@@ -18,11 +18,12 @@ use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
 use raft::{GetEntriesContext, SnapshotStatus};
 use smallvec::{smallvec, SmallVec};
 
+use super::{AbstractPeer, RegionSnapshot};
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::peer::{
-    UnsafeRecoveryFillOutReportSharedState, UnsafeRecoveryLeaveJointSharedState,
+    UnsafeRecoveryFillOutReportSharedState, UnsafeRecoveryReportId,
     UnsafeRecoveryWaitApplySharedState,
 };
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
@@ -32,8 +33,6 @@ use collections::HashSet;
 #[cfg(any(test, feature = "testexport"))]
 use pd_client::BucketMeta;
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
-
-use super::{AbstractPeer, RegionSnapshot};
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
@@ -574,10 +573,16 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Asks region to change replication mode.
     UpdateReplicationMode,
     Destroy(u64),
-    DemoteFailedVotersForUnsafeRecovery(Vec<metapb::Peer>, Arc<AtomicUsize>),
-    DestroyForUnsafeRecovery(Arc<AtomicUsize>),
+    DemoteFailedVotersForUnsafeRecovery {
+        failed_voters: Vec<metapb::Peer>,
+        counter: Arc<AtomicUsize>,
+        report_id: UnsafeRecoveryReportId,
+    },
+    DestroyForUnsafeRecovery {
+        counter: Arc<AtomicUsize>,
+        report_id: UnsafeRecoveryReportId,
+    },
     UnsafeRecoveryWaitApply(Arc<Mutex<UnsafeRecoveryWaitApplySharedState>>),
-    UnsafeRecoveryLeaveJoint(Arc<Mutex<UnsafeRecoveryLeaveJointSharedState>>),
     UnsafeRecoveryFillOutReport(Arc<Mutex<UnsafeRecoveryFillOutReportSharedState>>),
 }
 
@@ -607,14 +612,17 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
-            PeerMsg::DemoteFailedVotersForUnsafeRecovery(voters, _) => {
-                write!(fmt, "Demote following voters {:?} from the region", voters)
+            PeerMsg::DemoteFailedVotersForUnsafeRecovery { failed_voters, .. } => {
+                write!(
+                    fmt,
+                    "Demote following voters {:?} from the region",
+                    failed_voters
+                )
             }
-            PeerMsg::DestroyForUnsafeRecovery(_) => {
+            PeerMsg::DestroyForUnsafeRecovery { .. } => {
                 write!(fmt, "Destroy the peer for unsafe recovery")
             }
             PeerMsg::UnsafeRecoveryWaitApply(_) => write!(fmt, "WaitApply for unsafe recovery"),
-            PeerMsg::UnsafeRecoveryLeaveJoint(_) => write!(fmt, "LeaveJoint for unsafe recovery"),
             PeerMsg::UnsafeRecoveryFillOutReport(_) => {
                 write!(fmt, "FillOutReport for unsafe recovery")
             }
@@ -662,8 +670,12 @@ where
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 
-    ReportForUnsafeRecovery(Option<Vec<pdpb::PeerReport>>),
-    CreatePeerForUnsafeRecovery(metapb::Region, Arc<AtomicUsize>),
+    ReportForUnsafeRecovery(pdpb::StoreReport),
+    CreatePeerForUnsafeRecovery {
+        create: metapb::Region,
+        counter: Arc<AtomicUsize>,
+        report_id: UnsafeRecoveryReportId,
+    },
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -693,7 +705,9 @@ where
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
             StoreMsg::ReportForUnsafeRecovery(..) => write!(fmt, "ReportForUnsafeRecovery"),
-            StoreMsg::CreatePeerForUnsafeRecovery(..) => write!(fmt, "CreatePeerForUnsafeRecovery"),
+            StoreMsg::CreatePeerForUnsafeRecovery { .. } => {
+                write!(fmt, "CreatePeerForUnsafeRecovery")
+            }
         }
     }
 }

@@ -26,7 +26,7 @@ use yatp::Remote;
 
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
-use crate::store::peer::start_unsafe_recovery_report;
+use crate::store::peer::{start_unsafe_recovery_report, UnsafeRecoveryReportId};
 use crate::store::transport::SignificantRouter;
 use crate::store::util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration};
 use crate::store::worker::query_stats::QueryStats;
@@ -43,7 +43,6 @@ use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{merge_bucket_stats, BucketStat, Error, PdClient, RegionStat};
-use protobuf::RepeatedField;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::{Instant as TiInstant, UnixSecs};
@@ -135,7 +134,7 @@ where
     StoreHeartbeat {
         stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        reports: Option<Vec<pdpb::PeerReport>>,
+        report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     },
     ReportBatchSplit {
@@ -1026,7 +1025,7 @@ where
         &mut self,
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        opt_peer_reports: Option<Vec<pdpb::PeerReport>>,
+        opt_store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
@@ -1144,16 +1143,10 @@ where
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
 
-        let mut optional_report = None;
-        if let Some(peer_reports) = opt_peer_reports {
-            let mut store_report = pdpb::StoreReport::default();
-            store_report.set_peer_reports(RepeatedField::from_vec(peer_reports));
-            optional_report = Some(store_report);
-        }
         let router = self.router.clone();
         let resp =
             self.pd_client
-                .store_heartbeat(stats, optional_report, dr_autosync_status.clone());
+                .store_heartbeat(stats, opt_store_report, dr_autosync_status.clone());
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1179,7 +1172,13 @@ where
                                     error!("fail to send force leader message for recovery"; "err" => ?e);
                                 }
                             }
-                            start_unsafe_recovery_report(&router);
+                            start_unsafe_recovery_report(
+                                &router,
+                                UnsafeRecoveryReportId {
+                                    id: plan.get_step(),
+                                    exit_force_leader_after_reporting: false,
+                                },
+                            );
                         } else if plan.get_creates().len() != 0
                             || plan.get_demotes().len() != 0
                             || plan.get_tombstones().len() != 0
@@ -1189,13 +1188,18 @@ where
                                     + plan.get_tombstones().len()
                                     + plan.get_demotes().len(),
                             ));
+                            let report_id = UnsafeRecoveryReportId {
+                                id: plan.get_step(),
+                                exit_force_leader_after_reporting: true,
+                            };
                             for create in plan.get_creates() {
                                 info!("Unsafe recovery, asked to create region"; "region" => ?create);
                                 if let Err(e) =
-                                    router.send_control(StoreMsg::CreatePeerForUnsafeRecovery(
-                                        create.clone(),
-                                        counter.clone(),
-                                    ))
+                                    router.send_control(StoreMsg::CreatePeerForUnsafeRecovery {
+                                        create: create.clone(),
+                                        counter: counter.clone(),
+                                        report_id,
+                                    })
                                 {
                                     error!("fail to send creat peer message for recovery"; "err" => ?e);
                                 }
@@ -1204,7 +1208,10 @@ where
                                 info!("Unsafe recovery, asked to delete peer"; "peer" => delete);
                                 if let Err(e) = router.force_send(
                                     *delete,
-                                    PeerMsg::DestroyForUnsafeRecovery(counter.clone()),
+                                    PeerMsg::DestroyForUnsafeRecovery {
+                                        counter: counter.clone(),
+                                        report_id,
+                                    },
                                 ) {
                                     error!("fail to send delete peer message for recovery"; "err" => ?e);
                                 }
@@ -1213,10 +1220,11 @@ where
                                 info!("Unsafe recovery, required to demote failed peers"; "demotion" => ?demote);
                                 if let Err(e) = router.force_send(
                                     demote.get_region_id(),
-                                    PeerMsg::DemoteFailedVotersForUnsafeRecovery(
-                                        demote.get_failed_voters().to_vec(),
-                                        counter.clone(),
-                                    ),
+                                    PeerMsg::DemoteFailedVotersForUnsafeRecovery {
+                                        failed_voters: demote.get_failed_voters().to_vec(),
+                                        counter: counter.clone(),
+                                        report_id,
+                                    },
                                 ) {
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);
                                 }
@@ -1225,7 +1233,13 @@ where
                             info!(
                                 "Unsafe recovery, required to send detailed report in the next heartbeat"
                             );
-                            start_unsafe_recovery_report(&router);
+                            start_unsafe_recovery_report(
+                                &router,
+                                UnsafeRecoveryReportId {
+                                    id: plan.get_step(),
+                                    exit_force_leader_after_reporting: true,
+                                },
+                            );
                         }
                     }
                 }
@@ -1830,9 +1844,9 @@ where
             Task::StoreHeartbeat {
                 stats,
                 store_info,
-                reports,
+                report,
                 dr_autosync_status,
-            } => self.handle_store_heartbeat(stats, store_info, reports, dr_autosync_status),
+            } => self.handle_store_heartbeat(stats, store_info, report, dr_autosync_status),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),

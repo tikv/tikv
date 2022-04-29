@@ -67,7 +67,7 @@ use crate::store::fsm::{
 use crate::store::local_metrics::{RaftMetrics, RaftReadyMetrics};
 use crate::store::memory::*;
 use crate::store::metrics::*;
-use crate::store::peer::start_unsafe_recovery_report;
+use crate::store::peer::{start_unsafe_recovery_report, UnsafeRecoveryReportId};
 use crate::store::peer_storage;
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
@@ -623,10 +623,12 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     inspector.record_store_wait(send_time.saturating_elapsed());
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
-                StoreMsg::ReportForUnsafeRecovery(reports) => self.store_heartbeat_pd(reports),
-                StoreMsg::CreatePeerForUnsafeRecovery(region, counter) => {
-                    self.on_create_peer_for_unsafe_recovery(region, counter)
-                }
+                StoreMsg::ReportForUnsafeRecovery(report) => self.store_heartbeat_pd(Some(report)),
+                StoreMsg::CreatePeerForUnsafeRecovery {
+                    create,
+                    counter,
+                    report_id,
+                } => self.on_create_peer_for_unsafe_recovery(create, counter, report_id),
             }
         }
     }
@@ -2157,7 +2159,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
-    fn store_heartbeat_pd(&mut self, reports: Option<Vec<pdpb::PeerReport>>) {
+    fn store_heartbeat_pd(&mut self, report: Option<pdpb::StoreReport>) {
         let mut stats = StoreStats::default();
 
         stats.set_store_id(self.ctx.store_id());
@@ -2235,7 +2237,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let task = PdTask::StoreHeartbeat {
             stats,
             store_info,
-            reports,
+            report,
             dr_autosync_status: self
                 .ctx
                 .global_replication_state
@@ -2639,7 +2641,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.ctx.router.report_status_update()
     }
 
-    fn on_create_peer_for_unsafe_recovery(&self, region: Region, counter: Arc<AtomicUsize>) {
+    fn on_create_peer_for_unsafe_recovery(
+        &self,
+        region: Region,
+        counter: Arc<AtomicUsize>,
+        report_id: UnsafeRecoveryReportId,
+    ) {
         info!("Unsafe recovery, creating a peer"; "peer" => ?region);
         let mut meta = self.ctx.store_meta.lock().unwrap();
         for (_, id) in meta.region_ranges.range((
@@ -2731,7 +2738,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .force_send(region.get_id(), PeerMsg::Start)
             .unwrap();
         if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-            start_unsafe_recovery_report(&self.ctx.router);
+            start_unsafe_recovery_report(&self.ctx.router, report_id);
         }
     }
 }
