@@ -8,6 +8,7 @@ use tikv_util::codec::{bytes, Error};
 use super::*;
 
 pub const RAW_KEY_PREFIX: u8 = b'r';
+pub const RAW_KEY_PREFIX_END: u8 = RAW_KEY_PREFIX + 1;
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
@@ -169,6 +170,42 @@ impl KvFormat for ApiV2 {
             encoded_key
         }
     }
+
+    // add prefix RAW_KEY_PREFIX
+    fn convert_raw_encoded_key_version_from(
+        src_api: ApiVersion,
+        key: &[u8],
+        ts: Option<TimeStamp>,
+    ) -> Result<Key> {
+        match src_api {
+            ApiVersion::V1 | ApiVersion::V1ttl => {
+                let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(key.len() + 1));
+                apiv2_key.push(RAW_KEY_PREFIX);
+                apiv2_key.extend(key);
+                Ok(Self::encode_raw_key_owned(apiv2_key, ts))
+            }
+            ApiVersion::V2 => Ok(Key::from_encoded_slice(key)),
+        }
+    }
+
+    fn convert_raw_user_key_range_version_from(
+        src_api: ApiVersion,
+        mut start_key: Vec<u8>,
+        mut end_key: Vec<u8>,
+    ) -> (Vec<u8>, Vec<u8>) {
+        match src_api {
+            ApiVersion::V1 | ApiVersion::V1ttl => {
+                start_key.insert(0, RAW_KEY_PREFIX);
+                if end_key.is_empty() {
+                    end_key.insert(0, RAW_KEY_PREFIX_END);
+                } else {
+                    end_key.insert(0, RAW_KEY_PREFIX);
+                }
+                (start_key, end_key)
+            }
+            ApiVersion::V2 => (start_key, end_key),
+        }
+    }
 }
 
 impl ApiV2 {
@@ -178,13 +215,19 @@ impl ApiV2 {
         encoded_bytes.encode_u64_desc(ts.into_inner()).unwrap();
     }
 
+    fn get_encode_len(src_len: usize) -> usize {
+        MemComparableByteCodec::encoded_len(src_len) + number::U64_SIZE
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
+// Note: `encoded_bytes` may not be `KeyMode::Raw`.
+// E.g., backup service accept an exclusive end key just beyond the scope of raw keys.
+// The validity is ensured by client & Storage interfaces.
 #[inline]
 fn is_valid_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
-    ApiV2::parse_key_mode(encoded_bytes) == KeyMode::Raw
-        && bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
+    bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
         && encoded_bytes.len() == number::U64_SIZE * (with_ts as usize)
 }
 

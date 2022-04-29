@@ -371,6 +371,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "async-channel",
  "collections",
  "concurrency_manager",
@@ -2464,7 +2465,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f7a7c8ccda74ae17acdde7b47cf829ac6f5c2a52"
+source = "git+https://github.com/pingcap/kvproto.git#29c9119f3c95eeb1bdfbb7b6fb70830614eb6243"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5142,6 +5143,7 @@ dependencies = [
 name = "test_backup"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "backup",
  "collections",
  "concurrency_manager",
@@ -5154,6 +5156,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "kvproto",
+ "protobuf",
  "rand 0.8.3",
  "tempfile",
  "test_raftstore",
