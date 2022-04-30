@@ -34,6 +34,11 @@
 SHELL := bash
 ENABLE_FEATURES ?=
 
+# Rust & C/C++ compiler flags
+export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
+export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+
 # Pick an allocator
 ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
@@ -151,7 +156,8 @@ dev: format clippy
 
 build: export TIKV_PROFILE=debug
 build:
-	cargo build --no-default-features --features "${ENABLE_FEATURES}"
+	rustup component add rust-src
+	cargo build --no-default-features --features "${ENABLE_FEATURES}" -Z build-std --target x86_64-unknown-linux-gnu
 
 ## Release builds (optimized dev builds)
 ## ----------------------------
@@ -165,7 +171,8 @@ build:
 # enabled (the "sse" option)
 release: export TIKV_PROFILE=release
 release:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
+	rustup component add rust-src
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" -Z build-std --target x86_64-unknown-linux-gnu
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
