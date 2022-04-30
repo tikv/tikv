@@ -131,8 +131,6 @@ impl RecoveryRunner {
     }
 
     // Cleans up obsolete damaged files and panics if some files are not handled in time.
-    //
-    // Acquire meta lock.
     fn check_damaged_files(&mut self) {
         if self.damaged_files.is_empty() {
             return;
@@ -195,7 +193,8 @@ impl RecoveryRunner {
         let live_files = self.db.get_live_files();
         for i in 0..live_files.get_files_count() {
             if live_files.get_name(i as i32) == fname {
-                self.set_panic_mark_and_panic(fname, "file still exists");
+                // `delete_files_in_range` can't delete L0 files.
+                self.set_panic_mark_and_panic(fname, "file still exists, it may belong L0");
             }
         }
     }

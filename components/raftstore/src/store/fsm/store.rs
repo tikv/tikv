@@ -130,7 +130,7 @@ pub struct StoreMeta {
     pub destroyed_region_for_snap: HashMap<u64, bool>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
-    /// record which regions are damaged.
+    /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
 }
 
@@ -187,6 +187,9 @@ impl StoreMeta {
                     }
                 }
                 return true;
+            } else {
+                // `region_ranges` is promised to have no overlap.
+                break;
             }
         }
         // It's OK to remove the range here before deleting real file.
