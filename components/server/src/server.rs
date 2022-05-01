@@ -45,6 +45,7 @@ use file_system::{
 };
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
+use grpcio_health::HealthService;
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -774,6 +775,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .validate()
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        let health_service = HealthService::default();
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config.value().clone(),
@@ -782,6 +784,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.pd_client.clone(),
             self.state.clone(),
             self.background_worker.clone(),
+            Some(health_service.clone()),
         );
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
@@ -810,6 +813,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
+            health_service,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
