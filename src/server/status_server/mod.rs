@@ -46,6 +46,7 @@ use tokio_openssl::SslStream;
 
 use crate::config::{log_level_serde, ConfigController};
 use crate::server::Result;
+use crate::tikv_util::metrics::ThreadBuildWrapper;
 
 static TIMER_CANCELED: &str = "tokio timer canceled";
 
@@ -91,8 +92,8 @@ where
             .enable_all()
             .worker_threads(status_thread_pool_size)
             .thread_name("status-server")
-            .on_thread_start(|| debug!("Status server started"))
-            .on_thread_stop(|| debug!("stopping status server"))
+            .after_start_wrapper(|| debug!("Status server started"))
+            .before_stop_wrapper(|| debug!("stopping status server"))
             .build()?;
 
         let (tx, rx) = oneshot::channel::<()>();

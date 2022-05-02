@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, current, JoinHandle, ThreadId};
 use std::time::Duration;
+use tikv_util::metrics::StdThreadBuildWrapper;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
 use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
@@ -578,7 +579,7 @@ where
         let props = tikv_util::thread_group::current_properties();
         let t = thread::Builder::new()
             .name(name)
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 set_io_type(IOType::ForegroundWrite);
                 poller.poll();

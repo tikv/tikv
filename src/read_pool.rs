@@ -20,6 +20,7 @@ use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
 use self::metrics::*;
 use crate::config::{UnifiedReadPoolConfig, UNIFIED_READPOOL_MIN_CONCURRENCY};
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
+use crate::tikv_util::metrics::ThreadBuildWrapper;
 
 pub enum ReadPool {
     FuturePools {
@@ -255,12 +256,12 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
                 SysQuota::cpu_cores_quota() as usize,
             ),
         )
-        .after_start(move || {
+        .after_start_wrapper(move || {
             let engine = raftkv.lock().unwrap().clone();
             set_tls_engine(engine);
             set_io_type(IOType::ForegroundRead);
         })
-        .before_stop(|| unsafe {
+        .before_stop_wrapper(|| unsafe {
             destroy_tls_engine::<E>();
         })
         .build_multi_level_pool();

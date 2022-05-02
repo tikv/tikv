@@ -104,6 +104,7 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::raft_engine_switch::*;
+use crate::tikv_util::metrics::ThreadBuildWrapper;
 use crate::{memory::*, setup::*, signal_handler};
 
 #[inline]
@@ -601,11 +602,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .on_thread_start(move || {
+                .after_start_wrapper(move || {
                     tikv_alloc::add_thread_memory_accessor();
                     tikv_util::thread_group::set_properties(props.clone());
                 })
-                .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
+                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
         );

@@ -12,6 +12,7 @@ use futures::stream::StreamExt;
 use tokio::task::LocalSet;
 
 use super::metrics::*;
+use crate::metrics::StdThreadBuildWrapper;
 
 pub struct Stopped<T>(pub T);
 
@@ -152,7 +153,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         let props = crate::thread_group::current_properties();
         let h = Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 crate::thread_group::set_properties(props);
                 poll(runner, rx)
             })?;

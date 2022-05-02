@@ -17,6 +17,7 @@ use crate::storage::kv::{
     destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics,
 };
 use crate::storage::metrics::*;
+use crate::tikv_util::metrics::ThreadBuildWrapper;
 
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
@@ -72,11 +73,11 @@ impl SchedPool {
             .name_prefix(name_prefix)
             // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
             // the tls_engine invariants.
-            .after_start(move || {
+            .after_start_wrapper(move || {
                 set_tls_engine(engine.lock().unwrap().clone());
                 set_io_type(IOType::ForegroundWrite);
             })
-            .before_stop(move || unsafe {
+            .before_stop_wrapper(move || unsafe {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
                 destroy_tls_engine::<E>();
                 tls_flush(&reporter);

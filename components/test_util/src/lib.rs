@@ -16,6 +16,7 @@ mod security;
 use rand::Rng;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::{env, thread};
+use tikv_util::metrics::StdThreadBuildWrapper;
 
 pub use crate::encryption::*;
 pub use crate::kv_generator::*;
@@ -32,7 +33,7 @@ pub fn setup_for_ci() {
     // of time to avoid causing timeout.
     thread::Builder::new()
         .name(tikv_util::thd_name!("backtrace-loader"))
-        .spawn(::backtrace::Backtrace::new)
+        .spawn_wrapper(::backtrace::Backtrace::new)
         .unwrap();
 
     if env::var("CI").is_ok() {

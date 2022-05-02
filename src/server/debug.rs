@@ -30,6 +30,7 @@ use raftstore::store::PeerStorage;
 use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
 use tikv_util::config::ReadableSize;
 use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::metrics::StdThreadBuildWrapper;
 use tikv_util::worker::Worker;
 use txn_types::Key;
 
@@ -435,7 +436,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             let props = tikv_util::thread_group::current_properties();
             let thread = ThreadBuilder::new()
                 .name(format!("mvcc-recover-thread-{}", thread_index))
-                .spawn(move || {
+                .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
                     tikv_alloc::add_thread_memory_accessor();
                     info!(

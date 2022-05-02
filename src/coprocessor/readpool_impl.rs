@@ -9,6 +9,7 @@ use file_system::{set_io_type, IOType};
 use tikv_util::yatp_pool::{Config, DefaultTicker, FuturePool, PoolTicker, YatpPoolBuilder};
 
 use super::metrics::*;
+use crate::tikv_util::metrics::ThreadBuildWrapper;
 
 #[derive(Clone)]
 struct FuturePoolTicker<R: FlowStatsReporter> {
@@ -39,11 +40,11 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
             YatpPoolBuilder::new(FuturePoolTicker { reporter })
                 .config(config)
                 .name_prefix(name)
-                .after_start(move || {
+                .after_start_wrapper(move || {
                     set_tls_engine(engine.lock().unwrap().clone());
                     set_io_type(IOType::ForegroundRead);
                 })
-                .before_stop(move || unsafe {
+                .before_stop_wrapper(move || unsafe {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
                     destroy_tls_engine::<E>();
                 })
@@ -65,12 +66,12 @@ pub fn build_read_pool_for_test<E: Engine>(
             let engine = Arc::new(Mutex::new(engine.clone()));
             YatpPoolBuilder::new(DefaultTicker::default())
                 .config(config)
-                .after_start(move || {
+                .after_start_wrapper(move || {
                     set_tls_engine(engine.lock().unwrap().clone());
                     set_io_type(IOType::ForegroundRead);
                 })
                 // Safety: we call `set_` and `destroy_` with the same engine type.
-                .before_stop(|| unsafe { destroy_tls_engine::<E>() })
+                .before_stop_wrapper(|| unsafe { destroy_tls_engine::<E>() })
                 .build_future_pool()
         })
         .collect()

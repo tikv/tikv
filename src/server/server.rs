@@ -21,6 +21,7 @@ use crate::server::gc_worker::GcWorker;
 use crate::server::Proxy;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
+use crate::tikv_util::metrics::ThreadBuildWrapper;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{CheckLeaderTask, SnapManager};
 use security::SecurityManager;
@@ -102,6 +103,8 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
                 RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
                     .worker_threads(cfg.value().stats_concurrency)
+                    .after_start_wrapper(|| {})
+                    .before_stop_wrapper(|| {})
                     .build()
                     .unwrap(),
             )

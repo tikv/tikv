@@ -22,6 +22,7 @@ use raftstore::store::fsm::StoreMeta;
 use raftstore::store::util::RegionReadProgressRegistry;
 use security::SecurityManager;
 use tikv_util::info;
+use tikv_util::metrics::ThreadBuildWrapper;
 use tikv_util::time::Instant;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
@@ -66,6 +67,8 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             .thread_name("advance-ts")
             .worker_threads(1)
             .enable_time()
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         Self {

@@ -19,6 +19,7 @@ use super::compaction_filter::is_compaction_filter_allowed;
 use super::config::GcWorkerConfigManager;
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
 use super::Result;
+use crate::tikv_util::metrics::StdThreadBuildWrapper;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 10;
 
@@ -275,7 +276,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         let props = tikv_util::thread_group::current_properties();
         let res: Result<_> = ThreadBuilder::new()
             .name(thd_name!("gc-manager"))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 self.run();
@@ -626,6 +627,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
+    use tikv_util::metrics::StdThreadBuildWrapper;
     use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable};
 
     fn take_callback(t: &mut GcTask<RocksEngine>) -> Callback<()> {
@@ -811,7 +813,7 @@ mod tests {
 
         let (tx, rx) = channel();
         ThreadBuilder::new()
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 let safe_point = gc_manager.wait_for_next_safe_point().unwrap();
                 tx.send(safe_point).unwrap();
             })

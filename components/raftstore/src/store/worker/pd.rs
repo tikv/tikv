@@ -46,6 +46,7 @@ use pd_client::metrics::*;
 use pd_client::{merge_bucket_stats, BucketStat, Error, PdClient, RegionStat};
 use protobuf::Message;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
+use tikv_util::metrics::StdThreadBuildWrapper;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::{Instant as TiInstant, UnixSecs};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -475,7 +476,7 @@ where
         }
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();

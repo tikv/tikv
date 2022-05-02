@@ -23,6 +23,7 @@ use futures::{
 use grpcio::{CallOption, WriteFlags};
 use kvproto::pdpb::{PdClient, TsoRequest, TsoResponse};
 use std::{cell::RefCell, collections::VecDeque, pin::Pin, rc::Rc, thread};
+use tikv_util::metrics::StdThreadBuildWrapper;
 use tikv_util::{box_err, info};
 use tokio::sync::{mpsc, oneshot, watch};
 use txn_types::TimeStamp;
@@ -61,7 +62,7 @@ impl TimestampOracle {
         // Start a background thread to handle TSO requests and responses
         thread::Builder::new()
             .name("tso-worker".into())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 block_on(run_tso(
                     cluster_id,
                     rpc_sender.sink_err_into(),

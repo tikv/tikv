@@ -7,6 +7,7 @@ use file_system::{set_io_type, IOType};
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::thread;
+use tikv_util::metrics::StdThreadBuildWrapper;
 use tikv_util::worker::Runnable;
 use tikv_util::{debug, error, info, safe_panic, thd_name};
 
@@ -65,7 +66,7 @@ where
                     name_prefix,
                     i + self.state.id_base,
                 )))
-                .spawn(move || {
+                .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
                     set_io_type(IOType::ForegroundWrite);
                     poller.poll();

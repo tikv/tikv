@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::metrics::StdThreadBuildWrapper;
 use crate::time::{monotonic_raw_now, Instant};
 use lazy_static::lazy_static;
 use std::cmp::{Ord, Ordering, Reverse};
@@ -89,7 +90,7 @@ fn start_global_timer() -> Handle {
     let props = crate::thread_group::current_properties();
     Builder::new()
         .name(thd_name!("timer"))
-        .spawn(move || {
+        .spawn_wrapper(move || {
             crate::thread_group::set_properties(props);
             tikv_alloc::add_thread_memory_accessor();
             let mut timer = tokio_timer::Timer::default();
@@ -188,7 +189,7 @@ fn start_global_steady_timer() -> SteadyTimer {
     let clock_ = clock.clone();
     Builder::new()
         .name(thd_name!("steady-timer"))
-        .spawn(move || {
+        .spawn_wrapper(move || {
             let c = Clock::new_with_now(clock_);
             let mut timer = tokio_timer::Timer::new_with_now(ParkThread::new(), c);
             tx.send(timer.handle()).unwrap();

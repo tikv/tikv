@@ -32,6 +32,7 @@ use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::metrics::StdThreadBuildWrapper;
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::{box_err, debug, info, slow_log, thd_name, warn};
 
@@ -685,9 +686,11 @@ where
                 cfg,
             );
             info!("starting store writer {}", i);
-            let t = thread::Builder::new().name(thd_name!(tag)).spawn(move || {
-                worker.run();
-            })?;
+            let t = thread::Builder::new()
+                .name(thd_name!(tag))
+                .spawn_wrapper(move || {
+                    worker.run();
+                })?;
             self.writers.push(tx);
             self.handlers.push(t);
         }

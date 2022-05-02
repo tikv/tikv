@@ -183,7 +183,7 @@ mod softlimit_test {
 
     use futures::Future;
     use rand::Rng;
-    use tikv_util::sys::SysQuota;
+    use tikv_util::{metrics::tokio_spawn_wrapper, sys::SysQuota};
     use tokio::{sync::mpsc::channel as async_channel, time};
 
     use super::{CpuStatistics, SoftLimit, SoftLimitByCpu};
@@ -229,7 +229,7 @@ mod softlimit_test {
 
     async fn should_finish_in(d: Duration, name: &str, f: impl Future + Send + 'static) {
         let (sx, mut rx) = async_channel(1);
-        tokio::spawn(async move {
+        tokio_spawn_wrapper(async move {
             f.await;
             sx.send(()).await.unwrap();
         });

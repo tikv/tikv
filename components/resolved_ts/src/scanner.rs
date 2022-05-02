@@ -16,6 +16,7 @@ use raftstore::store::RegionSnapshot;
 use tikv::storage::kv::{ScanMode as MvccScanMode, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, MvccReader, ScannerBuilder};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
+use tikv_util::metrics::ThreadBuildWrapper;
 use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, LockType, TimeStamp};
@@ -69,6 +70,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
             Builder::new_multi_thread()
                 .thread_name("inc-scan")
                 .worker_threads(count)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()
                 .unwrap(),
         );
