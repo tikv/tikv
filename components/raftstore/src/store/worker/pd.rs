@@ -11,6 +11,7 @@ use std::{cmp, io, mem};
 use engine_traits::{KvEngine, RaftEngine, CF_RAFT};
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
+use grpcio_health::{HealthService, ServingStatus};
 use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
@@ -631,6 +632,7 @@ fn hotspot_query_num_report_threshold() -> u64 {
 // If there is not any timeout inspecting requests, the score will go back to 1 in at least 5min.
 struct SlowScore {
     value: OrderedFloat<f64>,
+    last_record_time: Instant,
     last_update_time: Instant,
 
     timeout_requests: usize,
@@ -661,6 +663,7 @@ impl SlowScore {
             inspect_interval,
             ratio_thresh: OrderedFloat(0.1),
             min_ttr: Duration::from_secs(5 * 60),
+            last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             round_ticks: 30,
             last_tick_id: 0,
@@ -669,6 +672,7 @@ impl SlowScore {
     }
 
     fn record(&mut self, id: u64, duration: Duration) {
+        self.last_record_time = Instant::now();
         if id != self.last_tick_id {
             return;
         }
@@ -698,7 +702,7 @@ impl SlowScore {
     fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
         if self.timeout_requests == 0 {
             let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
-            if OrderedFloat(desc) > self.value {
+            if OrderedFloat(desc) > self.value - OrderedFloat(1.0) {
                 self.value = 1.0.into();
             } else {
                 self.value -= desc;
@@ -779,6 +783,10 @@ where
     snap_mgr: SnapManager,
     remote: Remote<yatp::task::future::TaskCell>,
     slow_score: SlowScore,
+
+    // The health status of the store is updated by the slow score mechanism.
+    health_service: Option<HealthService>,
+    curr_health_status: ServingStatus,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -802,6 +810,7 @@ where
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
+        health_service: Option<HealthService>,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(
@@ -835,6 +844,8 @@ where
             snap_mgr,
             remote,
             slow_score: SlowScore::new(cfg.inspect_interval.0),
+            health_service,
+            curr_health_status: ServingStatus::Serving,
         }
     }
 
@@ -1666,6 +1677,13 @@ where
             })
             .or_insert(buckets);
     }
+
+    fn update_health_status(&mut self, status: ServingStatus) {
+        self.curr_health_status = status;
+        if let Some(health_service) = &self.health_service {
+            health_service.set_serving_status("", status);
+        }
+    }
 }
 
 fn calculate_region_cpu_records(
@@ -1910,6 +1928,13 @@ where
     T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
+        // The health status is recovered to serving as long as any tick
+        // does not timeout.
+        if self.curr_health_status == ServingStatus::ServiceUnknown
+            && self.slow_score.last_tick_finished
+        {
+            self.update_health_status(ServingStatus::Serving);
+        }
         if !self.slow_score.last_tick_finished {
             self.slow_score.record_timeout();
         }
@@ -1917,7 +1942,15 @@ where
         let id = self.slow_score.last_tick_id + 1;
         self.slow_score.last_tick_id += 1;
         self.slow_score.last_tick_finished = false;
+
         if self.slow_score.last_tick_id % self.slow_score.round_ticks == 0 {
+            // `last_update_time` is refreshed every round. If no update happens in a whole round,
+            // we set the status to unknown.
+            if self.curr_health_status == ServingStatus::Serving
+                && self.slow_score.last_record_time < self.slow_score.last_update_time
+            {
+                self.update_health_status(ServingStatus::ServiceUnknown);
+            }
             let slow_score = self.slow_score.update();
             STORE_SLOW_SCORE_GAUGE.set(slow_score);
         }
@@ -2316,6 +2349,13 @@ mod tests {
         assert_eq!(
             OrderedFloat(19.0),
             slow_score.update_impl(Duration::from_secs(15))
+        );
+
+        slow_score.timeout_requests = 0;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(1.0),
+            slow_score.update_impl(Duration::from_secs(57))
         );
     }
 

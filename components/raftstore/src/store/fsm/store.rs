@@ -21,6 +21,7 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
+use grpcio_health::HealthService;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -72,7 +73,7 @@ use crate::store::peer_storage;
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
 use crate::store::worker::{
-    AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
+    AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
     RaftlogFetchRunner, RaftlogFetchTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate,
     RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask, SplitCheckTask,
@@ -362,14 +363,14 @@ where
     pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
-    // handle Compact, CleanupSST task
+    // handle Compact, CleanupSst task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
-    pub importer: Arc<SSTImporter>,
+    pub importer: Arc<SstImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub feature_gate: FeatureGate,
     /// region_id -> (peer_id, is_splitting)
@@ -577,7 +578,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
             StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
-            StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
+            StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
         }
         let elapsed = t.saturating_elapsed();
         RAFT_EVENT_DURATION
@@ -604,7 +605,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
-                StoreMsg::ValidateSSTResult { invalid_ssts } => {
+                StoreMsg::ValidateSstResult { invalid_ssts } => {
                     self.on_validate_sst_result(invalid_ssts)
                 }
                 StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
@@ -843,20 +844,48 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
-        let dur = if self.poll_ctx.has_ready {
+        if self.poll_ctx.has_ready {
             // Only enable the fail point when the store id is equal to 3, which is
             // the id of slow store in tests.
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
+        }
+        let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
+        let mut dur = self.timer.saturating_elapsed();
 
-            if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+        for inspector in &mut latency_inspect {
+            inspector.record_store_process(dur);
+        }
+        let write_begin = TiInstant::now();
+        if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+            if self.poll_ctx.has_ready {
                 write_worker.write_to_db(false);
+
+                for mut inspector in latency_inspect {
+                    inspector.record_store_write(write_begin.saturating_elapsed());
+                    inspector.finish();
+                }
 
                 for peer in peers.iter_mut().flatten() {
                     PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
                 }
+            } else {
+                for inspector in latency_inspect {
+                    inspector.finish();
+                }
             }
-
-            let dur = self.timer.saturating_elapsed();
+        } else {
+            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
+            if let Err(err) =
+                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+                    send_time: write_begin,
+                    inspector: latency_inspect,
+                })
+            {
+                warn!("send latency inspecting to write workers failed"; "err" => ?err);
+            }
+        }
+        dur = self.timer.saturating_elapsed();
+        if self.poll_ctx.has_ready {
             if !self.poll_ctx.store_stat.is_busy {
                 let election_timeout = Duration::from_millis(
                     self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
@@ -890,40 +919,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     .snapshot
                     .saturating_sub(self.previous_metrics.snapshot),
             );
-            dur
-        } else {
-            self.timer.saturating_elapsed()
-        };
+        }
 
         self.poll_ctx.current_time = None;
         self.poll_ctx
             .raft_metrics
             .process_ready
             .observe(duration_to_sec(dur));
-
-        if !self.poll_ctx.pending_latency_inspect.is_empty() {
-            let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
-            for inspector in &mut latency_inspect {
-                inspector.record_store_process(dur);
-            }
-            if self.poll_ctx.sync_write_worker.is_some() {
-                for mut inspector in latency_inspect {
-                    inspector.record_store_write(dur);
-                    inspector.finish();
-                }
-            } else {
-                let now = TiInstant::now();
-                let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-                if let Err(err) =
-                    self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
-                        send_time: now,
-                        inspector: latency_inspect,
-                    })
-                {
-                    warn!("send latency inspecting to write workers failed"; "err" => ?err);
-                }
-            }
-        }
     }
 
     fn pause(&mut self) {
@@ -956,7 +958,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
-    pub importer: Arc<SSTImporter>,
+    pub importer: Arc<SstImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     snap_mgr: SnapManager,
@@ -1317,13 +1319,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<EK>,
-        importer: Arc<SSTImporter>,
+        importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         background_worker: Worker,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1391,7 +1394,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
 
         let compact_runner = CompactRunner::new(engines.kv.clone());
-        let cleanup_sst_runner = CleanupSSTRunner::new(
+        let cleanup_sst_runner = CleanupSstRunner::new(
             meta.get_id(),
             self.router.clone(),
             Arc::clone(&importer),
@@ -1447,6 +1450,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pd_client,
             collector_reg_handle,
             region_read_progress,
+            health_service,
         )?;
         Ok(())
     }
@@ -1462,6 +1466,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         pd_client: Arc<C>,
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1540,6 +1545,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             workers.pd_worker.remote(),
             collector_reg_handle,
             region_read_progress,
+            health_service,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
@@ -2405,7 +2411,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if ssts.is_empty() || self.ctx.importer.get_mode() == SwitchMode::Import {
             return;
         }
-        // A stale peer can still ingest a stale SST before it is
+        // A stale peer can still ingest a stale Sst before it is
         // destroyed. We need to make sure that no stale peer exists.
         let mut delete_ssts = Vec::new();
         {
@@ -2420,11 +2426,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             return;
         }
 
-        let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
+        let task = CleanupSstTask::DeleteSst { ssts: delete_ssts };
         if let Err(e) = self
             .ctx
             .cleanup_scheduler
-            .schedule(CleanupTask::CleanupSST(task))
+            .schedule(CleanupTask::CleanupSst(task))
         {
             error!(
                 "schedule to delete ssts failed";
@@ -2459,11 +2465,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
 
         if !delete_ssts.is_empty() {
-            let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
+            let task = CleanupSstTask::DeleteSst { ssts: delete_ssts };
             if let Err(e) = self
                 .ctx
                 .cleanup_scheduler
-                .schedule(CleanupTask::CleanupSST(task))
+                .schedule(CleanupTask::CleanupSst(task))
             {
                 error!(
                     "schedule to delete ssts failed";
@@ -2477,13 +2483,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         //  split from the origin region because the apply thread is so busy that it can not apply
         //  SplitRequest as soon as possible. So we can not delete this sst file.
         if !validate_ssts.is_empty() && self.ctx.importer.get_mode() != SwitchMode::Import {
-            let task = CleanupSSTTask::ValidateSST {
+            let task = CleanupSstTask::ValidateSst {
                 ssts: validate_ssts,
             };
             if let Err(e) = self
                 .ctx
                 .cleanup_scheduler
-                .schedule(CleanupTask::CleanupSST(task))
+                .schedule(CleanupTask::CleanupSst(task))
             {
                 error!(
                    "schedule to validate ssts failed";
@@ -2568,7 +2574,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn register_cleanup_import_sst_tick(&self) {
         self.ctx.schedule_store_tick(
-            StoreTick::CleanupImportSST,
+            StoreTick::CleanupImportSst,
             self.ctx.cfg.cleanup_import_sst_interval.0,
         )
     }
