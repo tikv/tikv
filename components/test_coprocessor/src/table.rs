@@ -138,6 +138,7 @@ impl TableBuilder {
         }
     }
 
+    #[must_use]
     pub fn add_col(mut self, name: impl std::borrow::Borrow<str>, col: Column) -> TableBuilder {
         use std::cmp::Ordering::*;
 

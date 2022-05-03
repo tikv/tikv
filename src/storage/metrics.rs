@@ -7,6 +7,7 @@ use prometheus_static_metric::*;
 
 use std::cell::RefCell;
 use std::mem;
+use std::sync::Arc;
 
 use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
 use crate::storage::kv::{FlowStatsReporter, PerfStatisticsDelta, Statistics};
@@ -14,6 +15,7 @@ use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
 use kvproto::pdpb::QueryKind;
+use pd_client::BucketMeta;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
 
@@ -128,11 +130,20 @@ pub fn tls_collect_scan_details(cmd: CommandKind, stats: &Statistics) {
     });
 }
 
-pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
+pub fn tls_collect_read_flow(
+    region_id: u64,
+    start: Option<&[u8]>,
+    end: Option<&[u8]>,
+    statistics: &Statistics,
+    buckets: Option<&Arc<BucketMeta>>,
+) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         m.local_read_stats.add_flow(
             region_id,
+            buckets,
+            start,
+            end,
             &statistics.write.flow_stats,
             &statistics.data.flow_stats,
         );
@@ -319,6 +330,11 @@ make_auto_flush_static_metric! {
         decrypt_data_nanos,
     }
 
+    pub label_enum InMemoryPessimisticLockingResult {
+        success,
+        full,
+    }
+
     pub struct CommandScanDetails: LocalIntCounter {
         "req" => CommandKind,
         "cf" => GcKeysCF,
@@ -370,6 +386,14 @@ make_auto_flush_static_metric! {
     pub struct PerfCounter: LocalIntCounter {
         "req" => CommandKind,
         "metric" => PerfMetric,
+    }
+
+    pub struct TxnCommandThrottleTimeCounterVec: LocalIntCounter {
+        "type" => CommandKind,
+    }
+
+    pub struct InMemoryPessimisticLockingCounter: LocalIntCounter {
+        "result" => InMemoryPessimisticLockingResult,
     }
 }
 
@@ -607,4 +631,23 @@ lazy_static! {
 
     pub static ref STORAGE_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
         auto_flush_from!(STORAGE_ROCKSDB_PERF_COUNTER, PerfCounter);
+
+    pub static ref TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_txn_command_throttle_time_total",
+        "Total throttle time (microsecond) of txn commands.",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC: TxnCommandThrottleTimeCounterVec =
+        auto_flush_from!(TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC, TxnCommandThrottleTimeCounterVec);
+
+    pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_in_memory_pessimistic_locking",
+        "Count of different types of in-memory pessimistic locking",
+        &["result"]
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC: InMemoryPessimisticLockingCounter =
+        auto_flush_from!(IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER, InMemoryPessimisticLockingCounter);
 }

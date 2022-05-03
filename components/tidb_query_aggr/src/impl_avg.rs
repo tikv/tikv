@@ -352,7 +352,7 @@ mod tests {
 
         let x: ChunkedVecSized<Real> = vec![Real::new(0.0).ok(), Real::new(-4.5).ok(), None].into();
 
-        update_vector!(state, &mut ctx, &x, &[0, 1, 2]).unwrap();
+        update_vector!(state, &mut ctx, x, &[0, 1, 2]).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
@@ -475,7 +475,7 @@ mod tests {
         let exp_result = exp_result.vector_value().unwrap();
         let slice = exp_result.as_ref().to_decimal_vec();
         let slice: ChunkedVecSized<Decimal> = slice.into();
-        update_vector!(state, &mut ctx, &slice, exp_result.logical_rows()).unwrap();
+        update_vector!(state, &mut ctx, slice, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [
             VectorValue::with_capacity(0, EvalType::Int),

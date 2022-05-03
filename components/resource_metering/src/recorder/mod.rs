@@ -238,12 +238,14 @@ impl Default for RecorderBuilder {
 
 impl RecorderBuilder {
     /// Sets the precision_ms parameter of [Recorder].
+    #[must_use]
     pub fn precision_ms(mut self, precision_ms: u64) -> Self {
         self.precision_ms = precision_ms;
         self
     }
 
     /// Add a [SubRecorder] for the execution of [Recorder].
+    #[must_use]
     pub fn add_sub_recorder(mut self, r: Box<dyn SubRecorder>) -> Self {
         self.recorders.push(r);
         self

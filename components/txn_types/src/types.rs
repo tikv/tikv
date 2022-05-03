@@ -105,6 +105,7 @@ impl Key {
 
     /// Creates a new key by appending a `u64` timestamp to this key.
     #[inline]
+    #[must_use]
     pub fn append_ts(mut self, ts: TimeStamp) -> Key {
         self.0.encode_u64_desc(ts.into_inner()).unwrap();
         self
@@ -224,7 +225,7 @@ impl Key {
 
 impl Clone for Key {
     fn clone(&self) -> Self {
-        // default clone implemention use self.len() to reserve capacity
+        // default clone implementation use self.len() to reserve capacity
         // for the sake of appending ts, we need to reserve more
         let mut key = Vec::with_capacity(self.0.capacity());
         key.extend_from_slice(&self.0);

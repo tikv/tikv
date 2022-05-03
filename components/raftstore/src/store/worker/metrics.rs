@@ -42,7 +42,7 @@ make_static_metric! {
         no_region,
         no_lease,
         epoch,
-        appiled_term,
+        applied_term,
         channel_full,
         safe_ts,
     }
@@ -154,6 +154,11 @@ lazy_static! {
         "tikv_raftstore_raft_log_kv_sync_duration_secs",
         "Bucketed histogram of kv sync duration of raft log gc.",
         exponential_buckets(0.0001, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref LOCAL_READ_RENEW_LEASE_ADVANCE_COUNTER: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_renew_lease_advance_count",
+        "Total number of renewing lease in advance from local reader."
     )
     .unwrap();
 }

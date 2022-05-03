@@ -3,6 +3,7 @@
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
+#![feature(vec_into_raw_parts)]
 
 #[cfg(test)]
 extern crate test;
@@ -38,6 +39,7 @@ pub mod math;
 pub mod memory;
 pub mod metrics;
 pub mod mpsc;
+pub mod quota_limiter;
 pub mod stream;
 pub mod sys;
 pub mod thread_group;
@@ -395,6 +397,7 @@ impl<T> MustConsumeVec<T> {
         }
     }
 
+    #[must_use]
     pub fn take(&mut self) -> Self {
         MustConsumeVec {
             tag: self.tag,

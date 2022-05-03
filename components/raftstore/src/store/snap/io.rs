@@ -354,11 +354,19 @@ mod tests {
 
                     let detector = TestStaleDetector {};
                     let tmp_file_path = &cf_file.tmp_file_paths()[0];
-                    apply_plain_cf_file(tmp_file_path, None, &detector, &db1, cf, 16, |v| {
-                        v.to_owned()
-                            .into_iter()
-                            .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
-                    })
+                    apply_plain_cf_file(
+                        tmp_file_path,
+                        None,
+                        &detector,
+                        &db1,
+                        cf,
+                        16,
+                        |v| {
+                            v.iter()
+                                .cloned()
+                                .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
+                        },
+                    )
                     .unwrap();
                 }
 

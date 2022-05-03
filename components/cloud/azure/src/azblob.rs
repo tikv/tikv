@@ -34,7 +34,7 @@ const ENV_CLIENT_SECRET: &str = "AZURE_CLIENT_SECRET";
 const ENV_ACCOUNT_NAME: &str = "AZURE_STORAGE_ACCOUNT";
 const ENV_SHARED_KEY: &str = "AZURE_STORAGE_KEY";
 
-/// CredentialInfo saves the credential variables from the enviroment:
+/// CredentialInfo saves the credential variables from the environment:
 /// client_id:      $AZURE_CLIENT_ID,
 /// tenant_id:      $AZURE_TENANT_ID,
 /// client_secret:  $AZURE_CLIENT_SECRET,

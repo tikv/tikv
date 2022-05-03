@@ -40,6 +40,7 @@ file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
+getset = "0.1"
 into_other = { path = "../into_other",  default-features = false }
 itertools = "0.10"
 keys = { path = "../keys", default-features = false }
@@ -49,13 +50,13 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../log_wrappers" }
 memory_trace_macros = { path = "../memory_trace_macros" }
 ordered-float = "2.6"
-parking_lot = "0.11"
+parking_lot = "0.12"
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
-raft-proto = { version = "0.6.0-alpha", default-features = false }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft-proto = { version = "0.7.0", default-features = false }
 rand = "0.8.3"
 resource_metering = { path = "../resource_metering" }
 serde = "1.0"

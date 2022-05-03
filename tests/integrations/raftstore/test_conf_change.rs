@@ -672,7 +672,7 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_4, b"k2", b"v2");
 
     // Can't transfer leader to learner.
-    pd_client.transfer_leader(r1, new_learner_peer(4, 12));
+    pd_client.transfer_leader(r1, new_learner_peer(4, 12), vec![]);
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&cluster.get_engine(4), b"k3", b"v3");
     pd_client.region_leader_must_be(r1, new_peer(1, 1));
@@ -685,11 +685,11 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Transfer leader to (4, 12) and check pd heartbeats from it to ensure
     // that `Peer::peer` has be updated correctly after the peer is promoted.
-    pd_client.transfer_leader(r1, new_peer(4, 12));
+    pd_client.transfer_leader(r1, new_peer(4, 12), vec![]);
     pd_client.region_leader_must_be(r1, new_peer(4, 12));
 
     // Transfer leader to (1, 1) to avoid "region not found".
-    pd_client.transfer_leader(r1, new_peer(1, 1));
+    pd_client.transfer_leader(r1, new_peer(1, 1), vec![]);
     pd_client.region_leader_must_be(r1, new_peer(1, 1));
     // To avoid using stale leader.
     cluster.reset_leader_of_region(r1);
@@ -860,7 +860,7 @@ fn test_learner_with_slow_snapshot() {
     cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Transfer leader so that peer 3 can report to pd with `Peer` in memory.
-    pd_client.transfer_leader(r1, new_peer(3, 3));
+    pd_client.transfer_leader(r1, new_peer(3, 3), vec![]);
     pd_client.region_leader_must_be(r1, new_peer(3, 3));
     assert!(count.load(Ordering::SeqCst) > 0);
 }

@@ -7,24 +7,29 @@ use std::time::Duration;
 
 use grpcio::*;
 use kvproto::kvrpcpb::{
-    self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op,
+    self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest, Op,
     PrewriteRequest, RawPutRequest,
 };
 use kvproto::tikvpb::TikvClient;
 
+use api_version::APIVersion;
 use collections::HashMap;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use test_raftstore::*;
+use tikv::config::{ConfigController, Module};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::{self, test_util::*, *};
+use tikv::storage::txn::{
+    commands, flow_controller::FlowController, Error as TxnError, ErrorInner as TxnErrorInner,
+};
+use tikv::storage::{self, config_manager::StorageConfigManger, test_util::*, *};
 use tikv::storage::{
     kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 use tikv_util::future::paired_future_callback;
+use tikv_util::worker::dummy_scheduler;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 use txn_types::{Mutation, OldValues, TimeStamp};
@@ -38,13 +43,9 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let storage0 = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine0,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage0 = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine0, DummyLockManager)
+        .build()
+        .unwrap();
 
     let mut ctx0 = Context::default();
     ctx0.set_region_id(region0.get_id());
@@ -222,6 +223,110 @@ fn test_raftkv_early_error_report() {
 }
 
 #[test]
+fn test_scale_scheduler_pool() {
+    let snapshot_fp = "scheduler_start_execute";
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+    let origin_pool_size = cluster.cfg.storage.scheduler_worker_pool_size;
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .config(cluster.cfg.tikv.storage.clone())
+        .build()
+        .unwrap();
+
+    let cfg = new_tikv_config(1);
+    let kv_engine = storage.get_engine().kv_engine();
+    let (_tx, rx) = std::sync::mpsc::channel();
+    let flow_controller = Arc::new(FlowController::new(
+        &cfg.storage.flow_control,
+        kv_engine.clone(),
+        rx,
+    ));
+
+    let cfg_controller = ConfigController::new(cfg.clone());
+    let (scheduler, _receiver) = dummy_scheduler();
+    cfg_controller.register(
+        Module::Storage,
+        Box::new(StorageConfigManger::new(
+            kv_engine,
+            cfg.storage.block_cache.shared,
+            scheduler,
+            flow_controller,
+            storage.get_scheduler(),
+        )),
+    );
+    let scheduler = storage.get_scheduler();
+
+    let region = cluster.get_region(b"k1");
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.id);
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(cluster.leader_of_region(region.id).unwrap());
+
+    let do_prewrite = |key: &[u8], val: &[u8]| {
+        // prewrite
+        let (prewrite_tx, prewrite_rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(key), val.to_vec())],
+                    key.to_vec(),
+                    10.into(),
+                    100,
+                    false,
+                    2,
+                    TimeStamp::default(),
+                    TimeStamp::default(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    ctx.clone(),
+                ),
+                Box::new(move |res: storage::Result<_>| {
+                    let _ = prewrite_tx.send(res);
+                }),
+            )
+            .unwrap();
+        prewrite_rx.recv_timeout(Duration::from_secs(2))
+    };
+
+    let scale_pool = |size: usize| {
+        cfg_controller
+            .update_config("storage.scheduler-worker-pool-size", &format!("{}", size))
+            .unwrap();
+        assert_eq!(
+            scheduler
+                .get_sched_pool(CommandPri::Normal)
+                .pool
+                .get_pool_size(),
+            size
+        );
+    };
+
+    scale_pool(1);
+    fail::cfg(snapshot_fp, "1*pause").unwrap();
+    // propose one prewrite to block the only worker
+    assert!(do_prewrite(b"k1", b"v1").is_err());
+
+    scale_pool(2);
+
+    // do prewrite again, as we scale another worker, this request should success
+    do_prewrite(b"k2", b"v2").unwrap().unwrap();
+
+    // restore to original config.
+    scale_pool(origin_pool_size);
+    fail::remove(snapshot_fp);
+}
+
+#[test]
 fn test_pipelined_pessimistic_lock() {
     let rockskv_async_write_fp = "rockskv_async_write";
     let rockskv_write_modifies_fp = "rockskv_write_modifies";
@@ -229,7 +334,7 @@ fn test_pipelined_pessimistic_lock() {
     let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .pipelined_pessimistic_lock(false)
             .build()
             .unwrap();
@@ -256,7 +361,7 @@ fn test_pipelined_pessimistic_lock() {
         fail::remove(rockskv_write_modifies_fp);
     }
 
-    let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+    let storage = TestStorageBuilderApiV1::new(DummyLockManager)
         .pipelined_pessimistic_lock(true)
         .build()
         .unwrap();
@@ -400,13 +505,10 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine.clone(),
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
+            .build()
+            .unwrap();
 
     // Fail to get timestamp from PD at first
     fail::cfg("test_raftstore_get_tso", "pause").unwrap();
@@ -518,8 +620,8 @@ fn expect_locked(err: tikv::storage::Error, key: &[u8], lock_ts: TimeStamp) {
     assert_eq!(lock_info.get_lock_version(), lock_ts.into_inner());
 }
 
-fn test_async_apply_prewrite_impl<E: Engine>(
-    storage: &Storage<E, DummyLockManager>,
+fn test_async_apply_prewrite_impl<E: Engine, Api: APIVersion>(
+    storage: &Storage<E, DummyLockManager, Api>,
     ctx: Context,
     key: &[u8],
     value: &[u8],
@@ -698,14 +800,10 @@ fn test_async_apply_prewrite() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .async_apply_prewrite(true)
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .async_apply_prewrite(true)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -800,14 +898,10 @@ fn test_async_apply_prewrite_fallback() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .async_apply_prewrite(true)
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .async_apply_prewrite(true)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -865,8 +959,8 @@ fn test_async_apply_prewrite_fallback() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 }
 
-fn test_async_apply_prewrite_1pc_impl<E: Engine>(
-    storage: &Storage<E, DummyLockManager>,
+fn test_async_apply_prewrite_1pc_impl<E: Engine, Api: APIVersion>(
+    storage: &Storage<E, DummyLockManager, Api>,
     ctx: Context,
     key: &[u8],
     value: &[u8],
@@ -989,14 +1083,10 @@ fn test_async_apply_prewrite_1pc() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .async_apply_prewrite(true)
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .async_apply_prewrite(true)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1020,13 +1110,9 @@ fn test_atomic_cas_lock_by_latch() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1110,13 +1196,9 @@ fn test_before_async_write_deadline() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1146,13 +1228,9 @@ fn test_before_propose_deadline() {
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1183,13 +1261,9 @@ fn test_resolve_lock_deadline() {
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1231,8 +1305,8 @@ fn test_resolve_lock_deadline() {
     // Resolve lock, this needs two rounds, two process_read and two process_write.
     // So it needs more than 400ms. It will exceed the deadline.
     ctx.max_execution_duration_ms = 300;
-    fail::cfg("txn_before_process_read", "sleep(100)").unwrap();
-    fail::cfg("txn_before_process_write", "sleep(100)").unwrap();
+    fail::cfg("txn_before_process_read", "1*sleep(100)->sleep(200)").unwrap();
+    fail::cfg("txn_before_process_write", "1*sleep(100)->sleep(500)").unwrap();
     let (tx, rx) = channel();
     let mut txn_status = HashMap::default();
     txn_status.insert(TimeStamp::new(10), TimeStamp::new(0));

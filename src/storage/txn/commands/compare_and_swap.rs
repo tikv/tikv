@@ -59,6 +59,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             let raw_value = RawValue {
                 user_value: value,
                 expire_ts: ttl_to_expire_ts(self.ttl),
+                is_delete: false,
             };
             let encoded_raw_value = match_template_api_version!(
                 API,

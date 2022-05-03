@@ -91,7 +91,6 @@ impl Drop for FlowController {
 
         if let Err(e) = h.unwrap().join() {
             error!("join flow controller failed"; "err" => ?e);
-            return;
         }
     }
 }

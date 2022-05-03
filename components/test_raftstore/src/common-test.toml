@@ -116,8 +116,3 @@ wake-up-delay-duration = "100ms"
 enable = false
 advance-ts-interval = "10ms"
 scan-lock-pool-size = 1
-[raftstore.store-batch-system]
-pool-size = 1
-[raftstore.apply-batch-system]
-pool-size = 1
-

@@ -14,7 +14,6 @@ portable = ["server/portable"]
 sse = ["server/sse"]
 mem-profiling = ["server/mem-profiling"]
 failpoints = ["server/failpoints"]
-bcc-iosnoop = ["server/bcc-iosnoop"]
 cloud-aws = ["server/cloud-aws"]
 cloud-gcp = ["server/cloud-gcp"]
 cloud-azure = ["server/cloud-azure"]
@@ -31,3 +30,4 @@ toml = "0.5"
 
 [build-dependencies]
 time = "0.1"
+cc = "1.0"

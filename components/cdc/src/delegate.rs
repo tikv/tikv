@@ -50,7 +50,12 @@ impl Default for DownstreamID {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DownstreamState {
+    /// It's just created and rejects change events and resolved timestamps.
     Uninitialized,
+    /// It has got a snapshot for incremental scan, and change events will be accepted.
+    /// However it still rejects resolved timestamps.
+    Initializing,
+    /// Incremental scan is finished so that resolved timestamps are acceptable now.
     Normal,
     Stopped,
 }
@@ -58,6 +63,40 @@ pub enum DownstreamState {
 impl Default for DownstreamState {
     fn default() -> Self {
         Self::Uninitialized
+    }
+}
+
+/// Shold only be called when it's uninitialized or stopped. Return false if it's stopped.
+pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
+    s.compare_exchange(
+        DownstreamState::Uninitialized,
+        DownstreamState::Initializing,
+    )
+    .is_ok()
+}
+
+/// Shold only be called when it's initializing or stopped. Return false if it's stopped.
+pub(crate) fn post_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
+    s.compare_exchange(DownstreamState::Initializing, DownstreamState::Normal)
+        .is_ok()
+}
+
+impl DownstreamState {
+    pub fn ready_for_change_events(&self) -> bool {
+        match *self {
+            DownstreamState::Uninitialized | DownstreamState::Stopped => false,
+            DownstreamState::Initializing | DownstreamState::Normal => true,
+        }
+    }
+
+    pub fn ready_for_advancing_ts(&self) -> bool {
+        match *self {
+            DownstreamState::Normal => true,
+
+            DownstreamState::Uninitialized
+            | DownstreamState::Stopped
+            | DownstreamState::Initializing => false,
+        }
     }
 }
 
@@ -74,7 +113,6 @@ pub struct Downstream {
     region_epoch: RegionEpoch,
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
-    enable_old_value: bool,
 }
 
 impl Downstream {
@@ -87,7 +125,6 @@ impl Downstream {
         region_epoch: RegionEpoch,
         req_id: u64,
         conn_id: ConnID,
-        enable_old_value: bool,
     ) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
@@ -97,7 +134,6 @@ impl Downstream {
             region_epoch,
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
-            enable_old_value,
         }
     }
 
@@ -135,6 +171,12 @@ impl Downstream {
         self.sink_event(change_data_event, force_send)
     }
 
+    pub fn sink_region_not_found(&self, region_id: u64) -> Result<()> {
+        let mut err_event = EventError::default();
+        err_event.mut_region_not_found().region_id = region_id;
+        self.sink_error_event(region_id, err_event)
+    }
+
     pub fn set_sink(&mut self, sink: Sink) {
         self.sink = Some(sink);
     }
@@ -165,16 +207,6 @@ impl Drop for Pending {
     }
 }
 
-impl Pending {
-    fn take_downstreams(&mut self) -> Vec<Downstream> {
-        mem::take(&mut self.downstreams)
-    }
-
-    fn take_locks(&mut self) -> Vec<PendingLock> {
-        mem::take(&mut self.locks)
-    }
-}
-
 enum PendingLock {
     Track { key: Vec<u8>, start_ts: TimeStamp },
     Untrack { key: Vec<u8> },
@@ -192,108 +224,74 @@ pub struct Delegate {
     region: Option<Region>,
     pub resolver: Option<Resolver>,
 
-    pub downstreams: Vec<Downstream>,
+    // Downstreams after the delegate has been resolved.
+    resolved_downstreams: Vec<Downstream>,
     pending: Option<Pending>,
+    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
-    pub txn_extra_op: TxnExtraOp,
 }
 
 impl Delegate {
     /// Create a Delegate the given region.
-    pub fn new(region_id: u64) -> Delegate {
+    pub fn new(region_id: u64, txn_extra_op: Arc<AtomicCell<TxnExtraOp>>) -> Delegate {
         Delegate {
             region_id,
             handle: ObserveHandle::new(),
-            downstreams: Vec::new(),
             resolver: None,
             region: None,
+            resolved_downstreams: Vec::new(),
             pending: Some(Pending::default()),
+            txn_extra_op,
             failed: false,
-            txn_extra_op: TxnExtraOp::default(),
         }
     }
 
     /// Let downstream subscribe the delegate.
-    /// Return error if subscribe fails, caller must deregister the downstream.
+    /// Return error if subscribe fails and the `Delegate` won't be changed.
     pub fn subscribe(&mut self, downstream: Downstream) -> Result<()> {
-        if let Some(region) = self.region.as_ref() {
-            let req_id = downstream.req_id;
-            let downstream_epoch = downstream.region_epoch.clone();
-            let downstream_id = downstream.get_id();
-            let conn_id = downstream.get_conn_id();
-
-            // The delegate is initialized, push to normal downstreams.
-            self.downstreams.push(downstream);
-
+        if self.region.is_some() {
             // Check if the downstream is out dated.
-            if let Err(e) = compare_region_epoch(
-                &downstream_epoch,
-                region,
-                false, /* check_conf_ver */
-                true,  /* check_ver */
-                true,  /* include_region */
-            ) {
-                info!("cdc fail to subscribe downstream";
-                    "region_id" => region.get_id(),
-                    "downstream_id" => ?downstream_id,
-                    "conn_id" => ?conn_id,
-                    "req_id" => req_id,
-                    "err" => ?e);
-
-                // Downstream is outdated, mark stop.
-                let downstream = self.downstreams.last_mut().unwrap();
-                downstream.state.store(DownstreamState::Stopped);
-                return Err(Error::request(e.into()));
-            }
-        } else {
-            self.pending.as_mut().unwrap().downstreams.push(downstream);
+            self.check_epoch_on_ready(&downstream)?;
         }
+        self.add_downstream(downstream);
         Ok(())
     }
 
     pub fn downstream(&self, downstream_id: DownstreamID) -> Option<&Downstream> {
-        self.downstreams.iter().find(|d| d.id == downstream_id)
+        self.downstreams().iter().find(|d| d.id == downstream_id)
     }
 
     pub fn downstreams(&self) -> &Vec<Downstream> {
-        if self.pending.is_some() {
-            &self.pending.as_ref().unwrap().downstreams
-        } else {
-            &self.downstreams
-        }
+        self.pending
+            .as_ref()
+            .map(|p| &p.downstreams)
+            .unwrap_or(&self.resolved_downstreams)
     }
 
     pub fn downstreams_mut(&mut self) -> &mut Vec<Downstream> {
-        if self.pending.is_some() {
-            &mut self.pending.as_mut().unwrap().downstreams
-        } else {
-            &mut self.downstreams
-        }
+        self.pending
+            .as_mut()
+            .map(|p| &mut p.downstreams)
+            .unwrap_or(&mut self.resolved_downstreams)
     }
 
+    /// Let downstream unsubscribe the delegate.
+    /// Return whether the delegate is empty or not.
     pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
         let error_event = err.map(|err| err.into_error_event(self.region_id));
         let region_id = self.region_id;
-        let downstreams = self.downstreams_mut();
-        downstreams.retain(|d| {
-            if d.id == id {
-                if let Some(error_event) = error_event.clone() {
-                    if let Err(err) = d.sink_error_event(region_id, error_event.clone()) {
-                        warn!("cdc send unsubscribe failed";
-                            "region_id" => region_id, "error" => ?err, "origin_error" => ?error_event,
-                            "downstream_id" => ?d.id, "downstream" => ?d.peer,
-                            "request_id" => d.req_id, "conn_id" => ?d.conn_id);
-                    }
+        if let Some(d) = self.remove_downstream(id) {
+            if let Some(error_event) = error_event {
+                if let Err(err) = d.sink_error_event(region_id, error_event.clone()) {
+                    warn!("cdc send unsubscribe failed";
+                        "region_id" => region_id, "error" => ?err, "origin_error" => ?error_event,
+                        "downstream_id" => ?d.id, "downstream" => ?d.peer,
+                        "request_id" => d.req_id, "conn_id" => ?d.conn_id);
                 }
-                d.state.store(DownstreamState::Stopped);
             }
-            d.id != id
-        });
-        let is_last = downstreams.is_empty();
-        if is_last {
-            self.handle.stop_observing();
+            d.state.store(DownstreamState::Stopped);
         }
-        is_last
+        self.downstreams().is_empty()
     }
 
     pub fn mark_failed(&mut self) {
@@ -310,8 +308,7 @@ impl Delegate {
     /// It broadcasts errors to all downstream and stops.
     pub fn stop(&mut self, err: Error) {
         self.mark_failed();
-        // Stop observe further events.
-        self.handle.stop_observing();
+        self.stop_observing();
 
         info!("cdc met region error";
             "region_id" => self.region_id, "error" => ?err);
@@ -334,6 +331,15 @@ impl Delegate {
         let _ = self.broadcast(send);
     }
 
+    /// `txn_extra_op` returns a shared flag which is accessed in TiKV's transaction layer to
+    /// determine whether to capture modifications' old value or not. Unsubsribing all downstreams
+    /// or calling `Delegate::stop` will store it with `TxnExtraOp::Noop`.
+    ///
+    /// NOTE: Dropping a `Delegate` won't update this flag.
+    pub fn txn_extra_op(&self) -> &AtomicCell<TxnExtraOp> {
+        self.txn_extra_op.as_ref()
+    }
+
     fn broadcast<F>(&self, send: F) -> Result<()>
     where
         F: Fn(&Downstream) -> Result<()>,
@@ -342,7 +348,7 @@ impl Delegate {
         assert!(
             !downstreams.is_empty(),
             "region {} miss downstream",
-            self.region_id,
+            self.region_id
         );
         for downstream in downstreams {
             send(downstream)?;
@@ -350,25 +356,39 @@ impl Delegate {
         Ok(())
     }
 
-    /// Install a resolver and return pending downstreams.
-    pub fn on_region_ready(&mut self, mut resolver: Resolver, region: Region) -> Vec<Downstream> {
+    /// Install a resolver. Return downstreams which fail because of the region's internal changes.
+    pub fn on_region_ready(
+        &mut self,
+        mut resolver: Resolver,
+        region: Region,
+    ) -> Vec<(&Downstream, Error)> {
         assert!(
             self.resolver.is_none(),
             "region {} resolver should not be ready",
             self.region_id,
         );
+
         // Mark the delegate as initialized.
-        self.region = Some(region);
         let mut pending = self.pending.take().unwrap();
-        for lock in pending.take_locks() {
+        self.region = Some(region);
+        info!("cdc region is ready"; "region_id" => self.region_id);
+
+        for lock in mem::take(&mut pending.locks) {
             match lock {
                 PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key, None),
                 PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
             }
         }
         self.resolver = Some(resolver);
-        info!("cdc region is ready"; "region_id" => self.region_id);
-        pending.take_downstreams()
+
+        self.resolved_downstreams = mem::take(&mut pending.downstreams);
+        let mut failed_downstreams = Vec::new();
+        for downstream in self.downstreams() {
+            if let Err(e) = self.check_epoch_on_ready(downstream) {
+                failed_downstreams.push((downstream, e));
+            }
+        }
+        failed_downstreams
     }
 
     /// Try advance and broadcast resolved ts.
@@ -527,13 +547,11 @@ impl Delegate {
         statistics: &mut Statistics,
         is_one_pc: bool,
     ) -> Result<()> {
-        let txn_extra_op = self.txn_extra_op;
+        debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         let mut read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
-            if txn_extra_op == TxnExtraOp::ReadOldValue {
-                let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-                let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
-                row.old_value = old_value.unwrap_or_default();
-            }
+            let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+            let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
+            row.old_value = old_value.unwrap_or_default();
             Ok(())
         };
 
@@ -571,19 +589,11 @@ impl Delegate {
             event: Some(Event_oneof_event::Entries(event_entries)),
             ..Default::default()
         };
-        let txn_extra_op = self.txn_extra_op;
         let send = move |downstream: &Downstream| {
-            if downstream.state.load() != DownstreamState::Normal {
+            if !downstream.state.load().ready_for_change_events() {
                 return Ok(());
             }
-            let mut event = change_data_event.clone();
-            if !downstream.enable_old_value && txn_extra_op == TxnExtraOp::ReadOldValue {
-                if let Some(Event_oneof_event::Entries(ref mut entries)) = event.event {
-                    for entry in entries.mut_entries().iter_mut() {
-                        entry.mut_old_value().clear();
-                    }
-                }
-            }
+            let event = change_data_event.clone();
             // Do not force send for real time change data events.
             let force_send = false;
             downstream.sink_event(event, force_send)
@@ -741,6 +751,57 @@ impl Delegate {
         self.mark_failed();
         Err(Error::request(store_err.into()))
     }
+
+    fn add_downstream(&mut self, downstream: Downstream) {
+        self.downstreams_mut().push(downstream);
+        self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
+    }
+
+    fn remove_downstream(&mut self, id: DownstreamID) -> Option<Downstream> {
+        let downstreams = self.downstreams_mut();
+        if let Some(index) = downstreams.iter().position(|x| x.id == id) {
+            let downstream = downstreams.swap_remove(index);
+            if downstreams.is_empty() {
+                // Stop observing when the last downstream is removed. Otherwise the observer
+                // will keep pushing events to the delegate.
+                self.stop_observing();
+            }
+            return Some(downstream);
+        }
+        None
+    }
+
+    fn check_epoch_on_ready(&self, downstream: &Downstream) -> Result<()> {
+        let region = self.region.as_ref().unwrap();
+        if let Err(e) = compare_region_epoch(
+            &downstream.region_epoch,
+            region,
+            false, /* check_conf_ver */
+            true,  /* check_ver */
+            true,  /* include_region */
+        ) {
+            info!(
+                "cdc fail to subscribe downstream";
+                "region_id" => region.id,
+                "downstream_id" => ?downstream.id,
+                "conn_id" => ?downstream.conn_id,
+                "req_id" => downstream.req_id,
+                "err" => ?e
+            );
+            // Downstream is outdated, mark stop.
+            downstream.state.store(DownstreamState::Stopped);
+            return Err(Error::request(e.into()));
+        }
+        Ok(())
+    }
+
+    fn stop_observing(&self) {
+        info!("stop observing"; "region_id" => self.region_id, "failed" => self.failed);
+        // Stop observe further events.
+        self.handle.stop_observing();
+        // To inform transaction layer no more old values are required for the region.
+        self.txn_extra_op.store(TxnExtraOp::Noop);
+    }
 }
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
@@ -856,15 +917,13 @@ mod tests {
         let rx = drain.drain();
         let request_id = 123;
         let mut downstream =
-            Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id);
+        let mut delegate = Delegate::new(region_id, Default::default());
         delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
         let resolver = Resolver::new(region_id);
-        for downstream in delegate.on_region_ready(resolver, region) {
-            delegate.subscribe(downstream).unwrap();
-        }
+        assert!(delegate.on_region_ready(resolver, region).is_empty());
 
         let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
@@ -966,5 +1025,62 @@ mod tests {
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
+    }
+
+    #[test]
+    fn test_delegate_subscribe_unsubscribe() {
+        let new_downstream = |id: u64, region_version: u64| {
+            let peer = format!("{}", id);
+            let mut epoch = RegionEpoch::default();
+            epoch.set_conf_ver(region_version);
+            epoch.set_version(region_version);
+            Downstream::new(peer, epoch, id, ConnID::new())
+        };
+
+        // Create a new delegate.
+        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
+        let mut delegate = Delegate::new(1, txn_extra_op.clone());
+        assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
+        assert!(delegate.handle.is_observing());
+
+        // Subscribe once.
+        let downstream1 = new_downstream(1, 1);
+        let downstream1_id = downstream1.id;
+        delegate.subscribe(downstream1).unwrap();
+        assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+        assert!(delegate.handle.is_observing());
+
+        // Subscribe twice and then unsubscribe the second downstream.
+        let downstream2 = new_downstream(2, 1);
+        let downstream2_id = downstream2.id;
+        delegate.subscribe(downstream2).unwrap();
+        assert!(!delegate.unsubscribe(downstream2_id, None));
+        assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+        assert!(delegate.handle.is_observing());
+
+        // `on_region_ready` when the delegate isn't resolved.
+        delegate.subscribe(new_downstream(1, 2)).unwrap();
+        let mut region = Region::default();
+        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(1);
+        {
+            let failures = delegate.on_region_ready(Resolver::new(1), region);
+            assert_eq!(failures.len(), 1);
+            let id = failures[0].0.id;
+            delegate.unsubscribe(id, None);
+            assert_eq!(delegate.downstreams().len(), 1);
+        }
+        assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+        assert!(delegate.handle.is_observing());
+
+        // Subscribe with an invalid epoch.
+        assert!(delegate.subscribe(new_downstream(1, 2)).is_err());
+        assert_eq!(delegate.downstreams().len(), 1);
+
+        // Unsubscribe all downstreams.
+        assert!(delegate.unsubscribe(downstream1_id, None));
+        assert!(delegate.downstreams().is_empty());
+        assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
+        assert!(!delegate.handle.is_observing());
     }
 }

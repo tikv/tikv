@@ -839,15 +839,21 @@ fn test_leader_drop_with_pessimistic_lock() {
         .get_txn_ext()
         .unwrap()
         .clone();
-    txn_ext.pessimistic_locks.write().insert(
-        Key::from_raw(b"k1"),
-        PessimisticLock {
-            primary: b"k1".to_vec().into_boxed_slice(),
-            start_ts: 10.into(),
-            ttl: 1000,
-            for_update_ts: 10.into(),
-            min_commit_ts: 10.into(),
-        },
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(
+                Key::from_raw(b"k1"),
+                PessimisticLock {
+                    primary: b"k1".to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 1000,
+                    for_update_ts: 10.into(),
+                    min_commit_ts: 10.into(),
+                },
+            )])
+            .is_ok()
     );
 
     // Isolate node 1, leader should be transferred to another node.
@@ -858,5 +864,5 @@ fn test_leader_drop_with_pessimistic_lock() {
     // When peer 1 becomes leader again, the pessimistic locks should be cleared before.
     cluster.clear_send_filters();
     cluster.must_transfer_leader(1, new_peer(1, 1));
-    assert!(txn_ext.pessimistic_locks.write().map.is_empty());
+    assert!(txn_ext.pessimistic_locks.read().is_empty());
 }

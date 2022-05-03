@@ -14,14 +14,14 @@ use crate::storage::kv::FlowStatsReporter;
 use crate::storage::txn::flow_controller::FlowController;
 use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{config::Config as StorageConfig, Storage};
-use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
+use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, APIVersion};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
-use pd_client::{Error as PdError, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
@@ -31,6 +31,7 @@ use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager,
 use raftstore::store::{GlobalReplicationState, PdTask, RefreshConfigTask, SplitCheckTask};
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use tikv_util::config::VersionTrack;
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -38,7 +39,7 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
+pub fn create_raft_storage<S, EK, R: FlowStatsReporter, Api: APIVersion>(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
@@ -48,7 +49,9 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     flow_controller: Arc<FlowController>,
     reporter: R,
     resource_tag_factory: ResourceTagFactory,
-) -> Result<Storage<RaftKv<EK, S>, LockManager>>
+    quota_limiter: Arc<QuotaLimiter>,
+    feature_gate: FeatureGate,
+) -> Result<Storage<RaftKv<EK, S>, LockManager, Api>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
     EK: KvEngine,
@@ -63,6 +66,8 @@ where
         flow_controller,
         reporter,
         resource_tag_factory,
+        quota_limiter,
+        feature_gate,
     )?;
     Ok(store)
 }

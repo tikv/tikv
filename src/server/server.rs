@@ -6,6 +6,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use api_version::APIVersion;
 use futures::compat::Stream01CompatExt;
 use futures::stream::StreamExt;
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
@@ -78,11 +79,11 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
     Server<T, S, E>
 {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<L: LockManager>(
+    pub fn new<L: LockManager, Api: APIVersion>(
         store_id: u64,
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E, L>,
+        storage: Storage<E, L, Api>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
         raft_router: T,
@@ -374,18 +375,20 @@ pub mod test_router {
         }
     }
 
-    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
-            Ok(())
-        }
-
+    impl SignificantRouter<RocksEngine> for TestRaftStoreRouter {
         fn significant_send(
             &self,
             _: u64,
             msg: SignificantMsg<RocksSnapshot>,
         ) -> RaftStoreResult<()> {
             let _ = self.significant_msg_sender.send(msg);
+            Ok(())
+        }
+    }
+
+    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
+        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+            let _ = self.tx.send(1);
             Ok(())
         }
 
@@ -408,17 +411,16 @@ mod tests {
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
     use crate::server::TestRaftStoreRouter;
-    use crate::storage::TestStorageBuilder;
+    use crate::storage::lock_manager::DummyLockManager;
+    use crate::storage::TestStorageBuilderApiV1;
+    use engine_rocks::{PerfLevel, RocksSnapshot};
     use grpcio::EnvBuilder;
-    use kvproto::kvrpcpb::ApiVersion;
+    use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::transport::Transport;
     use raftstore::store::*;
-
-    use crate::storage::lock_manager::DummyLockManager;
-    use engine_rocks::{PerfLevel, RocksSnapshot};
-    use kvproto::raft_serverpb::RaftMessage;
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
+    use tikv_util::quota_limiter::QuotaLimiter;
     use tokio::runtime::Builder as TokioBuilder;
 
     #[derive(Clone)]
@@ -465,7 +467,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
 
@@ -503,6 +505,7 @@ mod tests {
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(

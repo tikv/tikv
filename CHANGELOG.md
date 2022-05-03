@@ -465,7 +465,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [4.0.0-rc.1] - 2020-04-28
 
-+ Compability Changes
++ Compatibility Changes
   + Disable the Hibernate Region feature by default [#7618](https://github.com/tikv/tikv/pull/7618)
 + Important Bug Fixes
   + Fix the deadlock issue caused by the probe request from TiDB [#7540](https://github.com/tikv/tikv/pull/7540)
@@ -629,7 +629,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 ## [3.0.10]
 - Raftstore
     - Fix the system panic issue #6460 or data loss issue #5981 caused by Region merge failure [#6614](https://github.com/tikv/tikv/pull/6614)
-    - Support `yield` to optimize scheduling fairness, and support pre-transfering the leader to improve leader scheduling stability [#6563](https://github.com/tikv/tikv/pull/6563)
+    - Support `yield` to optimize scheduling fairness, and support pre-transferring the leader to improve leader scheduling stability [#6563](https://github.com/tikv/tikv/pull/6563)
 
 ## [3.0.9] - 2020-01-14
 - Raftstore
@@ -935,7 +935,7 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
 ## [2.1.10] - 2019-05-21
 * Reject transfer leader when the region recently changed config [#4684](https://github.com/tikv/tikv/pull/4684)
 * Add priority label to coprocessor metrics [#4643](https://github.com/tikv/tikv/pull/4643)
-* Fix the issue that read index may read stale data during transfering leader [#4724](https://github.com/tikv/tikv/pull/4724)
+* Fix the issue that read index may read stale data during transferring leader [#4724](https://github.com/tikv/tikv/pull/4724)
 * Fix the issue that `CommitMerge` may cause TiKV unable to restart [#4615](https://github.com/tikv/tikv/pull/4615)
 * Fix unknown logs [#4730](https://github.com/tikv/tikv/pull/4730)
 

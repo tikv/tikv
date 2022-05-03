@@ -548,14 +548,14 @@ mod tests {
             )
             .unwrap();
 
-            file_dict.insert(&"f1".to_owned(), &info1).unwrap();
-            file_dict.insert(&"f2".to_owned(), &info2).unwrap();
-            file_dict.insert(&"f3".to_owned(), &info3).unwrap();
+            file_dict.insert("f1", &info1).unwrap();
+            file_dict.insert("f2", &info2).unwrap();
+            file_dict.insert("f3", &info3).unwrap();
 
             file_dict.insert("f4", &info4).unwrap();
             file_dict.remove("f3").unwrap();
 
-            file_dict.remove(&"f2".to_owned()).unwrap();
+            file_dict.remove("f2").unwrap();
         }
         // Try open as v1 file. Should fail.
         {

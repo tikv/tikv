@@ -62,6 +62,7 @@ impl Column {
         &self.ft
     }
 
+    #[must_use]
     pub fn with_tp(mut self, tp: FieldTypeTp) -> Self {
         self.ft.as_mut_accessor().set_tp(tp);
         self
@@ -71,11 +72,13 @@ impl Column {
         self.ft.is_unsigned()
     }
 
+    #[must_use]
     pub fn with_unsigned(mut self) -> Self {
         self.ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
         self
     }
 
+    #[must_use]
     pub fn with_decimal(mut self, decimal: isize) -> Self {
         self.ft.as_mut_accessor().set_decimal(decimal);
         self

@@ -344,12 +344,13 @@ mod tests {
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {
             for (encoded_start_key, encoded_end_key, table_id) in cases {
-                region.set_start_key(encoded_start_key.unwrap_or_else(Vec::new));
-                region.set_end_key(encoded_end_key.unwrap_or_else(Vec::new));
+                region.set_start_key(encoded_start_key.unwrap_or_default());
+                region.set_end_key(encoded_end_key.unwrap_or_default());
                 runnable.run(SplitCheckTask::split_check(
                     region.clone(),
                     true,
                     CheckPolicy::Scan,
+                    None,
                 ));
 
                 if let Some(id) = table_id {

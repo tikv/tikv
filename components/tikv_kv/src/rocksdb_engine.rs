@@ -15,6 +15,7 @@ use engine_traits::{
 };
 use file_system::IORateLimiter;
 use kvproto::kvrpcpb::Context;
+use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
 
@@ -81,6 +82,7 @@ pub struct RocksEngine {
     sched: Scheduler<Task>,
     engines: Engines<BaseRocksEngine, BaseRocksEngine>,
     not_leader: Arc<AtomicBool>,
+    coprocessor: CoprocessorHost<BaseRocksEngine>,
 }
 
 impl RocksEngine {
@@ -90,6 +92,7 @@ impl RocksEngine {
         cfs_opts: Option<Vec<CFOptions<'_>>>,
         shared_block_cache: bool,
         io_rate_limiter: Option<Arc<IORateLimiter>>,
+        db_opts: Option<DBOptions>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -100,8 +103,11 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let worker = Worker::new("engine-rocksdb");
-        let mut db_opts = DBOptions::new();
-        db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
+        let mut db_opts = db_opts.unwrap_or_else(|| DBOptions::new());
+        if io_rate_limiter.is_some() {
+            db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
+        }
+
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path,
             Some(db_opts),
@@ -121,6 +127,7 @@ impl RocksEngine {
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
             not_leader: Arc::new(AtomicBool::new(false)),
             engines,
+            coprocessor: CoprocessorHost::default(),
         })
     }
 
@@ -143,6 +150,10 @@ impl RocksEngine {
     pub fn stop(&self) {
         let core = self.core.lock().unwrap();
         core.worker.stop();
+    }
+
+    pub fn mut_coprocessor(&mut self) -> &mut CoprocessorHost<BaseRocksEngine> {
+        &mut self.coprocessor
     }
 }
 
@@ -185,7 +196,7 @@ impl Engine for RocksEngine {
     fn async_write_ext(
         &self,
         _: &Context,
-        batch: WriteData,
+        mut batch: WriteData,
         cb: Callback<()>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
@@ -195,6 +206,28 @@ impl Engine for RocksEngine {
         if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
+
+        // Trigger "pre_propose_query" observers for RawKV API V2.
+        use kvproto::{metapb, raft_cmdpb};
+        let requests = batch
+            .modifies
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        let mut cmd_req = raft_cmdpb::RaftCmdRequest::default();
+        cmd_req.set_requests(requests.into());
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        // TODO: uncomment after finish modification of Storage.
+        // self.coprocessor
+        //     .pre_propose(&region, &mut cmd_req)
+        //     .map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;
+        batch.modifies = cmd_req
+            .take_requests()
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+
         if let Some(cb) = proposed_cb {
             cb();
         }

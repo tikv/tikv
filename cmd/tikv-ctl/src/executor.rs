@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use encryption_export::data_key_manager_from_config;
-use engine_rocks::get_env;
 use engine_rocks::raw_util::{db_exist, new_engine_opt};
 use engine_rocks::RocksEngine;
 use engine_traits::{
@@ -28,7 +27,7 @@ use std::pin::Pin;
 use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{process, str, u64};
+use std::{str, u64};
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::escape;
@@ -64,7 +63,9 @@ pub fn new_debug_executor(
 
     let cache = cfg.storage.block_cache.build_shared_cache();
     let shared_block_cache = cache.is_some();
-    let env = get_env(key_manager.clone(), None /*io_rate_limiter*/).unwrap();
+    let env = cfg
+        .build_shared_rocks_env(key_manager.clone(), None /*io_rate_limiter*/)
+        .unwrap();
 
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.set_env(env.clone());
@@ -89,7 +90,7 @@ pub fn new_debug_executor(
         let raft_path = cfg.infer_raft_db_path(Some(data_dir)).unwrap();
         if !db_exist(&raft_path) {
             error!("raft db not exists: {}", raft_path);
-            process::exit(-1);
+            tikv_util::logger::exit_process_gracefully(-1);
         }
         let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
             Ok(db) => db,
@@ -104,7 +105,7 @@ pub fn new_debug_executor(
         config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
         if !RaftLogEngine::exists(&config.dir) {
             error!("raft engine not exists: {}", config.dir);
-            process::exit(-1);
+            tikv_util::logger::exit_process_gracefully(-1);
         }
         let raft_db = RaftLogEngine::new(config, key_manager, None /*io_rate_limiter*/).unwrap();
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
@@ -275,17 +276,17 @@ pub trait DebugExecutor {
     ) {
         if !from.starts_with(b"z") || (!to.is_empty() && !to.starts_with(b"z")) {
             println!("from and to should start with \"z\"");
-            process::exit(-1);
+            tikv_util::logger::exit_process_gracefully(-1);
         }
         if !to.is_empty() && to < from {
             println!("\"to\" must be greater than \"from\"");
-            process::exit(-1);
+            tikv_util::logger::exit_process_gracefully(-1);
         }
 
         cfs.iter().for_each(|cf| {
             if !DATA_CFS.contains(cf) {
                 eprintln!("CF \"{}\" doesn't exist.", cf);
-                process::exit(-1);
+                tikv_util::logger::exit_process_gracefully(-1);
             }
         });
 
@@ -330,14 +331,14 @@ pub trait DebugExecutor {
                 });
         if let Err(e) = block_on(scan_future) {
             println!("{}", e);
-            process::exit(-1);
+            tikv_util::logger::exit_process_gracefully(-1);
         }
     }
 
     fn raw_scan(&self, from_key: &[u8], to_key: &[u8], limit: usize, cf: &str) {
         if !ALL_CFS.contains(&cf) {
             eprintln!("CF \"{}\" doesn't exist.", cf);
-            process::exit(-1);
+            tikv_util::logger::exit_process_gracefully(-1);
         }
         if !to_key.is_empty() && from_key >= to_key {
             eprintln!(
@@ -345,11 +346,11 @@ pub trait DebugExecutor {
                 escape(from_key),
                 escape(to_key)
             );
-            process::exit(-1);
+            tikv_util::logger::exit_process_gracefully(-1);
         }
         if limit == 0 {
             eprintln!("limit should be greater than 0");
-            process::exit(-1);
+            tikv_util::logger::exit_process_gracefully(-1);
         }
 
         self.raw_scan_impl(from_key, to_key, limit, cf);
@@ -403,7 +404,7 @@ pub trait DebugExecutor {
                     match wait? {
                         Err(e) => {
                             println!("db{} scan data in region {} fail: {}", i, region, e);
-                            process::exit(-1);
+                            tikv_util::logger::exit_process_gracefully(-1);
                         }
                         Ok(s) => Some(s),
                     }
@@ -530,7 +531,7 @@ pub trait DebugExecutor {
                     return region;
                 }
                 println!("no such region in pd: {}", region_id);
-                process::exit(-1);
+                tikv_util::logger::exit_process_gracefully(-1);
             })
             .collect();
         self.set_region_tombstone(regions);
@@ -578,7 +579,7 @@ pub trait DebugExecutor {
                     return region;
                 }
                 println!("no such region in pd: {}", region_id);
-                process::exit(-1);
+                tikv_util::logger::exit_process_gracefully(-1);
             })
             .collect();
         self.recover_regions(regions, read_only);
@@ -632,12 +633,14 @@ pub trait DebugExecutor {
     fn dump_store_info(&self);
 
     fn dump_cluster_info(&self);
+
+    fn reset_to_version(&self, version: u64);
 }
 
 impl DebugExecutor for DebugClient {
     fn check_local_mode(&self) {
         println!("This command is only for local mode");
-        process::exit(-1);
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
@@ -839,6 +842,13 @@ impl DebugExecutor for DebugClient {
             .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
         println!("{}", resp.get_cluster_id())
     }
+
+    fn reset_to_version(&self, version: u64) {
+        let mut req = ResetToVersionRequest::default();
+        req.set_ts(version);
+        DebugClient::reset_to_version(self, &req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
+    }
 }
 
 impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
@@ -989,7 +999,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             Ok(Some(region)) => region,
             Ok(None) => {
                 println!("no such region {} on PD", region_id);
-                process::exit(-1)
+                tikv_util::logger::exit_process_gracefully(-1);
             }
             Err(e) => perror_and_exit("RpcClient::get_region_by_id", e),
         };
@@ -1029,12 +1039,12 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
 
     fn check_region_consistency(&self, _: u64) {
         println!("only support remote mode");
-        process::exit(-1);
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
     fn modify_tikv_config(&self, _: &str, _: &str) {
         println!("only support remote mode");
-        process::exit(-1);
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 
     fn dump_region_properties(&self, region_id: u64) {
@@ -1069,6 +1079,10 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             println!("cluster id: {}", ident.get_cluster_id());
         }
     }
+
+    fn reset_to_version(&self, version: u64) {
+        Debugger::reset_to_version(self, version);
+    }
 }
 
 fn handle_engine_error(err: EngineError) -> ! {
@@ -1082,5 +1096,6 @@ fn handle_engine_error(err: EngineError) -> ! {
             );
         }
     }
-    process::exit(-1);
+
+    tikv_util::logger::exit_process_gracefully(-1);
 }

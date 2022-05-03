@@ -68,6 +68,9 @@ endif
 ifeq ($(shell uname -p),arm)
 ROCKSDB_SYS_SSE=0
 endif
+ifeq ($(shell uname -p),arm64)
+ROCKSDB_SYS_SSE=0
+endif
 
 # Build portable binary by default unless disable explicitly
 ifneq ($(ROCKSDB_SYS_PORTABLE),0)
@@ -82,10 +85,6 @@ endif
 
 ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
-endif
-
-ifeq ($(BCC_IOSNOOP),1)
-ENABLE_FEATURES += bcc-iosnoop
 endif
 
 # Set the storage engines used for testing
@@ -287,6 +286,7 @@ pre-clippy: unset-override
 
 clippy: pre-clippy
 	@./scripts/check-redact-log
+	@./scripts/check-docker-build
 	@./scripts/clippy-all
 
 pre-audit:

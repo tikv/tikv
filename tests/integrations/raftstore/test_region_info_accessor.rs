@@ -18,7 +18,9 @@ fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
 
     let mut res = Vec::new();
     for (end_key, id) in region_ranges {
-        let RegionInfo { ref region, role } = regions[&id];
+        let RegionInfo {
+            ref region, role, ..
+        } = regions[&id];
         assert_eq!(
             end_key,
             RangeKey::from_end_key(region.get_end_key().to_vec())
@@ -121,7 +123,11 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
     assert!(find_peer(&region2, 2).is_some());
 
     // Change leader
-    pd_client.transfer_leader(region2.get_id(), find_peer(&region2, 2).unwrap().clone());
+    pd_client.transfer_leader(
+        region2.get_id(),
+        find_peer(&region2, 2).unwrap().clone(),
+        vec![],
+    );
     let mut region3 = Region::default();
     let mut role3 = StateRole::default();
     // Wait for transfer leader finish

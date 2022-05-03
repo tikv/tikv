@@ -38,6 +38,7 @@
 //! * the [`engine_traits`](::engine_traits) crate, more detail of the engine abstraction.
 
 pub mod config;
+pub mod config_manager;
 pub mod errors;
 pub mod kv;
 pub mod lock_manager;
@@ -49,7 +50,6 @@ pub mod txn;
 mod read_pool;
 mod types;
 
-use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -62,6 +62,7 @@ pub use self::{
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
+use self::{kv::SnapContext, test_util::latest_feature_gate};
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
@@ -80,7 +81,7 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 
-use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV2};
+use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV1, APIV2};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -90,10 +91,12 @@ use kvproto::kvrpcpb::{
     RawGetRequest,
 };
 use kvproto::pdpb::QueryKind;
+use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
+use std::marker::PhantomData;
 use std::{
     borrow::Cow,
     iter,
@@ -103,8 +106,11 @@ use std::{
     },
 };
 use tikv_kv::SnapshotExt;
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
+
+use causal_ts;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -130,7 +136,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// to it, so that multiple versions can be saved at the same time.
 /// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
 /// encoding and appending timestamp.
-pub struct Storage<E: Engine, L: LockManager> {
+pub struct Storage<E: Engine, L: LockManager, Api: APIVersion> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
@@ -152,9 +158,17 @@ pub struct Storage<E: Engine, L: LockManager> {
     resource_tag_factory: ResourceTagFactory,
 
     api_version: ApiVersion,
+
+    quota_limiter: Arc<QuotaLimiter>,
+
+    _phantom: PhantomData<Api>,
 }
 
-impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
+/// Storage for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type StorageApiV1<E, L> = Storage<E, L, APIV1>;
+
+impl<E: Engine, L: LockManager, Api: APIVersion> Clone for Storage<E, L, Api> {
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -172,11 +186,13 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             concurrency_manager: self.concurrency_manager.clone(),
             api_version: self.api_version,
             resource_tag_factory: self.resource_tag_factory.clone(),
+            quota_limiter: Arc::clone(&self.quota_limiter),
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<E: Engine, L: LockManager> Drop for Storage<E, L> {
+impl<E: Engine, L: LockManager, Api: APIVersion> Drop for Storage<E, L, Api> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -208,7 +224,7 @@ macro_rules! check_key_size {
     };
 }
 
-impl<E: Engine, L: LockManager> Storage<E, L> {
+impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
     /// Create a `Storage` from given engine.
     pub fn from_engine<R: FlowStatsReporter>(
         engine: E,
@@ -220,7 +236,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
+        quota_limiter: Arc<QuotaLimiter>,
+        feature_gate: FeatureGate,
     ) -> Result<Self> {
+        assert_eq!(config.api_version(), Api::TAG, "Api version not match");
+
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
@@ -230,6 +250,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             flow_controller,
             reporter,
             resource_tag_factory.clone(),
+            Arc::clone(&quota_limiter),
+            feature_gate,
         );
 
         info!("Storage started.");
@@ -243,12 +265,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             max_key_size: config.max_key_size,
             api_version: config.api_version(),
             resource_tag_factory,
+            quota_limiter,
+            _phantom: PhantomData,
         })
     }
 
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
+    }
+
+    pub fn get_scheduler(&self) -> TxnScheduler<E, L> {
+        self.sched.clone()
     }
 
     pub fn get_concurrency_manager(&self) -> ConcurrencyManager {
@@ -378,6 +406,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// See the following for detail:
     ///   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
     ///   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+    // TODO: refactor to use `Api` parameter.
     fn check_api_version(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
@@ -437,6 +466,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
+    // TODO: refactor to use `Api` parameter.
     fn check_api_version_ranges(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
@@ -521,9 +551,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
+            &ctx,
+            vec![(key.as_encoded().to_vec(), key.as_encoded().to_vec())],
+        );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
+
+        let quota_limiter = self.quota_limiter.clone();
+        let mut sample = quota_limiter.new_sample();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -564,18 +600,21 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let stage_snap_recv_ts = begin_instant;
+                    let buckets = snapshot.ext().get_buckets();
                     let mut statistics = Statistics::default();
-                    let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                        bypass_locks,
-                        access_locks,
-                        false,
-                    );
-                    let result = snap_store
+                    let (result, delta) = {
+                        let _guard = sample.observe_cpu();
+                        let perf_statistics = PerfStatisticsInstant::new();
+                        let snap_store = SnapshotStore::new(
+                            snapshot,
+                            start_ts,
+                            ctx.get_isolation_level(),
+                            !ctx.get_not_fill_cache(),
+                            bypass_locks,
+                            access_locks,
+                            false,
+                        );
+                        let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
@@ -584,9 +623,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             r
                         });
 
-                    let delta = perf_statistics.delta();
+                        let delta = perf_statistics.delta();
+                        (result, delta)
+                    };
                     metrics::tls_collect_scan_details(CMD, &statistics);
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(key.as_encoded()),
+                        Some(key.as_encoded()),
+                        &statistics,
+                        buckets.as_ref(),
+                    );
                     metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -594,6 +641,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
+
+                    let read_bytes = key.len()
+                        + result
+                            .as_ref()
+                            .unwrap_or(&None)
+                            .as_ref()
+                            .map_or(0, |v| v.len());
+                    sample.add_read_bytes(read_bytes);
+                    let quota_delay = quota_limiter.async_consume(sample).await;
+                    if !quota_delay.is_zero() {
+                        TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                            .get(CMD)
+                            .inc_by(quota_delay.as_micros() as u64);
+                    }
 
                     let stage_finished_ts = Instant::now_coarse();
                     let schedule_wait_time =
@@ -651,9 +712,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, requests.len());
+        let rand_ctx = requests[rand_index].get_context();
+        let rand_key = requests[rand_index].get_key().to_vec();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag(requests[rand_index].get_context());
+            .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -739,10 +802,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     ) = req_snap;
                     match snap.await {
                         Ok(snapshot) => {
+                            let buckets = snapshot.ext().get_buckets();
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
-                                .multi(false)
                                 .bypass_locks(bypass_locks)
                                 .access_locks(access_locks)
                                 .build()
@@ -752,7 +815,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     let v = point_getter.get(&key);
                                     let stat = point_getter.take_statistics();
                                     let delta = perf_statistics.delta();
-                                    metrics::tls_collect_read_flow(region_id, &stat);
+                                    metrics::tls_collect_read_flow(
+                                        region_id,
+                                        Some(key.as_encoded()),
+                                        Some(key.as_encoded()),
+                                        &stat,
+                                        buckets.as_ref(),
+                                    );
                                     metrics::tls_collect_perf_stats(CMD, &delta);
                                     statistics.add(&stat);
                                     consumer.consume(
@@ -806,10 +875,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = keys
+            .iter()
+            .map(|k| (k.as_encoded().to_vec(), k.as_encoded().to_vec()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
-
+        let quota_limiter = self.quota_limiter.clone();
+        let mut sample = quota_limiter.new_sample();
         let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now_coarse();
@@ -853,43 +929,57 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-                    let stage_snap_recv_ts = begin_instant;
-                    let mut statistics = Statistics::default();
-                    let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                        bypass_locks,
-                        access_locks,
-                        false,
-                    );
-                    let result = snap_store
-                        .batch_get(&keys, &mut statistics)
-                        .map_err(Error::from)
-                        .map(|v| {
-                            let kv_pairs: Vec<_> = v
-                                .into_iter()
-                                .zip(keys)
-                                .filter(|&(ref v, ref _k)| {
-                                    !(v.is_ok() && v.as_ref().unwrap().is_none())
-                                })
-                                .map(|(v, k)| match v {
-                                    Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
-                                    Err(e) => Err(Error::from(e)),
-                                    _ => unreachable!(),
-                                })
-                                .collect();
-                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                                .get(CMD)
-                                .observe(kv_pairs.len() as f64);
-                            kv_pairs
-                        });
 
-                    let delta = perf_statistics.delta();
-                    metrics::tls_collect_scan_details(CMD, &statistics);
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    let stage_snap_recv_ts = begin_instant;
+                    let mut statistics = Vec::with_capacity(keys.len());
+                    let buckets = snapshot.ext().get_buckets();
+                    let (result, delta, stats) = {
+                        let _guard = sample.observe_cpu();
+                        let perf_statistics = PerfStatisticsInstant::new();
+                        let snap_store = SnapshotStore::new(
+                            snapshot,
+                            start_ts,
+                            ctx.get_isolation_level(),
+                            !ctx.get_not_fill_cache(),
+                            bypass_locks,
+                            access_locks,
+                            false,
+                        );
+                        let mut stats = Statistics::default();
+                        let result = snap_store
+                            .batch_get(&keys, &mut statistics)
+                            .map_err(Error::from)
+                            .map(|v| {
+                                let kv_pairs: Vec<_> = v
+                                    .into_iter()
+                                    .zip(keys)
+                                    .enumerate()
+                                    .filter(|&(i, (ref v, ref k))| {
+                                        metrics::tls_collect_read_flow(
+                                            ctx.get_region_id(),
+                                            Some(k.as_encoded()),
+                                            Some(k.as_encoded()),
+                                            &statistics[i],
+                                            buckets.as_ref(),
+                                        );
+                                        stats.add(&statistics[i]);
+                                        !(v.is_ok() && v.as_ref().unwrap().is_none())
+                                    })
+                                    .map(|(_, (v, k))| match v {
+                                        Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                                        Err(e) => Err(Error::from(e)),
+                                        _ => unreachable!(),
+                                    })
+                                    .collect();
+                                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                                    .get(CMD)
+                                    .observe(kv_pairs.len() as f64);
+                                kv_pairs
+                            });
+                        let delta = perf_statistics.delta();
+                        (result, delta, stats)
+                    };
+                    metrics::tls_collect_scan_details(CMD, &stats);
                     metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -897,6 +987,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
+
+                    let read_bytes = stats.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
+                        + stats.cf_statistics(CF_LOCK).flow_stats.read_bytes
+                        + stats.cf_statistics(CF_WRITE).flow_stats.read_bytes;
+                    sample.add_read_bytes(read_bytes);
+                    let quota_delay = quota_limiter.async_consume(sample).await;
+                    if !quota_delay.is_zero() {
+                        TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                            .get(CMD)
+                            .inc_by(quota_delay.as_micros() as u64);
+                    }
 
                     let stage_finished_ts = Instant::now_coarse();
                     let schedule_wait_time =
@@ -916,7 +1017,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Ok((
                         result?,
                         KvGetStatistics {
-                            stats: statistics,
+                            stats,
                             perf_stats: delta,
                             latency_stats,
                         },
@@ -953,7 +1054,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
+            &ctx,
+            vec![(
+                start_key.as_encoded().to_vec(),
+                match &end_key {
+                    Some(k) => k.as_encoded().to_vec(),
+                    None => vec![],
+                },
+            )],
+        );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -1001,7 +1111,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 if !ctx.get_stale_read() {
                     concurrency_manager.update_max_ts(start_ts);
                 }
-                if ctx.get_isolation_level() == IsolationLevel::Si {
+                if need_check_locks(ctx.get_isolation_level()) {
                     let begin_instant = Instant::now();
                     concurrency_manager
                         .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
@@ -1010,6 +1120,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 key,
                                 start_ts,
                                 &bypass_locks,
+                                ctx.get_isolation_level(),
                             )
                         })
                         .map_err(|e| {
@@ -1030,15 +1141,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     start_ts,
                     ..Default::default()
                 };
+                let mut key_range = KeyRange::default();
+                if let Some(start_key) = &start_key {
+                    key_range.set_start_key(start_key.as_encoded().to_vec());
+                }
+                if let Some(end_key) = &end_key {
+                    key_range.set_end_key(end_key.as_encoded().to_vec());
+                }
                 if need_check_locks_in_replica_read(&ctx) {
-                    let mut key_range = KeyRange::default();
-                    if let Some(start_key) = &start_key {
-                        key_range.set_start_key(start_key.as_encoded().to_vec());
-                    }
-                    if let Some(end_key) = &end_key {
-                        key_range.set_end_key(end_key.as_encoded().to_vec());
-                    }
-                    snap_ctx.key_ranges = vec![key_range];
+                    snap_ctx.key_ranges = vec![key_range.clone()];
                 }
 
                 let snapshot =
@@ -1046,6 +1157,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let perf_statistics = PerfStatisticsInstant::new();
+                    let buckets = snapshot.ext().get_buckets();
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -1064,7 +1176,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let statistics = scanner.take_statistics();
                     let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(key_range.get_start_key()),
+                        Some(key_range.get_end_key()),
+                        &statistics,
+                        buckets.as_ref(),
+                    );
                     metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -1106,7 +1224,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
+            &ctx,
+            vec![(
+                match &start_key {
+                    Some(k) => k.as_encoded().to_vec(),
+                    None => vec![],
+                },
+                match &end_key {
+                    Some(k) => k.as_encoded().to_vec(),
+                    None => vec![],
+                },
+            )],
+        );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         // Do not allow replica read for scan_lock.
@@ -1186,6 +1316,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
+                    let buckets = snapshot.ext().get_buckets();
                     let mut reader = MvccReader::new(
                         snapshot,
                         Some(ScanMode::Forward),
@@ -1210,7 +1341,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        start_key.as_ref().map(|key| key.as_encoded().as_slice()),
+                        end_key.as_ref().map(|key| key.as_encoded().as_slice()),
+                        &statistics,
+                        buckets.as_ref(),
+                    );
                     metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -1338,7 +1475,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1366,16 +1505,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
+                    let key = Key::from_encoded(key);
                     let r = store
-                        .raw_get_key_value(cf, &Key::from_encoded(key), &mut stats)
+                        .raw_get_key_value(cf, &key, &mut stats)
                         .map_err(Error::from);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(key.as_encoded()),
+                        Some(key.as_encoded()),
+                        &stats,
+                        buckets.as_ref(),
+                    );
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -1412,9 +1559,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, gets.len());
+        let rand_ctx = gets[rand_index].get_context();
+        let rand_key = gets[rand_index].get_key().to_vec();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag(gets[rand_index].get_context());
+            .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1463,21 +1612,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     match snap.await {
                         Ok(snapshot) => {
                             let mut stats = Statistics::default();
+                            let buckets = snapshot.ext().get_buckets();
                             let store = RawStore::new(snapshot, api_version);
+                            let key = Key::from_encoded(key);
                             match Self::rawkv_cf(&cf, api_version) {
                                 Ok(cf) => {
                                     consumer.consume(
                                         id,
                                         store
-                                            .raw_get_key_value(
-                                                cf,
-                                                &Key::from_encoded(key),
-                                                &mut stats,
-                                            )
+                                            .raw_get_key_value(cf, &key, &mut stats)
                                             .map_err(Error::from),
                                         begin_instant,
                                     );
-                                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+                                    tls_collect_read_flow(
+                                        ctx.get_region_id(),
+                                        Some(key.as_encoded()),
+                                        Some(key.as_encoded()),
+                                        &stats,
+                                        buckets.as_ref(),
+                                    );
                                 }
                                 Err(e) => {
                                     consumer.consume(id, Err(e), begin_instant);
@@ -1518,7 +1671,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = keys.iter().map(|k| (k.clone(), k.clone())).collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1530,7 +1686,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 tls_collect_query_batch(
                     ctx.get_region_id(),
                     ctx.get_peer(),
-                    key_ranges,
+                    key_ranges.clone(),
                     QueryKind::Get,
                 );
 
@@ -1548,6 +1704,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 {
                     let begin_instant = Instant::now_coarse();
@@ -1559,9 +1716,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .into_iter()
                         .map(Key::from_encoded)
                         .map(|k| {
-                            let v = store
-                                .raw_get_key_value(cf, &k, &mut stats)
-                                .map_err(Error::from);
+                            let mut s = Statistics::default();
+                            let v = store.raw_get_key_value(cf, &k, &mut s).map_err(Error::from);
+                            tls_collect_read_flow(
+                                ctx.get_region_id(),
+                                Some(k.as_encoded()),
+                                Some(k.as_encoded()),
+                                &s,
+                                buckets.as_ref(),
+                            );
+                            stats.add(&s);
                             (k, v)
                         })
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
@@ -1574,7 +1738,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(stats.data.flow_stats.read_keys as f64);
-                    tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -1623,6 +1786,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let raw_value = RawValue {
                         user_value: value,
                         expire_ts: ttl_to_expire_ts(ttl),
+                        is_delete: false,
                     };
                     Modify::Put(
                         Self::rawkv_cf(&cf, self.api_version)?,
@@ -1688,6 +1852,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             let raw_value = RawValue {
                                 user_value: v,
                                 expire_ts: ttl_to_expire_ts(ttl),
+                                is_delete: false,
                             };
                             Modify::Put(
                                 cf,
@@ -1871,6 +2036,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
                     let store = RawStore::new(snapshot, api_version);
@@ -1911,7 +2077,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     })
                     .map_err(Error::from);
 
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(start_key.as_encoded()),
+                        end_key.as_ref().map(|k| k.as_encoded().as_slice()),
+                        &statistics,
+                        buckets.as_ref(),
+                    );
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(statistics.data.flow_stats.read_keys as f64);
@@ -1950,7 +2122,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = ranges
+            .iter()
+            .map(|key_range| (key_range.start_key.clone(), key_range.end_key.clone()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1976,6 +2154,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
                     let store = RawStore::new(snapshot, api_version);
@@ -2006,6 +2185,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         } else {
                             Some(Key::from_encoded(end_key))
                         };
+                        let mut stats = Statistics::default();
                         let pairs = if reverse_scan {
                             store
                                 .reverse_raw_scan(
@@ -2013,7 +2193,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     &start_key,
                                     end_key.as_ref(),
                                     each_limit,
-                                    &mut statistics,
+                                    &mut stats,
                                     key_only,
                                 )
                                 .await
@@ -2024,12 +2204,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     &start_key,
                                     end_key.as_ref(),
                                     each_limit,
-                                    &mut statistics,
+                                    &mut stats,
                                     key_only,
                                 )
                                 .await
                         }
                         .map_err(Error::from)?;
+                        metrics::tls_collect_read_flow(
+                            ctx.get_region_id(),
+                            Some(start_key.as_encoded()),
+                            end_key.as_ref().map(|k| k.as_encoded().as_slice()),
+                            &stats,
+                            buckets.as_ref(),
+                        );
+                        statistics.add(&stats);
                         result.extend(pairs.into_iter().map(|res| res.map_err(Error::from)));
                     }
                     tls_collect_query_batch(
@@ -2038,7 +2226,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         key_ranges,
                         QueryKind::Scan,
                     );
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(statistics.data.flow_stats.read_keys as f64);
@@ -2073,7 +2260,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get_key_ttl;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2101,16 +2290,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
+                    let key = Key::from_encoded(key);
                     let r = store
-                        .raw_get_key_ttl(cf, &Key::from_encoded(key), &mut stats)
+                        .raw_get_key_ttl(cf, &key, &mut stats)
                         .map_err(Error::from);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(key.as_encoded()),
+                        Some(key.as_encoded()),
+                        &stats,
+                        buckets.as_ref(),
+                    );
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -2248,7 +2445,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = ranges
+            .iter()
+            .map(|key_range| (key_range.start_key.clone(), key_range.end_key.clone()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2278,16 +2481,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf("", api_version)?;
 
                 let begin_instant = tikv_util::time::Instant::now_coarse();
-                let mut stats = Statistics::default();
+                let mut stats = Vec::with_capacity(ranges.len());
                 let ret = store
-                    .raw_checksum_ranges(cf, ranges, &mut stats)
+                    .raw_checksum_ranges(cf, &ranges, &mut stats)
                     .await
                     .map_err(Error::from);
-                tls_collect_read_flow(ctx.get_region_id(), &stats);
+                stats.iter().zip(ranges.iter()).for_each(|(stats, range)| {
+                    tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(range.get_start_key()),
+                        Some(range.get_end_key()),
+                        stats,
+                        buckets.as_ref(),
+                    );
+                });
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(begin_instant.saturating_elapsed().as_secs_f64());
@@ -2336,14 +2548,20 @@ fn prepare_snap_ctx<'a>(
     }
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
-    if isolation_level == IsolationLevel::Si {
+    if need_check_locks(isolation_level) {
         let begin_instant = Instant::now();
         for key in keys.clone() {
             concurrency_manager
                 .read_key_check(key, |lock| {
                     // No need to check access_locks because they are committed which means they
                     // can't be in memory lock table.
-                    Lock::check_ts_conflict(Cow::Borrowed(lock), key, start_ts, bypass_locks)
+                    Lock::check_ts_conflict(
+                        Cow::Borrowed(lock),
+                        key,
+                        start_ts,
+                        bypass_locks,
+                        isolation_level,
+                    )
                 })
                 .map_err(|e| {
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
@@ -2377,6 +2595,11 @@ pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
     ctx.get_replica_read() && ctx.get_isolation_level() == IsolationLevel::Si
 }
 
+// checks whether the current isolation level needs to check related locks.
+pub fn need_check_locks(iso_level: IsolationLevel) -> bool {
+    matches!(iso_level, IsolationLevel::Si | IsolationLevel::RcCheckTs)
+}
+
 pub fn point_key_range(key: Key) -> KeyRange {
     let mut end_key = key.as_encoded().to_vec();
     end_key.push(0);
@@ -2391,23 +2614,36 @@ pub fn point_key_range(key: Key) -> KeyRange {
 ///
 /// Only used for test purpose.
 #[must_use]
-pub struct TestStorageBuilder<E: Engine, L: LockManager> {
+pub struct TestStorageBuilder<E: Engine, L: LockManager, Api: APIVersion> {
     engine: E,
     config: Config,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
     in_memory_pessimistic_lock: Arc<AtomicBool>,
     lock_mgr: L,
     resource_tag_factory: ResourceTagFactory,
+    _phantom: PhantomData<Api>,
 }
 
-impl TestStorageBuilder<RocksEngine, DummyLockManager> {
+/// TestStorageBuilder for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type TestStorageBuilderApiV1<E, L> = TestStorageBuilder<E, L, APIV1>;
+
+impl<Api: APIVersion> TestStorageBuilder<RocksEngine, DummyLockManager, Api> {
     /// Build `Storage<RocksEngine>`.
-    pub fn new(lock_mgr: DummyLockManager, api_version: ApiVersion) -> Self {
-        let engine = TestEngineBuilder::new()
-            .api_version(api_version)
+    pub fn new(lock_mgr: DummyLockManager) -> Self {
+        let mut engine = TestEngineBuilder::new()
+            .api_version(Api::TAG)
             .build()
             .unwrap();
-        Self::from_engine_and_lock_mgr(engine, lock_mgr, api_version)
+
+        // register causal observer for RawKV API V2
+        if let ApiVersion::V2 = Api::TAG {
+            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(engine.mut_coprocessor());
+        }
+
+        Self::from_engine_and_lock_mgr(engine, lock_mgr)
     }
 }
 
@@ -2529,10 +2765,10 @@ impl FlowStatsReporter for DummyReporter {
     fn report_write_stats(&self, _write_stats: WriteStats) {}
 }
 
-impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
-    pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L, api_version: ApiVersion) -> Self {
+impl<E: Engine, L: LockManager, Api: APIVersion> TestStorageBuilder<E, L, Api> {
+    pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
         let mut config = Config::default();
-        config.set_api_version(api_version);
+        config.set_api_version(Api::TAG);
         Self {
             engine,
             config,
@@ -2540,6 +2776,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             lock_mgr,
             resource_tag_factory: ResourceTagFactory::new_for_test(),
+            _phantom: PhantomData,
         }
     }
 
@@ -2579,7 +2816,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     }
 
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, L>> {
+    pub fn build(self) -> Result<Storage<E, L, Api>> {
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -2598,10 +2835,12 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             Arc::new(FlowController::empty()),
             DummyReporter,
             self.resource_tag_factory,
+            Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         )
     }
 
-    pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L>> {
+    pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L, Api>> {
         let engine = TxnTestEngine {
             engine: self.engine,
             txn_ext,
@@ -2624,6 +2863,8 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         )
     }
 }
@@ -2752,8 +2993,8 @@ pub mod test_util {
         )
     }
 
-    pub fn delete_pessimistic_lock<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    pub fn delete_pessimistic_lock<E: Engine, L: LockManager, Api: APIVersion>(
+        storage: &Storage<E, L, Api>,
         key: Key,
         start_ts: u64,
         for_update_ts: u64,
@@ -2823,6 +3064,12 @@ pub mod test_util {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
+
+    pub fn latest_feature_gate() -> FeatureGate {
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version(env!("CARGO_PKG_VERSION")).unwrap();
+        feature_gate
+    }
 }
 
 /// All statistics related to KvGet/KvBatchGet.
@@ -2840,6 +3087,8 @@ mod tests {
         test_util::*,
         *,
     };
+    use raw::encoded::RawEncodeSnapshot;
+    use raw::raw_mvcc::RawMvccSnapshot;
 
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
@@ -2854,9 +3103,12 @@ mod tests {
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
+    use api_version::{APIV1, APIV1TTL, APIV2};
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{raw_ttl::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{
+        raw_ttl::ttl_current_ts, IterOptions, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE,
+    };
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
@@ -2876,7 +3128,7 @@ mod tests {
     #[test]
     fn test_prewrite_blocks_read() {
         use kvproto::kvrpcpb::ExtraOp;
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
 
@@ -2913,7 +3165,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -2971,13 +3223,9 @@ mod tests {
     fn test_cf_error() {
         // New engine lacks normal column families.
         let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
-        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .build()
-        .unwrap();
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+            .build()
+            .unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -3063,7 +3311,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3399,16 +3647,13 @@ mod tests {
                 Some(cfs_opts),
                 cache.is_some(),
                 None, /*io_rate_limiter*/
+                None, /* CFOptions */
             )
         }
         .unwrap();
-        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .build()
-        .unwrap();
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+            .build()
+            .unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -3635,7 +3880,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3710,7 +3955,7 @@ mod tests {
 
     #[test]
     fn test_batch_get_command() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3796,7 +4041,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3882,7 +4127,7 @@ mod tests {
             scheduler_pending_write_threshold: ReadableSize(1),
             ..Default::default()
         };
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .config(config)
             .build()
             .unwrap();
@@ -3925,7 +4170,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -3963,7 +4208,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_check_ttl() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4021,7 +4266,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4078,7 +4323,7 @@ mod tests {
             scheduler_worker_pool_size: 1,
             ..Default::default()
         };
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .config(config)
             .build()
             .unwrap();
@@ -4132,7 +4377,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4234,23 +4479,18 @@ mod tests {
 
     #[test]
     fn test_raw_delete_range() {
-        test_raw_delete_range_impl(ApiVersion::V1);
-        test_raw_delete_range_impl(ApiVersion::V1ttl);
-        test_raw_delete_range_impl(ApiVersion::V2);
+        test_raw_delete_range_impl::<APIV1>();
+        test_raw_delete_range_impl::<APIV1TTL>();
+        test_raw_delete_range_impl::<APIV2>();
     }
 
-    fn test_raw_delete_range_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_raw_delete_range_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4352,23 +4592,18 @@ mod tests {
 
     #[test]
     fn test_raw_batch_put() {
-        test_raw_batch_put_impl(ApiVersion::V1);
-        test_raw_batch_put_impl(ApiVersion::V1ttl);
-        test_raw_batch_put_impl(ApiVersion::V2);
+        test_raw_batch_put_impl::<APIV1>();
+        test_raw_batch_put_impl::<APIV1TTL>();
+        test_raw_batch_put_impl::<APIV2>();
     }
 
-    fn test_raw_batch_put_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_raw_batch_put_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4385,7 +4620,7 @@ mod tests {
             .into_iter()
             .map(|(key, value, _)| (key, value))
             .collect();
-        let ttls = if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
+        let ttls = if Api::IS_TTL_ENABLED {
             test_data
                 .clone()
                 .into_iter()
@@ -4417,23 +4652,18 @@ mod tests {
 
     #[test]
     fn test_raw_batch_get() {
-        test_raw_batch_get_impl(ApiVersion::V1);
-        test_raw_batch_get_impl(ApiVersion::V1ttl);
-        test_raw_batch_get_impl(ApiVersion::V2);
+        test_raw_batch_get_impl::<APIV1>();
+        test_raw_batch_get_impl::<APIV1TTL>();
+        test_raw_batch_get_impl::<APIV2>();
     }
 
-    fn test_raw_batch_get_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_raw_batch_get_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4471,23 +4701,18 @@ mod tests {
 
     #[test]
     fn test_batch_raw_get() {
-        test_batch_raw_get_impl(ApiVersion::V1);
-        test_batch_raw_get_impl(ApiVersion::V1ttl);
-        test_batch_raw_get_impl(ApiVersion::V2);
+        test_batch_raw_get_impl::<APIV1>();
+        test_batch_raw_get_impl::<APIV1TTL>();
+        test_batch_raw_get_impl::<APIV2>();
     }
 
-    fn test_batch_raw_get_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_batch_raw_get_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4539,23 +4764,18 @@ mod tests {
 
     #[test]
     fn test_raw_batch_delete() {
-        test_raw_batch_delete_impl(ApiVersion::V1);
-        test_raw_batch_delete_impl(ApiVersion::V1ttl);
-        test_raw_batch_delete_impl(ApiVersion::V2);
+        test_raw_batch_delete_impl::<APIV1>();
+        test_raw_batch_delete_impl::<APIV1TTL>();
+        test_raw_batch_delete_impl::<APIV2>();
     }
 
-    fn test_raw_batch_delete_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_raw_batch_delete_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4640,29 +4860,24 @@ mod tests {
 
     #[test]
     fn test_raw_scan() {
-        test_raw_scan_impl(ApiVersion::V1);
-        test_raw_scan_impl(ApiVersion::V1ttl);
-        test_raw_scan_impl(ApiVersion::V2);
+        test_raw_scan_impl::<APIV1>();
+        test_raw_scan_impl::<APIV1TTL>();
+        test_raw_scan_impl::<APIV2>();
     }
 
-    fn test_raw_scan_impl(api_version: ApiVersion) {
-        let (end_key, end_key_reverse_scan) = if let ApiVersion::V2 = api_version {
+    fn test_raw_scan_impl<Api: APIVersion>() {
+        let (end_key, end_key_reverse_scan) = if let ApiVersion::V2 = Api::TAG {
             (Some(b"r\0z".to_vec()), Some(b"r\0\0".to_vec()))
         } else {
             (None, None)
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4957,8 +5172,9 @@ mod tests {
             (b"b".to_vec(), b"b3".to_vec()),
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
+        // TODO: refactor to use `Api` parameter.
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             true
         );
 
@@ -4968,7 +5184,7 @@ mod tests {
             (b"c".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             true
         );
 
@@ -4978,7 +5194,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             false
         );
 
@@ -4989,7 +5205,7 @@ mod tests {
             (b"a".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             false
         );
 
@@ -4999,7 +5215,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             true
         );
 
@@ -5009,7 +5225,7 @@ mod tests {
             (b"a3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             true
         );
 
@@ -5019,7 +5235,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             false
         );
 
@@ -5029,26 +5245,26 @@ mod tests {
             (b"c3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             false
         );
     }
 
     #[test]
     fn test_raw_batch_scan() {
-        test_raw_batch_scan_impl(ApiVersion::V1);
-        test_raw_batch_scan_impl(ApiVersion::V1ttl);
-        test_raw_batch_scan_impl(ApiVersion::V2);
+        test_raw_batch_scan_impl::<APIV1>();
+        test_raw_batch_scan_impl::<APIV1TTL>();
+        test_raw_batch_scan_impl::<APIV2>();
     }
 
-    fn test_raw_batch_scan_impl(api_version: ApiVersion) {
+    fn test_raw_batch_scan_impl<Api: APIVersion>() {
         let make_ranges = |delimiters: Vec<Vec<u8>>| -> Vec<KeyRange> {
             delimiters
                 .windows(2)
                 .map(|key_pair| {
                     let mut range = KeyRange::default();
                     range.set_start_key(key_pair[0].clone());
-                    if let ApiVersion::V2 = api_version {
+                    if let ApiVersion::V2 = Api::TAG {
                         range.set_end_key(key_pair[1].clone());
                     };
                     range
@@ -5056,17 +5272,12 @@ mod tests {
                 .collect()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -5298,22 +5509,17 @@ mod tests {
 
     #[test]
     fn test_raw_get_key_ttl() {
-        test_raw_get_key_ttl_impl(ApiVersion::V1ttl);
-        test_raw_get_key_ttl_impl(ApiVersion::V2);
+        test_raw_get_key_ttl_impl::<APIV1TTL>();
+        test_raw_get_key_ttl_impl::<APIV2>();
     }
 
-    fn test_raw_get_key_ttl_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_raw_get_key_ttl_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -5363,7 +5569,7 @@ mod tests {
 
     #[test]
     fn test_scan_lock() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5659,7 +5865,7 @@ mod tests {
     fn test_resolve_lock() {
         use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5770,7 +5976,7 @@ mod tests {
 
     #[test]
     fn test_resolve_lock_lite() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5878,7 +6084,7 @@ mod tests {
 
     #[test]
     fn test_txn_heart_beat() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5964,7 +6170,7 @@ mod tests {
 
     #[test]
     fn test_check_txn_status() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -6171,7 +6377,7 @@ mod tests {
 
     #[test]
     fn test_check_secondary_locks() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -6289,7 +6495,7 @@ mod tests {
     }
 
     fn test_pessimistic_lock_impl(pipelined_pessimistic_lock: bool) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
@@ -6495,6 +6701,7 @@ mod tests {
         test_pessimistic_lock_impl(true);
     }
 
+    #[allow(clippy::large_enum_variant)]
     pub enum Msg {
         WaitFor {
             start_ts: TimeStamp,
@@ -6589,10 +6796,9 @@ mod tests {
     #[test]
     fn validate_wait_for_lock_msg() {
         let (msg_tx, msg_rx) = channel();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             TestEngineBuilder::new().build().unwrap(),
             ProxyLockMgr::new(msg_tx),
-            ApiVersion::V1,
         )
         .build()
         .unwrap();
@@ -6706,10 +6912,9 @@ mod tests {
         let (msg_tx, msg_rx) = channel();
         let mut lock_mgr = ProxyLockMgr::new(msg_tx);
         lock_mgr.set_has_waiter(true);
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             TestEngineBuilder::new().build().unwrap(),
             lock_mgr,
-            ApiVersion::V1,
         )
         .build()
         .unwrap();
@@ -7010,7 +7215,7 @@ mod tests {
 
     #[test]
     fn test_check_memory_locks() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let cm = storage.get_concurrency_manager();
@@ -7109,7 +7314,7 @@ mod tests {
 
     #[test]
     fn test_read_access_locks() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
 
@@ -7188,7 +7393,7 @@ mod tests {
 
     #[test]
     fn test_async_commit_prewrite() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -7278,13 +7483,10 @@ mod tests {
     #[test]
     fn test_overlapped_ts_rollback_before_prewrite() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-            engine.clone(),
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .build()
-        .unwrap();
+        let storage =
+            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
+                .build()
+                .unwrap();
 
         let (k1, v1) = (b"key1", b"v1");
         let (k2, v2) = (b"key2", b"v2");
@@ -7449,11 +7651,8 @@ mod tests {
                     builder = builder.add_expected_write(expected_write)
                 }
                 let engine = builder.build();
-                let mut builder = TestStorageBuilder::from_engine_and_lock_mgr(
-                    engine,
-                    DummyLockManager {},
-                    ApiVersion::V1,
-                );
+                let mut builder =
+                    TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager);
                 builder.config.enable_async_apply_prewrite = true;
                 if self.pipelined_pessimistic_lock {
                     builder
@@ -7593,7 +7792,7 @@ mod tests {
 
     #[test]
     fn test_resolve_commit_pessimistic_locks() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -7927,7 +8126,8 @@ mod tests {
         for (i, (storage_api_version, req_api_version, cmd, keys, err)) in
             test_data.into_iter().enumerate()
         {
-            let res = Storage::<RocksEngine, DummyLockManager>::check_api_version(
+            // TODO: refactor to use `Api` parameter.
+            let res = StorageApiV1::<RocksEngine, DummyLockManager>::check_api_version(
                 storage_api_version,
                 req_api_version,
                 cmd,
@@ -7982,7 +8182,8 @@ mod tests {
                          cmd,
                          range: &[(Option<&[u8]>, Option<&[u8]>)],
                          err| {
-            let res = Storage::<RocksEngine, DummyLockManager>::check_api_version_ranges(
+            // TODO: refactor to use `Api` parameter.
+            let res = StorageApiV1::<RocksEngine, DummyLockManager>::check_api_version_ranges(
                 storage_api_version,
                 req_api_version,
                 cmd,
@@ -8147,7 +8348,7 @@ mod tests {
     #[test]
     fn test_write_in_memory_pessimistic_locks() {
         let txn_ext = Arc::new(TxnExt::default());
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .pipelined_pessimistic_lock(true)
             .in_memory_pessimistic_lock(true)
             .build_for_txn(txn_ext.clone())
@@ -8171,7 +8372,7 @@ mod tests {
 
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            let lock = pessimistic_locks.map.get(&k1).unwrap();
+            let lock = pessimistic_locks.get(&k1).unwrap();
             assert_eq!(
                 lock,
                 &(
@@ -8232,14 +8433,14 @@ mod tests {
         // After prewrite, the memory lock should be removed.
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            assert!(!pessimistic_locks.map.contains_key(&k1));
+            assert!(pessimistic_locks.get(&k1).is_none());
         }
     }
 
     #[test]
     fn test_disable_in_memory_pessimistic_locks() {
         let txn_ext = Arc::new(TxnExt::default());
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .pipelined_pessimistic_lock(true)
             .in_memory_pessimistic_lock(false)
             .build_for_txn(txn_ext.clone())
@@ -8261,7 +8462,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         // When disabling in-memory pessimistic lock, the lock map should remain unchanged.
-        assert!(txn_ext.pessimistic_locks.read().map.is_empty());
+        assert!(txn_ext.pessimistic_locks.read().is_empty());
 
         let (tx, rx) = channel();
         storage
@@ -8287,5 +8488,102 @@ mod tests {
             .unwrap();
         // Prewrite still succeeds
         assert!(rx.recv().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_raw_mvcc_snapshot() {
+        let storage = TestStorageBuilder::<_, _, APIV2>::new(DummyLockManager)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let ctx = Context {
+            api_version: ApiVersion::V2,
+            ..Default::default()
+        };
+
+        let raw_test_data = vec![
+            (b"r\0a".to_vec(), b"aa".to_vec(), 10),
+            (b"r\0aa".to_vec(), b"aaa".to_vec(), 20),
+            (b"r\0b".to_vec(), b"bb".to_vec(), 30),
+            (b"r\0bb".to_vec(), b"bbb".to_vec(), 40),
+            (b"r\0c".to_vec(), b"cc".to_vec(), 50),
+            (b"r\0cc".to_vec(), b"ccc".to_vec(), 60),
+            (b"r\0a".to_vec(), b"n_aa".to_vec(), 70),
+            (b"r\0aa".to_vec(), b"n_aaa".to_vec(), 80),
+            (b"r\0b".to_vec(), b"n_bb".to_vec(), 90),
+            (b"r\0bb".to_vec(), b"n_bbb".to_vec(), 100),
+            (b"r\0c".to_vec(), b"n_cc".to_vec(), 110),
+            (b"r\0cc".to_vec(), b"n_ccc".to_vec(), 120),
+        ];
+
+        let test_data: Vec<(Vec<u8>, Vec<u8>, u64)> = raw_test_data
+            .into_iter()
+            .map(|(key, val, ts)| {
+                (
+                    APIV2::encode_raw_key_owned(key, Some(TimeStamp::from(ts))).into_encoded(),
+                    val,
+                    ts,
+                )
+            })
+            .collect();
+        let ttl = 30;
+        // Write key-value pairs one by one
+        for (key, value, _) in test_data.clone() {
+            storage
+                .raw_put(
+                    ctx.clone(),
+                    "".to_string(),
+                    key.clone(),
+                    value.clone(),
+                    ttl,
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+        }
+        rx.recv().unwrap();
+
+        let snapshot = storage.get_snapshot();
+        let raw_mvcc_snapshot = RawMvccSnapshot::from_snapshot(snapshot);
+        let encode_snapshot: RawEncodeSnapshot<_, APIV2> =
+            RawEncodeSnapshot::from_snapshot(raw_mvcc_snapshot);
+        for &(ref key, ref value, _) in &test_data[6..12] {
+            let res = encode_snapshot.get_cf(CF_DEFAULT, &Key::from_encoded_slice(key));
+            assert_eq!(res.unwrap().unwrap(), value.to_owned());
+        }
+        let iter_opt = IterOptions::default();
+        let mut iter = encode_snapshot.iter_cf(CF_DEFAULT, iter_opt).unwrap();
+        let mut pairs = vec![];
+        let raw_key = APIV2::encode_raw_key_owned(b"r\0a".to_vec(), None);
+        iter.seek(&raw_key).unwrap();
+        while iter.valid().unwrap() {
+            pairs.push((iter.key().to_owned(), iter.value().to_owned()));
+            iter.next().unwrap();
+        }
+
+        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
+            .clone()
+            .into_iter()
+            .skip(6)
+            .map(|(key, val, _)| (key, val))
+            .collect();
+
+        assert_eq!(pairs, ret_data);
+        let raw_key = APIV2::encode_raw_key_owned(b"r\0z".to_vec(), None);
+        iter.seek_for_prev(&raw_key).unwrap();
+        pairs.clear();
+        while iter.valid().unwrap() {
+            pairs.push((iter.key().to_owned(), iter.value().to_owned()));
+            iter.prev().unwrap();
+        }
+        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
+            .into_iter()
+            .skip(6)
+            .rev()
+            .map(|(key, val, _)| (key, val))
+            .collect();
+        assert_eq!(pairs, ret_data);
+
+        // two way direction scan is not supported.
+        assert_eq!(iter.next().is_err(), true);
     }
 }

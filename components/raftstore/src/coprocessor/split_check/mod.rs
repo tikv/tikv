@@ -11,7 +11,7 @@ use tikv_util::box_try;
 
 use super::config::Config;
 use super::error::Result;
-use super::{KeyEntry, ObserverContext, SplitChecker};
+use super::{Bucket, KeyEntry, ObserverContext, SplitChecker};
 
 pub use self::half::{get_region_approximate_middle, HalfCheckObserver};
 pub use self::keys::{get_region_approximate_keys, KeysCheckObserver};
@@ -85,8 +85,48 @@ impl<'a, E> Host<'a, E> {
         Ok(vec![])
     }
 
+    pub fn approximate_bucket_keys<Kv: engine_traits::KvEngine>(
+        &mut self,
+        region: &Region,
+        engine: &Kv,
+    ) -> Result<Bucket> {
+        let region_size = get_region_approximate_size(engine, region, 0)?;
+        const MIN_BUCKET_COUNT_PER_REGION: u64 = 2;
+        if region_size >= self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION {
+            let mut bucket_checker = size::Checker::new(
+                self.cfg.region_bucket_size.0, /* not used */
+                self.cfg.region_bucket_size.0, /* not used */
+                region_size / self.cfg.region_bucket_size.0,
+                CheckPolicy::Approximate,
+            );
+            return bucket_checker
+                .approximate_split_keys(region, engine)
+                .map(|keys| Bucket {
+                    keys: keys
+                        .into_iter()
+                        .map(|k| ::keys::origin_key(&k).to_vec())
+                        .collect(),
+                    size: region_size,
+                });
+        }
+        Ok(Bucket {
+            keys: vec![],
+            size: region_size,
+        })
+    }
+
     #[inline]
     pub fn add_checker(&mut self, checker: Box<dyn SplitChecker<E>>) {
         self.checkers.push(checker);
+    }
+
+    #[inline]
+    pub fn enable_region_bucket(&self) -> bool {
+        self.cfg.enable_region_bucket
+    }
+
+    #[inline]
+    pub fn region_bucket_size(&self) -> u64 {
+        self.cfg.region_bucket_size.0
     }
 }

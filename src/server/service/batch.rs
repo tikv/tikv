@@ -13,6 +13,7 @@ use crate::storage::{
     Storage,
 };
 use crate::storage::{ResponseBatchConsumer, Result};
+use api_version::APIVersion;
 use kvproto::kvrpcpb::*;
 use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
@@ -62,9 +63,9 @@ impl ReqBatcher {
         self.raw_get_ids.push(id);
     }
 
-    pub fn maybe_commit<E: Engine, L: LockManager>(
+    pub fn maybe_commit<E: Engine, L: LockManager, Api: APIVersion>(
         &mut self,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, Api>,
         tx: &Sender<MeasuredSingleResponse>,
     ) {
         if self.gets.len() >= self.batch_size {
@@ -80,9 +81,9 @@ impl ReqBatcher {
         }
     }
 
-    pub fn commit<E: Engine, L: LockManager>(
+    pub fn commit<E: Engine, L: LockManager, Api: APIVersion>(
         self,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, Api>,
         tx: &Sender<MeasuredSingleResponse>,
     ) {
         if !self.gets.is_empty() {
@@ -203,8 +204,8 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
     }
 }
 
-fn future_batch_get_command<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_batch_get_command<E: Engine, L: LockManager, Api: APIVersion>(
+    storage: &Storage<E, L, Api>,
     requests: Vec<u64>,
     gets: Vec<GetRequest>,
     tx: Sender<MeasuredSingleResponse>,
@@ -243,8 +244,8 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     poll_future_notify(f);
 }
 
-fn future_batch_raw_get_command<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_batch_raw_get_command<E: Engine, L: LockManager, Api: APIVersion>(
+    storage: &Storage<E, L, Api>,
     requests: Vec<u64>,
     gets: Vec<RawGetRequest>,
     tx: Sender<MeasuredSingleResponse>,

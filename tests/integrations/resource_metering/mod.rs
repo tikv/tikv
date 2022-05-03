@@ -3,11 +3,14 @@
 pub mod test_read_keys;
 pub mod test_suite;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod test_dynamic_config;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod test_receiver;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod test_pubsub;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod test_cpu;

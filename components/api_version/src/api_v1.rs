@@ -4,6 +4,8 @@ use super::*;
 
 impl APIVersion for APIV1 {
     const TAG: ApiVersion = ApiVersion::V1;
+    #[cfg(any(test, feature = "testexport"))]
+    const CLIENT_TAG: ApiVersion = ApiVersion::V1;
     const IS_TTL_ENABLED: bool = false;
 
     #[inline]
@@ -20,6 +22,7 @@ impl APIVersion for APIV1 {
         Ok(RawValue {
             user_value: bytes,
             expire_ts: None,
+            is_delete: false,
         })
     }
 

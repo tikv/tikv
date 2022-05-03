@@ -3,10 +3,11 @@
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::{
-    self as pb, ApiVersion, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
+    self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
 };
 use kvproto::tikvpb::TikvClient;
 use raftstore::store::util::new_peer;
+use raftstore::store::LocksStatus;
 use std::sync::Arc;
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::tests::must_get;
@@ -19,7 +20,7 @@ use tikv::storage::txn::tests::{
     must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
 };
 use tikv::storage::{
-    self, lock_manager::DummyLockManager, Snapshot, TestEngineBuilder, TestStorageBuilder,
+    self, lock_manager::DummyLockManager, Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
@@ -53,13 +54,9 @@ fn test_txn_failpoints() {
 #[test]
 fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let (prewrite_tx, prewrite_rx) = channel();
     // sleep a while between getting max ts and store the lock in memory
@@ -104,13 +101,9 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
 #[test]
 fn test_snapshot_must_be_later_than_updating_max_ts() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite should complete.
     fail::cfg("after-snapshot", "sleep(500)").unwrap();
@@ -149,13 +142,9 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
 #[test]
 fn test_update_max_ts_before_scan_memory_locks() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     fail::cfg("before-storage-check-memory-locks", "sleep(500)").unwrap();
     let get_fut = storage.get(Context::default(), Key::from_raw(b"k"), 100.into());
@@ -199,13 +188,10 @@ macro_rules! lock_release_test {
         #[test]
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();
-            let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-                engine,
-                DummyLockManager {},
-                ApiVersion::V1,
-            )
-            .build()
-            .unwrap();
+            let storage =
+                TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+                    .build()
+                    .unwrap();
 
             let key = Key::from_raw(b"k");
             let cm = storage.get_concurrency_manager();
@@ -279,13 +265,9 @@ lock_release_test!(
 #[test]
 fn test_max_commit_ts_error() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
     let cm = storage.get_concurrency_manager();
 
     fail::cfg("after_prewrite_one_key", "sleep(500)").unwrap();
@@ -338,13 +320,9 @@ fn test_max_commit_ts_error() {
 #[test]
 fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
     let cm = storage.get_concurrency_manager();
 
     let (prewrite_tx, prewrite_rx) = channel();
@@ -523,15 +501,16 @@ fn test_pessimistic_lock_check_valid() {
 
     let lock_resp = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(300));
-    // Set `is_valid` to false, but the region remains available to serve.
-    txn_ext.pessimistic_locks.write().is_valid = false;
+    // Set `status` to `TransferringLeader` to make the locks table not writable,
+    // but the region remains available to serve.
+    txn_ext.pessimistic_locks.write().status = LocksStatus::TransferringLeader;
     fail::remove("acquire_pessimistic_lock");
 
     let resp = lock_resp.join().unwrap();
     // There should be no region error.
     assert!(!resp.has_region_error());
     // The lock should not be written to the in-memory pessimistic lock table.
-    assert!(txn_ext.pessimistic_locks.read().map.is_empty());
+    assert!(txn_ext.pessimistic_locks.read().is_empty());
 }
 
 #[test]
@@ -556,10 +535,13 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
     };
-    txn_ext
-        .pessimistic_locks
-        .write()
-        .insert(Key::from_raw(b"key"), lock.clone());
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(Key::from_raw(b"key"), lock.clone())])
+            .is_ok()
+    );
 
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();

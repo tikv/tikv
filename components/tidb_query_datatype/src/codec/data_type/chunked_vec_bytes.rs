@@ -238,10 +238,7 @@ mod tests {
             None,
         ];
         assert_eq!(ChunkedVecBytes::from_slice(test_bytes).to_vec(), test_bytes);
-        assert_eq!(
-            ChunkedVecBytes::from_slice(&test_bytes.to_vec()).to_vec(),
-            test_bytes
-        );
+        assert_eq!(ChunkedVecBytes::from_slice(test_bytes).to_vec(), test_bytes);
     }
 
     #[test]

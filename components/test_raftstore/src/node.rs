@@ -124,6 +124,10 @@ impl Transport for ChannelTransport {
         }
     }
 
+    fn set_store_allowlist(&mut self, _allowlist: Vec<u64>) {
+        unimplemented!();
+    }
+
     fn need_flush(&self) -> bool {
         false
     }

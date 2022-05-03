@@ -34,6 +34,7 @@ use tikv_util::worker::Worker;
 use txn_types::Key;
 
 use crate::config::ConfigController;
+use crate::server::reset_to_version::ResetToVersionManager;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 
 pub use crate::storage::mvcc::MvccInfoIterator;
@@ -117,6 +118,7 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 #[derive(Clone)]
 pub struct Debugger<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
+    reset_to_version_manager: ResetToVersionManager,
     cfg_controller: ConfigController,
 }
 
@@ -125,8 +127,10 @@ impl<ER: RaftEngine> Debugger<ER> {
         engines: Engines<RocksEngine, ER>,
         cfg_controller: ConfigController,
     ) -> Debugger<ER> {
+        let reset_to_version_manager = ResetToVersionManager::new(engines.kv.clone());
         Debugger {
             engines,
+            reset_to_version_manager,
             cfg_controller,
         }
     }
@@ -486,8 +490,9 @@ impl<ER: RaftEngine> Debugger<ER> {
         let mut iter = box_try!(self.engines.kv.iterator_cf_opt(CF_RAFT, readopts));
         iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
-        let fake_worker = Worker::new("fake-snap-worker");
-        let fake_snap_worker = fake_worker.lazy_build("fake-snap");
+        let fake_snap_worker = Worker::new("fake-snap-worker").lazy_build("fake-snap");
+        let fake_raftlog_fetch_worker =
+            Worker::new("fake-raftlog-fetch-worker").lazy_build("fake-raftlog-fetch");
 
         let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();
@@ -512,6 +517,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 self.engines.clone(),
                 region,
                 fake_snap_worker.scheduler(),
+                fake_raftlog_fetch_worker.scheduler(),
                 peer_id,
                 tag,
             ));
@@ -562,7 +568,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             let msg = format!("Store {} in the failed list", store_id);
             return Err(Error::Other(msg.into()));
         }
-        let mut wb = self.engines.kv.write_batch();
+        let mut wb = RocksWriteBatch::new(self.engines.kv.as_inner().clone());
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
         {
@@ -882,6 +888,10 @@ impl<ER: RaftEngine> Debugger<ER> {
         props.append(&mut props1);
         Ok(props)
     }
+
+    pub fn reset_to_version(&self, version: u64) {
+        self.reset_to_version_manager.start(version.into());
+    }
 }
 
 fn dump_default_cf_properties(
@@ -897,7 +907,6 @@ fn dump_default_cf_properties(
     for (_, v) in collection.iter() {
         num_entries += v.num_entries();
     }
-
     let sst_files = collection
         .iter()
         .map(|(k, _)| {
@@ -992,7 +1001,7 @@ fn recover_mvcc_for_range(
     let wb_limit: usize = 10240;
 
     loop {
-        let mut wb = db.c().write_batch();
+        let mut wb = RocksWriteBatch::new(db.clone());
         mvcc_checker.check_mvcc(&mut wb, Some(wb_limit))?;
 
         let batch_size = wb.count();

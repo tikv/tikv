@@ -598,19 +598,19 @@ mod tests {
         assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11_u64);
 
         assert_eq!(props.offsets.len(), 7);
-        let a = props.get(b"a".as_ref());
+        let a = props.get(b"a");
         assert_eq!(a.size, 1);
-        let e = props.get(b"e".as_ref());
+        let e = props.get(b"e");
         assert_eq!(e.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE + 5);
-        let i = props.get(b"i".as_ref());
+        let i = props.get(b"i");
         assert_eq!(i.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
-        let k = props.get(b"k".as_ref());
+        let k = props.get(b"k");
         assert_eq!(k.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11);
-        let m = props.get(b"m".as_ref());
+        let m = props.get(b"m");
         assert_eq!(m.keys, 11 + DEFAULT_PROP_KEYS_INDEX_DISTANCE);
-        let n = props.get(b"n".as_ref());
+        let n = props.get(b"n");
         assert_eq!(n.keys, 11 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
-        let o = props.get(b"o".as_ref());
+        let o = props.get(b"o");
         assert_eq!(o.keys, 12 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
         let empty = RangeOffsets::default();
         let cases = [

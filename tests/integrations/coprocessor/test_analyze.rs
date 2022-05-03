@@ -133,6 +133,7 @@ fn test_analyze_column_with_lock() {
                 assert!(hist.get_buckets().is_empty());
                 assert_eq!(hist.get_ndv(), 0);
             }
+            IsolationLevel::RcCheckTs => unimplemented!(),
         }
     }
 }
@@ -165,6 +166,8 @@ fn test_analyze_column() {
     assert_eq!(rows.len(), 4);
     let sum: u32 = rows.first().unwrap().get_counters().iter().sum();
     assert_eq!(sum, 3);
+    assert_eq!(collectors[0].get_total_size(), 21);
+    assert_eq!(collectors[1].get_total_size(), 4);
 }
 
 #[test]
@@ -222,6 +225,7 @@ fn test_analyze_index_with_lock() {
                 assert!(hist.get_buckets().is_empty());
                 assert_eq!(hist.get_ndv(), 0);
             }
+            IsolationLevel::RcCheckTs => unimplemented!(),
         }
     }
 }
@@ -297,7 +301,7 @@ fn test_analyze_sampling_reservoir() {
     assert_eq!(collector.get_null_counts(), vec![0, 1, 0, 1]);
     assert_eq!(collector.get_count(), 9);
     assert_eq!(collector.get_fm_sketch().len(), 4);
-    assert_eq!(collector.get_total_size(), vec![81, 64, 18, 64]);
+    assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
 }
 
 #[test]
@@ -328,7 +332,7 @@ fn test_analyze_sampling_bernoulli() {
     assert_eq!(collector.get_null_counts(), vec![0, 1, 0, 1]);
     assert_eq!(collector.get_count(), 9);
     assert_eq!(collector.get_fm_sketch().len(), 4);
-    assert_eq!(collector.get_total_size(), vec![81, 64, 18, 64]);
+    assert_eq!(collector.get_total_size(), vec![72, 56, 9, 56]);
 }
 
 #[test]

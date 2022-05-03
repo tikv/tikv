@@ -123,7 +123,7 @@ fn test_sync_recover_after_apply_snapshot() {
     // swith to async
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::Async);
+        .switch_replication_mode(DrAutoSyncState::Async, vec![]);
     rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     thread::sleep(Duration::from_millis(100));
@@ -140,7 +140,7 @@ fn test_sync_recover_after_apply_snapshot() {
 
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::SyncRecover);
+        .switch_replication_mode(DrAutoSyncState::SyncRecover, vec![]);
     thread::sleep(Duration::from_millis(100));
     // Add node 3 back, snapshot will apply
     cluster.clear_send_filters();
@@ -269,7 +269,7 @@ fn test_switching_replication_mode() {
 
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::Async);
+        .switch_replication_mode(DrAutoSyncState::Async, vec![]);
     rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     thread::sleep(Duration::from_millis(100));
@@ -279,7 +279,7 @@ fn test_switching_replication_mode() {
 
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::SyncRecover);
+        .switch_replication_mode(DrAutoSyncState::SyncRecover, vec![]);
     thread::sleep(Duration::from_millis(100));
     let mut request = new_request(
         region.get_id(),
@@ -309,6 +309,43 @@ fn test_switching_replication_mode() {
     let state = cluster.pd_client.region_replication_status(region.get_id());
     assert_eq!(state.state_id, 3);
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+}
+
+#[test]
+fn test_replication_mode_allowlist() {
+    let mut cluster = prepare_cluster();
+    run_cluster(&mut cluster);
+    cluster
+        .pd_client
+        .switch_replication_mode(DrAutoSyncState::Async, vec![1]);
+    thread::sleep(Duration::from_millis(100));
+
+    // 2,3 are paused, so it should not be able to write.
+    let region = cluster.get_region(b"k1");
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cf_cmd("default", b"k2", b"v2")],
+        false,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, request, cb)
+        .unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(100)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+
+    // clear allowlist.
+    cluster
+        .pd_client
+        .switch_replication_mode(DrAutoSyncState::Async, vec![]);
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 }
 
 /// Ensures hibernate region still works properly when switching replication mode.
@@ -449,7 +486,7 @@ fn test_assign_commit_groups_with_migrate_region() {
 
     // Split 1 region into 2 regions.
     let region = cluster.get_region(b"");
-    cluster.must_split(&region, &b"k".to_vec());
+    cluster.must_split(&region, b"k");
     // Put a key value pair.
     cluster.must_put(b"a1", b"v0");
     cluster.must_put(b"k1", b"v0");
