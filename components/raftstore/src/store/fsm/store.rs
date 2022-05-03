@@ -39,7 +39,7 @@ use engine_traits::CompactedEvent;
 use engine_traits::{RaftEngine, RaftLogBatch, WriteOptions};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{Feature, FeatureGate, PdClient};
-use sst_importer::SSTImporter;
+use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
