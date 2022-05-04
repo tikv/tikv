@@ -3,8 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::borrow::Cow;
 use std::fmt;
-use std::sync::atomic::AtomicUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicUsize, Arc};
 
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -23,7 +22,7 @@ use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::peer::{
-    UnsafeRecoveryFillOutReportSharedState, UnsafeRecoveryReportId,
+    UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryFillOutReportSharedState,
     UnsafeRecoveryWaitApplySharedState,
 };
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
@@ -574,16 +573,12 @@ pub enum PeerMsg<EK: KvEngine> {
     UpdateReplicationMode,
     Destroy(u64),
     UnsafeRecoveryDemoteFailedVoters {
+        shared_state: UnsafeRecoveryExecutePlanSharedState,
         failed_voters: Vec<metapb::Peer>,
-        counter: Arc<AtomicUsize>,
-        report_id: UnsafeRecoveryReportId,
     },
-    UnsafeRecoveryDestroy {
-        counter: Arc<AtomicUsize>,
-        report_id: UnsafeRecoveryReportId,
-    },
-    UnsafeRecoveryWaitApply(Arc<Mutex<UnsafeRecoveryWaitApplySharedState>>),
-    UnsafeRecoveryFillOutReport(Arc<Mutex<UnsafeRecoveryFillOutReportSharedState>>),
+    UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSharedState),
+    UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySharedState),
+    UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSharedState),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -672,9 +667,8 @@ where
 
     UnsafeRecoveryReport(pdpb::StoreReport),
     UnsafeRecoveryCreatePeer {
+        shared_state: UnsafeRecoveryExecutePlanSharedState,
         create: metapb::Region,
-        counter: Arc<AtomicUsize>,
-        report_id: UnsafeRecoveryReportId,
     },
 }
 

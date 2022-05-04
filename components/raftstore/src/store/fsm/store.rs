@@ -625,14 +625,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
                 StoreMsg::UnsafeRecoveryCreatePeer {
+                    shared_state,
                     create,
-                    counter,
-                    report_id,
                 } => {
                     self.on_unsafe_recovery_create_peer(create);
-                    if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-                        start_unsafe_recovery_report(&self.ctx.router, report_id);
-                    }
+                    shared_state.finish_for_self(&self.ctx.router);
                 }
             }
         }

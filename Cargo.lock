@@ -3771,6 +3771,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "derivative",
+ "derive_more",
  "encryption",
  "encryption_export",
  "engine_panic",

@@ -26,7 +26,9 @@ use yatp::Remote;
 
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
-use crate::store::peer::{start_unsafe_recovery_report, UnsafeRecoveryReportId};
+use crate::store::peer::{
+    start_unsafe_recovery_report, UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryReportContext,
+};
 use crate::store::transport::SignificantRouter;
 use crate::store::util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration};
 use crate::store::worker::query_stats::QueryStats;
@@ -1153,9 +1155,8 @@ where
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
-                    if resp.has_recovery_plan() {
+                    if let Some(plan) = resp.recovery_plan.take() {
                         info!("Unsafe recovery, received a recovery plan");
-                        let plan = resp.get_recovery_plan();
                         if plan.has_force_leader() {
                             let mut failed_stores = HashSet::default();
                             for failed_store in plan.get_force_leader().get_failed_stores() {
@@ -1174,83 +1175,55 @@ where
                             }
                             start_unsafe_recovery_report(
                                 &router,
-                                UnsafeRecoveryReportId {
+                                UnsafeRecoveryReportContext {
                                     id: plan.get_step(),
                                     exit_force_leader_after_reporting: false,
                                 },
                             );
-                        } else if plan.get_creates().len() != 0
-                            || plan.get_demotes().len() != 0
-                            || plan.get_tombstones().len() != 0
-                        {
-                            let counter = Arc::new(AtomicUsize::new(1));
-                            let report_id = UnsafeRecoveryReportId {
-                                id: plan.get_step(),
-                                exit_force_leader_after_reporting: true,
+                        } else {
+                            let shared_state = UnsafeRecoveryExecutePlanSharedState {
+                                report_context: UnsafeRecoveryReportContext {
+                                    id: plan.get_step(),
+                                    exit_force_leader_after_reporting: true,
+                                },
+                                counter: Arc::new(AtomicUsize::new(1)),
                             };
                             for create in plan.get_creates() {
                                 info!("Unsafe recovery, asked to create region"; "region" => ?create);
-                                let _ = counter.fetch_add(1, Ordering::SeqCst);
                                 if let Err(e) =
                                     router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
+                                        shared_state: shared_state.clone(),
                                         create: create.clone(),
-                                        counter: counter.clone(),
-                                        report_id,
                                     })
                                 {
                                     error!("fail to send creat peer message for recovery"; "err" => ?e);
-                                    let _ = counter.fetch_sub(1, Ordering::SeqCst);
+                                    let _ = shared_state.counter.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
                             for delete in plan.get_tombstones() {
                                 info!("Unsafe recovery, asked to delete peer"; "peer" => delete);
-                                let _ = counter.fetch_add(1, Ordering::SeqCst);
                                 if let Err(e) = router.force_send(
                                     *delete,
-                                    PeerMsg::UnsafeRecoveryDestroy {
-                                        counter: counter.clone(),
-                                        report_id,
-                                    },
+                                    PeerMsg::UnsafeRecoveryDestroy(shared_state.clone()),
                                 ) {
                                     error!("fail to send delete peer message for recovery"; "err" => ?e);
-                                    let _ = counter.fetch_sub(1, Ordering::SeqCst);
+                                    let _ = shared_state.counter.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
                             for demote in plan.get_demotes() {
                                 info!("Unsafe recovery, required to demote failed peers"; "demotion" => ?demote);
-                                let _ = counter.fetch_add(1, Ordering::SeqCst);
                                 if let Err(e) = router.force_send(
                                     demote.get_region_id(),
                                     PeerMsg::UnsafeRecoveryDemoteFailedVoters {
+                                        shared_state: shared_state.clone(),
                                         failed_voters: demote.get_failed_voters().to_vec(),
-                                        counter: counter.clone(),
-                                        report_id,
                                     },
                                 ) {
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);
-                                    let _ = counter.fetch_sub(1, Ordering::SeqCst);
+                                    let _ = shared_state.counter.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
-                            if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-                                start_unsafe_recovery_report(
-                                    &router,
-                                    UnsafeRecoveryReportId {
-                                        id: plan.get_step(),
-                                        exit_force_leader_after_reporting: true,
-                                    },
-                                );
-                            }
-                        } else {
-                            info!(
-                                "Unsafe recovery, required to send detailed report in the next heartbeat"
-                            );
-                            start_unsafe_recovery_report(
-                                &router,
-                                UnsafeRecoveryReportId {
-                                    id: plan.get_step(),
-                                    exit_force_leader_after_reporting: true,
-                                },
-                            );
+                            shared_state.finish_for_self(&router);
                         }
                     }
                 }
