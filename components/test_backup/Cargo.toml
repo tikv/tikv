@@ -11,6 +11,7 @@ cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
 
 [dependencies]
+api_version = { path = "../api_version" }
 backup = { path = "../backup" }
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager" }
@@ -21,8 +22,9 @@ file_system = { path = "../file_system", default-features = false }
 futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+protobuf = "2"
 rand = "0.8"
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore" }
@@ -30,5 +32,3 @@ tidb_query_common = { path = "../tidb_query_common" }
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }
-protobuf = "2"
-api_version = { path = "../api_version" }

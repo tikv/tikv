@@ -34,8 +34,8 @@ prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 raftstore = { path = "../raftstore", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog_derive = "0.2"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog_derive = "0.2"
 tempfile = "3.0"
 thiserror = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }
