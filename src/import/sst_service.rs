@@ -198,6 +198,8 @@ where
                 {
                     reqs.insert(encoded_key.to_owned(), (req, ts.into_inner()));
                 };
+                // When the request size get grow to half of the max request size,
+                // build the request and add it to a batch.
                 if req_size > raft_size / 2 {
                     req_size = 0;
                     let cmd = make_request(reqs, context.clone());

@@ -225,6 +225,7 @@ impl ImportDir {
         &self.root_dir
     }
 
+    /// Make an import path base on the basic path and the file name.
     pub fn get_import_path(&self, file_name: &str) -> Result<ImportPath> {
         let save_path = self.root_dir.join(&file_name);
         let temp_path = self.temp_dir.join(&file_name);

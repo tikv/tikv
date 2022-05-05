@@ -263,6 +263,14 @@ impl CmdObserveInfo {
         }
     }
 
+    /// Get the max observe level of the observer info by the observers currently registered.
+    /// Currently, TiKV uses a static strategy for managing observers.
+    /// There are a fixed number type of observer being registered in each TiKV node,
+    /// and normally, observers are singleton.
+    /// The types are:
+    /// CDC: Observer supports the `ChangeData` service.
+    /// PiTR: Observer supports the `backup-log` function.
+    /// RTS: Observer supports the `resolved-ts` advancing (and follower read, etc.).
     fn observe_level(&self) -> ObserveLevel {
         let cdc = if self.cdc_id.is_observing() {
             // `cdc` observe all data
@@ -271,6 +279,7 @@ impl CmdObserveInfo {
             ObserveLevel::None
         };
         let pitr = if self.pitr_id.is_observing() {
+            // `pitr` observe all data.
             ObserveLevel::All
         } else {
             ObserveLevel::None

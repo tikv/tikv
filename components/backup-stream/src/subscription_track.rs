@@ -1,4 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::sync::Arc;
 
 use crate::debug;
@@ -329,5 +330,38 @@ impl std::fmt::Debug for TwoPhaseResolver {
             .field(&self.stable_ts)
             .field(&self.resolver)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use txn_types::TimeStamp;
+
+    use super::TwoPhaseResolver;
+
+    #[test]
+    fn test_two_phase_resolver() {
+        let key = b"somewhere_over_the_rainbow";
+        let ts = TimeStamp::new;
+        let mut r = TwoPhaseResolver::new(42, Some(ts(42)));
+        r.track_phase_one_lock(ts(48), key.to_vec());
+        // When still in phase one, the resolver should not be advanced.
+        r.untrack_lock(&key[..]);
+        assert_eq!(r.resolve(ts(50)), ts(42));
+
+        // Even new lock tracked...
+        r.track_lock(ts(52), key.to_vec());
+        r.untrack_lock(&key[..]);
+        assert_eq!(r.resolve(ts(53)), ts(42));
+
+        // When pahse one done, the resolver should be resovled properly.
+        r.phase_one_done();
+        assert_eq!(r.resolve(ts(54)), ts(54));
+
+        // It should be able to track incremental locks.
+        r.track_lock(ts(55), key.to_vec());
+        assert_eq!(r.resolve(ts(56)), ts(55));
+        r.untrack_lock(&key[..]);
+        assert_eq!(r.resolve(ts(57)), ts(57));
     }
 }
