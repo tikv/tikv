@@ -23,7 +23,7 @@ use tikv_util::{
 use txn_types::KvPair;
 
 use crate::metrics::*;
-use crate::{backup_file_name, Error, Result};
+use crate::{backup_file_name, utils::KeyValueCodec, Error, Result};
 
 #[derive(Debug, Clone, Copy)]
 /// CfNameWrap wraps the CfName type.
@@ -340,16 +340,17 @@ impl BackupWriter {
 }
 
 /// A writer writes Raw kv into SST files.
-pub struct BackupRawKVWriter {
+pub struct BackupRawKvWriter {
     name: String,
     cf: CfName,
     writer: Writer,
     limiter: Limiter,
     cipher: CipherInfo,
+    codec: KeyValueCodec,
 }
 
-impl BackupRawKVWriter {
-    /// Create a new BackupRawKVWriter.
+impl BackupRawKvWriter {
+    /// Create a new BackupRawKvWriter.
     pub fn new(
         db: Arc<DB>,
         name: &str,
@@ -358,7 +359,8 @@ impl BackupRawKVWriter {
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         cipher: CipherInfo,
-    ) -> Result<BackupRawKVWriter> {
+        codec: KeyValueCodec,
+    ) -> Result<BackupRawKvWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf.into())
@@ -366,12 +368,13 @@ impl BackupRawKVWriter {
             .set_compression_type(compression_type)
             .set_compression_level(compression_level)
             .build(name)?;
-        Ok(BackupRawKVWriter {
+        Ok(BackupRawKvWriter {
             name: name.to_owned(),
             cf: cf.into(),
             writer: Writer::new(writer),
             limiter,
             cipher,
+            codec,
         })
     }
 
@@ -389,9 +392,12 @@ impl BackupRawKVWriter {
                 }
             };
 
-            assert!(!k.is_empty());
             self.writer.write(&k, &v)?;
-            self.writer.update_raw_with(&k, &v, need_checksum)?;
+            self.writer.update_raw_with(
+                &self.codec.decode_dst_encoded_key(&k)?,
+                self.codec.decode_dst_encoded_value(&v)?,
+                need_checksum,
+            )?;
         }
         Ok(())
     }

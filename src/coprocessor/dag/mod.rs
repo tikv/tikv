@@ -2,7 +2,7 @@
 
 mod storage_impl;
 
-pub use self::storage_impl::TiKVStorage;
+pub use self::storage_impl::TiKvStorage;
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
@@ -102,7 +102,7 @@ impl BatchDAGHandler {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request(
                 req,
                 ranges,
-                TiKVStorage::new(store, is_cache_enabled),
+                TiKvStorage::new(store, is_cache_enabled),
                 deadline,
                 streaming_batch_limit,
                 is_streaming,

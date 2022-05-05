@@ -12,7 +12,7 @@ use kvproto::kvrpcpb::{
 };
 use kvproto::tikvpb::TikvClient;
 
-use api_version::APIVersion;
+use api_version::KvFormat;
 use collections::HashMap;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
@@ -620,8 +620,8 @@ fn expect_locked(err: tikv::storage::Error, key: &[u8], lock_ts: TimeStamp) {
     assert_eq!(lock_info.get_lock_version(), lock_ts.into_inner());
 }
 
-fn test_async_apply_prewrite_impl<E: Engine, Api: APIVersion>(
-    storage: &Storage<E, DummyLockManager, Api>,
+fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
+    storage: &Storage<E, DummyLockManager, F>,
     ctx: Context,
     key: &[u8],
     value: &[u8],
@@ -959,8 +959,8 @@ fn test_async_apply_prewrite_fallback() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 }
 
-fn test_async_apply_prewrite_1pc_impl<E: Engine, Api: APIVersion>(
-    storage: &Storage<E, DummyLockManager, Api>,
+fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
+    storage: &Storage<E, DummyLockManager, F>,
     ctx: Context,
     key: &[u8],
     value: &[u8],

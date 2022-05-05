@@ -1,8 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{sync::Arc, thread, time::Duration};
+
+use grpcio::{ChannelBuilder, Environment, ServerBuilder};
+use grpcio_health::{create_health, proto::HealthCheckRequest, HealthClient, ServingStatus};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 /// When encountering raft/batch_raft mismatch store id error, the service is expected
 /// to drop connections in order to let raft_client re-resolve store address from PD
@@ -98,4 +103,46 @@ fn test_send_raft_channel_full() {
         must_get_equal(&cluster.get_engine(id), b"k3", b"v3");
     }
     fail::remove(on_batch_raft_stream_drop_by_err_fp);
+}
+
+#[test]
+fn test_serving_status() {
+    let mut cluster = new_server_cluster(0, 3);
+    // A round is 30 ticks, set inspect interval to 20ms, so one round is 0.3s.
+    cluster.cfg.raft_store.inspect_interval = ReadableDuration::millis(10);
+    cluster.run();
+
+    let service = cluster.sim.rl().health_services.get(&1).unwrap().clone();
+    let builder =
+        ServerBuilder::new(Arc::new(Environment::new(1))).register_service(create_health(service));
+    let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+    server.start();
+
+    let (addr, port) = server.bind_addrs().next().unwrap();
+    let ch =
+        ChannelBuilder::new(Arc::new(Environment::new(1))).connect(&format!("{}:{}", addr, port));
+    let client = HealthClient::new(ch);
+
+    let check = || {
+        let req = HealthCheckRequest {
+            service: "".to_string(),
+            ..Default::default()
+        };
+        let resp = client.check(&req).unwrap();
+        resp.status
+    };
+
+    thread::sleep(Duration::from_millis(500));
+    assert_eq!(check(), ServingStatus::Serving);
+
+    fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
+
+    thread::sleep(Duration::from_secs(1));
+    assert_eq!(check(), ServingStatus::ServiceUnknown);
+
+    fail::remove("pause_on_peer_collect_message");
+
+    // It should recover within one round.
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(check(), ServingStatus::Serving);
 }

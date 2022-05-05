@@ -393,7 +393,7 @@ pub enum Task {
     /// It's the only way to change the node from leader to follower, and vice versa.
     ChangeRole(Role),
     /// Change the ttl of DetectTable
-    ChangeTTL(Duration),
+    ChangeTtl(Duration),
     // Task only used for test
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(u64) + Send>),
@@ -413,7 +413,7 @@ impl Display for Task {
             ),
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
-            Task::ChangeTTL(ttl) => write!(f, "ChangeTTL {{ ttl: {:?} }}", ttl),
+            Task::ChangeTtl(ttl) => write!(f, "ChangeTtl {{ ttl: {:?} }}", ttl),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "Validate dead lock config"),
             #[cfg(test)]
@@ -472,7 +472,7 @@ impl Scheduler {
     }
 
     pub fn change_ttl(&self, t: Duration) {
-        self.notify_scheduler(Task::ChangeTTL(t));
+        self.notify_scheduler(Task::ChangeTtl(t));
     }
 
     #[cfg(any(test, feature = "testexport"))]
@@ -990,7 +990,7 @@ where
                 self.handle_detect_rpc(stream, sink);
             }
             Task::ChangeRole(role) => self.handle_change_role(role),
-            Task::ChangeTTL(ttl) => self.handle_change_ttl(ttl),
+            Task::ChangeTtl(ttl) => self.handle_change_ttl(ttl),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(self.inner.borrow().detect_table.ttl.as_millis() as u64),
             #[cfg(test)]

@@ -7,10 +7,11 @@ use std::{thread, usize};
 
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
+use grpcio_health::HealthService;
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::{create_debug, DebugClient};
 use kvproto::import_sstpb::create_import_sst;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
@@ -21,7 +22,7 @@ use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
 use crate::Config;
-use api_version::{dispatch_api_version, APIVersion};
+use api_version::{dispatch_api_version, KvFormat};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -48,7 +49,7 @@ use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
-use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::import::{ImportSstService, SstImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
 use tikv::server::load_statistics::ThreadLoadPool;
@@ -130,9 +131,10 @@ pub struct ServerCluster {
     addrs: AddressMap,
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
-    pub importers: HashMap<u64, Arc<SSTImporter>>,
+    pub importers: HashMap<u64, Arc<SstImporter>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
+    pub health_services: HashMap<u64, HealthService>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
@@ -177,6 +179,7 @@ impl ServerCluster {
             snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
+            health_services: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
             env,
@@ -233,7 +236,7 @@ impl ServerCluster {
         )
     }
 
-    fn run_node_impl<Api: APIVersion>(
+    fn run_node_impl<F: KvFormat>(
         &mut self,
         node_id: u64,
         mut cfg: Config,
@@ -271,7 +274,11 @@ impl ServerCluster {
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-
+        if ApiVersion::V2 == F::TAG {
+            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(&mut coprocessor_host);
+        }
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
@@ -349,7 +356,7 @@ impl ServerCluster {
             cfg.quota.foreground_read_bandwidth,
             cfg.quota.max_delay_duration,
         ));
-        let store = create_raft_storage::<_, _, _, Api>(
+        let store = create_raft_storage::<_, _, _, F>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
@@ -370,7 +377,7 @@ impl ServerCluster {
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
             Arc::new(
-                SSTImporter::new(
+                SstImporter::new(
                     &cfg.import,
                     dir,
                     key_manager.clone(),
@@ -379,7 +386,7 @@ impl ServerCluster {
                 .unwrap(),
             )
         };
-        let import_service = ImportSSTService::new(
+        let import_service = ImportSstService::new(
             cfg.import.clone(),
             sim_router.clone(),
             engines.kv.clone(),
@@ -434,6 +441,7 @@ impl ServerCluster {
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
         raft_store.validate().unwrap();
+        let health_service = HealthService::default();
         let mut node = Node::new(
             system,
             &server_cfg.value().clone(),
@@ -442,6 +450,7 @@ impl ServerCluster {
             Arc::clone(&self.pd_client),
             state,
             bg_worker.clone(),
+            Some(health_service.clone()),
         );
         node.try_bootstrap_store(engines.clone())?;
         let node_id = node.id();
@@ -462,6 +471,7 @@ impl ServerCluster {
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
+                health_service.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
@@ -525,6 +535,7 @@ impl ServerCluster {
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
         self.importers.insert(node_id, importer);
+        self.health_services.insert(node_id, health_service);
 
         lock_mgr
             .start(
@@ -721,13 +732,23 @@ impl Cluster<ServerCluster> {
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+}
+
+pub fn new_server_cluster_with_api_ver(
+    id: u64,
+    count: usize,
+    api_ver: ApiVersion,
+) -> Cluster<ServerCluster> {
+    let pd_client = Arc::new(TestPdClient::new(id, false));
+    let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
+    Cluster::new(id, count, sim, pd_client, api_ver)
 }
 
 pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
 pub fn must_new_cluster_mul(count: usize) -> (Cluster<ServerCluster>, metapb::Peer, Context) {
