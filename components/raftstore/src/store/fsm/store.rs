@@ -2646,24 +2646,27 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn on_unsafe_recovery_create_peer(&self, region: Region) {
         info!("Unsafe recovery, creating a peer"; "peer" => ?region);
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        for (_, id) in meta.region_ranges.range((
-            Excluded(data_key(region.get_start_key())),
-            Unbounded::<Vec<u8>>,
-        )) {
+        if let Some((_, id)) = meta
+            .region_ranges
+            .range((
+                Excluded(data_key(region.get_start_key())),
+                Unbounded::<Vec<u8>>,
+            ))
+            .next()
+        {
             let exist_region = &meta.regions[id];
-            if enc_start_key(exist_region) >= data_end_key(region.get_end_key()) {
-                break;
-            }
-            if exist_region.get_id() == region.get_id() {
-                warn!("Unsafe recovery, region has already been created."; "region"=>?region);
-                return;
-            } else {
-                error!(
-                    "Unsafe recovery, region to be created overlaps with an existing region";
-                    "region" => ?region,
-                    "exist_region" => ?exist_region,
-                );
-                return;
+            if enc_start_key(exist_region) < data_end_key(region.get_end_key()) {
+                if exist_region.get_id() == region.get_id() {
+                    warn!("Unsafe recovery, region has already been created."; "region"=>?region);
+                    return;
+                } else {
+                    error!(
+                        "Unsafe recovery, region to be created overlaps with an existing region";
+                        "region" => ?region,
+                        "exist_region" => ?exist_region,
+                    );
+                    return;
+                }
             }
         }
         let mut kv_wb = self.ctx.engines.kv.write_batch();

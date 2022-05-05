@@ -750,7 +750,7 @@ where
         shared_state: UnsafeRecoveryExecutePlanSharedState,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if !self.fsm.peer.force_leader.is_some() {
+        if self.fsm.peer.force_leader.is_none() {
             error!(
                 "Unsafe recovery, demoting failed voters failed, since this peer is not forced leader";
                 "region" => ?self.region(),
@@ -857,19 +857,13 @@ where
         &mut self,
         shared_state: UnsafeRecoveryFillOutReportSharedState,
     ) {
-        info!("Unsafe recovery, filling out peer report.";
-    "region" => ?self.region(),
-"force_leader" => self.fsm.peer.force_leader.is_some());
+        info!(
+            "Unsafe recovery, filling out peer report.";
+            "region" => ?self.region(),
+            "force_leader" => self.fsm.peer.force_leader.is_some()
+        );
         let mut self_report = pdpb::PeerReport::default();
-        match self.ctx.engines.raft.get_raft_state(self.region_id()) {
-            Ok(Some(raft_local_state)) => self_report.set_raft_state(raft_local_state),
-            Ok(None) => {
-                error!("Unsafe recovery, can't find raft local state"; "region" => self.region_id())
-            }
-            Err(e) => {
-                error!("Unsafe recovery, fail to read raft local state"; "region" => self.region_id(), "err" => ?e)
-            }
-        };
+        self_report.set_raft_state(self.fsm.peer.get_store().raft_state().clone());
         let region_state_key = keys::region_state_key(self.region_id());
         match self
             .ctx
@@ -1948,7 +1942,7 @@ where
                             if failed_voters.is_empty() {
                                 return false;
                             }
-                            if !self.fsm.peer.force_leader.is_some() {
+                            if self.fsm.peer.force_leader.is_none() {
                                 error!(
                                     "Unsafe recovery, demoting failed voters failed, after exit joint, this peer is no longer forced leader"
                                 );
@@ -1973,7 +1967,7 @@ where
                                 );
                                 return false;
                             }
-                            return true;
+                            true
                         };
 
                         let owned_failed_voters = failed_voters.to_owned();
@@ -1982,9 +1976,11 @@ where
                         // holding the state reference, explictly call "finish" here.
                         shared_state.finish_for_self(&self.ctx.router);
                         if still_need_demote() {
-                            info!("Unsafe recovery, demoting failed voters after exiting joint stata.";
-                             "region" => ?self.region(),
-                            "failed_voters" => ?owned_failed_voters);
+                            info!(
+                                "Unsafe recovery, demoting failed voters after exiting joint stata.";
+                                "region" => ?self.region(),
+                                "failed_voters" => ?owned_failed_voters
+                            );
                             self.propose_raft_command_internal(
                                 demote_failed_voters_request(
                                     self.region(),

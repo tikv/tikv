@@ -4807,24 +4807,22 @@ where
         ctx: &PollContext<EK, ER, T>,
         force: bool,
     ) {
-        if let Some(unsafe_recovery_state) = &self.unsafe_recovery_state {
-            if let UnsafeRecoveryState::WaitApply {
-                target_index,
-                shared_state,
-            } = unsafe_recovery_state
-            {
-                if self.raft_group.raft.raft_log.applied >= *target_index || force {
-                    info!(
-                        "Unsafe recovery, finish wait apply";
-                        "region_id" => self.region().get_id(),
-                        //"peer_id" => self.peer_id(),
-                        "target_index" => target_index,
-                        "applied" =>  self.raft_group.raft.raft_log.applied,
-                        "force" => force,
-                    );
-                    shared_state.finish_for_self(&ctx.router);
-                    self.unsafe_recovery_state = None;
-                }
+        if let Some(UnsafeRecoveryState::WaitApply {
+            target_index,
+            shared_state,
+        }) = &self.unsafe_recovery_state
+        {
+            if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                info!(
+                    "Unsafe recovery, finish wait apply";
+                    "region_id" => self.region().get_id(),
+                    //"peer_id" => self.peer_id(),
+                    "target_index" => target_index,
+                    "applied" =>  self.raft_group.raft.raft_log.applied,
+                    "force" => force,
+                );
+                shared_state.finish_for_self(&ctx.router);
+                self.unsafe_recovery_state = None;
             }
         }
     }

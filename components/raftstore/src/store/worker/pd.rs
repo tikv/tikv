@@ -1149,7 +1149,7 @@ where
         let router = self.router.clone();
         let resp = self
             .pd_client
-            .store_heartbeat(stats, store_report, dr_autosync_status.clone());
+            .store_heartbeat(stats, store_report, dr_autosync_status);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
