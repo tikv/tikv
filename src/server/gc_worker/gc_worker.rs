@@ -220,6 +220,47 @@ impl MvccRaw {
     }
 }
 
+struct KeysInRegions<R: Iterator<Item = Region>> {
+    keys: Peekable<IntoIter<Key>>,
+    regions: Peekable<R>,
+}
+impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
+    type Item = Key;
+    fn next(&mut self) -> Option<Key> {
+        loop {
+            let region = self.regions.peek()?;
+            let key = self.keys.peek()?.as_encoded().as_slice();
+            if key < region.get_start_key() {
+                self.keys.next();
+            } else if region.get_end_key().is_empty() || key < region.get_end_key() {
+                return self.keys.next();
+            } else {
+                self.regions.next();
+            }
+        }
+    }
+}
+
+fn get_keys_in_regions(
+    keys: Vec<Key>,
+    regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
+) -> Result<Box<dyn Iterator<Item = Key>>> {
+    if keys.len() >= 2 {
+        if let Some((store_id, region_info_provider)) = regions_provider {
+            let start = keys.first().unwrap().as_encoded();
+            let end = keys.last().unwrap().as_encoded();
+            let regions = box_try!(region_info_provider.get_regions_in_range(start, end))
+                .into_iter()
+                .filter(move |r| find_peer(r, store_id).is_some())
+                .peekable();
+
+            let keys = keys.into_iter().peekable();
+            return Ok(Box::new(KeysInRegions { keys, regions }));
+        }
+    }
+    Ok(Box::new(keys.into_iter()))
+}
+
 impl<E, RR> GcRunner<E, RR>
 where
     E: Engine,
@@ -339,47 +380,6 @@ where
         safe_point: TimeStamp,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     ) -> Result<(usize, usize)> {
-        struct KeysInRegions<R: Iterator<Item = Region>> {
-            keys: Peekable<IntoIter<Key>>,
-            regions: Peekable<R>,
-        }
-        impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
-            type Item = Key;
-            fn next(&mut self) -> Option<Key> {
-                loop {
-                    let region = self.regions.peek()?;
-                    let key = self.keys.peek()?.as_encoded().as_slice();
-                    if key < region.get_start_key() {
-                        self.keys.next();
-                    } else if region.get_end_key().is_empty() || key < region.get_end_key() {
-                        return self.keys.next();
-                    } else {
-                        self.regions.next();
-                    }
-                }
-            }
-        }
-
-        fn get_keys_in_regions(
-            keys: Vec<Key>,
-            regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
-        ) -> Result<Box<dyn Iterator<Item = Key>>> {
-            if keys.len() >= 2 {
-                if let Some((store_id, region_info_provider)) = regions_provider {
-                    let start = keys.first().unwrap().as_encoded();
-                    let end = keys.last().unwrap().as_encoded();
-                    let regions = box_try!(region_info_provider.get_regions_in_range(start, end))
-                        .into_iter()
-                        .filter(move |r| find_peer(r, store_id).is_some())
-                        .peekable();
-
-                    let keys = keys.into_iter().peekable();
-                    return Ok(Box::new(KeysInRegions { keys, regions }));
-                }
-            }
-            Ok(Box::new(keys.into_iter()))
-        }
-
         let count = keys.len();
         let range_start_key = keys.first().unwrap().clone().into_encoded();
         let range_end_key = {
@@ -464,47 +464,6 @@ where
         let last_raw_key = keys.last().unwrap().clone().append_ts(TimeStamp::zero());
         let range_end_key = last_raw_key.as_encoded();
 
-        struct KeysInRegions<R: Iterator<Item = Region>> {
-            keys: Peekable<IntoIter<Key>>,
-            regions: Peekable<R>,
-        }
-        impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
-            type Item = Key;
-            fn next(&mut self) -> Option<Key> {
-                loop {
-                    let region = self.regions.peek()?;
-                    let key = self.keys.peek()?.as_encoded().as_slice();
-                    if key < region.get_start_key() {
-                        self.keys.next();
-                    } else if region.get_end_key().is_empty() || key < region.get_end_key() {
-                        return self.keys.next();
-                    } else {
-                        self.regions.next();
-                    }
-                }
-            }
-        }
-
-        fn get_keys_in_regions(
-            keys: Vec<Key>,
-            regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
-        ) -> Result<Box<dyn Iterator<Item = Key>>> {
-            if keys.len() >= 2 {
-                if let Some((store_id, region_info_provider)) = regions_provider {
-                    let start = keys.first().unwrap().as_encoded();
-                    let end = keys.last().unwrap().as_encoded();
-                    let regions = box_try!(region_info_provider.get_regions_in_range(start, end))
-                        .into_iter()
-                        .filter(move |r| find_peer(r, store_id).is_some())
-                        .peekable();
-
-                    let keys = keys.into_iter().peekable();
-                    return Ok(Box::new(KeysInRegions { keys, regions }));
-                }
-            }
-            Ok(Box::new(keys.into_iter()))
-        }
-
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
         let mut snapshot = self
@@ -536,9 +495,7 @@ where
         raw_modifys: &mut MvccRaw,
         kv_snapshot: &mut <E as Engine>::Snap,
     ) -> Result<()> {
-        let start_key = key
-            .clone()
-            .append_ts(TimeStamp::new(safe_point.into_inner() - 1));
+        let start_key = key.clone().append_ts(safe_point.prev());
 
         let end_key = key.clone().append_ts(TimeStamp::zero());
 
