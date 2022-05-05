@@ -174,9 +174,11 @@ impl StoreMeta {
     /// end_key > file.smallestkey
     /// start_key <= file.largestkey
     pub fn update_overlap_damaged_ranges(&mut self, fname: &str, start: &[u8], end: &[u8]) -> bool {
-        for (_, id) in self
+        // `region_ranges` is promised to have no overlap so just check the first region.ƒ
+        if let Some((_, id)) = self
             .region_ranges
             .range((Excluded(start.to_owned()), Unbounded::<Vec<u8>>))
+            .next()
         {
             let region = &self.regions[id];
             if keys::enc_start_key(region).as_slice() <= end {
@@ -187,11 +189,9 @@ impl StoreMeta {
                     }
                 }
                 return true;
-            } else {
-                // `region_ranges` is promised to have no overlap.
-                break;
             }
         }
+
         // It's OK to remove the range here before deleting real file.
         let _ = self.damaged_ranges.remove(fname);
         false
@@ -208,6 +208,9 @@ impl StoreMeta {
                 let region = &self.regions[id];
                 if &keys::enc_start_key(region) <= end {
                     ids.insert(*id);
+                } else {
+                    // `region_ranges` is promised to have no overlap.
+                    break;
                 }
             }
         }

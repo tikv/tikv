@@ -245,16 +245,16 @@
 # reserve-space = "5GB"
 
 ## The maximum recovery time after rocksdb detects restorable background errors. When the data belonging
-## to the data range is damaged, it will be reported to PD, and PD will add `evict-leader-scheduler`
-## in this store to minimize the impact on user workload as much as possible. When hung, the corruption
-## SST file will remain, and the KV storage engine can still write new content normally, but it will
-## still return error when reading corrupt data range. 
+## to the data range is damaged, it will be reported to PD through heartbeat, and PD will add `remove-peer`
+## operator to remove this damaged peer. When the damaged peer still exists in the current store, the
+## corruption SST files remain, and the KV storage engine can still put new content normally, but it
+## will return error when reading corrupt data range.
 ##
-## If after this time, the peer where the corrupted data range is located has not been removed from the
+## If after this time, the peer where the corrupted data range located has not been removed from the
 ## current store, TiKV will panic.
 ##
 ## Set to 0 to disable this feature if you want to panic immediately when encountering such an error.
-# background-error-recovery-window = "24h"
+# background-error-recovery-window = "1h"
 
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.

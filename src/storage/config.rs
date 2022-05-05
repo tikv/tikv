@@ -85,7 +85,7 @@ impl Default for Config {
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IORateLimitConfig::default(),
-            background_error_recovery_window: ReadableDuration::hours(24),
+            background_error_recovery_window: ReadableDuration::hours(1),
         }
     }
 }

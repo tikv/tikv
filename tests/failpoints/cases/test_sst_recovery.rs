@@ -21,7 +21,7 @@ fn test_sst_recovery_basic() {
     fail::cfg("sst_recovery_before_delete_files", "pause").unwrap();
 
     let store_meta = cluster.store_metas.get(&1).unwrap().clone();
-    std::thread::sleep(Duration::from_millis(50));
+    std::thread::sleep(CHECK_DURATION);
     assert_eq!(
         store_meta
             .lock()
