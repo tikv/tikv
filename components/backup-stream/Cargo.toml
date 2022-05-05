@@ -12,57 +12,57 @@ failpoints = ["fail/failpoints"]
 backup-stream-debug = []
 
 [dependencies]
-tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
-tokio-util = { version = "0.7", features = ["compat"] } 
-prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 async-trait = { version = "0.1" }
-thiserror = "1"
 bytes = "0.4.12"
-etcd-client = { version = "0.7", features = ["pub-response-field"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-tokio-stream = "0.1"
-protobuf = { version = "2.8", features = ["bytes"] }
-regex = "1"
-tikv_util = {path = "../tikv_util"}
-txn_types = { path = "../txn_types", default-features = false }
-tikv_alloc = {path = "../tikv_alloc"}
-external_storage_export = { path = "../external_storage/export", default-features = false }
-external_storage = { path = "../external_storage", default-features = false }
-log_wrappers = { path = "../log_wrappers" }
-lazy_static = "1.4"
-futures = "0.3"
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-hex = "0.4"
-uuid = "0.8"
-openssl = "0.10"
-dashmap = "5"
+chrono = "0.4"
+concurrency_manager = { path = "../concurrency_manager" }
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
-chrono = "0.4"
+dashmap = "5"
+engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+error_code = { path = "../error_code" }
+etcd-client = { version = "0.7", features = ["pub-response-field"] }
+external_storage = { path = "../external_storage", default-features = false }
+external_storage_export = { path = "../external_storage/export", default-features = false }
 fail = "0.4"
 
 file_system = { path = "../file_system" }
-tidb_query_datatype = {path = "../tidb_query_datatype", default-features = false}
-engine_rocks = { path = "../engine_rocks", default-features = false }
-engine_traits = { path = "../engine_traits", default-features = false }
+futures = "0.3"
+hex = "0.4"
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+lazy_static = "1.4"
+log_wrappers = { path = "../log_wrappers" }
+online_config = { path = "../online_config" }
+openssl = "0.10"
+pd_client = { path = "../pd_client" }
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raftstore = { path = "../raftstore", default-features = false }
+regex = "1"
+resolved_ts = { path = "../resolved_ts" }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+thiserror = "1"
+tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tikv = { path = "../../", default-features = false }
-online_config = { path = "../online_config" }
-resolved_ts = { path = "../resolved_ts"}
-pd_client = {path = "../pd_client"}
-concurrency_manager = { path = "../concurrency_manager"}
-error_code = {path = "../error_code"}
+tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
+tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["compat"] } 
+txn_types = { path = "../txn_types", default-features = false }
+uuid = "0.8"
 
 [dev-dependencies]
+async-trait = "0.1"
+engine_panic = { path = "../engine_panic" }
+grpcio = "0.10"
+hex = "0.4"
 rand = "0.8.0"
 tempdir = "0.3"
-grpcio = "0.10"
 test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
-engine_panic = {path = "../engine_panic"}
-walkdir = "2"
-hex = "0.4"
 url = "2"
-async-trait = "0.1"
+walkdir = "2"
