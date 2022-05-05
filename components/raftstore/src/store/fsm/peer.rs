@@ -5914,7 +5914,7 @@ fn demote_failed_voters_request(
     let mut req = new_admin_request(region.get_id(), peer.clone());
     req.mut_header()
         .set_region_epoch(region.get_region_epoch().clone());
-    let change_peer_reqs = failed_voters
+    let mut change_peer_reqs: Vec<pdpb::ChangePeer> = failed_voters
         .drain(..)
         .map(|mut peer| {
             peer.set_role(metapb::PeerRole::Learner);
@@ -5924,6 +5924,13 @@ fn demote_failed_voters_request(
             cp
         })
         .collect();
+    // Promote self if it is a learner.
+    if peer.get_role() == metapb::PeerRole::Learner {
+        let mut cp = pdpb::ChangePeer::default();
+        cp.set_change_type(ConfChangeType::AddNode);
+        cp.set_peer(peer.clone());
+        change_peer_reqs.push(cp);
+    }
     req.set_admin_request(new_change_peer_v2_request(change_peer_reqs));
     req
 }
