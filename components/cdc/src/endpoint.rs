@@ -607,7 +607,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             error!("cdc rawkv are supported by api-version 2 only, TxnKv aren't supported now.");
             let mut err_event = EventError::default();
             let mut err = ErrorCompatibility::default();
-            err.set_required_version("TxnKv doesn't support now, RawKv requires tikv version >= 6.1 with storage.api-version=2".to_string());
+            err.set_required_version("6.1.0".to_string());
             err_event.set_compatibility(err);
 
             let _ = downstream.sink_error_event(region_id, err_event);
@@ -689,6 +689,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 observe_id
             );
         };
+        let is_build_resolver = delegate.resolver.is_none();
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
 
         let region_epoch = request.take_region_epoch();
@@ -707,7 +708,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
             checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: is_new_delegate,
+            build_resolver: is_build_resolver,
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
             kv_api,
         };

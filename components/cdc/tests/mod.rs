@@ -282,11 +282,9 @@ impl TestSuite {
         );
     }
 
-    pub fn must_kv_raw_put_v2(&mut self, region_id: u64, key: Vec<u8>, value: Vec<u8>) {
+    pub fn must_kv_put(&mut self, region_id: u64, key: Vec<u8>, value: Vec<u8>) {
         let mut rawkv_req = RawPutRequest::default();
-        let mut context = self.get_context(region_id);
-        context.set_api_version(ApiVersion::V2);
-        rawkv_req.set_context(context);
+        rawkv_req.set_context(self.get_context(region_id));
         rawkv_req.set_key(key);
         rawkv_req.set_value(value);
         rawkv_req.set_ttl(u64::MAX);
@@ -452,10 +450,12 @@ impl TestSuite {
     pub fn get_context(&mut self, region_id: u64) -> Context {
         let epoch = self.cluster.get_region_epoch(region_id);
         let leader = self.cluster.leader_of_region(region_id).unwrap();
+        let api_version = self.cluster.cfg.storage.api_version();
         let mut context = Context::default();
         context.set_region_id(region_id);
         context.set_peer(leader);
         context.set_region_epoch(epoch);
+        context.set_api_version(api_version);
         context
     }
 
