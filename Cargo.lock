@@ -3252,7 +3252,7 @@ dependencies = [
 [[package]]
 name = "procinfo"
 version = "0.4.2"
-source = "git+https://github.com/tikv/procinfo-rs?rev=5125fc1a69496b73b26b3c08b6e8afc3c665a56e#5125fc1a69496b73b26b3c08b6e8afc3c665a56e"
+source = "git+https://github.com/tikv/procinfo-rs?rev=6599eb9dca74229b2c1fcc44118bef7eff127128#6599eb9dca74229b2c1fcc44118bef7eff127128"
 dependencies = [
  "byteorder",
  "libc",
@@ -3400,7 +3400,8 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=0.1.x#2d1f8fcf7f2b0a3b304330bd3908a34a5e52af81"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a27c16860a320789970c9113070f024ce4d731bfb8a5a64d1cb1104d91a20e7"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5087,7 +5088,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.0.0-alpha"
+version = "6.0.0"
 dependencies = [
  "anyhow",
  "api_version",
