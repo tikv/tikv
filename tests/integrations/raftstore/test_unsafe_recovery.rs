@@ -35,7 +35,7 @@ fn test_unsafe_recovery_update_region() {
         .get_peers()
         .iter()
         .filter(|&peer| peer.get_store_id() != nodes[0])
-        .map(|peer| peer.clone())
+        .cloned()
         .collect();
     let mut plan = pdpb::RecoveryPlan::default();
     let mut demote = pdpb::DemoteFailedVoters::default();

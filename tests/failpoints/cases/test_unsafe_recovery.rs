@@ -97,8 +97,8 @@ fn test_unsafe_recovery_execution_result_report() {
         pdpb::CheckPolicy::Usekey,
         vec![b"random_key1".to_vec()],
     );
-    let region1 = pd_client.get_region(&b"random_key".as_ref()).unwrap();
-    let region2 = pd_client.get_region(&b"random_key1".as_ref()).unwrap();
+    let region1 = pd_client.get_region(b"random_key".as_ref()).unwrap();
+    let region2 = pd_client.get_region(b"random_key1".as_ref()).unwrap();
     let region1_store0_peer = find_peer(&region1, nodes[0]).unwrap().to_owned();
     pd_client.must_remove_peer(region1.get_id(), region1_store0_peer);
     cluster.must_remove_region(nodes[0], region1.get_id());
@@ -195,7 +195,7 @@ fn test_unsafe_recovery_execution_result_report() {
     assert_ne!(store_report, None);
     for peer_report in store_report.unwrap().get_peer_reports() {
         let region = peer_report.get_region_state().get_region();
-        if region.get_id() == 101 as u64 {
+        if region.get_id() == 101 {
             assert_eq!(region.get_end_key(), b"random_key1".to_vec());
         } else {
             assert_eq!(region.get_id(), region2.get_id());

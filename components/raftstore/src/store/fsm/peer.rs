@@ -864,23 +864,9 @@ where
         );
         let mut self_report = pdpb::PeerReport::default();
         self_report.set_raft_state(self.fsm.peer.get_store().raft_state().clone());
-        let region_state_key = keys::region_state_key(self.region_id());
-        match self
-            .ctx
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        {
-            Ok(Some(region_state)) => self_report.set_region_state(region_state),
-            Ok(None) => {
-                error!("Unsafe recovery, can't find region local state"; "region" => self.region_id());
-            }
-            Err(e) => {
-                error!(
-                    "Unsafe recovery, fail to read region local state"; "region" => self.region_id(), "err" => ?e,
-                );
-            }
-        };
+        let mut region_local_state = RegionLocalState::default();
+        region_local_state.set_region(self.region().clone());
+        self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
         shared_state.finish_for_self(&self.ctx.router, Some(self_report));
     }
