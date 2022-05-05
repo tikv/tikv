@@ -174,7 +174,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         };
     }
 
-    if config.log_file.is_empty() {
+    if config.log.file.filename.is_empty() {
         let log = logger::term_writer();
         do_build!(
             log,
@@ -185,7 +185,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         );
     } else {
         let log = logger::file_writer(
-            &config.log_file,
+            &config.log.file.filename,
             config.log.file.max_size,
             config.log.file.max_backups,
             config.log.file.max_days,
@@ -194,7 +194,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         .unwrap_or_else(|e| {
             fatal!(
                 "failed to initialize log with file {}: {}",
-                config.log_file,
+                config.log.file.filename,
                 e
             );
         });
