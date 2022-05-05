@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 use std::sync::{atomic::AtomicU64, Arc};
 
-use api_version::{APIVersion, APIV1};
+use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
@@ -23,22 +23,22 @@ use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 /// A builder to build a `SyncTestStorage`.
 ///
 /// Only used for test purpose.
-pub struct SyncTestStorageBuilder<E: Engine, Api: APIVersion> {
+pub struct SyncTestStorageBuilder<E: Engine, F: KvFormat> {
     engine: E,
     config: Option<Config>,
     gc_config: Option<GcConfig>,
-    _phantom: PhantomData<Api>,
+    _phantom: PhantomData<F>,
 }
 
 /// SyncTestStorageBuilder for Api V1
 /// To be convenience for test cases unrelated to RawKV.
-pub type SyncTestStorageBuilderApiV1<E> = SyncTestStorageBuilder<E, APIV1>;
+pub type SyncTestStorageBuilderApiV1<E> = SyncTestStorageBuilder<E, ApiV1>;
 
-impl<Api: APIVersion> SyncTestStorageBuilder<RocksEngine, Api> {
+impl<F: KvFormat> SyncTestStorageBuilder<RocksEngine, F> {
     pub fn new() -> Self {
         Self {
             engine: TestEngineBuilder::new()
-                .api_version(Api::TAG)
+                .api_version(F::TAG)
                 .build()
                 .unwrap(),
             config: None,
@@ -48,13 +48,13 @@ impl<Api: APIVersion> SyncTestStorageBuilder<RocksEngine, Api> {
     }
 }
 
-impl Default for SyncTestStorageBuilder<RocksEngine, APIV1> {
+impl Default for SyncTestStorageBuilder<RocksEngine, ApiV1> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<E: Engine, Api: APIVersion> SyncTestStorageBuilder<E, Api> {
+impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
     pub fn from_engine(engine: E) -> Self {
         Self {
             engine,
@@ -76,15 +76,15 @@ impl<E: Engine, Api: APIVersion> SyncTestStorageBuilder<E, Api> {
         self
     }
 
-    pub fn build(mut self) -> Result<SyncTestStorage<E, Api>> {
-        let mut builder = TestStorageBuilder::<_, _, Api>::from_engine_and_lock_mgr(
+    pub fn build(mut self) -> Result<SyncTestStorage<E, F>> {
+        let mut builder = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
             self.engine.clone(),
             DummyLockManager,
         );
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
-        builder = builder.set_api_version(Api::TAG);
+        builder = builder.set_api_version(F::TAG);
         SyncTestStorage::from_storage(builder.build()?, self.gc_config.unwrap_or_default())
     }
 }
@@ -93,18 +93,18 @@ impl<E: Engine, Api: APIVersion> SyncTestStorageBuilder<E, Api> {
 ///
 /// Only used for test purpose.
 #[derive(Clone)]
-pub struct SyncTestStorage<E: Engine, Api: APIVersion> {
+pub struct SyncTestStorage<E: Engine, F: KvFormat> {
     gc_worker: GcWorker<E, RaftStoreBlackHole>,
-    store: Storage<E, DummyLockManager, Api>,
+    store: Storage<E, DummyLockManager, F>,
 }
 
 /// SyncTestStorage for Api V1
 /// To be convenience for test cases unrelated to RawKV.
-pub type SyncTestStorageApiV1<E> = SyncTestStorage<E, APIV1>;
+pub type SyncTestStorageApiV1<E> = SyncTestStorage<E, ApiV1>;
 
-impl<E: Engine, Api: APIVersion> SyncTestStorage<E, Api> {
+impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
     pub fn from_storage(
-        storage: Storage<E, DummyLockManager, Api>,
+        storage: Storage<E, DummyLockManager, F>,
         config: GcConfig,
     ) -> Result<Self> {
         let (tx, _rx) = std::sync::mpsc::channel();
@@ -131,7 +131,7 @@ impl<E: Engine, Api: APIVersion> SyncTestStorage<E, Api> {
             .unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E, DummyLockManager, Api> {
+    pub fn get_storage(&self) -> Storage<E, DummyLockManager, F> {
         self.store.clone()
     }
 

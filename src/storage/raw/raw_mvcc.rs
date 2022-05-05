@@ -244,7 +244,7 @@ mod tests {
     use super::*;
     use crate::storage::raw::encoded::RawEncodeSnapshot;
     use crate::storage::TestEngineBuilder;
-    use api_version::{APIVersion, RawValue, APIV2};
+    use api_version::{ApiV2, KvFormat, RawValue};
     use engine_traits::raw_ttl::ttl_to_expire_ts;
     use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
@@ -293,8 +293,8 @@ mod tests {
             };
             let m = Modify::Put(
                 CF_DEFAULT,
-                APIV2::encode_raw_key_owned(key, Some(ts.into())),
-                APIV2::encode_raw_value_owned(raw_value),
+                ApiV2::encode_raw_key_owned(key, Some(ts.into())),
+                ApiV2::encode_raw_value_owned(raw_value),
             );
             let batch = WriteData::from_modifies(vec![m]);
             engine
@@ -306,12 +306,12 @@ mod tests {
         // snapshot
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let raw_mvcc_snapshot = RawMvccSnapshot::from_snapshot(snapshot);
-        let encode_snapshot: RawEncodeSnapshot<_, APIV2> =
+        let encode_snapshot: RawEncodeSnapshot<_, ApiV2> =
             RawEncodeSnapshot::from_snapshot(raw_mvcc_snapshot);
 
         // get_cf
         for &(ref key, ref value, _) in &test_data[6..12] {
-            let res = encode_snapshot.get_cf(CF_DEFAULT, &APIV2::encode_raw_key(key, None));
+            let res = encode_snapshot.get_cf(CF_DEFAULT, &ApiV2::encode_raw_key(key, None));
             assert_eq!(res.unwrap(), Some(value.to_owned()));
         }
 
@@ -319,11 +319,11 @@ mod tests {
         let iter_opt = IterOptions::default();
         let mut iter = encode_snapshot.iter_cf(CF_DEFAULT, iter_opt).unwrap();
         let mut pairs = vec![];
-        let raw_key = APIV2::encode_raw_key_owned(b"r\0a".to_vec(), None);
+        let raw_key = ApiV2::encode_raw_key_owned(b"r\0a".to_vec(), None);
         iter.seek(&raw_key).unwrap();
         while iter.valid().unwrap() {
             let (user_key, _) =
-                APIV2::decode_raw_key_owned(Key::from_encoded_slice(iter.key()), true).unwrap();
+                ApiV2::decode_raw_key_owned(Key::from_encoded_slice(iter.key()), true).unwrap();
             pairs.push((user_key, iter.value().to_owned()));
             iter.next().unwrap();
         }
@@ -337,12 +337,12 @@ mod tests {
         assert_eq!(pairs, ret_data);
 
         // seek_for_prev
-        let raw_key = APIV2::encode_raw_key_owned(b"r\0z".to_vec(), None);
+        let raw_key = ApiV2::encode_raw_key_owned(b"r\0z".to_vec(), None);
         iter.seek_for_prev(&raw_key).unwrap();
         pairs.clear();
         while iter.valid().unwrap() {
             let (user_key, _) =
-                APIV2::decode_raw_key_owned(Key::from_encoded_slice(iter.key()), true).unwrap();
+                ApiV2::decode_raw_key_owned(Key::from_encoded_slice(iter.key()), true).unwrap();
             pairs.push((user_key, iter.value().to_owned()));
             iter.prev().unwrap();
         }

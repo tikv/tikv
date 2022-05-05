@@ -259,7 +259,7 @@ pub enum StoreTick {
     SnapGc,
     CompactLockCf,
     ConsistencyCheck,
-    CleanupImportSST,
+    CleanupImportSst,
 }
 
 impl StoreTick {
@@ -271,7 +271,7 @@ impl StoreTick {
             StoreTick::SnapGc => RaftEventDurationType::snap_gc,
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
-            StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
         }
     }
 }
@@ -614,7 +614,7 @@ where
 {
     RaftMessage(InspectedRaftMessage),
 
-    ValidateSSTResult {
+    ValidateSstResult {
         invalid_ssts: Vec<SstMeta>,
     },
 
@@ -663,7 +663,7 @@ where
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
             StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
-            StoreMsg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
+            StoreMsg::ValidateSstResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {
                 ref start_key,
                 ref end_key,
