@@ -865,7 +865,7 @@ mod tests {
         assert!(name.contains(thread_name));
 
         // test tokio thread builder
-        let get_name_fn = get_name.clone();
+        let get_name_fn = get_name;
         block_on(
             tokio::runtime::Builder::new_multi_thread()
                 .thread_name(thread_name)
