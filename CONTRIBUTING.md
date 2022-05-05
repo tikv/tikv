@@ -21,13 +21,13 @@ To build TiKV you'll need to at least have the following installed:
 * `awk` - Pattern scanning/processing language
 * C++ compiler - gcc 5+ (required for gRPC)
 
-If you are targeting platforms other than x86_64/aarch64 linux or MacOS, you'll also need:
+If you are targeting platforms other than x86_64/aarch64 Linux or macOS, you'll also need:
 
 * [`llvm` and `clang`](http://releases.llvm.org/download.html) - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb).
 
 ### Getting the repository
 
-```
+```bash
 git clone https://github.com/tikv/tikv.git
 cd tikv
 # Future instructions assume you are in this directory
@@ -225,7 +225,7 @@ Use option `git commit -s` to sign off your commits. The bot will group and dist
 
 Testing AWS can be done without an AWS account by using [localstack](https://github.com/localstack/localstack).
 
-```
+```bash
 git clone https://github.com/localstack/localstack.git
 cd localstack
 docker-compose up
@@ -233,14 +233,14 @@ docker-compose up
 
 For example, to test KMS, create a key:
 
-```
+```bash
 pip install awscli-local
 awslocal kms create-key`
 ```
 
 Then add then use the returned ID in key-id:
 
-```
+```bash
 [security.encryption.master-key]
 type = "kms"
 region = "us-west-2"
@@ -250,7 +250,7 @@ key-id = "KMS key id"
 
 When you run TiKV, make sure to set the localstack credentials
 
-```
+```bash
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
 ```

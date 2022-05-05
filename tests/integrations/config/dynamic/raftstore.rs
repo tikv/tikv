@@ -13,7 +13,7 @@ use raftstore::store::fsm::*;
 use raftstore::store::{AutoSplitController, SnapManager, StoreMsg, Transport};
 use raftstore::Result;
 use tikv::config::{ConfigController, Module, TiKvConfig};
-use tikv::import::SSTImporter;
+use tikv::import::SstImporter;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, ALL_CFS};
@@ -81,7 +81,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SSTImporter::new(&cfg.import, &p, None, cfg.storage.api_version()).unwrap())
+        Arc::new(SstImporter::new(&cfg.import, &p, None, cfg.storage.api_version()).unwrap())
     };
     let snap_mgr = {
         let p = dir
@@ -115,6 +115,7 @@ fn start_raftstore(
             Arc::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
+            None,
         )
         .unwrap();
 

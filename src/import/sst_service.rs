@@ -33,14 +33,14 @@ use tikv_util::time::{Instant, Limiter};
 
 use crate::import::duplicate_detect::DuplicateDetector;
 use sst_importer::metrics::*;
-use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
+use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SstImporter};
 
-/// ImportSSTService provides tikv-server with the ability to ingest SST files.
+/// ImportSstService provides tikv-server with the ability to ingest SST files.
 ///
 /// It saves the SST sent from client to a file and then sends a command to
 /// raftstore to trigger the ingest process.
 #[derive(Clone)]
-pub struct ImportSSTService<E, Router>
+pub struct ImportSstService<E, Router>
 where
     E: KvEngine,
 {
@@ -48,7 +48,7 @@ where
     engine: E,
     router: Router,
     threads: ThreadPool,
-    importer: Arc<SSTImporter>,
+    importer: Arc<SstImporter>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
 }
@@ -58,7 +58,7 @@ pub struct SnapshotResult<E: KvEngine> {
     term: u64,
 }
 
-impl<E, Router> ImportSSTService<E, Router>
+impl<E, Router> ImportSstService<E, Router>
 where
     E: KvEngine,
     Router: 'static + RaftStoreRouter<E>,
@@ -67,8 +67,8 @@ where
         cfg: Config,
         router: Router,
         engine: E,
-        importer: Arc<SSTImporter>,
-    ) -> ImportSSTService<E, Router> {
+        importer: Arc<SstImporter>,
+    ) -> ImportSstService<E, Router> {
         let props = tikv_util::thread_group::current_properties();
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
@@ -82,7 +82,7 @@ where
             .create()
             .unwrap();
         importer.start_switch_mode_check(&threads, engine.clone());
-        ImportSSTService {
+        ImportSstService {
             cfg,
             engine,
             threads,
@@ -293,7 +293,7 @@ macro_rules! impl_write {
     };
 }
 
-impl<E, Router> ImportSst for ImportSSTService<E, Router>
+impl<E, Router> ImportSst for ImportSstService<E, Router>
 where
     E: KvEngine,
     Router: 'static + RaftStoreRouter<E>,

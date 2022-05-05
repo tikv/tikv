@@ -21,7 +21,7 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
-        ttl_tombstone,
+        raw_value_tombstone,
     }
 
     pub struct GcKeysCounterVec: LocalIntCounter {

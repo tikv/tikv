@@ -57,13 +57,13 @@ pub enum ErrorInner {
     CfDeprecated(String),
 
     #[error("ttl is not enabled, but get put request with ttl")]
-    TTLNotEnabled,
+    TtlNotEnabled,
 
     #[error("Deadline is exceeded")]
     DeadlineExceeded,
 
     #[error("The length of ttls does not equal to the length of pairs")]
-    TTLsLenNotEqualsToPairs,
+    TtlLenNotEqualsToPairs,
 
     #[error("Api version in request does not match with TiKV storage, cmd: {:?}, storage: {:?}, request: {:?}", .cmd, .storage_api_version, .req_api_version)]
     ApiVersionNotMatched {
@@ -152,11 +152,9 @@ impl ErrorCodeExt for Error {
             ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
             ErrorInner::CfDeprecated(_) => error_code::storage::CF_DEPRECATED,
-            ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
+            ErrorInner::TtlNotEnabled => error_code::storage::TTL_NOT_ENABLED,
             ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
-            ErrorInner::TTLsLenNotEqualsToPairs => {
-                error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
-            }
+            ErrorInner::TtlLenNotEqualsToPairs => error_code::storage::TTL_LEN_NOT_EQUALS_TO_PAIRS,
             ErrorInner::ApiVersionNotMatched { .. } => error_code::storage::API_VERSION_NOT_MATCHED,
             ErrorInner::InvalidKeyMode { .. } => error_code::storage::INVALID_KEY_MODE,
             ErrorInner::InvalidKeyRangeMode { .. } => error_code::storage::INVALID_KEY_MODE,

@@ -53,7 +53,7 @@ pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
-    StatisticsSummary, TTL_TOMBSTONE,
+    StatisticsSummary, RAW_VALUE_TOMBSTONE,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
@@ -89,6 +89,15 @@ impl Modify {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
+            Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
+
+    pub fn key(&self) -> &Key {
+        match self {
+            Modify::Delete(_, ref k) => k,
+            Modify::Put(_, ref k, _) => k,
+            Modify::PessimisticLock(ref k, _) => k,
             Modify::DeleteRange(..) => unreachable!(),
         }
     }

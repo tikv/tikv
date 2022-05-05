@@ -3,10 +3,11 @@
 use crate::perf_context_metrics::{
     APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC,
 };
-use crate::raw_util;
+use crate::{
+    raw_util, set_perf_flags, set_perf_level, PerfContext as RawPerfContext, PerfFlag, PerfFlags,
+};
 use engine_traits::{PerfContextKind, PerfLevel};
-use rocksdb::set_perf_level;
-use rocksdb::PerfContext as RawPerfContext;
+use lazy_static::lazy_static;
 
 #[macro_export]
 macro_rules! report_perf_context {
@@ -45,6 +46,18 @@ macro_rules! observe_perf_context_type {
     };
 }
 
+lazy_static! {
+    /// Default perf flags for a write operation.
+    static ref DEFAULT_WRITE_PERF_FLAGS: PerfFlags = PerfFlag::WriteWalTime
+        | PerfFlag::WritePreAndPostProcessTime
+        | PerfFlag::WriteMemtableTime
+        | PerfFlag::WriteThreadWaitNanos
+        | PerfFlag::DbMutexLockNanos
+        | PerfFlag::WriteSchedulingFlushesCompactionsTime
+        | PerfFlag::DbConditionWaitNanos
+        | PerfFlag::WriteDelayTime;
+}
+
 pub struct PerfContextStatistics {
     pub perf_level: PerfLevel,
     pub kind: PerfContextKind,
@@ -75,13 +88,21 @@ impl PerfContextStatistics {
         }
     }
 
+    fn apply_write_perf_settings(&self) {
+        if self.perf_level == PerfLevel::Uninitialized {
+            set_perf_flags(&*DEFAULT_WRITE_PERF_FLAGS);
+        } else {
+            set_perf_level(raw_util::to_raw_perf_level(self.perf_level));
+        }
+    }
+
     pub fn start(&mut self) {
         if self.perf_level == PerfLevel::Disable {
             return;
         }
         let mut ctx = RawPerfContext::get();
         ctx.reset();
-        set_perf_level(raw_util::to_raw_perf_level(self.perf_level));
+        self.apply_write_perf_settings();
         self.write_wal_time = 0;
         self.pre_and_post_process = 0;
         self.db_mutex_lock_nanos = 0;

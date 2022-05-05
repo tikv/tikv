@@ -371,6 +371,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "async-channel",
  "collections",
  "concurrency_manager",
@@ -2463,7 +2464,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#e22d8864c9579660424f83b62ca196c03ef85927"
+source = "git+https://github.com/pingcap/kvproto.git#29c9119f3c95eeb1bdfbb7b6fb70830614eb6243"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2528,7 +2529,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#4992ab1233c7593d0277a5cc4a903fc661df81b2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#e97c9b50d388ac00aae538afcdbb6224a2b12fda"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2547,7 +2548,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#4992ab1233c7593d0277a5cc4a903fc661df81b2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#e97c9b50d388ac00aae538afcdbb6224a2b12fda"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3783,6 +3784,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "getset",
+ "grpcio-health",
  "into_other",
  "itertools 0.10.0",
  "keys",
@@ -4207,7 +4209,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#4992ab1233c7593d0277a5cc4a903fc661df81b2"
+source = "git+https://github.com/tikv/rust-rocksdb.git#e97c9b50d388ac00aae538afcdbb6224a2b12fda"
 dependencies = [
  "libc 0.2.119",
  "librocksdb_sys",
@@ -4646,6 +4648,7 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "grpcio",
+ "grpcio-health",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -5141,6 +5144,7 @@ dependencies = [
 name = "test_backup"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "backup",
  "collections",
  "concurrency_manager",
@@ -5153,6 +5157,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "kvproto",
+ "protobuf",
  "rand 0.8.3",
  "tempfile",
  "test_raftstore",
@@ -5205,6 +5210,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "backtrace",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crossbeam",
@@ -5215,6 +5221,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "grpcio",
+ "grpcio-health",
  "keys",
  "kvproto",
  "lazy_static",

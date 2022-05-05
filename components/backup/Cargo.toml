@@ -27,6 +27,7 @@ mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 
 [dependencies]
+api_version = { path = "../api_version", default-features = false }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 online_config = { path = "../online_config" }
 crc64fast = "0.1"

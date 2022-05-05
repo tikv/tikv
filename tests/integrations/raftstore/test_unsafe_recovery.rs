@@ -300,6 +300,103 @@ fn test_force_leader_for_learner() {
     cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
 }
 
+// Test the case that three of five nodes fail and force leader on a hibernated
+// previous leader.
+#[test]
+fn test_force_leader_on_hibernated_leader() {
+    let mut cluster = new_node_cluster(0, 5);
+    configure_for_hibernate(&mut cluster);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let region = cluster.get_region(b"k2");
+    let peer_on_store1 = find_peer(&region, 1).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+
+    // wait a while to hibernate
+    std::thread::sleep(Duration::from_millis(
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+            * 3,
+    ));
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    // remove the peers on failed nodes
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
+    cluster.exit_force_leader(region.get_id(), 1);
+
+    // quorum is formed, can propose command successfully now
+    cluster.must_put(b"k4", b"v4");
+    assert_eq!(cluster.must_get(b"k2"), None);
+    assert_eq!(cluster.must_get(b"k3"), None);
+    assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+}
+
+// Test the case that three of five nodes fail and force leader on a hibernated
+// previous follower.
+#[test]
+fn test_force_leader_on_hibernated_follower() {
+    test_util::init_log_for_test();
+    let mut cluster = new_node_cluster(0, 5);
+    configure_for_hibernate(&mut cluster);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let region = cluster.get_region(b"k2");
+    let peer_on_store5 = find_peer(&region, 5).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
+
+    // wait a while to hibernate
+    std::thread::sleep(Duration::from_millis(
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+            * 3,
+    ));
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    // remove the peers on failed nodes
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
+    cluster.exit_force_leader(region.get_id(), 1);
+
+    // quorum is formed, can propose command successfully now
+    cluster.must_put(b"k4", b"v4");
+    assert_eq!(cluster.must_get(b"k2"), None);
+    assert_eq!(cluster.must_get(b"k3"), None);
+    assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+}
+
 // Test the case that three of five nodes fail and force leader on the rest node
 // with triggering snapshot.
 #[test]

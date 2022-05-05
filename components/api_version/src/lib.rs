@@ -12,7 +12,7 @@ use kvproto::kvrpcpb::ApiVersion;
 pub use match_template::match_template;
 use txn_types::{Key, TimeStamp};
 
-pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
+pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     const TAG: ApiVersion;
     /// Corresponding TAG of client requests. For test only.
     #[cfg(any(test, feature = "testexport"))]
@@ -68,14 +68,61 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
     fn encode_raw_key_owned(user_key: Vec<u8>, _ts: Option<TimeStamp>) -> Key {
         Key::from_encoded(user_key)
     }
+
+    // Convert the encoded key from src_api version to Self::TAG version
+    fn convert_raw_encoded_key_version_from(
+        src_api: ApiVersion,
+        key: &[u8],
+        ts: Option<TimeStamp>,
+    ) -> Result<Key>;
+
+    // Convert the user key range from src_api version to Self::TAG version
+    fn convert_raw_user_key_range_version_from(
+        src_api: ApiVersion,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> (Vec<u8>, Vec<u8>);
+
+    /// Convert the encoded value from src_api version to Self::TAG version
+    fn convert_raw_encoded_value_version_from(
+        src_api: ApiVersion,
+        value: &[u8],
+    ) -> Result<Vec<u8>> {
+        if src_api == Self::TAG {
+            return Ok(value.to_owned());
+        }
+        dispatch_api_version!(src_api, {
+            let raw_value = API::decode_raw_value(value)?;
+            Ok(Self::encode_raw_value(raw_value))
+        })
+    }
 }
 
 #[derive(Default, Clone, Copy)]
-pub struct APIV1;
+pub struct ApiV1;
 #[derive(Default, Clone, Copy)]
-pub struct APIV1TTL;
+pub struct ApiV1Ttl;
 #[derive(Default, Clone, Copy)]
-pub struct APIV2;
+pub struct ApiV2;
+
+#[macro_export]
+macro_rules! test_kv_format_impl {
+    ($func:ident<$ver:ident $($left_ver:ident)*> $(($($arg:expr),*))?) => {
+        $crate::test_kv_format_impl!(__imp $func<$ver> $(($($arg),*))?);
+        $crate::test_kv_format_impl!($func<$($left_ver)*> $(($($arg),*))?);
+    };
+    ($func:ident<> $(($($arg:expr),*))?) => {
+    };
+    ($func:ident $(($($arg:expr),*))?) => {
+        $crate::test_kv_format_impl!($func<ApiV1 ApiV1Ttl ApiV2>$(($($arg),*))?);
+    };
+    (__imp $func:ident<$ver:ident>) => {
+        $func::<$crate::$ver>();
+    };
+    (__imp $func:ident<$ver:ident>($($arg:expr),*)) => {
+        $func::<$crate::$ver>($($arg),*);
+    };
+}
 
 // TODO: move `match_template_api_version!` usage to `dispatch_api_version!`.
 #[macro_export]
@@ -83,16 +130,16 @@ macro_rules! match_template_api_version {
      ($t:tt, $($tail:tt)*) => {{
          $crate::match_template! {
              $t = [
-                V1 => $crate::APIV1,
-                V1ttl => $crate::APIV1TTL,
-                V2 => $crate::APIV2,
+                V1 => $crate::ApiV1,
+                V1ttl => $crate::ApiV1Ttl,
+                V2 => $crate::ApiV2,
             ],
             $($tail)*
          }
      }}
 }
 
-/// Dispatch an expression with type `kvproto::kvrpcpb::ApiVersion` to corresponding concrete type of `APIVersion`
+/// Dispatch an expression with type `kvproto::kvrpcpb::ApiVersion` to corresponding concrete type of `KvFormat`
 ///
 /// For example, the following code
 ///
@@ -104,9 +151,9 @@ macro_rules! match_template_api_version {
 ///
 /// ```ignore
 /// let encoded_key = match api_version {
-///     ApiVersion::V1 => APIV1::encode_raw_key(key),
-///     ApiVersion::V1ttl => APIV1TTL::encode_raw_key(key),
-///     ApiVersion::V2 => APIV2::encode_raw_key(key),
+///     ApiVersion::V1 => ApiV1::encode_raw_key(key),
+///     ApiVersion::V1ttl => ApiV1Ttl::encode_raw_key(key),
+///     ApiVersion::V2 => ApiV2::encode_raw_key(key),
 /// };
 /// ```
 #[macro_export]
@@ -114,9 +161,9 @@ macro_rules! dispatch_api_version {
     ($api_version:expr, $e:expr) => {{
         $crate::match_template! {
             API = [
-                V1 => $crate::APIV1,
-                V1ttl => $crate::APIV1TTL,
-                V2 => $crate::APIV2,
+                V1 => $crate::ApiV1,
+                V1ttl => $crate::ApiV1Ttl,
+                V2 => $crate::ApiV2,
             ],
             match $api_version {
                 kvproto::kvrpcpb::ApiVersion::API => $e,
@@ -191,8 +238,18 @@ pub struct RawValue<T: AsRef<[u8]>> {
     pub user_value: T,
     /// The unix timestamp in seconds indicating the point of time that this key will be deleted.
     pub expire_ts: Option<u64>,
-    /// Logical deletion flag in APIV2, should be `false` in APIV1 and APIV1TTL
+    /// Logical deletion flag in ApiV2, should be `false` in ApiV1 and ApiV1Ttl
     pub is_delete: bool,
+}
+
+impl<T: AsRef<[u8]>> RawValue<T> {
+    #[inline]
+    pub fn is_valid(&self, current_ts: u64) -> bool {
+        !self.is_delete
+            && self
+                .expire_ts
+                .map_or(true, |expire_ts| expire_ts > current_ts)
+    }
 }
 
 #[cfg(test)]
@@ -202,108 +259,108 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        assert_eq!(APIV1::parse_key_mode(&b"t_a"[..]), KeyMode::Unknown);
-        assert_eq!(APIV1TTL::parse_key_mode(&b"ot"[..]), KeyMode::Raw);
+        assert_eq!(ApiV1::parse_key_mode(&b"t_a"[..]), KeyMode::Unknown);
+        assert_eq!(ApiV1Ttl::parse_key_mode(&b"ot"[..]), KeyMode::Raw);
         assert_eq!(
-            APIV2::parse_key_mode(&[RAW_KEY_PREFIX, b'a', b'b']),
+            ApiV2::parse_key_mode(&[RAW_KEY_PREFIX, b'a', b'b']),
             KeyMode::Raw
         );
-        assert_eq!(APIV2::parse_key_mode(&[RAW_KEY_PREFIX]), KeyMode::Raw);
-        assert_eq!(APIV2::parse_key_mode(&[TXN_KEY_PREFIX]), KeyMode::Txn);
-        assert_eq!(APIV2::parse_key_mode(&b"t_a"[..]), KeyMode::TiDB);
-        assert_eq!(APIV2::parse_key_mode(&b"m"[..]), KeyMode::TiDB);
-        assert_eq!(APIV2::parse_key_mode(&b"ot"[..]), KeyMode::Unknown);
+        assert_eq!(ApiV2::parse_key_mode(&[RAW_KEY_PREFIX]), KeyMode::Raw);
+        assert_eq!(ApiV2::parse_key_mode(&[TXN_KEY_PREFIX]), KeyMode::Txn);
+        assert_eq!(ApiV2::parse_key_mode(&b"t_a"[..]), KeyMode::TiDB);
+        assert_eq!(ApiV2::parse_key_mode(&b"m"[..]), KeyMode::TiDB);
+        assert_eq!(ApiV2::parse_key_mode(&b"ot"[..]), KeyMode::Unknown);
     }
 
     #[test]
     fn test_parse_range() {
-        assert_eq!(APIV1::parse_range_mode((None, None)), KeyMode::Unknown);
+        assert_eq!(ApiV1::parse_range_mode((None, None)), KeyMode::Unknown);
         assert_eq!(
-            APIV1::parse_range_mode((Some(b"x"), None)),
+            ApiV1::parse_range_mode((Some(b"x"), None)),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV1TTL::parse_range_mode((Some(b"m_a"), Some(b"na"))),
+            ApiV1Ttl::parse_range_mode((Some(b"m_a"), Some(b"na"))),
             KeyMode::Raw
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"t_a"), Some(b"t_z"))),
+            ApiV2::parse_range_mode((Some(b"t_a"), Some(b"t_z"))),
             KeyMode::TiDB
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"t"), Some(b"u"))),
+            ApiV2::parse_range_mode((Some(b"t"), Some(b"u"))),
             KeyMode::TiDB
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"m"), Some(b"n"))),
+            ApiV2::parse_range_mode((Some(b"m"), Some(b"n"))),
             KeyMode::TiDB
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"m_a"), Some(b"m_z"))),
+            ApiV2::parse_range_mode((Some(b"m_a"), Some(b"m_z"))),
             KeyMode::TiDB
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"x\0a"), Some(b"x\0z"))),
+            ApiV2::parse_range_mode((Some(b"x\0a"), Some(b"x\0z"))),
             KeyMode::Txn
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"x"), Some(b"y"))),
+            ApiV2::parse_range_mode((Some(b"x"), Some(b"y"))),
             KeyMode::Txn
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"r\0a"), Some(b"r\0z"))),
+            ApiV2::parse_range_mode((Some(b"r\0a"), Some(b"r\0z"))),
             KeyMode::Raw
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"r"), Some(b"s"))),
+            ApiV2::parse_range_mode((Some(b"r"), Some(b"s"))),
             KeyMode::Raw
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"t_a"), Some(b"ua"))),
+            ApiV2::parse_range_mode((Some(b"t_a"), Some(b"ua"))),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"t"), None)),
+            ApiV2::parse_range_mode((Some(b"t"), None)),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((None, Some(b"t_z"))),
+            ApiV2::parse_range_mode((None, Some(b"t_z"))),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"m_a"), Some(b"na"))),
+            ApiV2::parse_range_mode((Some(b"m_a"), Some(b"na"))),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"m"), None)),
+            ApiV2::parse_range_mode((Some(b"m"), None)),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((None, Some(b"m_z"))),
+            ApiV2::parse_range_mode((None, Some(b"m_z"))),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"x\0a"), Some(b"ya"))),
+            ApiV2::parse_range_mode((Some(b"x\0a"), Some(b"ya"))),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"x"), None)),
+            ApiV2::parse_range_mode((Some(b"x"), None)),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((None, Some(b"x\0z"))),
+            ApiV2::parse_range_mode((None, Some(b"x\0z"))),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"r\0a"), Some(b"sa"))),
+            ApiV2::parse_range_mode((Some(b"r\0a"), Some(b"sa"))),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((Some(b"r"), None)),
+            ApiV2::parse_range_mode((Some(b"r"), None)),
             KeyMode::Unknown
         );
         assert_eq!(
-            APIV2::parse_range_mode((None, Some(b"r\0z"))),
+            ApiV2::parse_range_mode((None, Some(b"r\0z"))),
             KeyMode::Unknown
         );
     }
@@ -416,15 +473,32 @@ mod tests {
         ];
 
         for (bytes, api_version) in cases {
-            match_template_api_version!(
-                API,
-                match api_version {
-                    ApiVersion::API => {
-                        assert!(API::decode_raw_value(&bytes).is_err());
-                        assert!(API::decode_raw_value_owned(bytes).is_err());
-                    }
-                }
-            )
+            dispatch_api_version!(api_version, {
+                assert!(API::decode_raw_value(&bytes).is_err());
+                assert!(API::decode_raw_value_owned(bytes).is_err());
+            })
+        }
+    }
+
+    #[test]
+    fn test_value_valid() {
+        let cases = vec![
+            // expire_ts, is_delete, expect_is_valid
+            (None, false, true),
+            (None, true, false),
+            (Some(5), false, false),
+            (Some(5), true, false),
+            (Some(100), false, true),
+            (Some(100), true, false),
+        ];
+
+        for (idx, (expire_ts, is_delete, expect_is_valid)) in cases.into_iter().enumerate() {
+            let raw_value = RawValue {
+                user_value: b"value",
+                expire_ts,
+                is_delete,
+            };
+            assert_eq!(raw_value.is_valid(10), expect_is_valid, "case {}", idx);
         }
     }
 
@@ -435,34 +509,29 @@ mod tests {
         encoded_bytes: &[u8],
         api_version: ApiVersion,
     ) {
-        match_template_api_version!(
-            API,
-            match api_version {
-                ApiVersion::API => {
-                    let raw_value = RawValue {
-                        user_value,
-                        expire_ts,
-                        is_delete,
-                    };
-                    assert_eq!(&API::encode_raw_value(raw_value), encoded_bytes);
-                    assert_eq!(API::decode_raw_value(encoded_bytes).unwrap(), raw_value);
+        dispatch_api_version!(api_version, {
+            let raw_value = RawValue {
+                user_value,
+                expire_ts,
+                is_delete,
+            };
+            assert_eq!(&API::encode_raw_value(raw_value), encoded_bytes);
+            assert_eq!(API::decode_raw_value(encoded_bytes).unwrap(), raw_value);
 
-                    let raw_value = RawValue {
-                        user_value: user_value.to_vec(),
-                        expire_ts,
-                        is_delete,
-                    };
-                    assert_eq!(
-                        API::encode_raw_value_owned(raw_value.clone()),
-                        encoded_bytes
-                    );
-                    assert_eq!(
-                        API::decode_raw_value_owned(encoded_bytes.to_vec()).unwrap(),
-                        raw_value
-                    );
-                }
-            }
-        )
+            let raw_value = RawValue {
+                user_value: user_value.to_vec(),
+                expire_ts,
+                is_delete,
+            };
+            assert_eq!(
+                API::encode_raw_value_owned(raw_value.clone()),
+                encoded_bytes
+            );
+            assert_eq!(
+                API::decode_raw_value_owned(encoded_bytes.to_vec()).unwrap(),
+                raw_value
+            );
+        })
     }
 
     #[test]
@@ -530,31 +599,185 @@ mod tests {
         api_version: ApiVersion,
         expected_ts: Option<TimeStamp>,
     ) {
-        match_template_api_version!(
-            API,
-            match api_version {
-                ApiVersion::API => {
-                    let encoded_key = Key::from_encoded_slice(encoded_bytes);
+        dispatch_api_version!(api_version, {
+            let encoded_key = Key::from_encoded_slice(encoded_bytes);
 
-                    assert_eq!(
-                        &API::encode_raw_key(user_key, ts).into_encoded(),
-                        encoded_bytes
-                    );
-                    assert_eq!(
-                        API::decode_raw_key(&encoded_key, expected_ts.is_some()).unwrap(),
-                        (user_key.to_vec(), expected_ts)
-                    );
+            assert_eq!(
+                &API::encode_raw_key(user_key, ts).into_encoded(),
+                encoded_bytes
+            );
+            assert_eq!(
+                API::decode_raw_key(&encoded_key, expected_ts.is_some()).unwrap(),
+                (user_key.to_vec(), expected_ts)
+            );
 
-                    assert_eq!(
-                        &API::encode_raw_key_owned(user_key.to_vec(), ts).into_encoded(),
-                        encoded_bytes
-                    );
-                    assert_eq!(
-                        API::decode_raw_key_owned(encoded_key, expected_ts.is_some()).unwrap(),
-                        (user_key.to_vec(), expected_ts)
-                    );
-                }
+            assert_eq!(
+                &API::encode_raw_key_owned(user_key.to_vec(), ts).into_encoded(),
+                encoded_bytes
+            );
+            assert_eq!(
+                API::decode_raw_key_owned(encoded_key, expected_ts.is_some()).unwrap(),
+                (user_key.to_vec(), expected_ts)
+            );
+        })
+    }
+
+    #[test]
+    fn test_raw_key_convert() {
+        let timestamp = 30;
+        let apiv1_keys = vec![
+            b""[..].to_owned(),
+            b"abc"[..].to_owned(),
+            b"api_ver_test"[..].to_owned(),
+        ];
+        let apiv2_keys: Vec<Vec<u8>> = apiv1_keys
+            .clone()
+            .into_iter()
+            .map(|key| {
+                let mut v2_key = key;
+                v2_key.insert(0, RAW_KEY_PREFIX);
+                ApiV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
+            })
+            .collect();
+        // src_api_ver, dst_api_ver, src_data, dst_data
+        let test_cases = vec![
+            (ApiVersion::V1, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
+            (ApiVersion::V1ttl, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
+            (ApiVersion::V2, ApiVersion::V1, &apiv2_keys, &apiv1_keys),
+            (ApiVersion::V2, ApiVersion::V1ttl, &apiv2_keys, &apiv1_keys),
+        ];
+        for i in 0..apiv1_keys.len() {
+            for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
+                let dst_key = dispatch_api_version!(dst_api_ver, {
+                    API::convert_raw_encoded_key_version_from(
+                        src_api_ver,
+                        &src_data[i],
+                        Some(TimeStamp::from(timestamp)),
+                    )
+                });
+                assert_eq!(dst_key.unwrap().into_encoded(), dst_data[i]);
             }
-        )
+        }
+    }
+
+    #[test]
+    fn test_raw_value_convert() {
+        let apiv1_values = vec![
+            b""[..].to_owned(),
+            b"abc"[..].to_owned(),
+            b"api_ver_test"[..].to_owned(),
+        ];
+        let apiv1ttl_values: Vec<Vec<u8>> = apiv1_values
+            .clone()
+            .into_iter()
+            .map(|value| {
+                let raw_value = RawValue {
+                    user_value: value,
+                    expire_ts: None,
+                    is_delete: false,
+                };
+                ApiV1Ttl::encode_raw_value_owned(raw_value)
+            })
+            .collect();
+        let apiv2_values: Vec<Vec<u8>> = apiv1_values
+            .clone()
+            .into_iter()
+            .map(|value| {
+                let raw_value = RawValue {
+                    user_value: value,
+                    expire_ts: None,
+                    is_delete: false,
+                };
+                ApiV2::encode_raw_value_owned(raw_value)
+            })
+            .collect();
+        // src_api_ver, dst_api_ver, src_data, dst_data
+        let test_cases = vec![
+            (ApiVersion::V1, ApiVersion::V2, &apiv1_values, &apiv2_values),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V2,
+                &apiv1ttl_values,
+                &apiv2_values,
+            ),
+            (ApiVersion::V2, ApiVersion::V1, &apiv2_values, &apiv1_values),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1ttl,
+                &apiv2_values,
+                &apiv1ttl_values,
+            ),
+        ];
+        for i in 0..apiv1_values.len() {
+            for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
+                let dst_value = dispatch_api_version!(dst_api_ver, {
+                    API::convert_raw_encoded_value_version_from(src_api_ver, &src_data[i])
+                });
+                assert_eq!(dst_value.unwrap(), dst_data[i]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_convert_raw_user_key_range() {
+        let apiv1_key_ranges = vec![
+            (b""[..].to_owned(), b""[..].to_owned()),
+            (b"abc"[..].to_owned(), b"abz"[..].to_owned()),
+            (
+                b"api_ver_test"[..].to_owned(),
+                b"bpi_ver_test"[..].to_owned(),
+            ),
+        ];
+        let apiv2_key_ranges: Vec<(Vec<u8>, Vec<u8>)> = apiv1_key_ranges
+            .clone()
+            .into_iter()
+            .map(|(start_key, end_key)| {
+                let mut v2_start_key = start_key;
+                let mut v2_end_key = end_key;
+                v2_start_key.insert(0, RAW_KEY_PREFIX);
+                if v2_end_key.is_empty() {
+                    v2_end_key.insert(0, RAW_KEY_PREFIX_END);
+                } else {
+                    v2_end_key.insert(0, RAW_KEY_PREFIX);
+                }
+                (v2_start_key, v2_end_key)
+            })
+            .collect();
+        // src_api_ver, dst_api_ver, src_data, dst_data
+        let test_cases = vec![
+            (
+                ApiVersion::V1,
+                ApiVersion::V2,
+                &apiv1_key_ranges,
+                &apiv2_key_ranges,
+            ),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V2,
+                &apiv1_key_ranges,
+                &apiv2_key_ranges,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1,
+                &apiv2_key_ranges,
+                &apiv1_key_ranges,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1ttl,
+                &apiv2_key_ranges,
+                &apiv1_key_ranges,
+            ),
+        ];
+        for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases {
+            for i in 0..apiv1_key_ranges.len() {
+                let dst_key_range = dispatch_api_version!(dst_api_ver, {
+                    let (src_start, src_end) = src_data[i].clone();
+                    API::convert_raw_user_key_range_version_from(src_api_ver, src_start, src_end)
+                });
+                assert_eq!(dst_key_range, dst_data[i]);
+            }
+        }
     }
 }
