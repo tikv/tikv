@@ -28,10 +28,9 @@ nortcheck = ["engine_rocks/nortcheck"]
 [dependencies]
 api_version = { path = "../api_version" }
 backup = { path = "../backup", default-features = false }
+causal_ts = { path = "../causal_ts" }
 cdc = { path = "../cdc", default-features = false }
 chrono = "0.4"
-tempfile = "3.0"
-causal_ts = { path = "../causal_ts" }
 clap = "2.32"
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
@@ -44,7 +43,6 @@ error_code = { path = "../error_code", default-features = false }
 file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
-tokio = { version = "1.5", features = ["rt-multi-thread"] }
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored"] }
 grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"
@@ -62,17 +60,19 @@ raft_log_engine = { path = "../raft_log_engine", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
 rand = "0.8"
 resolved_ts = { path = "../../components/resolved_ts", default-features = false }
+resource_metering = { path = "../resource_metering" }
 security = { path = "../security", default-features = false }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tempfile = "3.0"
 tikv = { path = "../..", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 toml = "0.5"
 txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-resource_metering = { path = "../resource_metering" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

@@ -29,5 +29,5 @@ tikv = { path = "../../", default-features = false }
 toml = "0.5"
 
 [build-dependencies]
-time = "0.1"
 cc = "1.0"
+time = "0.1"

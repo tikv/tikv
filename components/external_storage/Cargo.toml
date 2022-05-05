@@ -16,7 +16,10 @@ cloud-storage-grpc = [
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+async-trait = "0.1"
 bytes = "1.0"
+encryption = { path = "../encryption" }
+engine_traits = { path = "../engine_traits" }
 fail = "0.5"
 ffi-support = { optional = true, version = "0.4.2" }
 file_system = { path = "../file_system" }
@@ -36,17 +39,14 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_alloc = { path = "../tikv_alloc" }
-engine_traits = { path = "../engine_traits" }
-encryption = { path = "../encryption" }
 tikv_util = { path = "../tikv_util", default-features = false }
 tokio = { version = "1.5", features = ["time", "fs", "process"] }
 tokio-util = { version = "0.6", features = ["compat"] }
 url = "2.0"
-async-trait = "0.1"
 
 [dev-dependencies]
-structopt = "0.3"
-tokio = { version = "1.5", features = ["macros"] }
-tempfile = "3.1"
-rust-ini = "0.14.0"
 matches = "0.1.8"
+rust-ini = "0.14.0"
+structopt = "0.3"
+tempfile = "3.1"
+tokio = { version = "1.5", features = ["macros"] }
