@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -465,10 +465,12 @@ pub struct ReadyResult {
 /// 6. After the plan steps are all applied, exit force leader state
 pub enum ForceLeaderState {
     WaitTicks {
+        shared_state: UnsafeRecoveryForceLeaderSharedState,
         failed_stores: HashSet<u64>,
         ticks: usize,
     },
     PreForceLeader {
+        shared_state: UnsafeRecoveryForceLeaderSharedState,
         failed_stores: HashSet<u64>,
     },
     ForceLeader {
@@ -494,28 +496,96 @@ pub enum ForceLeaderState {
 //            --------------------------------------------
 //                                 |
 //                     send report (store heartbeat)
-#[derive(Clone, Copy)]
+#[derive(Copy, Clone, Debug)]
 pub struct UnsafeRecoveryReportContext {
     pub id: u64,
     pub exit_force_leader_after_reporting: bool,
 }
-pub struct UnsafeRecoveryExecutePlanSharedState {
+#[derive(Debug)]
+pub struct UnsafeRecoveryReportState {
     pub report_context: UnsafeRecoveryReportContext,
-    pub counter: Arc<AtomicUsize>,
+    pub counter: AtomicUsize,
+    pub reports: Mutex<Vec<pdpb::PeerReport>>,
 }
-impl UnsafeRecoveryExecutePlanSharedState {
+#[derive(Debug)]
+pub struct UnsafeRecoveryForceLeaderSharedState(
+    Arc<UnsafeRecoveryReportState>,
+    /*consumed*/ Cell<bool>,
+);
+impl Clone for UnsafeRecoveryForceLeaderSharedState {
+    fn clone(&self) -> Self {
+        let _ = self.0.counter.fetch_add(1, Ordering::SeqCst);
+        UnsafeRecoveryForceLeaderSharedState(self.0.clone(), /*consumed=*/ Cell::new(false))
+    }
+}
+impl Drop for UnsafeRecoveryForceLeaderSharedState {
+    fn drop(&mut self) {
+        if !self.1.get() {
+            // if not consumed.
+            // It is ok to be not consumed, e.g. dropped due to message delivery error, but it
+            // should not be the last one owning the report state.
+            if self.0.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+                panic!("Unsafe recovery, unexpected force leader shared state");
+            }
+        }
+    }
+}
+impl UnsafeRecoveryForceLeaderSharedState {
+    pub fn new(report_context: UnsafeRecoveryReportContext) -> Self {
+        UnsafeRecoveryForceLeaderSharedState(
+            Arc::new(UnsafeRecoveryReportState {
+                report_context,
+                counter: AtomicUsize::new(1),
+                reports: Mutex::new(vec![]),
+            }),
+            /*consumed=*/ Cell::new(false),
+        )
+    }
     pub fn finish_for_self<EK: KvEngine, ER: RaftEngine>(&self, router: &RaftRouter<EK, ER>) {
-        if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-            start_unsafe_recovery_report(router, self.report_context);
+        self.1.set(true); // consumed = true
+        if self.0.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+            info!("Unsafe recovery, all failed regions on this host now have a force leader");
+            start_unsafe_recovery_report(router, self.0.report_context);
+        }
+    }
+}
+pub struct UnsafeRecoveryExecutePlanSharedState(
+    Arc<UnsafeRecoveryReportState>,
+    /*consumed*/ Cell<bool>,
+);
+impl UnsafeRecoveryExecutePlanSharedState {
+    pub fn new(report_context: UnsafeRecoveryReportContext) -> Self {
+        UnsafeRecoveryExecutePlanSharedState(
+            Arc::new(UnsafeRecoveryReportState {
+                report_context,
+                counter: AtomicUsize::new(1),
+                reports: Mutex::new(vec![]),
+            }),
+            /* consumed= */ Cell::new(false),
+        )
+    }
+    pub fn finish_for_self<EK: KvEngine, ER: RaftEngine>(&self, router: &RaftRouter<EK, ER>) {
+        self.1.set(true); // consumed = true
+        if self.0.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+            start_unsafe_recovery_report(router, self.0.report_context);
         }
     }
 }
 impl Clone for UnsafeRecoveryExecutePlanSharedState {
     fn clone(&self) -> Self {
-        let _ = self.counter.fetch_add(1, Ordering::SeqCst);
-        UnsafeRecoveryExecutePlanSharedState {
-            report_context: self.report_context,
-            counter: self.counter.clone(),
+        let _ = self.0.counter.fetch_add(1, Ordering::SeqCst);
+        UnsafeRecoveryExecutePlanSharedState(self.0.clone(), /*consumed= */ Cell::new(false))
+    }
+}
+impl Drop for UnsafeRecoveryExecutePlanSharedState {
+    fn drop(&mut self) {
+        if !self.1.get() {
+            // if not consumed.
+            // It is ok to be not consumed, e.g. dropped due to message delivery error, but it
+            // should not be the last one owning the report state.
+            if self.0.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+                panic!("Unsafe recovery, unexpected execute plan shared state");
+            }
         }
     }
 }
@@ -524,38 +594,51 @@ pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
     report_context: UnsafeRecoveryReportContext,
 ) {
     info!("Unsafe recovery, preparing report");
-    let wait_apply = UnsafeRecoveryWaitApplySharedState {
-        report_context,
-        counter: Arc::new(AtomicUsize::new(0)),
-    };
+    let wait_apply = UnsafeRecoveryWaitApplySharedState::new(report_context);
     let clone = wait_apply.clone();
     router.broadcast_normal(|| PeerMsg::UnsafeRecoveryWaitApply(clone.clone()));
     // In case no message is sent, we can still proceed to the next step.
     wait_apply.finish_for_self(router);
 }
-
-pub struct UnsafeRecoveryWaitApplySharedState {
-    pub report_context: UnsafeRecoveryReportContext,
-    pub counter: Arc<AtomicUsize>,
-}
+pub struct UnsafeRecoveryWaitApplySharedState(
+    Arc<UnsafeRecoveryReportState>,
+    /*consumed */ Cell<bool>,
+);
 impl Clone for UnsafeRecoveryWaitApplySharedState {
     fn clone(&self) -> Self {
-        let _ = self.counter.fetch_add(1, Ordering::SeqCst);
-        UnsafeRecoveryWaitApplySharedState {
-            report_context: self.report_context,
-            counter: self.counter.clone(),
+        let _ = self.0.counter.fetch_add(1, Ordering::SeqCst);
+        UnsafeRecoveryWaitApplySharedState(self.0.clone(), /*consumed= */ Cell::new(false))
+    }
+}
+impl Drop for UnsafeRecoveryWaitApplySharedState {
+    fn drop(&mut self) {
+        if !self.1.get() {
+            // if not consumed.
+            // It is ok to be not consumed, e.g. dropped due to message delivery error, but it
+            // should not be the last one owning the report state.
+            if self.0.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+                panic!("Unsafe recovery, unexpected wait apply shared state");
+            }
         }
     }
 }
 impl UnsafeRecoveryWaitApplySharedState {
+    pub fn new(report_context: UnsafeRecoveryReportContext) -> Self {
+        UnsafeRecoveryWaitApplySharedState(
+            Arc::new(UnsafeRecoveryReportState {
+                report_context,
+                counter: AtomicUsize::new(1),
+                reports: Mutex::new(vec![]),
+            }),
+            /*consumed= */ Cell::new(false),
+        )
+    }
     pub fn finish_for_self<EK: KvEngine, ER: RaftEngine>(&self, router: &RaftRouter<EK, ER>) {
-        if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+        self.1.set(true); // consumed = true
+        if self.0.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
             info!("Unsafe recovery, filling out store report");
-            let fill_out_report = UnsafeRecoveryFillOutReportSharedState {
-                report_context: self.report_context,
-                counter: Arc::new(AtomicUsize::new(0)),
-                reports: Arc::new(Mutex::new(vec![])),
-            };
+            let fill_out_report =
+                UnsafeRecoveryFillOutReportSharedState::new(self.0.report_context);
             let clone = fill_out_report.clone();
             router.broadcast_normal(|| PeerMsg::UnsafeRecoveryFillOutReport(clone.clone()));
             // In case no message is sent, we can still proceed to the next step.
@@ -563,33 +646,51 @@ impl UnsafeRecoveryWaitApplySharedState {
         }
     }
 }
-pub struct UnsafeRecoveryFillOutReportSharedState {
-    pub report_context: UnsafeRecoveryReportContext,
-    pub counter: Arc<AtomicUsize>,
-    pub reports: Arc<Mutex<Vec<pdpb::PeerReport>>>,
-}
+pub struct UnsafeRecoveryFillOutReportSharedState(
+    Arc<UnsafeRecoveryReportState>,
+    /* consumed */ Cell<bool>,
+);
 impl Clone for UnsafeRecoveryFillOutReportSharedState {
     fn clone(&self) -> Self {
-        let _ = self.counter.fetch_add(1, Ordering::SeqCst);
-        UnsafeRecoveryFillOutReportSharedState {
-            report_context: self.report_context,
-            counter: self.counter.clone(),
-            reports: self.reports.clone(),
+        let _ = self.0.counter.fetch_add(1, Ordering::SeqCst);
+        UnsafeRecoveryFillOutReportSharedState(self.0.clone(), /*consumed= */ Cell::new(false))
+    }
+}
+impl Drop for UnsafeRecoveryFillOutReportSharedState {
+    fn drop(&mut self) {
+        if !self.1.get() {
+            // if not consumed.
+            // It is ok to be not consumed, e.g. dropped due to message delivery error, but it
+            // should not be the last one owning the report state.
+            if self.0.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+                panic!("Unsafe recovery, unexpected fill out report shared state");
+            }
         }
     }
 }
 impl UnsafeRecoveryFillOutReportSharedState {
+    pub fn new(report_context: UnsafeRecoveryReportContext) -> Self {
+        UnsafeRecoveryFillOutReportSharedState(
+            Arc::new(UnsafeRecoveryReportState {
+                report_context,
+                counter: AtomicUsize::new(1),
+                reports: Mutex::new(vec![]),
+            }),
+            /*consumed= */ Cell::new(false),
+        )
+    }
+
     pub fn schedule_store_report<EK: KvEngine, ER: RaftEngine>(&self, router: &RaftRouter<EK, ER>) {
         let mut store_report = pdpb::StoreReport::default();
         {
-            let reports_ptr = self.reports.lock().unwrap();
+            let reports_ptr = self.0.reports.lock().unwrap();
             store_report.set_peer_reports(RepeatedField::from_vec((*reports_ptr).to_vec()));
         }
-        store_report.set_step(self.report_context.id);
+        store_report.set_step(self.0.report_context.id);
         if let Err(e) = router.send_control(StoreMsg::UnsafeRecoveryReport(store_report)) {
             error!("Unsafe recovery, fail to schedule reporting"; "err" => ?e);
         }
-        if self.report_context.exit_force_leader_after_reporting {
+        if self.0.report_context.exit_force_leader_after_reporting {
             router
                 .broadcast_normal(|| PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState));
         }
@@ -600,11 +701,12 @@ impl UnsafeRecoveryFillOutReportSharedState {
         router: &RaftRouter<EK, ER>,
         report: Option<pdpb::PeerReport>,
     ) {
+        self.1.set(true); // consumed = true
         if let Some(peer_report) = report {
-            let mut reports_ptr = self.reports.lock().unwrap();
+            let mut reports_ptr = self.0.reports.lock().unwrap();
             (*reports_ptr).push(peer_report);
         }
-        if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+        if self.0.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
             self.schedule_store_report(router);
         }
     }
@@ -4715,15 +4817,12 @@ where
                     info!(
                         "Unsafe recovery, finish wait apply";
                         "region_id" => self.region().get_id(),
-                        "peer_id" => self.peer_id(),
+                        //"peer_id" => self.peer_id(),
                         "target_index" => target_index,
                         "applied" =>  self.raft_group.raft.raft_log.applied,
                         "force" => force,
                     );
-                    {
-                        shared_state.finish_for_self(&ctx.router);
-                    }
-                    // Reset the state if the wait is finished.
+                    shared_state.finish_for_self(&ctx.router);
                     self.unsafe_recovery_state = None;
                 }
             }

@@ -31,7 +31,6 @@ online_config = { path = "../online_config" }
 crc32fast = "1.2"
 crossbeam = "0.8"
 derivative = "2"
-derive_more = "0.99.3"
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }

@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::borrow::Cow;
 use std::fmt;
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::sync::Arc;
 
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -23,7 +23,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::peer::{
     UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryFillOutReportSharedState,
-    UnsafeRecoveryWaitApplySharedState,
+    UnsafeRecoveryForceLeaderSharedState, UnsafeRecoveryWaitApplySharedState,
 };
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::worker::{Bucket, BucketRange};
@@ -340,6 +340,7 @@ where
         res: Box<RaftlogFetchResult>,
     },
     EnterForceLeaderState {
+        shared_state: UnsafeRecoveryForceLeaderSharedState,
         failed_stores: HashSet<u64>,
     },
     ExitForceLeaderState,

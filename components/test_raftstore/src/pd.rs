@@ -328,7 +328,7 @@ struct PdCluster {
     pub check_merge_target_integrity: bool,
 
     unsafe_recovery_require_report: bool,
-    unsafe_recovery_store_reported: HashMap<u64, i32>,
+    unsafe_recovery_store_reports: HashMap<u64, pdpb::StoreReport>,
     unsafe_recovery_plan: HashMap<u64, pdpb::RecoveryPlan>,
 }
 
@@ -364,7 +364,7 @@ impl PdCluster {
             region_replication_status: HashMap::default(),
             check_merge_target_integrity: true,
             unsafe_recovery_require_report: false,
-            unsafe_recovery_store_reported: HashMap::default(),
+            unsafe_recovery_store_reports: HashMap::default(),
             unsafe_recovery_plan: HashMap::default(),
             buckets: HashMap::default(),
         }
@@ -753,19 +753,12 @@ impl PdCluster {
         self.unsafe_recovery_plan.insert(store_id, recovery_plan);
     }
 
-    fn get_store_reported(&self, store_id: u64) -> i32 {
-        *self
-            .unsafe_recovery_store_reported
-            .get(&store_id)
-            .unwrap_or(&0)
+    fn get_store_report(&mut self, store_id: u64) -> Option<pdpb::StoreReport> {
+        self.unsafe_recovery_store_reports.remove(&store_id)
     }
 
-    fn store_reported_inc(&mut self, store_id: u64) {
-        let reported = self
-            .unsafe_recovery_store_reported
-            .entry(store_id)
-            .or_insert(0);
-        *reported += 1;
+    fn set_store_report(&mut self, store_id: u64, report: pdpb::StoreReport) {
+        let _ = self.unsafe_recovery_store_reports.insert(store_id, report);
     }
 }
 
@@ -1323,8 +1316,8 @@ impl TestPdClient {
         self.cluster.wl().set_require_report(require_report);
     }
 
-    pub fn must_get_store_reported(&self, store_id: u64) -> i32 {
-        self.cluster.rl().get_store_reported(store_id)
+    pub fn must_get_store_report(&self, store_id: u64) -> Option<pdpb::StoreReport> {
+        self.cluster.wl().get_store_report(store_id)
     }
 
     pub fn must_set_unsafe_recovery_plan(&self, store_id: u64, plan: pdpb::RecoveryPlan) {
@@ -1615,8 +1608,8 @@ impl PdClient for TestPdClient {
 
         cluster.store_stats.insert(store_id, stats);
 
-        if report.is_some() {
-            cluster.store_reported_inc(store_id);
+        if let Some(store_report) = report {
+            cluster.set_store_report(store_id, store_report);
         }
 
         let mut resp = cluster.handle_store_heartbeat(store_id).unwrap();

@@ -1372,19 +1372,24 @@ impl<T: Simulator> Cluster<T> {
         .unwrap();
     }
 
-    pub fn enter_force_leader(
-        &mut self,
-        region_id: u64,
-        store_id: u64,
-        failed_stores: HashSet<u64>,
-    ) {
-        let router = self.sim.rl().get_router(store_id).unwrap();
-        router
-            .significant_send(
-                region_id,
-                SignificantMsg::EnterForceLeaderState { failed_stores },
-            )
-            .unwrap();
+    pub fn enter_force_leader(&mut self, region_id: u64, store_id: u64, failed_stores: Vec<u64>) {
+        let mut plan = pdpb::RecoveryPlan::default();
+        let mut force_leader = pdpb::ForceLeader::default();
+        force_leader.set_enter_force_leaders([region_id].to_vec());
+        force_leader.set_failed_stores(failed_stores.to_vec());
+        plan.set_force_leader(force_leader);
+        // Triggers the unsafe recovery plan execution.
+        self.pd_client.must_set_unsafe_recovery_plan(store_id, plan);
+        self.must_send_store_heartbeat(store_id);
+        let mut store_report = None;
+        for _ in 0..20 {
+            store_report = self.pd_client.must_get_store_report(store_id);
+            if store_report.is_some() {
+                break;
+            }
+            sleep_ms(100);
+        }
+        assert_ne!(store_report, None);
     }
 
     pub fn exit_force_leader(&mut self, region_id: u64, store_id: u64) {

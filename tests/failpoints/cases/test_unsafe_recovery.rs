@@ -53,7 +53,7 @@ fn test_unsafe_recovery_send_report() {
 
     // No store report is sent, since there are peers have unapplied entries.
     for _ in 0..20 {
-        assert_eq!(pd_client.must_get_store_reported(nodes[0]), 0);
+        assert_eq!(pd_client.must_get_store_report(nodes[0]), None);
         sleep_ms(100);
     }
 
@@ -61,15 +61,15 @@ fn test_unsafe_recovery_send_report() {
     drop(apply_released_tx);
 
     // Store reports are sent once the entries are applied.
-    let mut reported = false;
+    let mut store_report = None;
     for _ in 0..20 {
-        if pd_client.must_get_store_reported(nodes[0]) > 0 {
-            reported = true;
+        store_report = pd_client.must_get_store_report(nodes[0]);
+        if store_report.is_some() {
             break;
         }
         sleep_ms(100);
     }
-    assert_eq!(reported, true);
+    assert_ne!(store_report, None);
     fail::remove("on_handle_apply_store_1");
 }
 
@@ -131,15 +131,15 @@ fn test_unsafe_recovery_execution_result_report() {
     // Triggers the unsafe recovery plan execution.
     pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
     cluster.must_send_store_heartbeat(nodes[0]);
-    let mut reported = false;
+    let mut store_report = None;
     for _ in 0..20 {
-        if pd_client.must_get_store_reported(nodes[0]) == 1 {
-            reported = true;
+        store_report = pd_client.must_get_store_report(nodes[0]);
+        if store_report.is_some() {
             break;
         }
         sleep_ms(100);
     }
-    assert_eq!(reported, true);
+    assert_ne!(store_report, None);
 
     // Construct recovery plan.
     let mut plan = pdpb::RecoveryPlan::default();
@@ -177,7 +177,7 @@ fn test_unsafe_recovery_execution_result_report() {
 
     // No store report is sent, since there are peers have unapplied entries.
     for _ in 0..20 {
-        assert_eq!(pd_client.must_get_store_reported(nodes[0]), 1);
+        assert_eq!(pd_client.must_get_store_report(nodes[0]), None);
         sleep_ms(100);
     }
 
@@ -185,15 +185,28 @@ fn test_unsafe_recovery_execution_result_report() {
     drop(apply_released_tx);
 
     // Store reports are sent once the entries are applied.
-    let mut reported = false;
     for _ in 0..20 {
-        if pd_client.must_get_store_reported(nodes[0]) == 2 {
-            reported = true;
+        store_report = pd_client.must_get_store_report(nodes[0]);
+        if store_report.is_some() {
             break;
         }
         sleep_ms(100);
     }
-    assert_eq!(reported, true);
+    assert_ne!(store_report, None);
+    for peer_report in store_report.unwrap().get_peer_reports() {
+        let region = peer_report.get_region_state().get_region();
+        if region.get_id() == 101 as u64 {
+            assert_eq!(region.get_end_key(), b"random_key1".to_vec());
+        } else {
+            assert_eq!(region.get_id(), region2.get_id());
+            println!("region-----------{:?}", region);
+            for peer in region.get_peers() {
+                if peer.get_store_id() != nodes[0] {
+                    assert_eq!(peer.get_role(), metapb::PeerRole::Learner);
+                }
+            }
+        }
+    }
     fail::remove("on_handle_apply_store_1");
 }
 
@@ -258,7 +271,7 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
 
     // No store report is sent, since there are peers have unapplied entries.
     for _ in 0..20 {
-        assert_eq!(pd_client.must_get_store_reported(nodes[1]), 0);
+        assert_eq!(pd_client.must_get_store_report(nodes[1]), None);
         sleep_ms(100);
     }
 
@@ -266,15 +279,15 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
     drop(apply_released_tx);
 
     // Store reports are sent once the entries are applied.
-    let mut reported = false;
+    let mut store_report = None;
     for _ in 0..20 {
-        if pd_client.must_get_store_reported(nodes[1]) > 0 {
-            reported = true;
+        store_report = pd_client.must_get_store_report(nodes[1]);
+        if store_report.is_some() {
             break;
         }
         sleep_ms(100);
     }
-    assert_eq!(reported, true);
+    assert_ne!(store_report, None);
     fail::remove("worker_gc_raft_log");
     fail::remove("worker_gc_raft_log_finished");
     fail::remove("raft_before_apply_snap_callback");

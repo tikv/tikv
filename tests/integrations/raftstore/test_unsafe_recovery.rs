@@ -4,7 +4,6 @@ use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Duration;
 
-use collections::HashSet;
 use futures::executor::block_on;
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
@@ -154,7 +153,7 @@ fn test_force_leader_three_nodes() {
             .is_err()
     );
 
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![2, 3]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![2, 3]);
     // remove the peers on failed nodes
     cluster
         .pd_client
@@ -209,7 +208,7 @@ fn test_force_leader_five_nodes() {
             .is_err()
     );
 
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // remove the peers on failed nodes
     cluster
         .pd_client
@@ -289,7 +288,7 @@ fn test_force_leader_for_learner() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 2,
     ));
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // promote the learner first and remove the peers on failed nodes
     cluster
         .pd_client
@@ -341,7 +340,7 @@ fn test_force_leader_on_hibernated_leader() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // remove the peers on failed nodes
     cluster
         .pd_client
@@ -390,7 +389,7 @@ fn test_force_leader_on_hibernated_follower() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // remove the peers on failed nodes
     cluster
         .pd_client
@@ -462,7 +461,7 @@ fn test_force_leader_trigger_snapshot() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 5,
     );
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
 
     sleep_ms(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
@@ -558,7 +557,7 @@ fn test_force_leader_with_uncommitted_conf_change() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 2,
     ));
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // the uncommitted conf-change is committed successfully after being force leader
     cluster
         .pd_client
@@ -605,7 +604,7 @@ fn test_force_leader_on_healthy_region() {
     cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
     // try to enter force leader, it can't succeed due to quorum isn't lost
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // make sure it leaves pre force leader state.
     std::thread::sleep(Duration::from_millis(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
@@ -662,7 +661,7 @@ fn test_force_leader_on_wrong_leader() {
     );
 
     // try to force leader on peer of node2 which is stale
-    cluster.enter_force_leader(region.get_id(), 2, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
     // can't propose confchange as it's not in force leader state
     let cmd = new_change_peer_request(
         ConfChangeType::RemoveNode,
@@ -706,10 +705,10 @@ fn test_force_leader_twice_on_different_peers() {
     cluster.stop_node(2);
     cluster.run_node(2).unwrap();
 
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     std::thread::sleep(Duration::from_millis(100));
     // enter force leader on a different peer
-    cluster.enter_force_leader(region.get_id(), 2, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
     // leader is the peer of store 2
     assert_eq!(
         cluster.leader_of_region(region.get_id()).unwrap(),
@@ -774,10 +773,10 @@ fn test_force_leader_twice_on_same_peer() {
     cluster.stop_node(2);
     cluster.run_node(2).unwrap();
 
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     std::thread::sleep(Duration::from_millis(100));
     // enter force leader on the same peer
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // remove the peers on failed nodes
     cluster
         .pd_client
@@ -827,7 +826,7 @@ fn test_force_leader_multiple_election_rounds() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 2,
     ));
-    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // wait multiple election rounds
     std::thread::sleep(Duration::from_millis(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64

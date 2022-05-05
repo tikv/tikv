@@ -3,7 +3,7 @@
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::sync::{atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io, mem};
@@ -27,7 +27,8 @@ use yatp::Remote;
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
 use crate::store::peer::{
-    start_unsafe_recovery_report, UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryReportContext,
+    UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryForceLeaderSharedState,
+    UnsafeRecoveryReportContext,
 };
 use crate::store::transport::SignificantRouter;
 use crate::store::util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration};
@@ -1027,7 +1028,7 @@ where
         &mut self,
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        opt_store_report: Option<pdpb::StoreReport>,
+        store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
@@ -1146,9 +1147,9 @@ where
         stats.set_slow_score(slow_score as u64);
 
         let router = self.router.clone();
-        let resp =
-            self.pd_client
-                .store_heartbeat(stats, opt_store_report, dr_autosync_status.clone());
+        let resp = self
+            .pd_client
+            .store_heartbeat(stats, store_report, dr_autosync_status.clone());
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1162,32 +1163,32 @@ where
                             for failed_store in plan.get_force_leader().get_failed_stores() {
                                 failed_stores.insert(*failed_store);
                             }
+                            let shared_state = UnsafeRecoveryForceLeaderSharedState::new(
+                                UnsafeRecoveryReportContext {
+                                    id: plan.get_step(),
+                                    exit_force_leader_after_reporting: false,
+                                },
+                            );
                             for region in plan.get_force_leader().get_enter_force_leaders() {
                                 info!("Unsafe recovery, forcely assign the peer in this store to be the leader"; "region" => region);
                                 if let Err(e) = router.significant_send(
                                     *region,
                                     SignificantMsg::EnterForceLeaderState {
+                                        shared_state: shared_state.clone(),
                                         failed_stores: failed_stores.clone(),
                                     },
                                 ) {
                                     error!("fail to send force leader message for recovery"; "err" => ?e);
                                 }
                             }
-                            start_unsafe_recovery_report(
-                                &router,
-                                UnsafeRecoveryReportContext {
-                                    id: plan.get_step(),
-                                    exit_force_leader_after_reporting: false,
-                                },
-                            );
+                            shared_state.finish_for_self(&router);
                         } else {
-                            let shared_state = UnsafeRecoveryExecutePlanSharedState {
-                                report_context: UnsafeRecoveryReportContext {
+                            let shared_state = UnsafeRecoveryExecutePlanSharedState::new(
+                                UnsafeRecoveryReportContext {
                                     id: plan.get_step(),
                                     exit_force_leader_after_reporting: true,
                                 },
-                                counter: Arc::new(AtomicUsize::new(1)),
-                            };
+                            );
                             for create in plan.get_creates() {
                                 info!("Unsafe recovery, asked to create region"; "region" => ?create);
                                 if let Err(e) =
@@ -1197,7 +1198,6 @@ where
                                     })
                                 {
                                     error!("fail to send creat peer message for recovery"; "err" => ?e);
-                                    let _ = shared_state.counter.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
                             for delete in plan.get_tombstones() {
@@ -1207,7 +1207,6 @@ where
                                     PeerMsg::UnsafeRecoveryDestroy(shared_state.clone()),
                                 ) {
                                     error!("fail to send delete peer message for recovery"; "err" => ?e);
-                                    let _ = shared_state.counter.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
                             for demote in plan.get_demotes() {
@@ -1220,7 +1219,6 @@ where
                                     },
                                 ) {
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);
-                                    let _ = shared_state.counter.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
                             shared_state.finish_for_self(&router);

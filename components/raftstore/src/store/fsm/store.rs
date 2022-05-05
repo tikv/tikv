@@ -67,7 +67,6 @@ use crate::store::fsm::{
 use crate::store::local_metrics::{RaftMetrics, RaftReadyMetrics};
 use crate::store::memory::*;
 use crate::store::metrics::*;
-use crate::store::peer::start_unsafe_recovery_report;
 use crate::store::peer_storage;
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};

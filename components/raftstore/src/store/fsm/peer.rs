@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, mem, u64};
 
@@ -64,9 +64,10 @@ use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{
-    start_unsafe_recovery_report, ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult,
-    StaleState, UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryFillOutReportSharedState,
-    UnsafeRecoveryState, UnsafeRecoveryWaitApplySharedState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+    ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
+    UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryFillOutReportSharedState,
+    UnsafeRecoveryForceLeaderSharedState, UnsafeRecoveryState, UnsafeRecoveryWaitApplySharedState,
+    TRANSFER_LEADER_COMMAND_REPLY_CTX,
 };
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
@@ -749,11 +750,6 @@ where
         shared_state: UnsafeRecoveryExecutePlanSharedState,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        info!(
-            "Unsafe recovery, demoting following voters {:?} in region {:?}",
-            failed_voters,
-            self.region(),
-        );
         if !self.fsm.peer.force_leader.is_some() {
             error!(
                 "Unsafe recovery, demoting failed voters failed, since this peer is not forced leader";
@@ -773,6 +769,8 @@ where
         }
 
         if self.fsm.peer.in_joint_state() {
+            info!("Unsafe recovery, already in joint state, exit first.";
+            "region" => ?self.region());
             self.propose_raft_command_internal(
                 exit_joint_request(self.region(), &self.fsm.peer.peer),
                 Callback::None,
@@ -789,8 +787,13 @@ where
                 shared_state.finish_for_self(&self.ctx.router);
                 return;
             }
+            let req =
+                demote_failed_voters_request(self.region(), &self.fsm.peer.peer, failed_voters);
+            info!("Unsafe recovery, demoting failed voters";
+                "region" => ?self.region(),
+                "req" => ?req);
             self.propose_raft_command_internal(
-                demote_failed_voters_request(self.region(), &self.fsm.peer.peer, failed_voters),
+                req,
                 Callback::None,
                 DiskFullOpt::AllowedOnAlmostFull,
             );
@@ -854,6 +857,9 @@ where
         &mut self,
         shared_state: UnsafeRecoveryFillOutReportSharedState,
     ) {
+        info!("Unsafe recovery, filling out peer report.";
+    "region" => ?self.region(),
+"force_leader" => self.fsm.peer.force_leader.is_some());
         let mut self_report = pdpb::PeerReport::default();
         match self.ctx.engines.raft.get_raft_state(self.region_id()) {
             Ok(Some(raft_local_state)) => self_report.set_raft_state(raft_local_state),
@@ -1230,20 +1236,29 @@ where
             SignificantMsg::RaftlogFetched { context, res } => {
                 self.on_raft_log_fetched(context, res);
             }
-            SignificantMsg::EnterForceLeaderState { failed_stores } => {
-                self.on_enter_pre_force_leader(failed_stores);
+            SignificantMsg::EnterForceLeaderState {
+                shared_state,
+                failed_stores,
+            } => {
+                self.on_enter_pre_force_leader(shared_state, failed_stores);
             }
             SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
         }
     }
 
-    fn on_enter_pre_force_leader(&mut self, failed_stores: HashSet<u64>) {
+    fn on_enter_pre_force_leader(
+        &mut self,
+        shared_state: UnsafeRecoveryForceLeaderSharedState,
+        failed_stores: HashSet<u64>,
+    ) {
         match self.fsm.peer.force_leader {
             Some(ForceLeaderState::PreForceLeader { .. }) => {
+                shared_state.finish_for_self(&self.ctx.router);
                 self.on_force_leader_fail();
             }
             Some(ForceLeaderState::ForceLeader { .. }) => {
                 // already is a force leader, do nothing
+                shared_state.finish_for_self(&self.ctx.router);
                 return;
             }
             Some(ForceLeaderState::WaitTicks { .. }) => {
@@ -1259,6 +1274,7 @@ where
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                 );
+                shared_state.finish_for_self(&self.ctx.router);
                 return;
             }
             // wait two rounds of election timeout to trigger check quorum to step down the leader
@@ -1281,6 +1297,7 @@ where
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                 );
+                shared_state.finish_for_self(&self.ctx.router);
                 return;
             }
             // wait one round of election timeout to make sure leader_id is invalid
@@ -1300,6 +1317,7 @@ where
                 "ticks" => ticks,
             );
             self.fsm.peer.force_leader = Some(ForceLeaderState::WaitTicks {
+                shared_state,
                 failed_stores,
                 ticks,
             });
@@ -1326,6 +1344,7 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
+            shared_state.finish_for_self(&self.ctx.router);
             return;
         }
 
@@ -1358,11 +1377,15 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
+            shared_state.finish_for_self(&self.ctx.router);
             self.on_force_leader_fail();
             return;
         }
 
-        self.fsm.peer.force_leader = Some(ForceLeaderState::PreForceLeader { failed_stores });
+        self.fsm.peer.force_leader = Some(ForceLeaderState::PreForceLeader {
+            shared_state,
+            failed_stores,
+        });
         self.fsm.has_ready = true;
     }
 
@@ -1380,8 +1403,11 @@ where
         );
         assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
 
-        let failed_stores = match self.fsm.peer.force_leader.take() {
-            Some(ForceLeaderState::PreForceLeader { failed_stores }) => failed_stores,
+        let (shared_state, failed_stores) = match self.fsm.peer.force_leader.take() {
+            Some(ForceLeaderState::PreForceLeader {
+                shared_state,
+                failed_stores,
+            }) => (shared_state, failed_stores),
             _ => unreachable!(),
         };
 
@@ -1417,6 +1443,7 @@ where
 
         self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader { failed_stores });
         self.fsm.has_ready = true;
+        shared_state.finish_for_self(&self.ctx.router);
     }
 
     fn on_exit_force_leader(&mut self) {
@@ -1474,20 +1501,25 @@ where
     #[inline]
     fn check_force_leader(&mut self) {
         if let Some(ForceLeaderState::WaitTicks {
+            shared_state,
             failed_stores,
             ticks,
         }) = &mut self.fsm.peer.force_leader
         {
             if *ticks == 0 {
                 let s = mem::take(failed_stores);
-                self.on_enter_pre_force_leader(s);
+                let shared_state_clone = shared_state.clone();
+                shared_state.finish_for_self(&self.ctx.router);
+                self.on_enter_pre_force_leader(shared_state_clone, s);
+                // It is possible that this code block owns the last reference of "shared_state",
+                // explictly call "finish" to make sure the report is correctly triggered.
             } else {
                 *ticks -= 1;
             }
             return;
         };
 
-        let failed_stores = match &self.fsm.peer.force_leader {
+        let (shared_state, failed_stores) = match &self.fsm.peer.force_leader {
             None => return,
             Some(ForceLeaderState::ForceLeader { .. }) => {
                 if self.fsm.peer.maybe_force_forward_commit_index() {
@@ -1495,7 +1527,10 @@ where
                 }
                 return;
             }
-            Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
+            Some(ForceLeaderState::PreForceLeader {
+                shared_state,
+                failed_stores,
+            }) => (shared_state, failed_stores),
             Some(ForceLeaderState::WaitTicks { .. }) => unreachable!(),
         };
 
@@ -1507,7 +1542,7 @@ where
         }
 
         let expected_alive_voter: HashSet<_> =
-            self.get_force_leader_expected_alive_voter(failed_stores);
+            self.get_force_leader_expected_alive_voter(&*failed_stores);
         let check = || {
             if self.fsm.peer.raft_group.raft.state != StateRole::Candidate {
                 Err(format!(
@@ -1546,6 +1581,7 @@ where
                     "alive_voter" => ?expected_alive_voter,
                     "reason" => err,
                 );
+                shared_state.finish_for_self(&self.ctx.router);
                 self.on_force_leader_fail();
             }
             Ok(granted) => {
@@ -1942,8 +1978,13 @@ where
 
                         let owned_failed_voters = failed_voters.to_owned();
                         let owned_shared_state = shared_state.clone();
+                        // In case owned_shared_state outlives shared_state and make it the last one
+                        // holding the state reference, explictly call "finish" here.
                         shared_state.finish_for_self(&self.ctx.router);
                         if still_need_demote() {
+                            info!("Unsafe recovery, demoting failed voters after exiting joint stata.";
+                             "region" => ?self.region(),
+                            "failed_voters" => ?owned_failed_voters);
                             self.propose_raft_command_internal(
                                 demote_failed_voters_request(
                                     self.region(),
@@ -1971,7 +2012,10 @@ where
                             self.fsm.peer.unsafe_recovery_state = None;
                         }
                     } else {
-                        let owned_shared_state = shared_state.to_owned();
+                        info!("Unsafe recovery, exiting joint state."; "region" => ?self.region());
+                        let owned_shared_state = shared_state.clone();
+                        // In case owned_shared_state outlives shared_state and make it the last one
+                        // holding the state reference, explictly call "finish" here.
                         shared_state.finish_for_self(&self.ctx.router);
                         self.propose_raft_command_internal(
                             exit_joint_request(self.region(), &self.fsm.peer.peer),
