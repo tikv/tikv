@@ -371,6 +371,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "async-channel",
  "collections",
  "concurrency_manager",
@@ -2703,7 +2704,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#e22d8864c9579660424f83b62ca196c03ef85927"
+source = "git+https://github.com/pingcap/kvproto.git#29c9119f3c95eeb1bdfbb7b6fb70830614eb6243"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4133,6 +4134,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "getset",
+ "grpcio-health",
  "into_other",
  "itertools",
  "keys",
@@ -5107,6 +5109,7 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "grpcio",
+ "grpcio-health",
  "hex 0.4.2",
  "keys",
  "kvproto 0.0.2 (git+https://github.com/coocood/kvproto.git?branch=cloud-native)",
@@ -5623,6 +5626,7 @@ dependencies = [
 name = "test_backup"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "backup",
  "collections",
  "concurrency_manager",
@@ -5635,6 +5639,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "kvproto 0.0.2 (git+https://github.com/coocood/kvproto.git?branch=cloud-native)",
+ "protobuf",
  "rand 0.8.3",
  "tempfile",
  "test_raftstore",
@@ -5687,6 +5692,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "backtrace",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crossbeam",
@@ -5697,6 +5703,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "grpcio",
+ "grpcio-health",
  "keys",
  "kvproto 0.0.2 (git+https://github.com/coocood/kvproto.git?branch=cloud-native)",
  "lazy_static",

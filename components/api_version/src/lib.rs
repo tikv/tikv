@@ -68,6 +68,34 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     fn encode_raw_key_owned(user_key: Vec<u8>, _ts: Option<TimeStamp>) -> Key {
         Key::from_encoded(user_key)
     }
+
+    // Convert the encoded key from src_api version to Self::TAG version
+    fn convert_raw_encoded_key_version_from(
+        src_api: ApiVersion,
+        key: &[u8],
+        ts: Option<TimeStamp>,
+    ) -> Result<Key>;
+
+    // Convert the user key range from src_api version to Self::TAG version
+    fn convert_raw_user_key_range_version_from(
+        src_api: ApiVersion,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> (Vec<u8>, Vec<u8>);
+
+    /// Convert the encoded value from src_api version to Self::TAG version
+    fn convert_raw_encoded_value_version_from(
+        src_api: ApiVersion,
+        value: &[u8],
+    ) -> Result<Vec<u8>> {
+        if src_api == Self::TAG {
+            return Ok(value.to_owned());
+        }
+        dispatch_api_version!(src_api, {
+            let raw_value = API::decode_raw_value(value)?;
+            Ok(Self::encode_raw_value(raw_value))
+        })
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -592,5 +620,164 @@ mod tests {
                 (user_key.to_vec(), expected_ts)
             );
         })
+    }
+
+    #[test]
+    fn test_raw_key_convert() {
+        let timestamp = 30;
+        let apiv1_keys = vec![
+            b""[..].to_owned(),
+            b"abc"[..].to_owned(),
+            b"api_ver_test"[..].to_owned(),
+        ];
+        let apiv2_keys: Vec<Vec<u8>> = apiv1_keys
+            .clone()
+            .into_iter()
+            .map(|key| {
+                let mut v2_key = key;
+                v2_key.insert(0, RAW_KEY_PREFIX);
+                ApiV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
+            })
+            .collect();
+        // src_api_ver, dst_api_ver, src_data, dst_data
+        let test_cases = vec![
+            (ApiVersion::V1, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
+            (ApiVersion::V1ttl, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
+            (ApiVersion::V2, ApiVersion::V1, &apiv2_keys, &apiv1_keys),
+            (ApiVersion::V2, ApiVersion::V1ttl, &apiv2_keys, &apiv1_keys),
+        ];
+        for i in 0..apiv1_keys.len() {
+            for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
+                let dst_key = dispatch_api_version!(dst_api_ver, {
+                    API::convert_raw_encoded_key_version_from(
+                        src_api_ver,
+                        &src_data[i],
+                        Some(TimeStamp::from(timestamp)),
+                    )
+                });
+                assert_eq!(dst_key.unwrap().into_encoded(), dst_data[i]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_raw_value_convert() {
+        let apiv1_values = vec![
+            b""[..].to_owned(),
+            b"abc"[..].to_owned(),
+            b"api_ver_test"[..].to_owned(),
+        ];
+        let apiv1ttl_values: Vec<Vec<u8>> = apiv1_values
+            .clone()
+            .into_iter()
+            .map(|value| {
+                let raw_value = RawValue {
+                    user_value: value,
+                    expire_ts: None,
+                    is_delete: false,
+                };
+                ApiV1Ttl::encode_raw_value_owned(raw_value)
+            })
+            .collect();
+        let apiv2_values: Vec<Vec<u8>> = apiv1_values
+            .clone()
+            .into_iter()
+            .map(|value| {
+                let raw_value = RawValue {
+                    user_value: value,
+                    expire_ts: None,
+                    is_delete: false,
+                };
+                ApiV2::encode_raw_value_owned(raw_value)
+            })
+            .collect();
+        // src_api_ver, dst_api_ver, src_data, dst_data
+        let test_cases = vec![
+            (ApiVersion::V1, ApiVersion::V2, &apiv1_values, &apiv2_values),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V2,
+                &apiv1ttl_values,
+                &apiv2_values,
+            ),
+            (ApiVersion::V2, ApiVersion::V1, &apiv2_values, &apiv1_values),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1ttl,
+                &apiv2_values,
+                &apiv1ttl_values,
+            ),
+        ];
+        for i in 0..apiv1_values.len() {
+            for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
+                let dst_value = dispatch_api_version!(dst_api_ver, {
+                    API::convert_raw_encoded_value_version_from(src_api_ver, &src_data[i])
+                });
+                assert_eq!(dst_value.unwrap(), dst_data[i]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_convert_raw_user_key_range() {
+        let apiv1_key_ranges = vec![
+            (b""[..].to_owned(), b""[..].to_owned()),
+            (b"abc"[..].to_owned(), b"abz"[..].to_owned()),
+            (
+                b"api_ver_test"[..].to_owned(),
+                b"bpi_ver_test"[..].to_owned(),
+            ),
+        ];
+        let apiv2_key_ranges: Vec<(Vec<u8>, Vec<u8>)> = apiv1_key_ranges
+            .clone()
+            .into_iter()
+            .map(|(start_key, end_key)| {
+                let mut v2_start_key = start_key;
+                let mut v2_end_key = end_key;
+                v2_start_key.insert(0, RAW_KEY_PREFIX);
+                if v2_end_key.is_empty() {
+                    v2_end_key.insert(0, RAW_KEY_PREFIX_END);
+                } else {
+                    v2_end_key.insert(0, RAW_KEY_PREFIX);
+                }
+                (v2_start_key, v2_end_key)
+            })
+            .collect();
+        // src_api_ver, dst_api_ver, src_data, dst_data
+        let test_cases = vec![
+            (
+                ApiVersion::V1,
+                ApiVersion::V2,
+                &apiv1_key_ranges,
+                &apiv2_key_ranges,
+            ),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V2,
+                &apiv1_key_ranges,
+                &apiv2_key_ranges,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1,
+                &apiv2_key_ranges,
+                &apiv1_key_ranges,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1ttl,
+                &apiv2_key_ranges,
+                &apiv1_key_ranges,
+            ),
+        ];
+        for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases {
+            for i in 0..apiv1_key_ranges.len() {
+                let dst_key_range = dispatch_api_version!(dst_api_ver, {
+                    let (src_start, src_end) = src_data[i].clone();
+                    API::convert_raw_user_key_range_version_from(src_api_ver, src_start, src_end)
+                });
+                assert_eq!(dst_key_range, dst_data[i]);
+            }
+        }
     }
 }

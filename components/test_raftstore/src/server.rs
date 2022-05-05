@@ -7,10 +7,11 @@ use std::{thread, usize};
 
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
+use grpcio_health::HealthService;
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::{create_debug, DebugClient};
 use kvproto::import_sstpb::create_import_sst;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
@@ -133,6 +134,7 @@ pub struct ServerCluster {
     pub importers: HashMap<u64, Arc<SstImporter>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
+    pub health_services: HashMap<u64, HealthService>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
@@ -177,6 +179,7 @@ impl ServerCluster {
             snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
+            health_services: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
             env,
@@ -271,7 +274,11 @@ impl ServerCluster {
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-
+        if ApiVersion::V2 == F::TAG {
+            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(&mut coprocessor_host);
+        }
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
@@ -434,6 +441,7 @@ impl ServerCluster {
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
         raft_store.validate().unwrap();
+        let health_service = HealthService::default();
         let mut node = Node::new(
             system,
             &server_cfg.value().clone(),
@@ -442,6 +450,7 @@ impl ServerCluster {
             Arc::clone(&self.pd_client),
             state,
             bg_worker.clone(),
+            Some(health_service.clone()),
         );
         node.try_bootstrap_store(engines.clone())?;
         let node_id = node.id();
@@ -462,6 +471,7 @@ impl ServerCluster {
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
+                health_service.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
@@ -525,6 +535,7 @@ impl ServerCluster {
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
         self.importers.insert(node_id, importer);
+        self.health_services.insert(node_id, health_service);
 
         lock_mgr
             .start(
@@ -721,13 +732,23 @@ impl Cluster<ServerCluster> {
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+}
+
+pub fn new_server_cluster_with_api_ver(
+    id: u64,
+    count: usize,
+    api_ver: ApiVersion,
+) -> Cluster<ServerCluster> {
+    let pd_client = Arc::new(TestPdClient::new(id, false));
+    let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
+    Cluster::new(id, count, sim, pd_client, api_ver)
 }
 
 pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
 pub fn must_new_cluster_mul(count: usize) -> (Cluster<ServerCluster>, metapb::Peer, Context) {

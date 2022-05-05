@@ -3069,6 +3069,7 @@ mod tests {
         *,
     };
     use crate::config::TitanDBConfig;
+    use crate::coprocessor::checksum_crc64_xor;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
     use crate::storage::lock_manager::DiagnosticContext;
     use crate::storage::mvcc::LockType;
@@ -4498,6 +4499,60 @@ mod tests {
                 block_on(storage.raw_get(ctx.clone(), "".to_string(), k)).unwrap(),
             );
         }
+    }
+
+    #[test]
+    fn test_raw_checksum() {
+        test_kv_format_impl!(test_raw_checksum_impl);
+    }
+
+    fn test_raw_checksum_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let ctx = Context {
+            api_version: F::CLIENT_TAG,
+            ..Default::default()
+        };
+
+        let test_data = vec![
+            (b"r\0a".to_vec(), b"aa".to_vec()),
+            (b"r\0b".to_vec(), b"bb".to_vec()),
+            (b"r\0c".to_vec(), b"cc".to_vec()),
+            (b"r\0d".to_vec(), b"dd".to_vec()),
+            (b"r\0e".to_vec(), b"ee".to_vec()),
+            (b"r\0f".to_vec(), b"ff".to_vec()),
+        ];
+
+        let digest = crc64fast::Digest::new();
+        let mut checksum: u64 = 0;
+        let mut total_kvs: u64 = 0;
+        let mut total_bytes: u64 = 0;
+        // Write key-value pairs one by one
+        for &(ref key, ref value) in &test_data {
+            storage
+                .raw_put(
+                    ctx.clone(),
+                    "".to_string(),
+                    key.clone(),
+                    value.clone(),
+                    0,
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            total_kvs += 1;
+            total_bytes += (key.len() + value.len()) as u64;
+            checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
+            rx.recv().unwrap();
+        }
+        let mut range = KeyRange::default();
+        range.set_start_key(b"r\0a".to_vec());
+        range.set_end_key(b"r\0z".to_vec());
+        assert_eq!(
+            (checksum, total_kvs, total_bytes),
+            block_on(storage.raw_checksum(ctx, ChecksumAlgorithm::Crc64Xor, vec![range])).unwrap(),
+        );
     }
 
     #[test]

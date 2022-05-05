@@ -25,6 +25,7 @@ engine_rocks = { path = "../engine_rocks", default-features = false }
 file_system = { path = "../file_system" }
 futures = "0.3"
 grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
 keys = { path = "../keys", default-features = false }
@@ -51,3 +52,4 @@ tokio = { version = "1.5", features = ["rt-multi-thread"]}
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 fail = "0.5"
 resource_metering = { path = "../resource_metering" }
+causal_ts = { path = "../causal_ts"}

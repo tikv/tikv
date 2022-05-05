@@ -30,3 +30,5 @@ tidb_query_common = { path = "../tidb_query_common" }
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }
+protobuf = "2"
+api_version = { path = "../api_version" }

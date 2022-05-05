@@ -41,6 +41,7 @@ fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 getset = "0.1"
+grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 into_other = { path = "../into_other",  default-features = false }
 itertools = "0.10"
 keys = { path = "../keys", default-features = false }
