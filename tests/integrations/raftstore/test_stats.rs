@@ -11,10 +11,10 @@ use kvproto::tikvpb_grpc::TikvClient;
 use pd_client::PdClient;
 use raftstore::store::QueryStats;
 use std::sync::*;
-use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::metrics::thread_spawn_wrapper;
 
 use futures::{SinkExt, StreamExt};
 use grpcio::*;
@@ -758,7 +758,7 @@ fn batch_commands(
     block_on(sender.close()).unwrap();
 
     let (tx, rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
+    thread_spawn_wrapper(move || {
         // We have send 10k requests to the server, so we should get 10k responses.
         let mut count = 0;
         for x in block_on(

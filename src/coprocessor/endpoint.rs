@@ -1017,7 +1017,7 @@ mod tests {
             });
             let future = copr.handle_unary_request(ReqContext::default_for_test(), handler_builder);
             let tx = tx.clone();
-            thread::spawn(move || {
+            tikv_util::metrics::thread_spawn_wrapper(move || {
                 tx.send(block_on(future)).unwrap();
             });
             thread::sleep(Duration::from_millis(100));
@@ -1349,7 +1349,9 @@ mod tests {
             let resp_future_1 =
                 copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
+            tikv_util::metrics::thread_spawn_wrapper(move || {
+                sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap()
+            });
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
@@ -1363,7 +1365,9 @@ mod tests {
             let resp_future_2 =
                 copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
+            tikv_util::metrics::thread_spawn_wrapper(move || {
+                sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap()
+            });
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Response 1
@@ -1437,7 +1441,9 @@ mod tests {
             let resp_future_1 =
                 copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
+            tikv_util::metrics::thread_spawn_wrapper(move || {
+                sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap()
+            });
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
@@ -1452,7 +1458,9 @@ mod tests {
             let resp_future_2 =
                 copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
+            tikv_util::metrics::thread_spawn_wrapper(move || {
+                sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap()
+            });
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Response 1
@@ -1514,7 +1522,9 @@ mod tests {
             let resp_future_1 =
                 copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
-            thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
+            tikv_util::metrics::thread_spawn_wrapper(move || {
+                sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap()
+            });
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
@@ -1538,7 +1548,7 @@ mod tests {
                 .handle_stream_request(req_with_exec_detail, handler_builder)
                 .unwrap()
                 .map(|x| x.map(|x| x.into()));
-            thread::spawn(move || {
+            tikv_util::metrics::thread_spawn_wrapper(move || {
                 tx.send(
                     block_on_stream(resp_future_3)
                         .collect::<Result<Vec<_>>>()

@@ -24,6 +24,7 @@ use test_raftstore::*;
 use tikv::storage::kv::SnapshotExt;
 use tikv::storage::Snapshot;
 use tikv_util::config::{ReadableDuration, ReadableSize};
+use tikv_util::metrics::thread_spawn_wrapper;
 use txn_types::{Key, PessimisticLock};
 
 #[test]
@@ -868,7 +869,7 @@ fn test_split_with_concurrent_pessimistic_locking() {
 
     let client2 = client.clone();
     let req2 = req.clone();
-    let res = thread::spawn(move || client2.kv_pessimistic_lock(&req2).unwrap());
+    let res = thread_spawn_wrapper(move || client2.kv_pessimistic_lock(&req2).unwrap());
     thread::sleep(Duration::from_millis(200));
     fail::remove("on_split_invalidate_locks");
     let resp = res.join().unwrap();
@@ -878,7 +879,7 @@ fn test_split_with_concurrent_pessimistic_locking() {
     // It needs to be rejected due to incorrect epoch, otherwise the lock may be written to the wrong region.
     fail::cfg("txn_before_process_write", "pause").unwrap();
     req.set_context(cluster.get_ctx(b"key"));
-    let res = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    let res = thread_spawn_wrapper(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(200));
 
     cluster.split_region(&cluster.get_region(b"key"), b"b", Callback::None);
@@ -965,7 +966,7 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
 
     // First let prewrite get snapshot
     fail::cfg("txn_before_process_write", "pause").unwrap();
-    let resp = thread::spawn(move || client.kv_prewrite(&req).unwrap());
+    let resp = thread_spawn_wrapper(move || client.kv_prewrite(&req).unwrap());
     thread::sleep(Duration::from_millis(150));
 
     // In the meantime, split region.

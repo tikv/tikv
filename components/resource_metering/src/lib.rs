@@ -319,12 +319,13 @@ impl TagInfos {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tikv_util::metrics::thread_spawn_wrapper;
 
     #[test]
     fn test_attach() {
         // Use a thread created by ourself. If we use unit test thread directly,
         // the test results may be affected by parallel testing.
-        std::thread::spawn(|| {
+        thread_spawn_wrapper(|| {
             let resource_tag_factory = ResourceTagFactory::new_for_test();
             let tag = ResourceMeteringTag {
                 infos: Arc::new(TagInfos {

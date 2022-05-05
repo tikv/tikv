@@ -34,6 +34,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::metrics::thread_spawn_wrapper;
 
     struct StepRunner {
         ch: mpsc::Sender<u64>,
@@ -113,7 +114,7 @@ mod tests {
         let worker = Worker::new("test-worker-threaded");
         let (tx, rx) = mpsc::channel();
         let scheduler = worker.start("test-worker", StepRunner { ch: tx });
-        thread::spawn(move || {
+        thread_spawn_wrapper(move || {
             scheduler.schedule(90).unwrap();
             scheduler.schedule(110).unwrap();
         });

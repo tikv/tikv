@@ -287,6 +287,7 @@ pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
 
 #[cfg(test)]
 mod tests {
+    use crate::metrics::thread_spawn_wrapper;
     use crate::time::Instant;
     use crossbeam::channel::*;
     use std::thread;
@@ -353,7 +354,7 @@ mod tests {
 
         let (tx1, rx1) = super::bounded::<u64>(10);
         let (tx2, rx2) = super::bounded::<u64>(0);
-        thread::spawn(move || {
+        thread_spawn_wrapper(move || {
             thread::sleep(Duration::from_millis(100));
             tx1.send(10).unwrap();
             thread::sleep(Duration::from_millis(100));
@@ -401,7 +402,7 @@ mod tests {
         );
 
         let (tx, rx) = super::unbounded::<u64>();
-        thread::spawn(move || {
+        thread_spawn_wrapper(move || {
             thread::sleep(Duration::from_millis(100));
             tx.send(10).unwrap();
         });
@@ -481,7 +482,7 @@ mod tests {
         );
 
         let (tx, rx) = super::loose_bounded(10);
-        thread::spawn(move || {
+        thread_spawn_wrapper(move || {
             thread::sleep(Duration::from_millis(100));
             tx.try_send(10).unwrap();
         });

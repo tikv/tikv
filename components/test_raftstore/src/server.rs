@@ -65,6 +65,7 @@ use tikv::storage::txn::flow_controller::FlowController;
 use tikv::storage::{self, Engine};
 use tikv::{config::ConfigController, server::raftkv::ReplicaReadLockChecker};
 use tikv_util::config::VersionTrack;
+use tikv_util::metrics::ThreadBuildWrapper;
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
@@ -426,6 +427,8 @@ impl ServerCluster {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()
                 .unwrap(),
         );

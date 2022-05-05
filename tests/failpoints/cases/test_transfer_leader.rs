@@ -14,6 +14,7 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::storage::Snapshot;
+use tikv_util::metrics::thread_spawn_wrapper;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, PessimisticLock};
 
@@ -154,7 +155,7 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
     // Pause the command after it mark the lock as deleted.
     fail::cfg("raftkv_async_write", "pause").unwrap();
     let (tx, resp_rx) = mpsc::channel();
-    thread::spawn(move || tx.send(client.kv_cleanup(&req).unwrap()).unwrap());
+    thread_spawn_wrapper(move || tx.send(client.kv_cleanup(&req).unwrap()).unwrap());
 
     thread::sleep(Duration::from_millis(200));
     assert!(resp_rx.try_recv().is_err());
@@ -233,7 +234,7 @@ fn test_delete_lock_proposed_before_proposing_locks() {
     // Pause the command before it actually removes locks.
     fail::cfg("scheduler_async_write_finish", "pause").unwrap();
     let (tx, resp_rx) = mpsc::channel();
-    thread::spawn(move || tx.send(client.kv_cleanup(&req).unwrap()).unwrap());
+    thread_spawn_wrapper(move || tx.send(client.kv_cleanup(&req).unwrap()).unwrap());
 
     thread::sleep(Duration::from_millis(200));
     assert!(resp_rx.try_recv().is_err());
@@ -322,7 +323,7 @@ fn test_read_lock_after_become_follower() {
     // Pause the command before it executes prewrite.
     fail::cfg("txn_before_process_write", "pause").unwrap();
     let (tx, resp_rx) = mpsc::channel();
-    thread::spawn(move || tx.send(client.kv_prewrite(&req).unwrap()).unwrap());
+    thread_spawn_wrapper(move || tx.send(client.kv_prewrite(&req).unwrap()).unwrap());
 
     thread::sleep(Duration::from_millis(200));
     assert!(resp_rx.try_recv().is_err());

@@ -10,6 +10,7 @@ use kvproto::resource_usage_agent::ResourceUsageRecord;
 use resource_metering::error::Result;
 use resource_metering::{init_recorder, init_reporter, Config, DataSink};
 use tikv_util::config::ReadableDuration;
+use tikv_util::metrics::thread_spawn_wrapper;
 
 const PRECISION_MS: u64 = 1000;
 const REPORT_INTERVAL_MS: u64 = 3000;
@@ -59,7 +60,7 @@ fn test_summary() {
     {
         let tf = resource_tag_factory.clone();
         let data_sink = data_sink.clone();
-        thread::spawn(move || {
+        thread_spawn_wrapper(move || {
             {
                 let mut ctx = Context::default();
                 ctx.set_resource_group_tag(b"TAG-1".to_vec());
@@ -83,7 +84,7 @@ fn test_summary() {
     {
         let tf = resource_tag_factory.clone();
         let data_sink = data_sink.clone();
-        thread::spawn(move || {
+        thread_spawn_wrapper(move || {
             {
                 let mut ctx = Context::default();
                 ctx.set_resource_group_tag(b"TAG-1".to_vec());
@@ -122,7 +123,7 @@ fn test_summary() {
     drop(reg_guard);
 
     // expect no data
-    thread::spawn(move || {
+    thread_spawn_wrapper(move || {
         {
             let mut ctx = Context::default();
             ctx.set_resource_group_tag(b"TAG-1".to_vec());

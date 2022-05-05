@@ -8,6 +8,8 @@ use criterion::*;
 use std::sync::atomic::*;
 use std::sync::Arc;
 
+use tikv_util::metrics::thread_spawn_wrapper;
+
 fn end_hook(tx: &std::sync::mpsc::Sender<()>) -> Message {
     let tx = tx.clone();
     Message::Callback(Box::new(move |_, _| {
@@ -106,7 +108,7 @@ fn bench_fairness(c: &mut Criterion) {
     let running = Arc::new(AtomicBool::new(true));
     let router1 = router.clone();
     let running1 = running.clone();
-    let handle = std::thread::spawn(move || {
+    let handle = thread_spawn_wrapper(move || {
         while running1.load(Ordering::SeqCst) {
             // Using 4 to ensure all worker threads are busy spinning.
             for id in 0..4 {

@@ -2141,6 +2141,7 @@ mod tests {
     use futures::channel::oneshot;
     use futures::executor::block_on;
     use std::thread;
+    use tikv_util::metrics::StdThreadBuildWrapper;
 
     #[test]
     fn test_poll_future_notify_with_slow_source() {
@@ -2149,7 +2150,7 @@ mod tests {
 
         thread::Builder::new()
             .name("source".to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 block_on(signal_rx).unwrap();
                 tx.send(100).unwrap();
             })
@@ -2172,7 +2173,7 @@ mod tests {
         let (signal_tx, signal_rx) = oneshot::channel();
         thread::Builder::new()
             .name("source".to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tx.send(100).unwrap();
                 signal_tx.send(()).unwrap();
             })

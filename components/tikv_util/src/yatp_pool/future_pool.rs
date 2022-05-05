@@ -224,6 +224,7 @@ mod tests {
     use std::time::Duration;
 
     use super::super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL};
+    use crate::metrics::thread_spawn_wrapper;
     use futures::executor::block_on;
 
     fn spawn_future_and_wait(pool: &FuturePool, duration: Duration) {
@@ -419,7 +420,7 @@ mod tests {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        thread::spawn(move || {
+        thread_spawn_wrapper(move || {
             let r = block_on(future);
             sender.send(r).unwrap();
         });

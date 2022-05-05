@@ -19,6 +19,7 @@ use test_raftstore::*;
 use tikv::storage::kv::SnapshotExt;
 use tikv::storage::Snapshot;
 use tikv_util::config::*;
+use tikv_util::metrics::thread_spawn_wrapper;
 use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, PessimisticLock};
@@ -1415,7 +1416,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
     req.set_for_update_ts(10);
     req.set_primary_lock(b"k1".to_vec());
     fail::cfg("txn_before_process_write", "pause").unwrap();
-    let res = thread::spawn(move || client2.kv_pessimistic_lock(&req).unwrap());
+    let res = thread_spawn_wrapper(move || client2.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(150));
     cluster.merge_region(left.id, right.id, Callback::None);
     thread::sleep(Duration::from_millis(150));
@@ -1435,7 +1436,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
     req.set_for_update_ts(10);
     req.set_primary_lock(b"k11".to_vec());
     fail::cfg("txn_before_process_write", "pause").unwrap();
-    let res = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    let res = thread_spawn_wrapper(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(200));
     fail::remove("txn_before_process_write");
     let resp = res.join().unwrap();
@@ -1506,7 +1507,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     fail::cfg("on_handle_apply", "pause").unwrap();
     let req2 = req.clone();
     let client2 = client.clone();
-    let resp = thread::spawn(move || client2.kv_prewrite(&req2).unwrap());
+    let resp = thread_spawn_wrapper(move || client2.kv_prewrite(&req2).unwrap());
     thread::sleep(Duration::from_millis(150));
 
     // Then, start merging. PrepareMerge should wait until prewrite is done.
@@ -1516,7 +1517,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
 
     // But a later prewrite request should fail because we have already banned all later proposals.
     req.mut_mutations()[0].set_key(b"k1".to_vec());
-    let resp2 = thread::spawn(move || client.kv_prewrite(&req).unwrap());
+    let resp2 = thread_spawn_wrapper(move || client.kv_prewrite(&req).unwrap());
 
     fail::remove("on_handle_apply");
     let resp = resp.join().unwrap();

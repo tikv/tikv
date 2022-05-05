@@ -9,6 +9,7 @@ use raft::eraftpb::Entry;
 use raft_log_engine::RaftLogEngine;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tikv_util::metrics::thread_spawn_wrapper;
 
 const BATCH_THRESHOLD: usize = 32 * 1024;
 
@@ -24,7 +25,7 @@ pub fn dump_raftdb_to_raft_engine(source: &RocksEngine, target: &RaftLogEngine, 
         let target = target.clone();
         let count_size = count_size.clone();
         let rx = rx.clone();
-        let t = std::thread::spawn(move || {
+        let t = thread_spawn_wrapper(move || {
             run_dump_raftdb_worker(&rx, &source, &target, &count_size);
         });
         workers.push(t);
@@ -74,7 +75,7 @@ pub fn dump_raft_engine_to_raftdb(source: &RaftLogEngine, target: &RocksEngine, 
         let target = target.clone();
         let count_size = count_size.clone();
         let rx = rx.clone();
-        let t = std::thread::spawn(move || {
+        let t = thread_spawn_wrapper(move || {
             run_dump_raft_engine_worker(&rx, &source, &target, &count_size);
         });
         workers.push(t);

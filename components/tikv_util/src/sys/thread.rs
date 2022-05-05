@@ -366,6 +366,7 @@ pub fn current_thread_stat() -> io::Result<ThreadStat> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::thread_spawn_wrapper;
 
     use std::collections::HashSet;
     use std::sync::{Arc, Condvar, Mutex};
@@ -374,7 +375,7 @@ mod tests {
     fn test_thread_id() {
         let id = thread_id();
         assert_ne!(id, 0);
-        std::thread::spawn(move || {
+        thread_spawn_wrapper(move || {
             // Two threads should have different ids.
             assert_ne!(thread_id(), id);
         })
@@ -395,7 +396,7 @@ mod tests {
             .map(|_| {
                 let tx = tx.clone();
                 let stop_threads_cvar = stop_threads_cvar.clone();
-                std::thread::spawn(move || {
+                thread_spawn_wrapper(move || {
                     tx.send(thread_id()).unwrap();
 
                     let (lock, cvar) = &*stop_threads_cvar;

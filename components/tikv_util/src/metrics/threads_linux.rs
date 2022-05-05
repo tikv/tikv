@@ -591,7 +591,7 @@ mod tests {
         let (tx1, rx1) = sync::mpsc::channel();
         let h = std::thread::Builder::new()
             .name(name.to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 // Make `io::write_bytes` > 0
                 let mut tmp = temp_dir();
                 tmp.push(name);
@@ -640,7 +640,7 @@ mod tests {
         let (tx1, rx1) = sync::mpsc::channel();
         std::thread::Builder::new()
             .name(str1.to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tx1.send(()).unwrap();
 
                 // Make `io::write_bytes` > 0
@@ -726,7 +726,7 @@ mod tests {
         let (tx1, rx1) = sync::mpsc::channel();
         std::thread::Builder::new()
             .name(name)
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tx1.send(()).unwrap();
 
                 let start = Instant::now();

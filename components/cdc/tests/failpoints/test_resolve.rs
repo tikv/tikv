@@ -10,6 +10,7 @@ use raft::eraftpb::ConfChangeType;
 use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::metrics::thread_spawn_wrapper;
 
 #[test]
 fn test_stale_resolver() {
@@ -250,7 +251,7 @@ fn test_joint_confchange() {
         .joint_confchange(region.get_id(), confchanges);
     sleep_ms(500);
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    thread_spawn_wrapper(move || {
         receive_resolved_ts(&receive_event);
         tx.send(()).unwrap();
     });

@@ -18,7 +18,7 @@ use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
 use tikv::server::snap::send_snap;
-use tikv_util::{config::*, time::Instant, HandyRwLock};
+use tikv_util::{config::*, metrics::thread_spawn_wrapper, time::Instant, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
@@ -545,7 +545,7 @@ fn test_gen_during_heavy_recv() {
     let s1_addr = cluster.sim.rl().get_addr(1);
     let sec_mgr = cluster.sim.rl().security_mgr.clone();
     let snap_dir = cluster.sim.rl().get_snap_dir(2);
-    let th = std::thread::spawn(move || {
+    let th = thread_spawn_wrapper(move || {
         loop {
             for suffix in &[".meta", "_default.sst"] {
                 let f = format!("gen_{}_{}_{}{}", r2, snap_term, snap_index, suffix);

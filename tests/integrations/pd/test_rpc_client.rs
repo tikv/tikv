@@ -16,6 +16,7 @@ use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, Rp
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
 use tikv_util::config::ReadableDuration;
+use tikv_util::metrics::{thread_spawn_wrapper, ThreadBuildWrapper};
 use txn_types::TimeStamp;
 
 use test_pd::{mocker::*, util::*, Server as MockServer};
@@ -29,7 +30,7 @@ fn test_retry_rpc_client() {
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let m_mgr = mgr.clone();
     server.stop();
-    let child = thread::spawn(move || {
+    let child = thread_spawn_wrapper(move || {
         let cfg = new_config(m_eps);
         assert_eq!(RpcClient::new(&cfg, None, m_mgr).is_ok(), true);
     });
@@ -105,6 +106,8 @@ fn test_rpc_client() {
     let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
         .worker_threads(1)
+        .after_start_wrapper(|| {})
+        .before_stop_wrapper(|| {})
         .build()
         .unwrap();
     let (tx, rx) = mpsc::channel();
@@ -453,6 +456,8 @@ fn test_region_heartbeat_on_leader_change() {
     let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
         .worker_threads(1)
+        .after_start_wrapper(|| {})
+        .before_stop_wrapper(|| {})
         .build()
         .unwrap();
     let (tx, rx) = mpsc::channel();

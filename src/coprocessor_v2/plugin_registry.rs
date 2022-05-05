@@ -7,13 +7,13 @@ use semver::Version;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
-use std::thread;
 use std::time::Duration;
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
 };
 use thiserror::Error;
+use tikv_util::metrics::thread_spawn_wrapper;
 
 #[derive(Debug, Error)]
 pub enum PluginLoadingError {
@@ -123,7 +123,7 @@ impl PluginRegistry {
             let fs_watcher = notify::watcher(tx, Duration::from_secs(3)).unwrap();
 
             let hot_reload_registry = self.inner.clone();
-            thread::spawn(move || {
+            thread_spawn_wrapper(move || {
                 // Simple helper functions for loading/unloading plugins.
                 let maybe_load = |file: &PathBuf| {
                     let mut hot_reload_registry = hot_reload_registry.write().unwrap();

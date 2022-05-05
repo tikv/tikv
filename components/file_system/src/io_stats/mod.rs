@@ -47,6 +47,7 @@ pub use proc::*;
 mod tests {
     use super::*;
     use crate::IOType;
+    use tikv_util::metrics::thread_spawn_wrapper;
 
     #[bench]
     fn bench_fetch_io_bytes(b: &mut test::Bencher) {
@@ -54,7 +55,7 @@ mod tests {
         let _ths = (0..8)
             .map(|_| {
                 let tx_clone = tx.clone();
-                std::thread::Builder::new().spawn(move || {
+                thread_spawn_wrapper(move || {
                     set_io_type(IOType::ForegroundWrite);
                     tx_clone.send(()).unwrap();
                 })
@@ -72,7 +73,7 @@ mod tests {
         let _ths = (0..8)
             .map(|_| {
                 let tx_clone = tx.clone();
-                std::thread::Builder::new().spawn(move || {
+                thread_spawn_wrapper(move || {
                     set_io_type(IOType::ForegroundWrite);
                     tx_clone.send(()).unwrap();
                 })

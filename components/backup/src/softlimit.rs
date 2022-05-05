@@ -277,7 +277,7 @@ mod softlimit_test {
         for _ in 0..4 {
             let working_cloned = working.clone();
             let limit_cloned = limit.clone();
-            tokio::spawn(async move {
+            tokio_spawn_wrapper(async move {
                 loop {
                     let _guard = limit_cloned.guard().await.unwrap();
                     working_cloned.fetch_add(1, Ordering::SeqCst);

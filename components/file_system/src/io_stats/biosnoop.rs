@@ -285,6 +285,7 @@ mod tests {
     use std::{io::Read, io::Seek, io::SeekFrom, io::Write};
     use tempfile::TempDir;
     use test::Bencher;
+    use tikv_util::metrics::thread_spawn_wrapper;
 
     #[test]
     fn test_biosnoop() {
@@ -321,7 +322,7 @@ mod tests {
         drop(f);
 
         let other_bytes_before = fetch_io_bytes()[IOType::Other as usize];
-        std::thread::spawn(move || {
+        thread_spawn_wrapper(move || {
             set_io_type(IOType::Other);
             let mut f = OpenOptions::new()
                 .read(true)
@@ -350,7 +351,7 @@ mod tests {
     fn test_thread_idx_allocation() {
         // the thread indexes should be recycled.
         for _ in 1..=MAX_THREAD_IDX * 2 {
-            std::thread::spawn(|| {
+            thread_spawn_wrapper(|| {
                 set_io_type(IOType::Other);
             })
             .join()
@@ -362,7 +363,7 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 1..=MAX_THREAD_IDX {
             let pair1 = pair.clone();
-            let h = std::thread::spawn(move || {
+            let h = thread_spawn_wrapper(move || {
                 set_io_type(IOType::Compaction);
                 let (lock, cvar) = &*pair1;
                 let mut stop = lock.lock().unwrap();
@@ -375,7 +376,7 @@ mod tests {
 
         // the reserved index is used, io type should be IOType::Other
         for _ in 1..=MAX_THREAD_IDX {
-            std::thread::spawn(|| {
+            thread_spawn_wrapper(|| {
                 set_io_type(IOType::Compaction);
                 assert_eq!(get_io_type(), IOType::Other);
             })
@@ -396,7 +397,7 @@ mod tests {
 
         // the thread indexes should be available again.
         for _ in 1..=MAX_THREAD_IDX {
-            std::thread::spawn(|| {
+            thread_spawn_wrapper(|| {
                 set_io_type(IOType::Compaction);
                 assert_eq!(get_io_type(), IOType::Compaction);
             })

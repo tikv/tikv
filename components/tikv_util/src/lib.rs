@@ -563,6 +563,7 @@ pub fn build_on_master_branch() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::thread_spawn_wrapper;
 
     use std::io::Read;
     use std::rc::Rc;
@@ -610,7 +611,7 @@ mod tests {
             )
             .unwrap();
 
-            let _ = std::thread::spawn(|| {
+            let _ = thread_spawn_wrapper(|| {
                 // let the global logger is held by the other thread, so the
                 // drop() of the async drain is not called in time.
                 let _guard = slog_global::borrow_global();

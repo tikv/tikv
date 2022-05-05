@@ -7,6 +7,7 @@ use kvproto::brpb::Error_oneof_detail;
 use kvproto::kvrpcpb::*;
 use tempfile::Builder;
 use test_backup::*;
+use tikv_util::metrics::thread_spawn_wrapper;
 use txn_types::TimeStamp;
 
 #[test]
@@ -27,7 +28,7 @@ fn backup_blocked_by_memory_lock() {
     prewrite_req.set_start_version(20);
     prewrite_req.set_lock_ttl(2000);
     prewrite_req.set_use_async_commit(true);
-    let th = thread::spawn(move || tikv_cli.kv_prewrite(&prewrite_req).unwrap());
+    let th = thread_spawn_wrapper(move || tikv_cli.kv_prewrite(&prewrite_req).unwrap());
 
     thread::sleep(Duration::from_millis(200));
 

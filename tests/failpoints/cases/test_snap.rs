@@ -12,6 +12,7 @@ use std::io::prelude::*;
 use std::path::PathBuf;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::metrics::thread_spawn_wrapper;
 use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
@@ -364,7 +365,7 @@ fn test_shutdown_when_snap_gc() {
     }
 
     fail::cfg("peer_2_handle_snap_mgr_gc", "pause").unwrap();
-    std::thread::spawn(|| {
+    thread_spawn_wrapper(|| {
         // Sleep a while to wait snap_gc event to reach batch system.
         sleep_ms(500);
         fail::cfg("peer_2_handle_snap_mgr_gc", "off").unwrap();

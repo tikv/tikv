@@ -347,6 +347,7 @@ mod tests {
     use std::sync::{mpsc, Mutex};
     use std::{thread, time};
 
+    use crate::metrics::ThreadBuildWrapper;
     use futures::future::{self, BoxFuture, FutureExt};
     use futures::stream::{self, StreamExt};
     use futures::task::{self, ArcWake, Poll};
@@ -362,6 +363,8 @@ mod tests {
         let msg_counter1 = Arc::clone(&msg_counter);
         let pool = Builder::new_multi_thread()
             .worker_threads(1)
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         let _res = pool.spawn(rx.for_each(move |_| {
@@ -407,6 +410,8 @@ mod tests {
         let (nty, polled) = mpsc::sync_channel(1);
         let pool = Builder::new_multi_thread()
             .worker_threads(1)
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         let _res = pool.spawn(

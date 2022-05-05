@@ -115,6 +115,8 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use tikv_util::metrics::StdThreadBuildWrapper;
+
     use super::*;
 
     #[test]
@@ -124,7 +126,7 @@ mod tests {
         let l = loads.clone();
         thread::Builder::new()
             .name(THREAD_NAME.to_string())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 let mut stats = ThreadLoadStatistics::new(2, THREAD_NAME, Arc::clone(&l));
                 let start = Instant::now();
                 loop {

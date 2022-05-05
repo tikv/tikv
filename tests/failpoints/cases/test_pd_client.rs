@@ -6,6 +6,7 @@ use pd_client::{PdClient, RegionInfo, RegionStat, RpcClient};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;
+use tikv_util::metrics::thread_spawn_wrapper;
 
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -81,7 +82,7 @@ fn test_pd_client_deadlock() {
         thread::sleep(Duration::from_millis(200));
 
         let (tx, rx) = mpsc::channel();
-        let handle = thread::spawn(move || {
+        let handle = thread_spawn_wrapper(move || {
             func();
             tx.send(()).unwrap();
         });
@@ -127,7 +128,7 @@ fn test_watch_global_config_on_closed_server() {
     let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
     let client = Arc::new(client);
     use futures::StreamExt;
-    let j = std::thread::spawn(move || {
+    let j = thread_spawn_wrapper(move || {
         let _ = futures::executor::block_on(async move {
             let mut r = client.watch_global_config().unwrap();
             let mut i: usize = 0;
@@ -192,7 +193,7 @@ fn test_slow_periodical_update() {
     thread::sleep(Duration::from_millis(200));
 
     let (tx, rx) = mpsc::channel();
-    let handle = thread::spawn(move || {
+    let handle = thread_spawn_wrapper(move || {
         client2.alloc_id().unwrap();
         tx.send(()).unwrap();
     });

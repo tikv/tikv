@@ -38,6 +38,7 @@ use tikv::server;
 use tikv::server::gc_worker::sync_gc;
 use tikv::server::service::{batch_commands_request, batch_commands_response};
 use tikv_util::config::ReadableSize;
+use tikv_util::metrics::thread_spawn_wrapper;
 use tikv_util::worker::{dummy_scheduler, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType, TimeStamp};
@@ -1096,7 +1097,7 @@ fn test_batch_commands() {
     block_on(sender.close()).unwrap();
 
     let (tx, rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
+    thread_spawn_wrapper(move || {
         // We have send 10k requests to the server, so we should get 10k responses.
         let mut count = 0;
         for x in block_on(
@@ -1136,7 +1137,7 @@ fn test_empty_commands() {
     block_on(sender.close()).unwrap();
 
     let (tx, rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
+    thread_spawn_wrapper(move || {
         // We have send 10k requests to the server, so we should get 10k responses.
         let mut count = 0;
         for x in block_on(
@@ -1711,7 +1712,7 @@ fn test_get_lock_wait_info_api() {
     ctx1.set_resource_group_tag(b"resource_group_tag1".to_vec());
     kv_pessimistic_lock_with_ttl(&client, ctx1, vec![b"a".to_vec()], 20, 20, false, 5000);
     let mut ctx2 = ctx.clone();
-    let handle = thread::spawn(move || {
+    let handle = thread_spawn_wrapper(move || {
         ctx2.set_resource_group_tag(b"resource_group_tag2".to_vec());
         kv_pessimistic_lock_with_ttl(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false, 5000);
     });

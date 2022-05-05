@@ -503,6 +503,7 @@ mod tests {
         must_acquire_pessimistic_lock, must_commit, must_prewrite_delete, must_prewrite_put,
     };
     use tikv::storage::TestEngineBuilder;
+    use tikv_util::metrics::ThreadBuildWrapper;
     use tikv_util::worker::{LazyWorker, Runnable};
     use tokio::runtime::{Builder, Runtime};
 
@@ -546,6 +547,8 @@ mod tests {
         let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
             .worker_threads(4)
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));

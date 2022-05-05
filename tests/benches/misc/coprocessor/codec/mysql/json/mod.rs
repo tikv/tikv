@@ -4,11 +4,11 @@ use std::borrow::ToOwned;
 use std::io;
 use std::io::prelude::*;
 use std::process::{Command, Stdio};
-use std::thread;
 
 use test::Bencher;
 
 use tidb_query_datatype::codec::mysql::{Json, JsonDecoder, JsonEncoder};
+use tikv_util::metrics::thread_spawn_wrapper;
 
 fn download_and_extract_file(url: &str) -> io::Result<String> {
     let mut dl_child = Command::new("curl")
@@ -25,7 +25,7 @@ fn download_and_extract_file(url: &str) -> io::Result<String> {
 
     let mut dl_output = dl_child.stdout.take().unwrap();
     let mut tar_input = tar_child.stdin.take().unwrap();
-    let th = thread::spawn(move || -> io::Result<()> {
+    let th = thread_spawn_wrapper(move || -> io::Result<()> {
         let mut buf = vec![0; 4096];
         loop {
             let nbytes = dl_output.read(&mut buf)?;
