@@ -7,7 +7,6 @@
 
 use std::cmp;
 use std::collections::HashMap;
-use std::env;
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -2333,7 +2332,7 @@ impl Default for BackupStreamConfig {
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             enable: false,
             // TODO: may be use raft store directory
-            temp_path: env::temp_dir().into_os_string().into_string().unwrap(),
+            temp_path: String::new(),
             temp_file_size_limit_per_task: ReadableSize::mb(128),
         }
     }
@@ -2815,6 +2814,11 @@ impl TiKvConfig {
                 "raftstore.hibernate-regions was enabled but cdc.hibernate-regions-compatible \
                 was disabled, hibernate regions may be broken up if you want to deploy a cdc cluster"
             );
+        }
+
+        if self.backup_stream.temp_path.is_empty() {
+            self.backup_stream.temp_path =
+                config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-tmp")?;
         }
 
         self.rocksdb.validate()?;
