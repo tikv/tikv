@@ -380,7 +380,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let search_base = env::temp_dir().join(&lock_dir);
         file_system::create_dir_all(&search_base)
             .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
-        set_path_all_permission(&search_base);
 
         for entry in file_system::read_dir(&search_base).unwrap().flatten() {
             if !entry.file_type().unwrap().is_file() {
@@ -1485,8 +1484,6 @@ fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
         )
     });
 
-    set_path_all_permission(&path);
-
     if f.try_lock_exclusive().is_err() {
         fatal!(
             "{} already in use, maybe another instance is binding with this address.",
@@ -1505,18 +1502,6 @@ fn get_lock_dir() -> String {
 fn get_lock_dir() -> String {
     "TIKV_LOCK_FILES".to_owned()
 }
-
-// Make the lock files be accessed by all users. Only support in unix platform.
-#[cfg(unix)]
-fn set_path_all_permission<P: AsRef<Path>>(path: P) {
-    use std::fs::{set_permissions, Permissions};
-    use std::os::unix::fs::PermissionsExt;
-    // this may failed when setting a file created by root.
-    let _ = set_permissions(path, Permissions::from_mode(0o777));
-}
-
-#[cfg(not(unix))]
-fn set_path_all_permission<P: AsRef<Path>>(path: P) {}
 
 /// A small trait for components which can be trivially stopped. Lets us keep
 /// a list of these in `TiKV`, rather than storing each component individually.
