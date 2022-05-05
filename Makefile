@@ -271,10 +271,11 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
+	@cargo install -q cargo-sort 
 
 format: pre-format
-	@cargo fmt -- --check >/dev/null || \
-	cargo fmt
+	@cargo fmt
+	@cargo sort -w ./Cargo.toml ./*/Cargo.toml components/*/Cargo.toml cmd/*/Cargo.toml >/dev/null 
 
 doc:
 	@cargo doc --workspace --document-private-items \
