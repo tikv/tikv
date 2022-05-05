@@ -502,7 +502,6 @@ where
         kv_snapshot: &mut <E as Engine>::Snap,
     ) -> Result<()> {
         let start_key = key.clone().append_ts(safe_point.prev());
-
         let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT).build()?;
 
         let mut statistics = CfStatistics::default();
@@ -1797,7 +1796,7 @@ mod tests {
 
         test_raws.push((make_key(key_b, 50), value_is_delete));
         test_raws.push((make_key(key_b, 20), value_not_delete.clone()));
-        test_raws.push((make_key(key_b, 20), value_not_delete));
+        test_raws.push((make_key(key_b, 10), value_not_delete));
 
         let mut keys = vec![];
 
@@ -1845,7 +1844,7 @@ mod tests {
         let check_key_a = snapshot.get(&Key::from_encoded_slice(&*engine_key_a));
         let check_key_b = snapshot.get(&Key::from_encoded_slice(&*engine_key_b));
 
-        assert_eq!(5, runner.stats.data.next);
+        assert_eq!(6, runner.stats.data.next);
         assert_eq!(2, runner.stats.data.seek);
         // If raw.ts == safepoint , it will not be delete. We just delete the raw.ts < safepoint
         assert_eq!(check_key_a.unwrap().is_none(), false);
@@ -1859,7 +1858,7 @@ mod tests {
         let check_key_a = snapshot.get(&Key::from_encoded_slice(&*engine_key_a));
         let check_key_b = snapshot.get(&Key::from_encoded_slice(&*engine_key_b));
 
-        assert_eq!(6, runner.stats.data.next);
+        assert_eq!(7, runner.stats.data.next);
         assert_eq!(4, runner.stats.data.seek);
 
         assert_eq!(check_key_a.unwrap().is_none(), true);
