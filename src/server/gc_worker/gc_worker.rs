@@ -199,6 +199,8 @@ where
     stats: Statistics,
 }
 
+pub const MAX_RAW_WRITE_SIZE: usize = 32 * 1024;
+
 pub struct MvccRaw {
     pub(crate) write_size: usize,
     pub(crate) modifies: Vec<Modify>,
@@ -458,19 +460,23 @@ where
         safe_point: TimeStamp,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     ) -> Result<(usize, usize)> {
-        let first_raw_key = keys.first().unwrap().clone().append_ts(TimeStamp::max());
-        let range_start_key = first_raw_key.as_encoded();
-
-        let last_raw_key = keys.last().unwrap().clone().append_ts(TimeStamp::zero());
-        let range_end_key = last_raw_key.as_encoded();
-
-        let mut keys = get_keys_in_regions(keys, regions_provider)?;
+        let range_start_key = keys.first().unwrap().clone().into_encoded();
+        let range_end_key = {
+            let mut k = keys
+                .last()
+                .unwrap()
+                .to_raw()
+                .map_err(|e| EngineError::Codec(e))?;
+            k.push(0);
+            Key::from_raw(&k).into_encoded()
+        };
 
         let mut snapshot = self
             .engine
-            .snapshot_on_kv_engine(range_start_key, range_end_key)?;
+            .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
 
         let mut raw_modifys = MvccRaw::new();
+        let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
@@ -497,23 +503,24 @@ where
     ) -> Result<()> {
         let start_key = key.clone().append_ts(safe_point.prev());
 
-        let end_key = key.clone().append_ts(TimeStamp::zero());
-
-        let start_seek_key = start_key.clone();
-
-        let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT)
-            .range(Some(start_key), Some(end_key))
-            .build()?;
+        let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT).build()?;
 
         let mut statistics = CfStatistics::default();
 
-        cursor.seek(&start_seek_key, &mut statistics)?;
+        cursor.seek(&start_key, &mut statistics)?;
 
         while cursor.valid()? {
             let engine_slice = cursor.key(&mut statistics);
+            if !Key::is_user_key_eq(engine_slice, key.as_encoded()) {
+                break;
+            }
 
             let engine_key = Key::from_encoded_slice(engine_slice);
             let write = Modify::Delete(CF_DEFAULT, engine_key);
+            if raw_modifys.write_size >= MAX_RAW_WRITE_SIZE {
+                return Ok(());
+            }
+
             raw_modifys.write_size += write.size();
             raw_modifys.modifies.push(write);
 
