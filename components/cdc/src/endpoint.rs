@@ -17,11 +17,11 @@ use futures::compat::Future01CompatExt;
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
-        ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
-        DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, Event_oneof_event,
-        ResolvedTs,
+        ChangeDataRequest, ChangeDataRequestKvApi, ClusterIdMismatch as ErrorClusterIdMismatch,
+        Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
+        Error as EventError, Event, Event_oneof_event, ResolvedTs,
     },
-    kvrpcpb::ApiVersion;
+    kvrpcpb::ApiVersion,
     metapb::Region,
     tikvpb::TikvClient,
 };
@@ -679,6 +679,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
 
+        let is_build_resolver =
+            kv_api == ChangeDataRequestKvApi::TiDb && delegate.has_tidb_downstream();
+
         let downstream_ = downstream.clone();
         if let Err(err) = delegate.subscribe(downstream) {
             let error_event = err.into_error_event(region_id);
@@ -704,7 +707,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
         // Now resolver is only used by tidb downstream.
         // Resolver is created when the first tidb cdc request arrive.
-        let is_build_resolver = kv_api == ChangeDataRequestKvApi::TiDb && delegate.resolver.is_none();
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
 
         let region_epoch = request.take_region_epoch();
@@ -723,7 +725,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
             checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: is_new_delegate,
+            build_resolver: is_build_resolver,
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
             kv_api,
         };
@@ -1244,7 +1246,10 @@ mod tests {
     use std::ops::{Deref, DerefMut};
 
     use engine_rocks::RocksEngine;
-    use kvproto::{cdcpb::{Header, ChangeDataRequestKvApi}, errorpb::Error as ErrorHeader};
+    use kvproto::{
+        cdcpb::{ChangeDataRequestKvApi, Header},
+        errorpb::Error as ErrorHeader,
+    };
     use raftstore::{
         errors::{DiscardReason, Error as RaftStoreError},
         store::{msg::CasualMessage, PeerMsg, ReadDelegate},

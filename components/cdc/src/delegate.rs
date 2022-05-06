@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::string::String;
 use std::{
     mem,
+    string::String,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -12,13 +12,12 @@ use std::{
 use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
-use kvproto::kvrpcpb::ApiVersion;
 use kvproto::{
     cdcpb::{
-        Error as EventError, Event, EventEntries, EventLogType, EventRow, EventRowOpType,
-        Event_oneof_event,
+        ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
+        EventRowOpType, Event_oneof_event,
     },
-    kvrpcpb::ExtraOp as TxnExtraOp,
+    kvrpcpb::{ApiVersion, ExtraOp as TxnExtraOp},
     metapb::{Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
@@ -36,7 +35,7 @@ use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, Write
 
 use crate::{
     channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
-    initializer::KvEntry;
+    initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
     service::ConnID,
@@ -246,6 +245,7 @@ pub struct Delegate {
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
     api_version: ApiVersion,
+    has_tidb_downstream: bool,
 }
 
 impl Delegate {
@@ -265,7 +265,12 @@ impl Delegate {
             txn_extra_op,
             failed: false,
             api_version,
+            has_tidb_downstream: false,
         }
+    }
+
+    pub fn has_tidb_downstream(&self) -> bool {
+        self.has_tidb_downstream
     }
 
     /// Let downstream subscribe the delegate.
@@ -275,6 +280,7 @@ impl Delegate {
             // Check if the downstream is out dated.
             self.check_epoch_on_ready(&downstream)?;
         }
+        self.has_tidb_downstream = true;
         self.add_downstream(downstream);
         Ok(())
     }
@@ -1008,14 +1014,9 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use api_version::RawValue;
-    use futures::executor::block_on;
-    use futures::stream::StreamExt;
-    use kvproto::errorpb::Error as ErrorHeader;
-    use kvproto::metapb::Region;
     use std::cell::Cell;
 
+    use api_version::RawValue;
     use futures::{executor::block_on, stream::StreamExt};
     use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
 

@@ -2,12 +2,12 @@
 
 use codec::byte::MemComparableByteCodec;
 use engine_traits::Result;
-use txn_types::{Key, TimeStamp};
 use tikv_util::codec::{
     bytes,
     number::{self, NumberEncoder},
     Error,
 };
+use txn_types::{Key, TimeStamp};
 
 use super::*;
 

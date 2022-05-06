@@ -31,6 +31,7 @@ use tikv::storage::{
     txn::{TxnEntry, TxnEntryScanner},
     Statistics,
 };
+use tikv_kv::Iterator;
 use tikv_util::{
     box_err,
     codec::number,
