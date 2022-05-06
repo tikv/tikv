@@ -1,14 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use regex::{bytes::Regex as BytesRegex, Regex};
-
-use tipb::{Expr, ExprType};
-
 use tidb_query_codegen::rpn_fn;
-
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::*;
-use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::codec::{collation::*, data_type::*};
+use tipb::{Expr, ExprType};
 
 #[rpn_fn]
 #[inline]
@@ -158,16 +154,14 @@ fn init_regexp_data(expr: &mut Expr) -> Result<Option<BytesRegex>> {
 
 #[cfg(test)]
 mod tests {
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder, codec::batch::LazyBatchColumnVec, expr::EvalContext, Collation,
+        FieldTypeTp,
+    };
     use tipb::ScalarFuncSig;
+    use tipb_helper::ExprDefBuilder;
 
     use crate::{test_util::RpnFnScalarEvaluator, RpnExpressionBuilder};
-
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-    use tidb_query_datatype::expr::EvalContext;
-    use tidb_query_datatype::Collation;
-    use tidb_query_datatype::FieldTypeTp;
-    use tipb_helper::ExprDefBuilder;
 
     #[test]
     fn test_like() {

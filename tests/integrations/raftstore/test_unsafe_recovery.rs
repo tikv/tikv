@@ -1,8 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::FromIterator;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use futures::executor::block_on;
 use kvproto::{metapb, pdpb};
@@ -10,8 +8,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::util::find_peer;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 #[test]
 fn test_unsafe_recovery_demote_failed_voters() {

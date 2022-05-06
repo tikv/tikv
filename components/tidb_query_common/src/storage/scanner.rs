@@ -1,8 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::range::*;
-use super::ranges_iter::*;
-use super::{OwnedKvPair, Storage};
+use super::{range::*, ranges_iter::*, OwnedKvPair, Storage};
 use crate::error::StorageError;
 
 const KEY_BUFFER_CAPACITY: usize = 64;
@@ -232,9 +230,7 @@ impl<T: Storage> RangesScanner<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::storage::test_fixture::FixtureStorage;
-    use crate::storage::{IntervalRange, PointRange, Range};
+    use crate::storage::{test_fixture::FixtureStorage, IntervalRange, PointRange, Range};
 
     fn create_storage() -> FixtureStorage {
         let data: &[(&'static [u8], &'static [u8])] = &[

@@ -50,12 +50,44 @@ pub mod txn;
 mod read_pool;
 mod types;
 
+use std::{
+    borrow::Cow,
+    iter,
+    marker::PhantomData,
+    sync::{
+        atomic::{self, AtomicBool},
+        Arc,
+    },
+};
+
+use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::{ReadPerfContext, ReadPerfInstant};
+use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use futures::prelude::*;
+use kvproto::{
+    kvrpcpb::{
+        ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
+        LockInfo, RawGetRequest,
+    },
+    pdpb::QueryKind,
+};
+use pd_client::FeatureGate;
+use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
+use rand::prelude::*;
+use resource_metering::{FutureExt, ResourceTagFactory};
+use tikv_kv::SnapshotExt;
+use tikv_util::{
+    quota_limiter::QuotaLimiter,
+    time::{duration_to_ms, Instant, ThreadReadId},
+};
+use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
+
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot,
-        StageLatencyStats, Statistics, TestEngineBuilder,
+        RocksEngine, ScanMode, Snapshot, StageLatencyStats, Statistics, TestEngineBuilder,
     },
     raw::RawStore,
     read_pool::{build_read_pool, build_read_pool_for_test},
@@ -63,52 +95,24 @@ pub use self::{
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 use self::{kv::SnapContext, test_util::latest_feature_gate};
-
-use crate::read_pool::{ReadPool, ReadPoolHandle};
-use crate::storage::metrics::CommandKind;
-use crate::storage::mvcc::MvccReader;
-use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
-use crate::storage::txn::flow_controller::FlowController;
-
-use crate::server::lock_manager::waiter_manager;
-use crate::storage::{
-    config::Config,
-    kv::{with_tls_engine, Modify, WriteData},
-    lock_manager::{DummyLockManager, LockManager},
-    metrics::*,
-    mvcc::PointGetterBuilder,
-    txn::{commands::TypedCommand, scheduler::Scheduler as TxnScheduler, Command},
-    types::StorageCallbackType,
-};
-
-use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
-use concurrency_manager::ConcurrencyManager;
-use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
-use futures::prelude::*;
-use kvproto::kvrpcpb::ApiVersion;
-use kvproto::kvrpcpb::{
-    ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo,
-    RawGetRequest,
-};
-use kvproto::pdpb::QueryKind;
-use pd_client::FeatureGate;
-use raftstore::store::{util::build_key_range, TxnExt};
-use raftstore::store::{ReadStats, WriteStats};
-use rand::prelude::*;
-use resource_metering::{FutureExt, ResourceTagFactory};
-use std::marker::PhantomData;
-use std::{
-    borrow::Cow,
-    iter,
-    sync::{
-        atomic::{self, AtomicBool},
-        Arc,
+use crate::{
+    read_pool::{ReadPool, ReadPoolHandle},
+    server::lock_manager::waiter_manager,
+    storage::{
+        config::Config,
+        kv::{with_tls_engine, Modify, WriteData},
+        lock_manager::{DummyLockManager, LockManager},
+        metrics::{CommandKind, *},
+        mvcc::{MvccReader, PointGetterBuilder},
+        txn::{
+            commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
+            flow_controller::FlowController,
+            scheduler::Scheduler as TxnScheduler,
+            Command,
+        },
+        types::StorageCallbackType,
     },
 };
-use tikv_kv::SnapshotExt;
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -600,7 +604,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let mut statistics = Statistics::default();
                     let (result, delta) = {
                         let _guard = sample.observe_cpu();
-                        let perf_statistics = PerfStatisticsInstant::new();
+                        let perf_statistics = ReadPerfInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
                             start_ts,
@@ -691,7 +695,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ///
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn batch_get_command<
-        P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+        P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, ReadPerfContext)>,
     >(
         &self,
         requests: Vec<GetRequest>,
@@ -807,7 +811,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 .build()
                             {
                                 Ok(mut point_getter) => {
-                                    let perf_statistics = PerfStatisticsInstant::new();
+                                    let perf_statistics = ReadPerfInstant::new();
                                     let v = point_getter.get(&key);
                                     let stat = point_getter.take_statistics();
                                     let delta = perf_statistics.delta();
@@ -931,7 +935,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let buckets = snapshot.ext().get_buckets();
                     let (result, delta, stats) = {
                         let _guard = sample.observe_cpu();
-                        let perf_statistics = PerfStatisticsInstant::new();
+                        let perf_statistics = ReadPerfInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
                             start_ts,
@@ -1152,7 +1156,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-                    let perf_statistics = PerfStatisticsInstant::new();
+                    let perf_statistics = ReadPerfInstant::new();
                     let buckets = snapshot.ext().get_buckets();
 
                     let snap_store = SnapshotStore::new(
@@ -1311,7 +1315,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
-                    let perf_statistics = PerfStatisticsInstant::new();
+                    let perf_statistics = ReadPerfInstant::new();
                     let buckets = snapshot.ext().get_buckets();
                     let mut reader = MvccReader::new(
                         snapshot,
@@ -2859,13 +2863,16 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
 }
 
 pub mod test_util {
-    use super::*;
-    use crate::storage::txn::commands;
-    use std::sync::Mutex;
     use std::{
         fmt::Debug,
-        sync::mpsc::{channel, Sender},
+        sync::{
+            mpsc::{channel, Sender},
+            Mutex,
+        },
     };
+
+    use super::*;
+    use crate::storage::txn::commands;
 
     pub fn expect_none(x: Option<Value>) {
         assert_eq!(x, None);
@@ -3030,11 +3037,11 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetConsumer {
+    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, ReadPerfContext)> for GetConsumer {
         fn consume(
             &self,
             id: u64,
-            res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+            res: Result<(Option<Vec<u8>>, Statistics, ReadPerfContext)>,
             _: tikv_util::time::Instant,
         ) {
             self.data.lock().unwrap().push(GetResult {
@@ -3061,31 +3068,22 @@ pub mod test_util {
 #[derive(Debug, Default, Clone)]
 pub struct KvGetStatistics {
     pub stats: Statistics,
-    pub perf_stats: PerfStatisticsDelta,
+    pub perf_stats: ReadPerfContext,
     pub latency_stats: StageLatencyStats,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        mvcc::tests::{must_unlocked, must_written},
-        test_util::*,
-        *,
+    use std::{
+        iter::Iterator,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc::{channel, Sender},
+            Arc,
+        },
+        time::Duration,
     };
-    use crate::config::TitanDBConfig;
-    use crate::coprocessor::checksum_crc64_xor;
-    use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
-    use crate::storage::lock_manager::DiagnosticContext;
-    use crate::storage::mvcc::LockType;
-    use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
-    use crate::storage::txn::tests::must_rollback;
-    use crate::storage::{
-        config::BlockCacheConfig,
-        kv::{Error as KvError, ErrorInner as EngineErrorInner},
-        lock_manager::{Lock, WaitTimeout},
-        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
-        txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
-    };
+
     use api_version::{test_kv_format_impl, ApiV2};
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
@@ -3094,17 +3092,32 @@ mod tests {
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op};
-    use std::iter::Iterator;
-    use std::{
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            mpsc::{channel, Sender},
-            Arc,
-        },
-        time::Duration,
-    };
     use tikv_util::config::ReadableSize;
     use txn_types::{Mutation, PessimisticLock, WriteType};
+
+    use super::{
+        mvcc::tests::{must_unlocked, must_written},
+        test_util::*,
+        *,
+    };
+    use crate::{
+        config::TitanDBConfig,
+        coprocessor::checksum_crc64_xor,
+        storage::{
+            config::BlockCacheConfig,
+            kv::{
+                Error as KvError, ErrorInner as EngineErrorInner, ExpectedWrite, MockEngineBuilder,
+            },
+            lock_manager::{DiagnosticContext, Lock, WaitTimeout},
+            mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, LockType},
+            txn::{
+                commands,
+                commands::{AcquirePessimisticLock, Prewrite},
+                tests::must_rollback,
+                Error as TxnError, ErrorInner as TxnErrorInner,
+            },
+        },
+    };
 
     #[test]
     fn test_prewrite_blocks_read() {

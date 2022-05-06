@@ -2,13 +2,15 @@
 
 //! Constructor tests
 
-use super::tempdir;
+use std::fs;
 
-use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt};
-use engine_test::kv::KvTestEngine;
+use engine_test::{
+    ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt},
+    kv::KvTestEngine,
+};
 use engine_traits::{KvEngine, SyncMutable, ALL_CFS};
 
-use std::fs;
+use super::tempdir;
 
 #[test]
 fn new_engine_basic() {

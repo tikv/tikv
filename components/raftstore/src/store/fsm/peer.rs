@@ -1,89 +1,100 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::borrow::Cow;
-use std::cell::Cell;
-use std::collections::Bound::{Excluded, Unbounded};
-use std::collections::VecDeque;
-use std::iter::Iterator;
-use std::sync::Arc;
-use std::time::Instant;
-use std::{cmp, mem, u64};
+use std::{
+    borrow::Cow,
+    cell::Cell,
+    cmp,
+    collections::{
+        Bound::{Excluded, Unbounded},
+        VecDeque,
+    },
+    iter::Iterator,
+    mem,
+    sync::Arc,
+    time::Instant,
+    u64,
+};
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
-use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt};
-use engine_traits::{CF_LOCK, CF_RAFT};
+use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use keys::{self, enc_end_key, enc_start_key};
-use kvproto::errorpb;
-use kvproto::import_sstpb::SwitchMode;
-use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::{self, CheckPolicy};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
-    StatusCmdType, StatusResponse,
+use kvproto::{
+    errorpb,
+    import_sstpb::SwitchMode,
+    kvrpcpb::DiskFullOpt,
+    metapb::{self, Region, RegionEpoch},
+    pdpb::{self, CheckPolicy},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
+        StatusCmdType, StatusResponse,
+    },
+    raft_serverpb::{
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
+        RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+    },
+    replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
-use kvproto::raft_serverpb::{
-    ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-    RaftSnapshotData, RaftTruncatedState, RegionLocalState,
-};
-use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
 use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
-use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{
-    self, GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX,
-    NO_LIMIT,
+    self,
+    eraftpb::{self, ConfChangeType, MessageType},
+    GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::disk::DiskUsage;
-use tikv_util::sys::memory_usage_reaches_high_water;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant};
-use tikv_util::worker::{ScheduleError, Scheduler};
-use tikv_util::{box_err, debug, defer, error, info, trace, warn};
-use tikv_util::{escape, is_zero_duration, Either};
+use tikv_util::{
+    box_err, debug, defer, error, escape, info, is_zero_duration,
+    mpsc::{self, LooseBoundedSender, Receiver},
+    sys::{disk::DiskUsage, memory_usage_reaches_high_water},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    trace, warn,
+    worker::{ScheduleError, Scheduler},
+    Either,
+};
 use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
-use crate::coprocessor::RegionChangeEvent;
-use crate::store::cmd_resp::{bind_term, new_error};
-use crate::store::fsm::store::{PollContext, StoreMeta};
-use crate::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
-    ExecResult,
-};
-use crate::store::hibernate_state::{GroupState, HibernateState};
-use crate::store::local_metrics::RaftMetrics;
-use crate::store::memory::*;
-use crate::store::metrics::*;
-use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
-use crate::store::peer::{
-    ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-    UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryFillOutReportSharedState,
-    UnsafeRecoveryForceLeaderSharedState, UnsafeRecoveryState, UnsafeRecoveryWaitApplySharedState,
-    TRANSFER_LEADER_COMMAND_REPLY_CTX,
-};
-use crate::store::transport::Transport;
-use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
-use crate::store::worker::{
-    new_change_peer_v2_request, Bucket, BucketRange, ConsistencyCheckTask, RaftlogFetchTask,
-    RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
-};
-use crate::store::PdTask;
 #[cfg(any(test, feature = "testexport"))]
 use crate::store::PeerInternalStat;
-use crate::store::RaftlogFetchResult;
-use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
-    RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
+use crate::{
+    coprocessor::RegionChangeEvent,
+    store::{
+        cmd_resp::{bind_term, new_error},
+        fsm::{
+            apply,
+            store::{PollContext, StoreMeta},
+            ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
+            ExecResult,
+        },
+        hibernate_state::{GroupState, HibernateState},
+        local_metrics::RaftMetrics,
+        memory::*,
+        metrics::*,
+        msg::{Callback, ExtCallback, InspectedRaftMessage},
+        peer::{
+            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
+            UnsafeRecoveryState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+        },
+        transport::Transport,
+        util,
+        util::{is_learner, KeysInfoFormatter, LeaseState},
+        worker::{
+            new_change_peer_v2_request, Bucket, BucketRange, ConsistencyCheckTask,
+            RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask,
+            SplitCheckTask,
+        },
+        AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
+        PeerTick, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, SignificantMsg, SnapKey,
+        StoreMsg,
+    },
+    Error, Result,
 };
-use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DelayDestroy {
@@ -5976,8 +5987,9 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
 }
 
 mod memtrace {
-    use super::*;
     use memory_trace_macros::MemoryTraceHelper;
+
+    use super::*;
 
     /// Heap size for Raft internal `ReadOnly`.
     #[derive(MemoryTraceHelper, Default, Debug)]
@@ -6018,11 +6030,10 @@ mod memtrace {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    use crate::store::local_metrics::RaftMetrics;
-    use crate::store::msg::{Callback, ExtCallback, RaftCommand};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     use engine_test::kv::KvTestEngine;
     use kvproto::raft_cmdpb::{
@@ -6033,6 +6044,10 @@ mod tests {
     use tikv_util::config::ReadableSize;
 
     use super::*;
+    use crate::store::{
+        local_metrics::RaftMetrics,
+        msg::{Callback, ExtCallback, RaftCommand},
+    };
 
     #[test]
     fn test_batch_raft_cmd_request_builder() {

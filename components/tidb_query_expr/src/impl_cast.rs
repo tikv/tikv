@@ -1,27 +1,34 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
-use std::convert::TryFrom;
-use std::convert::TryInto;
-use std::num::IntErrorKind;
+use std::{
+    borrow::Cow,
+    convert::{TryFrom, TryInto},
+    num::IntErrorKind,
+};
 
 use byteorder::{BigEndian, ByteOrder};
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::*;
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    codec::{
+        collation::Encoding,
+        convert::*,
+        data_type::*,
+        error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE},
+        mysql::{
+            binary_literal,
+            time::{MAX_YEAR, MIN_YEAR},
+            Time,
+        },
+        Error,
+    },
+    expr::EvalContext,
+    *,
+};
 use tipb::{Expr, FieldType};
 
-use crate::types::RpnExpressionBuilder;
-use crate::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::Encoding;
-use tidb_query_datatype::codec::convert::*;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
-use tidb_query_datatype::codec::mysql::time::{MAX_YEAR, MIN_YEAR};
-use tidb_query_datatype::codec::mysql::{binary_literal, Time};
-use tidb_query_datatype::codec::Error;
-use tidb_query_datatype::expr::EvalContext;
+use crate::{types::RpnExpressionBuilder, RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 
 fn get_cast_fn_rpn_meta(
     is_from_constant: bool,
@@ -1479,31 +1486,38 @@ fn from_binary<E: Encoding>(val: BytesRef) -> Result<Option<Bytes>> {
 
 #[cfg(test)]
 mod tests {
-    use super::Result;
-    use crate::impl_cast::*;
-    use crate::types::test_util::RpnFnScalarEvaluator;
-    use crate::RpnFnCallExtra;
-    use std::collections::BTreeMap;
-    use std::fmt::{Debug, Display};
-    use std::sync::Arc;
-    use std::{f32, f64, i64, u64};
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::codec::convert::produce_dec_with_specified_tp;
-    use tidb_query_datatype::codec::data_type::{Bytes, Int, Real};
-    use tidb_query_datatype::codec::error::{
-        ERR_DATA_OUT_OF_RANGE, ERR_DATA_TOO_LONG, ERR_TRUNCATE_WRONG_VALUE, ERR_UNKNOWN,
-        WARN_DATA_TRUNCATED,
+    use std::{
+        collections::BTreeMap,
+        f32, f64,
+        fmt::{Debug, Display},
+        i64,
+        sync::Arc,
+        u64,
     };
-    use tidb_query_datatype::codec::mysql::charset::*;
-    use tidb_query_datatype::codec::mysql::decimal::{max_decimal, max_or_min_dec};
-    use tidb_query_datatype::codec::mysql::{
-        Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
+
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::{
+            convert::produce_dec_with_specified_tp,
+            data_type::{Bytes, Int, Real},
+            error::{
+                ERR_DATA_OUT_OF_RANGE, ERR_DATA_TOO_LONG, ERR_TRUNCATE_WRONG_VALUE, ERR_UNKNOWN,
+                WARN_DATA_TRUNCATED,
+            },
+            mysql::{
+                charset::*,
+                decimal::{max_decimal, max_or_min_dec},
+                Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
+            },
+        },
+        expr::{EvalConfig, EvalContext, Flag},
+        Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH,
     };
-    use tidb_query_datatype::expr::Flag;
-    use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
     use tikv_util::buffer_vec::BufferVec;
     use tipb::ScalarFuncSig;
+
+    use super::Result;
+    use crate::{impl_cast::*, types::test_util::RpnFnScalarEvaluator, RpnFnCallExtra};
 
     fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
     where

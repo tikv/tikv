@@ -1,12 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    collections::{HashMap, HashSet},
+    fs::read_to_string,
+    mem::MaybeUninit,
+    num::IntErrorKind,
+    path::{Path, PathBuf},
+};
+
 use num_traits::Bounded;
 use procfs::process::{MountInfo, Process};
-use std::collections::{HashMap, HashSet};
-use std::fs::read_to_string;
-use std::mem::MaybeUninit;
-use std::num::IntErrorKind;
-use std::path::{Path, PathBuf};
 
 // ## Differences between cgroup v1 and v2:
 // ### memory subsystem, memory limitation
@@ -343,9 +346,9 @@ fn parse_cpu_quota_v1(line1: &str, line2: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs::OpenOptions, io::Write};
+
     use super::*;
-    use std::fs::OpenOptions;
-    use std::io::Write;
 
     #[test]
     fn test_defult_cgroup_sys() {

@@ -1,15 +1,21 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::timestamp::TimeStamp;
+use std::fmt::{self, Debug, Display, Formatter};
+
 use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
 use kvproto::kvrpcpb::{self, Assertion};
-use std::fmt::{self, Debug, Display, Formatter};
-use tikv_util::codec;
-use tikv_util::codec::bytes;
-use tikv_util::codec::bytes::BytesEncoder;
-use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::{
+    codec,
+    codec::{
+        bytes,
+        bytes::BytesEncoder,
+        number::{self, NumberEncoder},
+    },
+};
+
+use super::timestamp::TimeStamp;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;

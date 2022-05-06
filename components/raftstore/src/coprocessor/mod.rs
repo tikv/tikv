@@ -1,15 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
-use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::vec::IntoIter;
+use std::{
+    cmp,
+    fmt::{self, Debug, Formatter},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    vec::IntoIter,
+};
 
 use engine_traits::CfName;
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
+use kvproto::{
+    metapb::Region,
+    pdpb::CheckPolicy,
+    raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request},
+};
 use raft::{eraftpb, StateRole};
 
 pub mod config;
@@ -21,22 +27,24 @@ pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
 
-pub use self::config::{Config, ConsistencyCheckMethod};
-pub use self::consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver};
-pub use self::dispatcher::{
-    BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
-    BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver,
-    CoprocessorHost, Registry,
-};
-pub use self::error::{Error, Result};
-pub use self::region_info_accessor::{
-    Callback as RegionInfoCallback, RangeKey, RegionCollector, RegionInfo, RegionInfoAccessor,
-    RegionInfoProvider, SeekRegionCallback,
-};
-pub use self::split_check::{
-    get_region_approximate_keys, get_region_approximate_middle, get_region_approximate_size,
-    HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
-    TableCheckObserver,
+pub use self::{
+    config::{Config, ConsistencyCheckMethod},
+    consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver},
+    dispatcher::{
+        BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
+        BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver,
+        CoprocessorHost, Registry,
+    },
+    error::{Error, Result},
+    region_info_accessor::{
+        Callback as RegionInfoCallback, RangeKey, RegionCollector, RegionInfo, RegionInfoAccessor,
+        RegionInfoProvider, SeekRegionCallback,
+    },
+    split_check::{
+        get_region_approximate_keys, get_region_approximate_middle, get_region_approximate_size,
+        HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
+        TableCheckObserver,
+    },
 };
 pub use crate::store::{Bucket, KeyEntry};
 

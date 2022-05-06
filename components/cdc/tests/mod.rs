@@ -1,27 +1,29 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::*;
-use std::time::Duration;
+use std::{sync::*, time::Duration};
 
+use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use grpcio::{ChannelBuilder, Environment};
-use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
-use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::TikvClient;
+use grpcio::{
+    ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver, Environment,
+};
+use kvproto::{
+    cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
+    kvrpcpb::*,
+    tikvpb::TikvClient,
+};
 use online_config::OnlineConfig;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
-use tikv::config::CdcConfig;
-use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv_util::config::ReadableDuration;
-use tikv_util::worker::{LazyWorker, Runnable};
-use tikv_util::HandyRwLock;
+use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID};
+use tikv_util::{
+    config::ReadableDuration,
+    worker::{LazyWorker, Runnable},
+    HandyRwLock,
+};
 use txn_types::TimeStamp;
-
-use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {

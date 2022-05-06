@@ -1,18 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::fmt::{self, Display, Formatter};
+use std::{
+    cmp::Ordering,
+    fmt::{self, Display, Formatter},
+};
 
-use crate::FieldTypeAccessor;
 use codec::prelude::*;
 use tipb::FieldType;
 
 use super::{check_fsp, Decimal, DEFAULT_FSP};
-use crate::codec::convert::ConvertTo;
-use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
-use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP, MIN_FSP};
-use crate::codec::{Error, Result, TEN_POW};
-use crate::expr::EvalContext;
+use crate::{
+    codec::{
+        convert::ConvertTo,
+        error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE},
+        mysql::{Time as DateTime, TimeType, MAX_FSP, MIN_FSP},
+        Error, Result, TEN_POW,
+    },
+    expr::EvalContext,
+    FieldTypeAccessor,
+};
 
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 pub const NANOS_PER_MILLI: i64 = 1_000_000;
@@ -83,10 +89,13 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 }
 
 mod parser {
+    use nom::{
+        character::complete::{anychar, char, digit0, digit1, space0, space1},
+        combinator::opt,
+        IResult,
+    };
+
     use super::*;
-    use nom::character::complete::{anychar, char, digit0, digit1, space0, space1};
-    use nom::combinator::opt;
-    use nom::IResult;
 
     fn number(input: &str) -> IResult<&str, u32, ()> {
         let (rest, num) = digit1(input)?;
@@ -675,11 +684,13 @@ impl crate::codec::data_type::AsMySQLBool for Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::codec::data_type::DateTime;
-    use crate::codec::mysql::UNSPECIFIED_FSP;
-    use crate::expr::{EvalConfig, EvalContext, Flag};
     use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        codec::{data_type::DateTime, mysql::UNSPECIFIED_FSP},
+        expr::{EvalConfig, EvalContext, Flag},
+    };
 
     #[test]
     fn test_hours() {

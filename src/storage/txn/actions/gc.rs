@@ -1,8 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn, Result as MvccResult, MAX_TXN_WRITE_SIZE};
-use crate::storage::Snapshot;
 use txn_types::{Key, TimeStamp, Write, WriteType};
+
+use crate::storage::{
+    mvcc::{GcInfo, MvccReader, MvccTxn, Result as MvccResult, MAX_TXN_WRITE_SIZE},
+    Snapshot,
+};
 
 pub fn gc<'a, S: Snapshot>(
     txn: &'a mut MvccTxn,
@@ -117,21 +120,19 @@ impl State {
 }
 
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::SnapContext;
-    use crate::storage::mvcc::tests::write;
-    use crate::storage::{Engine, ScanMode};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use txn_types::SHORT_VALUE_MAX_LEN;
 
+    use super::*;
+    use crate::storage::{kv::SnapContext, mvcc::tests::write, Engine, ScanMode};
     #[cfg(test)]
     use crate::storage::{
         mvcc::tests::{must_get, must_get_none},
         txn::tests::*,
         RocksEngine, TestEngineBuilder,
     };
-    #[cfg(test)]
-    use txn_types::SHORT_VALUE_MAX_LEN;
 
     pub fn must_succeed<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = SnapContext::default();

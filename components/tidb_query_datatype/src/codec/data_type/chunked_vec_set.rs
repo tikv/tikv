@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
-use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
-use super::{Set, SetRef};
-use crate::impl_chunked_vec_common;
 use std::sync::Arc;
+
 use tikv_util::buffer_vec::BufferVec;
+
+use super::{bit_vec::BitVec, ChunkRef, ChunkedVec, Set, SetRef, UnsafeRefInto};
+use crate::impl_chunked_vec_common;
 
 /// `ChunkedVecSet` stores set in a compact way.
 ///

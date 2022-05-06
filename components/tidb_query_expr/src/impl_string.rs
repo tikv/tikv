@@ -1,15 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{iter, str};
+use std::{cmp::Ordering, iter, str};
+
+use bstr::ByteSlice;
 use tidb_query_codegen::rpn_fn;
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    codec::{collation::*, data_type::*},
+    *,
+};
 
 use crate::impl_math::i64_to_usize;
-use bstr::ByteSlice;
-use std::cmp::Ordering;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::*;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::*;
 
 const SPACE: u8 = 0o40u8;
 const MAX_BLOB_WIDTH: i32 = 16_777_216; // FIXME: Should be isize
@@ -1118,8 +1119,10 @@ fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result
 mod tests {
     use std::{f64, i64};
 
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::codec::mysql::charset::{CHARSET_GBK, CHARSET_UTF8MB4};
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::mysql::charset::{CHARSET_GBK, CHARSET_UTF8MB4},
+    };
     use tipb::ScalarFuncSig;
 
     use super::*;

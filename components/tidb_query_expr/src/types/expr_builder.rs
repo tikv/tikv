@@ -3,16 +3,21 @@
 use std::convert::{TryFrom, TryInto};
 
 use codec::prelude::NumberDecoder;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    codec::{
+        data_type::*,
+        mysql::{EnumDecoder, JsonDecoder, MAX_FSP},
+    },
+    expr::EvalContext,
+    match_template_evaltype, EvalType, FieldTypeAccessor,
+};
 use tipb::{Expr, ExprType, FieldType};
 
-use super::super::function::RpnFnMeta;
-use super::expr::{RpnExpression, RpnExpressionNode};
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::{EnumDecoder, JsonDecoder, MAX_FSP};
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::match_template_evaltype;
+use super::{
+    super::function::RpnFnMeta,
+    expr::{RpnExpression, RpnExpressionNode},
+};
 
 /// Helper to build an `RpnExpression`.
 #[derive(Debug)]
@@ -489,14 +494,13 @@ fn extract_scalar_value_enum(val: Vec<u8>, field_type: &FieldType) -> Result<Sca
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use tidb_query_codegen::rpn_fn;
+    use tidb_query_common::Result;
     use tidb_query_datatype::FieldTypeTp;
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
-    use tidb_query_common::Result;
+    use super::*;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
     #[rpn_fn(nullable)]

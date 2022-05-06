@@ -1,13 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
-use serde::ser::{Error as SerError, Serialize, SerializeMap, SerializeTuple, Serializer};
+use std::{collections::BTreeMap, f64, fmt, str, str::FromStr, string::ToString};
+
+use serde::{
+    de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor},
+    ser::{Error as SerError, Serialize, SerializeMap, SerializeTuple, Serializer},
+};
 use serde_json::Serializer as JsonSerializer;
-use std::collections::BTreeMap;
-use std::fmt;
-use std::str::FromStr;
-use std::string::ToString;
-use std::{f64, str};
 
 use super::{Json, JsonRef, JsonType};
 use crate::codec::Error;

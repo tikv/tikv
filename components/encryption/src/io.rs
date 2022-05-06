@@ -5,16 +5,16 @@ use std::{
     pin::Pin,
 };
 
+use file_system::File;
 use futures_util::{
     io::AsyncRead,
     task::{Context, Poll},
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
+use tikv_util::box_err;
 
 use crate::{Iv, Result};
-use file_system::File;
-use tikv_util::box_err;
 
 const AES_BLOCK_SIZE: usize = 16;
 const MAX_INPLACE_CRYPTION_SIZE: usize = 1024 * 1024;
@@ -502,12 +502,14 @@ impl CrypterCore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::crypter;
+    use std::{cmp::min, io::Cursor};
+
     use byteorder::{BigEndian, ByteOrder};
     use futures::AsyncReadExt;
     use rand::{rngs::OsRng, RngCore};
-    use std::{cmp::min, io::Cursor};
+
+    use super::*;
+    use crate::crypter;
 
     fn generate_data_key(method: EncryptionMethod) -> Vec<u8> {
         let key_length = crypter::get_method_key_length(method);

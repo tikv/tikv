@@ -1,7 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{IOBytes, IOType};
-
 use std::{
     cell::Cell,
     fs::File,
@@ -15,8 +13,12 @@ use crossbeam_utils::CachePadded;
 use parking_lot::Mutex;
 use strum::EnumCount;
 use thread_local::ThreadLocal;
-use tikv_util::sys::thread::{self, Pid};
-use tikv_util::warn;
+use tikv_util::{
+    sys::thread::{self, Pid},
+    warn,
+};
+
+use crate::{IOBytes, IOType};
 
 lazy_static! {
     /// Total I/O bytes read/written by each I/O type.
@@ -179,10 +181,13 @@ pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        os::unix::fs::OpenOptionsExt,
+    };
+
     use libc::O_DIRECT;
     use maligned::{AsBytes, AsBytesMut, A512};
-    use std::io::{Read, Write};
-    use std::os::unix::fs::OpenOptionsExt;
     use tempfile::{tempdir, tempdir_in};
 
     use super::*;
