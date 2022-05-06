@@ -8,14 +8,21 @@ impl PerfContextExt for RocksEngine {
     type PerfContext = RocksPerfContext;
 
     fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext {
+        RocksPerfContext::new(level, kind)
+    }
+}
+
+#[derive(Debug)]
+pub struct RocksPerfContext {
+    pub stats: PerfContextStatistics,
+}
+
+impl RocksPerfContext {
+    pub fn new(level: PerfLevel, kind: PerfContextKind) -> Self {
         RocksPerfContext {
             stats: PerfContextStatistics::new(level, kind),
         }
     }
-}
-
-pub struct RocksPerfContext {
-    stats: PerfContextStatistics,
 }
 
 impl PerfContext for RocksPerfContext {

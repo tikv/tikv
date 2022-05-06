@@ -6,15 +6,16 @@ publish = false
 
 [features]
 default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
-cloud-aws = [ "encryption_export/cloud-aws" ]
-cloud-gcp = [ "encryption_export/cloud-gcp" ]
-cloud-azure = [ "encryption_export/cloud-azure" ]
+cloud-aws = ["encryption_export/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure"]
 
 [dependencies]
 backtrace = "0.3"
+collections = { path = "../collections" }
 encryption_export = { path = "../encryption/export", default-features = false }
 fail = "0.5"
-grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 rand = "0.8"
 rand_isaac = "0.3"
@@ -23,5 +24,4 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
 tikv_util = { path = "../tikv_util", default-features = false }
-collections = { path = "../collections" }
 time = "0.1"

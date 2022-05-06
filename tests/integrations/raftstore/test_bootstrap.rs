@@ -16,7 +16,7 @@ use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::{bootstrap_store, fsm, AutoSplitController, SnapManager};
 use resource_metering::CollectorRegHandle;
 use test_raftstore::*;
-use tikv::import::SSTImporter;
+use tikv::import::SstImporter;
 use tikv::server::Node;
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, LazyWorker};
@@ -67,6 +67,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::clone(&pd_client),
         Arc::default(),
         bg_worker,
+        None,
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());
     let pd_worker = LazyWorker::new("test-pd-worker");
@@ -99,7 +100,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
-        Arc::new(SSTImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
+        Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 

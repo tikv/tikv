@@ -3,7 +3,7 @@
 use std::thread;
 use std::time::Duration;
 
-use api_version::{APIVersion, APIV1};
+use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
 use error_code::{raftstore::STALE_COMMAND, ErrorCodeExt};
 use kvproto::kvrpcpb::Context;
@@ -24,7 +24,7 @@ fn new_raft_storage() -> (
     SyncTestStorageApiV1<SimulateEngine>,
     Context,
 ) {
-    new_raft_storage_with_store_count::<APIV1>(1, "")
+    new_raft_storage_with_store_count::<ApiV1>(1, "")
 }
 
 #[test]
@@ -193,8 +193,8 @@ fn test_engine_leader_change_twice() {
     }
 }
 
-fn write_test_data<E: Engine, Api: APIVersion>(
-    storage: &SyncTestStorage<E, Api>,
+fn write_test_data<E: Engine, F: KvFormat>(
+    storage: &SyncTestStorage<E, F>,
     ctx: &Context,
     data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,
@@ -219,9 +219,9 @@ fn write_test_data<E: Engine, Api: APIVersion>(
     }
 }
 
-fn check_data<E: Engine, Api: APIVersion>(
+fn check_data<E: Engine, F: KvFormat>(
     cluster: &mut Cluster<ServerCluster>,
-    storages: &HashMap<u64, SyncTestStorage<E, Api>>,
+    storages: &HashMap<u64, SyncTestStorage<E, F>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,
     expect_success: bool,
@@ -262,7 +262,7 @@ fn check_data<E: Engine, Api: APIVersion>(
 fn test_auto_gc() {
     let count = 3;
     let (mut cluster, first_leader_storage, ctx) =
-        new_raft_storage_with_store_count::<APIV1>(count, "");
+        new_raft_storage_with_store_count::<ApiV1>(count, "");
     let pd_client = Arc::clone(&cluster.pd_client);
 
     // Used to wait for all storage's GC to finish

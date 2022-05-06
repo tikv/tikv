@@ -288,13 +288,12 @@ fn get_value_default<S: EngineSnapshot>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{ReadPerfInstant, RocksEngine};
     use engine_traits::{KvEngine, MiscExt};
     use std::sync::Arc;
     use tikv::config::DbConfig;
     use tikv::storage::kv::TestEngineBuilder;
     use tikv::storage::txn::tests::*;
-    use tikv_kv::PerfStatisticsInstant;
 
     fn must_get_eq(
         kv_engine: &RocksEngine,
@@ -594,7 +593,7 @@ mod tests {
 
         let key = format!("zkey-{:0>3}", 0).into_bytes();
         let snapshot = Arc::new(kv_engine.snapshot());
-        let perf_instant = PerfStatisticsInstant::new();
+        let perf_instant = ReadPerfInstant::new();
         let value = get_old_value(
             &snapshot,
             Key::from_raw(&key).append_ts(100.into()),
@@ -608,6 +607,6 @@ mod tests {
         // block read count should be 1 instead of 4 because some of them
         // are filtered by `prefix_seek`.
         let perf_delta = perf_instant.delta();
-        assert_eq!(perf_delta.0.block_read_count, 1);
+        assert_eq!(perf_delta.block_read_count, 1);
     }
 }
