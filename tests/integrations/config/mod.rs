@@ -19,7 +19,7 @@ use engine_traits::PerfLevel;
 use file_system::{IOPriority, IORateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
-use raft_log_engine::RecoveryMode;
+use raft_log_engine::{ReadableSize as RaftEngineReadableSize, RecoveryMode};
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
 use raftstore::store::Config as RaftstoreConfig;
 use security::SecurityConfig;
@@ -631,6 +631,7 @@ fn test_serde_custom_tikv_config() {
     raft_engine_config.recovery_mode = RecoveryMode::TolerateTailCorruption;
     raft_engine_config.recovery_read_block_size.0 = ReadableSize::kb(1).0;
     raft_engine_config.recovery_threads = 2;
+    raft_engine_config.memory_limit = Some(RaftEngineReadableSize::gb(1));
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
