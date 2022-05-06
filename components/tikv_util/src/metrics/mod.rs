@@ -95,7 +95,7 @@ pub fn dump(should_simplify: bool) -> String {
     String::from_utf8(buffer).unwrap()
 }
 
-fn dump_metrics<'a, E: Encoder, W: std::io::Write>(
+fn dump_metrics<E: Encoder, W: std::io::Write>(
     metric_families: Vec<proto::MetricFamily>,
     encoder: &E,
     writer: &mut W,
@@ -133,7 +133,7 @@ fn dump_metrics<'a, E: Encoder, W: std::io::Write>(
                     let mut need_rewrite = false;
                     {
                         let buckets = m.get_histogram().get_bucket();
-                        if buckets.len() == 0
+                        if buckets.is_empty()
                             || buckets[buckets.len() - 1].get_cumulative_count() == 0
                         {
                             return false;
