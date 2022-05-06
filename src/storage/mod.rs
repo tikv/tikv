@@ -54,8 +54,7 @@ pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot,
-        StageLatencyStats, Statistics, TestEngineBuilder,
+        RocksEngine, ScanMode, Snapshot, StageLatencyStats, Statistics, TestEngineBuilder,
     },
     raw::RawStore,
     read_pool::{build_read_pool, build_read_pool_for_test},
@@ -83,6 +82,7 @@ use crate::storage::{
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
 use concurrency_manager::ConcurrencyManager;
+use engine_rocks::{ReadPerfContext, ReadPerfInstant};
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
@@ -600,7 +600,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let mut statistics = Statistics::default();
                     let (result, delta) = {
                         let _guard = sample.observe_cpu();
-                        let perf_statistics = PerfStatisticsInstant::new();
+                        let perf_statistics = ReadPerfInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
                             start_ts,
@@ -691,7 +691,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ///
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn batch_get_command<
-        P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+        P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, ReadPerfContext)>,
     >(
         &self,
         requests: Vec<GetRequest>,
@@ -807,7 +807,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 .build()
                             {
                                 Ok(mut point_getter) => {
-                                    let perf_statistics = PerfStatisticsInstant::new();
+                                    let perf_statistics = ReadPerfInstant::new();
                                     let v = point_getter.get(&key);
                                     let stat = point_getter.take_statistics();
                                     let delta = perf_statistics.delta();
@@ -931,7 +931,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let buckets = snapshot.ext().get_buckets();
                     let (result, delta, stats) = {
                         let _guard = sample.observe_cpu();
-                        let perf_statistics = PerfStatisticsInstant::new();
+                        let perf_statistics = ReadPerfInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
                             start_ts,
@@ -1152,7 +1152,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-                    let perf_statistics = PerfStatisticsInstant::new();
+                    let perf_statistics = ReadPerfInstant::new();
                     let buckets = snapshot.ext().get_buckets();
 
                     let snap_store = SnapshotStore::new(
@@ -1311,7 +1311,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
-                    let perf_statistics = PerfStatisticsInstant::new();
+                    let perf_statistics = ReadPerfInstant::new();
                     let buckets = snapshot.ext().get_buckets();
                     let mut reader = MvccReader::new(
                         snapshot,
@@ -3030,11 +3030,11 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetConsumer {
+    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, ReadPerfContext)> for GetConsumer {
         fn consume(
             &self,
             id: u64,
-            res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+            res: Result<(Option<Vec<u8>>, Statistics, ReadPerfContext)>,
             _: tikv_util::time::Instant,
         ) {
             self.data.lock().unwrap().push(GetResult {
@@ -3061,7 +3061,7 @@ pub mod test_util {
 #[derive(Debug, Default, Clone)]
 pub struct KvGetStatistics {
     pub stats: Statistics,
-    pub perf_stats: PerfStatisticsDelta,
+    pub perf_stats: ReadPerfContext,
     pub latency_stats: StageLatencyStats,
 }
 

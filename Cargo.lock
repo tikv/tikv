@@ -1382,6 +1382,7 @@ dependencies = [
  "api_version",
  "case_macros",
  "collections",
+ "derive_more",
  "encryption",
  "engine_traits",
  "fail",
@@ -1402,6 +1403,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "slog_derive",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
@@ -5810,7 +5812,6 @@ name = "tikv_kv"
 version = "0.1.0"
 dependencies = [
  "backtrace",
- "derive_more",
  "engine_panic",
  "engine_rocks",
  "engine_traits",

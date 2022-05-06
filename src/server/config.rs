@@ -9,6 +9,7 @@ use grpcio::CompressionAlgorithms;
 use regex::Regex;
 
 use collections::HashMap;
+use engine_traits::{perf_level_serde, PerfLevel};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack};
 use tikv_util::sys::SysQuota;
@@ -133,6 +134,9 @@ pub struct Config {
     pub end_point_request_max_handle_duration: ReadableDuration,
     #[online_config(skip)]
     pub end_point_max_concurrency: usize,
+    #[serde(with = "perf_level_serde")]
+    #[online_config(skip)]
+    pub end_point_perf_level: PerfLevel,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     #[online_config(skip)]
@@ -234,6 +238,7 @@ impl Default for Config {
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
+            end_point_perf_level: PerfLevel::Uninitialized,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,

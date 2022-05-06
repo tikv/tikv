@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use api_version::{DATA_KEY_PREFIX_LEN, RAW_KEY_PREFIX};
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::PROP_MAX_TS;
+use engine_rocks::{ReadPerfContext, ReadPerfInstant, PROP_MAX_TS};
 use engine_traits::{
     IterOptions, KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection,
     TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE,
@@ -24,7 +24,6 @@ use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::raw::raw_mvcc::{RawMvccIterator, RawMvccSnapshot};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
 use tikv::storage::Statistics;
-use tikv_kv::PerfStatisticsDelta;
 use tikv_util::codec::number;
 use tikv_util::sys::inspector::{self_thread_inspector, ThreadInspector};
 use tikv_util::time::{Instant, Limiter};
@@ -48,7 +47,7 @@ struct ScanStat {
     // Bytes from the device, `None` if not possible to get it.
     disk_read: Option<usize>,
     // Perf delta for RocksDB.
-    perf_delta: PerfStatisticsDelta,
+    perf_delta: ReadPerfContext,
 }
 
 pub(crate) enum KvEntry {
@@ -313,7 +312,7 @@ impl<E: KvEngine> Initializer<E> {
         // This code block shouldn't be switched to other threads.
         let mut total_bytes = 0;
         let mut total_size = 0;
-        let perf_instant = PerfStatisticsInstant::new();
+        let perf_instant = ReadPerfInstant::new();
         let inspector = self_thread_inspector().ok();
         let old_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
         let mut stats = Statistics::default();
@@ -383,7 +382,7 @@ impl<E: KvEngine> Initializer<E> {
             CDC_SCAN_DISK_READ_BYTES.inc_by(bytes as _);
             bytes
         } else {
-            perf_delta.0.block_read_byte
+            perf_delta.block_read_byte as usize
         };
         self.speed_limiter.consume(require).await;
 
