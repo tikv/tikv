@@ -1,11 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::io::{self, ErrorKind};
+
 use anyhow::Context;
 use futures::executor::block_on;
 use futures_io::{AsyncRead, AsyncWrite};
 use kvproto::brpb as proto;
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
-use std::io::{self, ErrorKind};
 use tikv_util::time::Limiter;
 use tokio::runtime::Runtime;
 use tokio_util::compat::Tokio02AsyncReadCompatExt;

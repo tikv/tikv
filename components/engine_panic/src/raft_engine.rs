@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
-use crate::write_batch::PanicWriteBatch;
 use engine_traits::{Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
+
+use crate::{engine::PanicEngine, write_batch::PanicWriteBatch};
 
 impl RaftEngineReadOnly for PanicEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {

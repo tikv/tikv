@@ -1,8 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, Read, Write};
-use std::sync::Arc;
-use std::{fs, usize};
+use std::{
+    fs,
+    fs::{File, OpenOptions},
+    io::{self, BufReader, Read, Write},
+    sync::Arc,
+    usize,
+};
 
 use encryption::{
     encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter,
@@ -13,9 +16,12 @@ use engine_traits::{
     SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
-use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
-use tikv_util::time::Limiter;
-use tikv_util::{box_try, debug};
+use tikv_util::{
+    box_try,
+    codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder},
+    debug,
+    time::Limiter,
+};
 
 use super::{Error, IO_LIMITER_CHUNK_SIZE};
 
@@ -243,13 +249,13 @@ pub fn get_decrypter_reader(
 mod tests {
     use std::collections::HashMap;
 
-    use super::*;
-    use crate::store::snap::tests::*;
-    use crate::store::snap::SNAPSHOT_CFS;
     use engine_test::kv::KvTestEngine;
     use engine_traits::CF_DEFAULT;
     use tempfile::Builder;
     use tikv_util::time::Limiter;
+
+    use super::*;
+    use crate::store::snap::{tests::*, SNAPSHOT_CFS};
 
     struct TestStaleDetector;
     impl StaleDetector for TestStaleDetector {

@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Duration;
+
 use engine_traits::{RaftEngine, RaftEngineDebug};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::MessageType;
 use raftstore::store::*;
-use std::time::*;
 use test_raftstore::*;
 
 fn delete_old_data<E: RaftEngineDebug>(engine: &E, id: u64) {

@@ -1,23 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::mem;
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    mem,
+    sync::{
+        atomic::AtomicBool,
+        mpsc::{self, RecvTimeoutError},
+        Arc, Mutex,
+    },
+    thread,
+    time::Duration,
+};
 
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use raftstore::store::ReadIndexContext;
-use raftstore::Result;
+use raftstore::{store::ReadIndexContext, Result};
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::time::Instant;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 use uuid::Uuid;
 

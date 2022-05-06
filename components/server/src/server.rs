@@ -29,8 +29,11 @@ use api_version::{dispatch_api_version, KvFormat};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::raw::{Cache, Env};
-use engine_rocks::{from_rocks_compression_type, FlowInfo, RocksEngine};
+use engine_rocks::{
+    from_rocks_compression_type,
+    raw::{Cache, Env},
+    FlowInfo, RocksEngine,
+};
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
     RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -72,13 +75,12 @@ use tikv::{
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
-    server::raftkv::ReplicaReadLockChecker,
     server::{
-        config::Config as ServerConfig,
-        config::ServerConfigManager,
+        config::{Config as ServerConfig, ServerConfigManager},
         create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
+        raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
@@ -103,8 +105,7 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
-use crate::raft_engine_switch::*;
-use crate::{memory::*, setup::*, signal_handler};
+use crate::{memory::*, raft_engine_switch::*, setup::*, signal_handler};
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {

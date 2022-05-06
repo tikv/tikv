@@ -1,30 +1,29 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{path::Path, sync::Arc, thread, time::Duration};
 
-use engine_rocks::raw::{IngestExternalFileOptions, Writable};
-use engine_rocks::util::get_cf_handle;
-use engine_rocks::util::new_temp_engine;
-use engine_rocks::RocksEngine;
-use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
+use engine_rocks::{
+    raw::{IngestExternalFileOptions, Writable},
+    util::{get_cf_handle, new_temp_engine},
+    Compat, RocksEngine, RocksSnapshot, RocksSstWriterBuilder,
+};
 use engine_traits::{
     CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter, SstWriterBuilder,
     ALL_CFS, CF_DEFAULT, CF_WRITE,
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
-use raftstore::store::RegionSnapshot;
-use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
+use raftstore::store::{apply_sst_cf_file, build_sst_cf_file, RegionSnapshot};
 use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::TiKvConfig;
-use tikv::storage::mvcc::ScannerBuilder;
-use tikv::storage::txn::Scanner;
-use tikv_util::config::{ReadableDuration, ReadableSize};
-use tikv_util::time::Limiter;
+use tikv::{
+    config::TiKvConfig,
+    storage::{mvcc::ScannerBuilder, txn::Scanner},
+};
+use tikv_util::{
+    config::{ReadableDuration, ReadableSize},
+    time::Limiter,
+};
 use txn_types::{Key, Write, WriteType};
 
 #[test]

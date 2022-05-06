@@ -1,16 +1,20 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error as StdError;
-use std::fmt::{self, Display, Formatter};
-use std::sync::mpsc::Sender;
-
-use thiserror::Error;
+use std::{
+    error::Error as StdError,
+    fmt::{self, Display, Formatter},
+    sync::mpsc::Sender,
+};
 
 use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogGCTask};
 use file_system::{IOType, WithIOType};
-use tikv_util::time::{Duration, Instant};
-use tikv_util::worker::{Runnable, RunnableWithTimer};
-use tikv_util::{box_try, debug, error, warn};
+use thiserror::Error;
+use tikv_util::{
+    box_try, debug, error,
+    time::{Duration, Instant},
+    warn,
+    worker::{Runnable, RunnableWithTimer},
+};
 
 use crate::store::worker::metrics::*;
 
@@ -195,12 +199,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{sync::mpsc, time::Duration};
+
     use engine_traits::{RaftEngine, RaftLogBatch, ALL_CFS};
     use raft::eraftpb::Entry;
-    use std::sync::mpsc;
-    use std::time::Duration;
     use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_gc_raft_log() {

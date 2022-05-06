@@ -1,10 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    borrow::Cow,
+    ptr,
+    sync::{
+        atomic::{AtomicPtr, AtomicUsize, Ordering},
+        Arc,
+    },
+    usize,
+};
+
 use crate::mailbox::BasicMailbox;
-use std::borrow::Cow;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::{ptr, usize};
 
 // The FSM is notified.
 const NOTIFYSTATE_NOTIFIED: usize = 0;

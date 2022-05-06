@@ -1,47 +1,58 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::hash_map::Entry as MapEntry;
-use std::error::Error as StdError;
-use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::time::Duration;
-use std::{result, thread};
-
-use crossbeam::channel::TrySendError;
-use futures::executor::block_on;
-use kvproto::errorpb::Error as PbError;
-use kvproto::kvrpcpb::{ApiVersion, Context};
-use kvproto::metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel};
-use kvproto::pdpb;
-use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{
-    PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
+use std::{
+    collections::hash_map::Entry as MapEntry,
+    error::Error as StdError,
+    result,
+    sync::{mpsc, Arc, Mutex, RwLock},
+    thread,
+    time::Duration,
 };
-use raft::eraftpb::ConfChangeType;
-use tempfile::TempDir;
 
 use collections::{HashMap, HashSet};
+use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::raw::DB;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{raw::DB, Compat, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
     WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
-use kvproto::pdpb::CheckPolicy;
+use futures::executor::block_on;
+use kvproto::{
+    errorpb::Error as PbError,
+    kvrpcpb::{ApiVersion, Context},
+    metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel},
+    pdpb,
+    pdpb::CheckPolicy,
+    raft_cmdpb::*,
+    raft_serverpb::{
+        PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+        RegionLocalState,
+    },
+};
 use pd_client::{BucketStat, PdClient};
-use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
-use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
-use raftstore::store::transport::CasualRouter;
-use raftstore::store::*;
-use raftstore::{Error, Result};
-use std::sync::mpsc::channel;
+use raft::eraftpb::ConfChangeType;
+use raftstore::{
+    store::{
+        fsm::{
+            create_raft_batch_system,
+            store::{StoreMeta, PENDING_MSG_CAP},
+            RaftBatchSystem, RaftRouter,
+        },
+        transport::CasualRouter,
+        *,
+    },
+    Error, Result,
+};
+use tempfile::TempDir;
 use tikv::server::Result as ServerResult;
-use tikv_util::thread_group::GroupProperties;
-use tikv_util::time::Instant;
-use tikv_util::time::ThreadReadId;
-use tikv_util::HandyRwLock;
+use tikv_util::{
+    thread_group::GroupProperties,
+    time::{Instant, ThreadReadId},
+    HandyRwLock,
+};
 
 use super::*;
 use crate::Config;
@@ -1714,7 +1725,7 @@ impl<T: Simulator> Cluster<T> {
     ) -> u64 {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
-        let (tx, rx) = channel();
+        let (tx, rx) = mpsc::channel();
         let cb = Callback::Test {
             cb: Box::new(move |stat: PeerInternalStat| {
                 if let Some(expect_buckets) = expect_buckets {
@@ -1748,7 +1759,7 @@ impl<T: Simulator> Cluster<T> {
     ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
-        let (tx, rx) = channel();
+        let (tx, rx) = mpsc::channel();
         let cb = Callback::Test {
             cb: Box::new(move |stat: PeerInternalStat| {
                 assert_eq!(

@@ -1,17 +1,21 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+use std::{
+    path::Path,
+    sync::*,
+    thread,
+    time::{Duration, Instant},
+};
 
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::{raw::Writable, Compat};
+use engine_traits::{
+    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
+};
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
-use grpcio_health::proto::HealthCheckRequest;
-use grpcio_health::*;
-use tempfile::Builder;
-
+use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
@@ -20,29 +24,30 @@ use kvproto::{
     raft_serverpb::*,
     tikvpb::*,
 };
-use raft::eraftpb;
-
-use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{raw::Writable, Compat};
-use engine_traits::{
-    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE,
-};
 use pd_client::PdClient;
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
+use raft::eraftpb;
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{fsm::store::StoreMeta, AutoSplitController, SnapManager},
+};
 use resource_metering::CollectorRegHandle;
+use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::QuotaConfig;
-use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv::import::Config as ImportConfig;
-use tikv::import::SstImporter;
-use tikv::server;
-use tikv::server::gc_worker::sync_gc;
-use tikv::server::service::{batch_commands_request, batch_commands_response};
-use tikv_util::config::ReadableSize;
-use tikv_util::worker::{dummy_scheduler, LazyWorker};
-use tikv_util::HandyRwLock;
+use tikv::{
+    config::QuotaConfig,
+    coprocessor::REQ_TYPE_DAG,
+    import::{Config as ImportConfig, SstImporter},
+    server,
+    server::{
+        gc_worker::sync_gc,
+        service::{batch_commands_request, batch_commands_response},
+    },
+};
+use tikv_util::{
+    config::ReadableSize,
+    worker::{dummy_scheduler, LazyWorker},
+    HandyRwLock,
+};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 #[test]

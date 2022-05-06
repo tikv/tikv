@@ -57,17 +57,15 @@
 
 /// Types and constructors for the "raft" engine
 pub mod raft {
-    use crate::ctor::{RaftDBOptions, RaftEngineConstructorExt};
-    use engine_traits::Result;
-
     #[cfg(feature = "test-engine-raft-panic")]
     pub use engine_panic::PanicEngine as RaftTestEngine;
-
     #[cfg(feature = "test-engine-raft-rocksdb")]
     pub use engine_rocks::RocksEngine as RaftTestEngine;
-
+    use engine_traits::Result;
     #[cfg(feature = "test-engine-raft-raft-engine")]
     pub use raft_log_engine::RaftLogEngine as RaftTestEngine;
+
+    use crate::ctor::{RaftDBOptions, RaftEngineConstructorExt};
 
     pub fn new_engine(path: &str, db_opt: Option<RaftDBOptions>) -> Result<RaftTestEngine> {
         RaftTestEngine::new_raft_engine(path, db_opt)
@@ -76,20 +74,19 @@ pub mod raft {
 
 /// Types and constructors for the "kv" engine
 pub mod kv {
-    use crate::ctor::{CFOptions, DBOptions, KvEngineConstructorExt};
-    use engine_traits::Result;
-
     #[cfg(feature = "test-engine-kv-panic")]
     pub use engine_panic::{
         PanicEngine as KvTestEngine, PanicEngineIterator as KvTestEngineIterator,
         PanicSnapshot as KvTestSnapshot, PanicWriteBatch as KvTestWriteBatch,
     };
-
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
         RocksSnapshot as KvTestSnapshot, RocksWriteBatch as KvTestWriteBatch,
     };
+    use engine_traits::Result;
+
+    use crate::ctor::{CFOptions, DBOptions, KvEngineConstructorExt};
 
     pub fn new_engine(
         path: &str,
@@ -120,10 +117,11 @@ pub mod kv {
 /// This module itself is intended to be extracted from this crate into its own
 /// crate, once the requirements for engine construction are better understood.
 pub mod ctor {
+    use std::sync::Arc;
+
     use encryption::DataKeyManager;
     use engine_traits::Result;
     use file_system::IORateLimiter;
-    use std::sync::Arc;
 
     /// Kv engine construction
     ///
@@ -289,9 +287,10 @@ pub mod ctor {
     }
 
     mod panic {
-        use super::{CFOptions, DBOptions, KvEngineConstructorExt, RaftEngineConstructorExt};
         use engine_panic::PanicEngine;
         use engine_traits::Result;
+
+        use super::{CFOptions, DBOptions, KvEngineConstructorExt, RaftEngineConstructorExt};
 
         impl KvEngineConstructorExt for engine_panic::PanicEngine {
             fn new_kv_engine(
@@ -320,22 +319,24 @@ pub mod ctor {
     }
 
     mod rocks {
+        use engine_rocks::{
+            get_env,
+            properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
+            raw::{
+                ColumnFamilyOptions as RawRocksColumnFamilyOptions, DBOptions as RawRocksDBOptions,
+            },
+            util::{
+                new_engine as rocks_new_engine, new_engine_opt as rocks_new_engine_opt,
+                RocksCFOptions,
+            },
+            RocksColumnFamilyOptions, RocksDBOptions,
+        };
+        use engine_traits::{ColumnFamilyOptions as ColumnFamilyOptionsTrait, Result};
+
         use super::{
             CFOptions, ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftDBOptions,
             RaftEngineConstructorExt,
         };
-
-        use engine_traits::{ColumnFamilyOptions as ColumnFamilyOptionsTrait, Result};
-
-        use engine_rocks::properties::{
-            MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
-        };
-        use engine_rocks::raw::ColumnFamilyOptions as RawRocksColumnFamilyOptions;
-        use engine_rocks::raw::DBOptions as RawRocksDBOptions;
-        use engine_rocks::util::{
-            new_engine as rocks_new_engine, new_engine_opt as rocks_new_engine_opt, RocksCFOptions,
-        };
-        use engine_rocks::{get_env, RocksColumnFamilyOptions, RocksDBOptions};
 
         impl KvEngineConstructorExt for engine_rocks::RocksEngine {
             // FIXME this is duplicating behavior from engine_rocks::raw_util in order to
@@ -451,9 +452,10 @@ pub mod ctor {
     }
 
     mod raft_engine {
-        use super::{RaftDBOptions, RaftEngineConstructorExt};
         use engine_traits::Result;
         use raft_log_engine::{RaftEngineConfig, RaftLogEngine};
+
+        use super::{RaftDBOptions, RaftEngineConstructorExt};
 
         impl RaftEngineConstructorExt for raft_log_engine::RaftLogEngine {
             fn new_raft_engine(path: &str, db_opts: Option<RaftDBOptions>) -> Result<Self> {

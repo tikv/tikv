@@ -2,19 +2,22 @@
 
 //! Storage online config manager.
 
-use crate::server::ttl::TtlCheckerTask;
-use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::txn::flow_controller::FlowController;
-use crate::storage::TxnScheduler;
+use std::sync::Arc;
+
 use engine_traits::{CFNamesExt, CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IOPriority, IOType};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
-use std::sync::Arc;
 use strum::IntoEnumIterator;
 use tikv_kv::Engine;
-use tikv_util::config::{ReadableDuration, ReadableSize};
-use tikv_util::worker::Scheduler;
+use tikv_util::{
+    config::{ReadableDuration, ReadableSize},
+    worker::Scheduler,
+};
+
+use crate::{
+    server::{ttl::TtlCheckerTask, CONFIG_ROCKSDB_GAUGE},
+    storage::{lock_manager::LockManager, txn::flow_controller::FlowController, TxnScheduler},
+};
 
 pub struct StorageConfigManger<E: Engine, L: LockManager> {
     kvdb: <E as Engine>::Local,

@@ -1,24 +1,26 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::repeat;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
-use std::u64;
-
-use rand::random;
-
-use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
+use std::{
+    iter::repeat,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+    time::Duration,
+    u64,
+};
 
 use api_version::{dispatch_api_version, KvFormat};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
+use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
+use rand::random;
 use test_storage::*;
-use tikv::coprocessor::checksum_crc64_xor;
-use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
-use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
-use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
-use tikv::storage::Engine;
+use tikv::{
+    coprocessor::checksum_crc64_xor,
+    server::gc_worker::DEFAULT_GC_BATCH_KEYS,
+    storage::{mvcc::MAX_TXN_WRITE_SIZE, txn::RESOLVE_LOCK_BATCH_SIZE, Engine},
+};
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]

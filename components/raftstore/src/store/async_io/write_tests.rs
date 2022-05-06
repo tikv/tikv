@@ -2,9 +2,6 @@
 
 use std::time::Duration;
 
-use crate::store::{Config, Transport};
-use crate::Result;
-
 use collections::HashSet;
 use crossbeam::channel::unbounded;
 use engine_test::{kv::KvTestEngine, new_temp_engine, raft::RaftTestEngine};
@@ -13,6 +10,10 @@ use kvproto::raft_serverpb::RaftMessage;
 use tempfile::Builder;
 
 use super::*;
+use crate::{
+    store::{Config, Transport},
+    Result,
+};
 
 fn must_have_entries_and_state(
     raft_engine: &RaftTestEngine,

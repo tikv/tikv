@@ -1,18 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    sync::{atomic::AtomicBool, Arc, Mutex},
+    thread,
+    time::Duration,
+};
+
 use crossbeam::channel;
 use engine_rocks::Compat;
 use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 
 #[test]

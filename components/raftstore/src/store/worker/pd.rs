@@ -1,57 +1,68 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering as CmpOrdering;
-use std::fmt::{self, Display, Formatter};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-use std::thread::{Builder, JoinHandle};
-use std::time::{Duration, Instant};
-use std::{cmp, io, mem};
-
-use engine_traits::{KvEngine, RaftEngine, CF_RAFT};
-#[cfg(feature = "failpoints")]
-use fail::fail_point;
-use grpcio_health::{HealthService, ServingStatus};
-use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
-    SplitRequest,
-};
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use kvproto::replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus};
-use kvproto::{metapb, pdpb};
-use ordered_float::OrderedFloat;
-use prometheus::local::LocalHistogram;
-use raft::eraftpb::ConfChangeType;
-use yatp::Remote;
-
-use crate::store::cmd_resp::new_error;
-use crate::store::metrics::*;
-use crate::store::util::{
-    is_epoch_stale, ConfChangeKind, KeysInfoFormatter, LatencyInspector, RaftstoreDuration,
-};
-use crate::store::worker::query_stats::QueryStats;
-use crate::store::worker::split_controller::{SplitInfo, TOP_N};
-use crate::store::worker::{AutoSplitController, ReadStats, WriteStats};
-use crate::store::{
-    Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-    RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
+use std::{
+    cmp,
+    cmp::Ordering as CmpOrdering,
+    fmt::{self, Display, Formatter},
+    io, mem,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc::{self, Receiver, Sender},
+        Arc,
+    },
+    thread::{Builder, JoinHandle},
+    time::{Duration, Instant},
 };
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use futures::compat::Future01CompatExt;
-use futures::FutureExt;
-use pd_client::metrics::*;
-use pd_client::{merge_bucket_stats, BucketStat, Error, PdClient, RegionStat};
+use engine_traits::{KvEngine, RaftEngine, CF_RAFT};
+#[cfg(feature = "failpoints")]
+use fail::fail_point;
+use futures::{compat::Future01CompatExt, FutureExt};
+use grpcio_health::{HealthService, ServingStatus};
+use kvproto::{
+    kvrpcpb::DiskFullOpt,
+    metapb, pdpb,
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
+        SplitRequest,
+    },
+    raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
+    replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
+};
+use ordered_float::OrderedFloat;
+use pd_client::{merge_bucket_stats, metrics::*, BucketStat, Error, PdClient, RegionStat};
+use prometheus::local::LocalHistogram;
 use protobuf::Message;
+use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
-use tikv_util::metrics::ThreadInfoStatistics;
-use tikv_util::time::{Instant as TiInstant, UnixSecs};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::topn::TopN;
-use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
-use tikv_util::{box_err, box_try, debug, error, info, thd_name, warn};
+use tikv_util::{
+    box_err, box_try, debug, error, info,
+    metrics::ThreadInfoStatistics,
+    thd_name,
+    time::{Instant as TiInstant, UnixSecs},
+    timer::GLOBAL_TIMER_HANDLE,
+    topn::TopN,
+    warn,
+    worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
+};
+use yatp::Remote;
+
+use crate::store::{
+    cmd_resp::new_error,
+    metrics::*,
+    util::{
+        is_epoch_stale, ConfChangeKind, KeysInfoFormatter, LatencyInspector, RaftstoreDuration,
+    },
+    worker::{
+        query_stats::QueryStats,
+        split_controller::{SplitInfo, TOP_N},
+        AutoSplitController, ReadStats, WriteStats,
+    },
+    Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+    RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
+};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -2177,8 +2188,9 @@ fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use kvproto::{kvrpcpb, pdpb::QueryKind};
     use std::thread::sleep;
+
+    use kvproto::{kvrpcpb, pdpb::QueryKind};
 
     use super::*;
 
@@ -2187,12 +2199,12 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn test_collect_stats() {
-        use crate::store::fsm::StoreMeta;
+        use std::{sync::Mutex, time::Instant};
 
         use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
-        use std::sync::Mutex;
-        use std::time::Instant;
         use tikv_util::worker::LazyWorker;
+
+        use crate::store::fsm::StoreMeta;
 
         struct RunnerTest {
             store_stat: Arc<Mutex<StoreStat>>,

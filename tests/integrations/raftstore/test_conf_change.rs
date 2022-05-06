@@ -1,26 +1,27 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-
-use futures::executor::block_on;
-
-use kvproto::metapb::{self, PeerRole};
-use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
-use kvproto::raft_serverpb::*;
-use raft::eraftpb::{ConfChangeType, MessageType};
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
 
 use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
+use futures::executor::block_on;
+use kvproto::{
+    metapb::{self, PeerRole},
+    raft_cmdpb::{RaftCmdResponse, RaftResponseHeader},
+    raft_serverpb::*,
+};
 use pd_client::PdClient;
-use raftstore::store::util::is_learner;
-use raftstore::Result;
+use raft::eraftpb::{ConfChangeType, MessageType};
+use raftstore::{store::util::is_learner, Result};
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
-use tikv_util::time::Instant;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);

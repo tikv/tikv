@@ -1,18 +1,25 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::Cell;
-use std::ffi::CString;
-use std::mem;
-use std::result::Result;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-use engine_rocks::raw::{
-    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
+use std::{
+    cell::Cell,
+    ffi::CString,
+    mem,
+    result::Result,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
-use engine_rocks::{RocksEngine, RocksMvccProperties, RocksWriteBatch};
+
+use engine_rocks::{
+    raw::{
+        new_compaction_filter_raw, CompactionFilter, CompactionFilterContext,
+        CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
+        DBCompactionFilter,
+    },
+    RocksEngine, RocksMvccProperties, RocksWriteBatch,
+};
 use engine_traits::{
     KvEngine, MiscExt, Mutable, MvccProperties, WriteBatch, WriteBatchExt, WriteOptions,
 };
@@ -20,12 +27,16 @@ use file_system::{IOType, WithIOType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::time::Instant;
-use tikv_util::worker::{ScheduleError, Scheduler};
+use tikv_util::{
+    time::Instant,
+    worker::{ScheduleError, Scheduler},
+};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
-use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
-use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
+use crate::{
+    server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager},
+    storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
+};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
@@ -687,15 +698,20 @@ fn check_need_gc(
 #[allow(dead_code)] // Some interfaces are not used with different compile options.
 #[cfg(any(test, feature = "failpoints"))]
 pub mod test_utils {
-    use super::*;
-    use crate::storage::kv::RocksEngine as StorageRocksEngine;
-    use engine_rocks::raw::{CompactOptions, CompactionOptions};
-    use engine_rocks::util::get_cf_handle;
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{
+        raw::{CompactOptions, CompactionOptions},
+        util::get_cf_handle,
+        RocksEngine,
+    };
     use engine_traits::{SyncMutable, CF_WRITE};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
-    use tikv_util::config::VersionTrack;
-    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use tikv_util::{
+        config::VersionTrack,
+        worker::{dummy_scheduler, ReceiverWrapper},
+    };
+
+    use super::*;
+    use crate::storage::kv::RocksEngine as StorageRocksEngine;
 
     /// Do a global GC with the given safe point.
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
@@ -842,14 +858,17 @@ pub mod test_utils {
 
 #[cfg(test)]
 pub mod tests {
-    use super::test_utils::*;
-    use super::*;
-
-    use crate::config::DbConfig;
-    use crate::storage::kv::TestEngineBuilder;
-    use crate::storage::mvcc::tests::{must_get, must_get_none};
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
+
+    use super::{test_utils::*, *};
+    use crate::{
+        config::DbConfig,
+        storage::{
+            kv::TestEngineBuilder,
+            mvcc::tests::{must_get, must_get_none},
+            txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put},
+        },
+    };
 
     #[test]
     fn test_is_compaction_filter_allowed() {

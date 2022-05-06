@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::{thread, time};
+use std::{sync::Arc, thread, time};
 
 use engine_traits::MiscExt;
 use pd_client::PdClient;

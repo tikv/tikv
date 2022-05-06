@@ -1,23 +1,23 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    fmt,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{EncryptionKeyManager, Iterable, KvEngine, SstMetaInfo, SstReader};
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
-use kvproto::import_sstpb::*;
-use kvproto::kvrpcpb::ApiVersion;
+use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use crate::metrics::*;
-use crate::{Error, Result};
+use crate::{metrics::*, Error, Result};
 
 // `SyncableWrite` extends io::Write with sync
 trait SyncableWrite: io::Write + Send {
@@ -450,8 +450,9 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use engine_traits::CF_DEFAULT;
+
+    use super::*;
 
     #[test]
     fn test_sst_meta_to_path() {

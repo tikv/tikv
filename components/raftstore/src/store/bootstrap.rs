@@ -1,16 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::peer_storage::{
-    write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+use engine_traits::{Engines, KvEngine, Mutable, RaftEngine, WriteBatch, CF_DEFAULT, CF_RAFT};
+use kvproto::{
+    metapb,
+    raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent},
 };
-use super::util::new_peer;
-use crate::Result;
-use engine_traits::{Engines, KvEngine, Mutable, RaftEngine, WriteBatch};
-use engine_traits::{CF_DEFAULT, CF_RAFT};
-
-use kvproto::metapb;
-use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent};
 use tikv_util::{box_err, box_try};
+
+use super::{
+    peer_storage::{
+        write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+    },
+    util::new_peer,
+};
+use crate::Result;
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
@@ -122,12 +125,12 @@ pub fn clear_prepare_bootstrap_key(
 
 #[cfg(test)]
 mod tests {
-    use tempfile::Builder;
-
-    use super::*;
     use engine_traits::{
         Engines, Peekable, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, CF_DEFAULT,
     };
+    use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_bootstrap() {

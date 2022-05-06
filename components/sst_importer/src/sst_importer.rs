@@ -1,14 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::ops::Bound;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use futures::executor::ThreadPool;
-use kvproto::brpb::{CipherInfo, StorageBackend};
-use kvproto::import_sstpb::*;
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    ops::Bound,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
@@ -18,16 +16,22 @@ use engine_traits::{
     CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
-use kvproto::kvrpcpb::ApiVersion;
+use futures::executor::ThreadPool;
+use kvproto::{
+    brpb::{CipherInfo, StorageBackend},
+    import_sstpb::*,
+    kvrpcpb::ApiVersion,
+};
 use tikv_util::time::{Instant, Limiter};
 use txn_types::{Key, TimeStamp, WriteRef};
 
-use crate::import_file::{ImportDir, ImportFile};
-use crate::import_mode::{ImportModeSwitcher, RocksDBMetricsFn};
-use crate::metrics::*;
-use crate::sst_writer::{RawSstWriter, TxnSstWriter};
-use crate::Config;
-use crate::{Error, Result};
+use crate::{
+    import_file::{ImportDir, ImportFile},
+    import_mode::{ImportModeSwitcher, RocksDBMetricsFn},
+    metrics::*,
+    sst_writer::{RawSstWriter, TxnSstWriter},
+    Config, Error, Result,
+};
 
 /// SstImporter manages SST files that are waiting for ingesting.
 pub struct SstImporter {
@@ -561,8 +565,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::import_file::ImportPath;
-    use crate::*;
+    use crate::{import_file::ImportPath, *};
 
     fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>) {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();

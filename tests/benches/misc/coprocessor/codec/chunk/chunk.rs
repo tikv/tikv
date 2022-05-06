@@ -2,13 +2,12 @@
 
 use std::sync::Arc;
 
-use arrow::array;
-use arrow::datatypes::{self, DataType, Field};
-use arrow::record_batch::RecordBatch;
-
-use tidb_query_datatype::codec::Datum;
-use tidb_query_datatype::prelude::*;
-use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
+use arrow::{
+    array,
+    datatypes::{self, DataType, Field},
+    record_batch::RecordBatch,
+};
+use tidb_query_datatype::{codec::Datum, prelude::*, FieldTypeFlag, FieldTypeTp};
 use tipb::FieldType;
 
 pub struct Chunk {

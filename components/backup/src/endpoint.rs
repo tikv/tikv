@@ -1,50 +1,55 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
-use std::cell::RefCell;
-use std::fmt;
-use std::sync::atomic::*;
-use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    fmt,
+    sync::{atomic::*, mpsc, Arc, Mutex, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use async_channel::SendError;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
-use engine_traits::raw_ttl::ttl_current_ts;
-use engine_traits::{name_to_cf, CfName, SstCompressionType};
+use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, SstCompressionType};
 use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
 use futures::channel::mpsc::*;
-use kvproto::brpb::*;
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
-use kvproto::metapb::*;
-use online_config::OnlineConfig;
-
-use raft::StateRole;
-use raftstore::coprocessor::RegionInfoProvider;
-use raftstore::store::util::find_peer;
-use tikv::config::BackupConfig;
-use tikv::storage::kv::{CursorBuilder, Engine, ScanMode, SnapContext};
-use tikv::storage::mvcc::Error as MvccError;
-use tikv::storage::raw::raw_mvcc::RawMvccSnapshot;
-use tikv::storage::txn::{
-    EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
+use kvproto::{
+    brpb::*,
+    encryptionpb::EncryptionMethod,
+    kvrpcpb::{ApiVersion, Context, IsolationLevel},
+    metapb::*,
 };
-use tikv::storage::Snapshot;
-use tikv::storage::Statistics;
-use tikv_util::time::{Instant, Limiter};
-use tikv_util::worker::Runnable;
-use tikv_util::{box_err, debug, error, error_unknown, impl_display_as_debug, info, warn};
+use online_config::OnlineConfig;
+use raft::StateRole;
+use raftstore::{coprocessor::RegionInfoProvider, store::util::find_peer};
+use tikv::{
+    config::BackupConfig,
+    storage::{
+        kv::{CursorBuilder, Engine, ScanMode, SnapContext},
+        mvcc::Error as MvccError,
+        raw::raw_mvcc::RawMvccSnapshot,
+        txn::{EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore},
+        Snapshot, Statistics,
+    },
+};
+use tikv_util::{
+    box_err, debug, error, error_unknown, impl_display_as_debug, info,
+    time::{Instant, Limiter},
+    warn,
+    worker::Runnable,
+};
 use tokio::runtime::Runtime;
 use txn_types::{Key, Lock, TimeStamp};
 
-use crate::metrics::*;
-use crate::softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu};
-use crate::utils::{ControlThreadPool, KeyValueCodec};
-use crate::writer::{BackupWriterBuilder, CfNameWrap};
-use crate::Error;
-use crate::*;
+use crate::{
+    metrics::*,
+    softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu},
+    utils::{ControlThreadPool, KeyValueCodec},
+    writer::{BackupWriterBuilder, CfNameWrap},
+    Error, *,
+};
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
 
@@ -1094,27 +1099,32 @@ fn redact_option_key(key: &Option<Key>) -> log_wrappers::Value<'_> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::time::Duration;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::Mutex,
+        time::Duration,
+    };
 
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
     use file_system::{IOOp, IORateLimiter, IOType};
-    use futures::executor::block_on;
-    use futures::stream::StreamExt;
+    use futures::{executor::block_on, stream::StreamExt};
     use kvproto::metapb;
-    use raftstore::coprocessor::RegionCollector;
-    use raftstore::coprocessor::Result as CopResult;
-    use raftstore::coprocessor::SeekRegionCallback;
-    use raftstore::store::util::new_peer;
+    use raftstore::{
+        coprocessor::{RegionCollector, Result as CopResult, SeekRegionCallback},
+        store::util::new_peer,
+    };
     use rand::Rng;
-    use std::sync::Mutex;
     use tempfile::TempDir;
-    use tikv::coprocessor::checksum_crc64_xor;
-    use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
-    use tikv::storage::{RocksEngine, TestEngineBuilder};
+    use tikv::{
+        coprocessor::checksum_crc64_xor,
+        storage::{
+            txn::tests::{must_commit, must_prewrite_put},
+            RocksEngine, TestEngineBuilder,
+        },
+    };
     use tikv_util::config::ReadableSize;
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;

@@ -1,29 +1,35 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
-use std::time::Duration;
-
-use engine_traits::CF_WRITE;
-use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{Mutation, Op, PessimisticLockRequest, PrewriteRequest};
-use kvproto::metapb::Region;
-use kvproto::raft_serverpb::RaftMessage;
-use kvproto::tikvpb::TikvClient;
-use pd_client::PdClient;
-use raft::eraftpb::MessageType;
-use raftstore::store::config::Config as RaftstoreConfig;
-use raftstore::store::util::is_vote_msg;
-use raftstore::store::Callback;
-use raftstore::Result;
-use tikv_util::HandyRwLock;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
+    thread,
+    time::Duration,
+};
 
 use collections::HashMap;
+use engine_traits::CF_WRITE;
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::{
+    kvrpcpb::{Mutation, Op, PessimisticLockRequest, PrewriteRequest},
+    metapb::Region,
+    raft_serverpb::RaftMessage,
+    tikvpb::TikvClient,
+};
+use pd_client::PdClient;
+use raft::eraftpb::MessageType;
+use raftstore::{
+    store::{config::Config as RaftstoreConfig, util::is_vote_msg, Callback},
+    Result,
+};
 use test_raftstore::*;
-use tikv::storage::kv::SnapshotExt;
-use tikv::storage::Snapshot;
-use tikv_util::config::{ReadableDuration, ReadableSize};
+use tikv::storage::{kv::SnapshotExt, Snapshot};
+use tikv_util::{
+    config::{ReadableDuration, ReadableSize},
+    HandyRwLock,
+};
 use txn_types::{Key, PessimisticLock};
 
 #[test]

@@ -1,7 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{mpsc, Mutex};
-use std::time::Duration;
+use std::{
+    sync::{mpsc, Mutex},
+    time::Duration,
+};
 
 use collections::HashMap;
 use engine_traits::{Peekable, CF_RAFT};

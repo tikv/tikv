@@ -1,9 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::mvcc::{ErrorInner, Result as MvccResult, SnapshotReader};
-use crate::storage::Snapshot;
 use txn_types::{Key, TimeStamp, Write, WriteType};
+
+use crate::storage::{
+    mvcc::{ErrorInner, Result as MvccResult, SnapshotReader},
+    Snapshot,
+};
 
 /// Checks the existence of the key according to `should_not_exist`.
 /// If not, returns an `AlreadyExist` error.
@@ -34,12 +37,14 @@ pub(crate) fn check_data_constraint<S: Snapshot>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::mvcc::tests::write;
-    use crate::storage::mvcc::MvccTxn;
-    use crate::storage::{Engine, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+
+    use super::*;
+    use crate::storage::{
+        mvcc::{tests::write, MvccTxn},
+        Engine, TestEngineBuilder,
+    };
 
     #[test]
     fn test_check_data_constraint() {

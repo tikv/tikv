@@ -3,8 +3,7 @@
 use std::{thread, time::Duration};
 
 use futures::{executor::block_on, StreamExt};
-use kvproto::brpb::Error_oneof_detail;
-use kvproto::kvrpcpb::*;
+use kvproto::{brpb::Error_oneof_detail, kvrpcpb::*};
 use tempfile::Builder;
 use test_backup::*;
 use txn_types::TimeStamp;

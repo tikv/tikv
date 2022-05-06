@@ -1,10 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{mpsc::Sender, Arc, Mutex};
+
 use collections::hash_set_with_capacity;
 use rocksdb::{CompactionJobInfo, EventListener, FlushJobInfo, IngestionInfo};
-
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
 
 pub enum FlowInfo {
     L0(String, u64),

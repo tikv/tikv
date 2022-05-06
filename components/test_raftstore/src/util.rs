@@ -1,18 +1,18 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::Write;
-use std::path::Path;
-use std::sync::{mpsc, Arc};
-use std::thread;
-use std::time::Duration;
+use std::{
+    fmt::Write,
+    path::Path,
+    sync::{mpsc, Arc},
+    thread,
+    time::Duration,
+};
 
 use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::config::BlobRunMode;
-use engine_rocks::raw::DB;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{config::BlobRunMode, raw::DB, Compat, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
@@ -21,36 +21,35 @@ use engine_traits::{
 use file_system::IORateLimiter;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::*;
-use kvproto::metapb::{self, RegionEpoch};
-use kvproto::pdpb::{
-    ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
-    TransferLeader,
+use kvproto::{
+    encryptionpb::EncryptionMethod,
+    kvrpcpb::*,
+    metapb::{self, RegionEpoch},
+    pdpb::{
+        ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
+        TransferLeader,
+    },
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType,
+        RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType, StatusRequest,
+    },
+    raft_serverpb::{
+        PeerState, RaftApplyState, RaftLocalState, RaftTruncatedState, RegionLocalState,
+    },
+    tikvpb::TikvClient,
 };
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType, RaftCmdRequest,
-    RaftCmdResponse, Request, StatusCmdType, StatusRequest,
-};
-use kvproto::raft_serverpb::{
-    PeerState, RaftApplyState, RaftLocalState, RaftTruncatedState, RegionLocalState,
-};
-use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
-use raftstore::store::fsm::RaftRouter;
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
-use raftstore::store::*;
-use raftstore::Result;
+use raftstore::{
+    store::{fsm::RaftRouter, *},
+    Result,
+};
 use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use tikv::config::*;
-use tikv::server::KvEngineFactoryBuilder;
-use tikv::storage::point_key_range;
-use tikv_util::config::*;
-use tikv_util::time::ThreadReadId;
-use tikv_util::{escape, HandyRwLock};
+use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
+use tikv_util::{config::*, escape, time::ThreadReadId, HandyRwLock};
 use txn_types::Key;
 
 use crate::{Cluster, Config, ServerCluster, Simulator, TestPdClient};

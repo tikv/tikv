@@ -1,20 +1,23 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::{
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+};
 
 use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
+use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::{box_try, debug, info, warn};
 
+use super::{
+    super::{
+        error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
+        SplitChecker,
+    },
+    Host,
+};
 use crate::store::{CasualMessage, CasualRouter};
-
-use super::super::error::Result;
-use super::super::metrics::*;
-use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
-use super::Host;
 
 pub struct Checker {
     max_size: u64,
@@ -237,26 +240,29 @@ fn get_approximate_split_keys(
 
 #[cfg(test)]
 pub mod tests {
-    use super::Checker;
-    use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use crate::store::{BucketRange, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
+    use std::{iter, sync::mpsc, u64};
+
     use collections::HashSet;
-    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
-    use engine_test::kv::KvTestEngine;
-    use engine_traits::CF_LOCK;
-    use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
-    use engine_traits::{MiscExt, SyncMutable};
-    use kvproto::metapb::Peer;
-    use kvproto::metapb::Region;
-    use kvproto::pdpb::CheckPolicy;
-    use std::sync::mpsc;
-    use std::{iter, u64};
+    use engine_test::{
+        ctor::{CFOptions, ColumnFamilyOptions, DBOptions},
+        kv::KvTestEngine,
+    };
+    use engine_traits::{
+        CfName, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
+    };
+    use kvproto::{
+        metapb::{Peer, Region},
+        pdpb::CheckPolicy,
+    };
     use tempfile::Builder;
-    use tikv_util::config::ReadableSize;
-    use tikv_util::worker::Runnable;
+    use tikv_util::{config::ReadableSize, worker::Runnable};
     use txn_types::Key;
 
-    use super::*;
+    use super::{Checker, *};
+    use crate::{
+        coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker},
+        store::{BucketRange, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask},
+    };
 
     fn must_split_at_impl(
         rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,

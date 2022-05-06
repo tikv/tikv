@@ -1,15 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    sync::{mpsc, Arc},
+    thread,
+    time::Duration,
+};
+
 use grpcio::EnvBuilder;
 use kvproto::metapb::*;
 use pd_client::{PdClient, RegionInfo, RegionStat, RpcClient};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;
-
-use std::sync::{mpsc, Arc};
-use std::thread;
-use std::time::Duration;
 
 fn new_test_server_and_client(
     update_interval: ReadableDuration,

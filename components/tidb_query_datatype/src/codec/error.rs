@@ -1,11 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::Display;
-use std::io;
-use std::num::ParseFloatError;
-use std::str::Utf8Error;
-use std::string::FromUtf8Error;
-use std::{error, str};
+use std::{
+    error, fmt::Display, io, num::ParseFloatError, str, str::Utf8Error, string::FromUtf8Error,
+};
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use regex::Error as RegexpError;

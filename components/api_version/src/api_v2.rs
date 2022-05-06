@@ -2,8 +2,11 @@
 
 use codec::byte::MemComparableByteCodec;
 use engine_traits::Result;
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::{bytes, Error};
+use tikv_util::codec::{
+    bytes,
+    number::{self, NumberEncoder},
+    Error,
+};
 
 use super::*;
 
@@ -254,8 +257,9 @@ fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<T
 
 #[cfg(test)]
 mod tests {
-    use crate::{ApiV2, KvFormat, RawValue};
     use txn_types::{Key, TimeStamp};
+
+    use crate::{ApiV2, KvFormat, RawValue};
 
     #[test]
     fn test_key_decode_err() {
