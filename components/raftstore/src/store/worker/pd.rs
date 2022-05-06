@@ -1168,6 +1168,7 @@ where
                                     id: plan.get_step(),
                                     exit_force_leader_after_reporting: false,
                                 },
+                                router.clone(),
                             );
                             for region in plan.get_force_leader().get_enter_force_leaders() {
                                 info!("Unsafe recovery, forcely assign the peer in this store to be the leader"; "region" => region);
@@ -1181,13 +1182,13 @@ where
                                     error!("fail to send force leader message for recovery"; "err" => ?e);
                                 }
                             }
-                            shared_state.finish_for_self(&router);
                         } else {
                             let shared_state = UnsafeRecoveryExecutePlanSharedState::new(
                                 UnsafeRecoveryReportContext {
                                     id: plan.get_step(),
                                     exit_force_leader_after_reporting: true,
                                 },
+                                router.clone(),
                             );
                             for create in plan.get_creates() {
                                 info!("Unsafe recovery, asked to create region"; "region" => ?create);
@@ -1221,7 +1222,6 @@ where
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);
                                 }
                             }
-                            shared_state.finish_for_self(&router);
                         }
                     }
                 }
