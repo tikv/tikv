@@ -273,7 +273,10 @@ impl MetaApplier {
     fn run(&self) {
         loop {
             let cs = unwrap_or_return!(self.meta_rx.recv(), "meta_applier recv");
-            unwrap_or_return!(self.engine.apply_change_set(cs), "meta_applier cs");
+            unwrap_or_return!(
+                self.engine.apply_change_set(ChangeSet::new(cs)),
+                "meta_applier cs"
+            );
         }
     }
 }
