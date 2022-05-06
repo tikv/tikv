@@ -26,6 +26,29 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()>;
 }
 
+pub trait RaftEngineDebug: RaftEngine + Sync + Send + 'static {
+    /// Scan all log entries of given raft group in order.
+    fn scan_entries<F>(&self, raft_group_id: u64, f: F) -> Result<()>
+    where
+        F: FnMut(&Entry) -> Result<bool>;
+
+    /// Put all data of given raft group into a log batch.
+    fn dump_all_data(&self, region_id: u64) -> <Self as RaftEngine>::LogBatch {
+        let mut batch = self.log_batch(0);
+        let mut entries = Vec::new();
+        self.scan_entries(region_id, |e| {
+            entries.push(e.clone());
+            Ok(true)
+        })
+        .unwrap();
+        batch.append(region_id, entries).unwrap();
+        if let Some(state) = self.get_raft_state(region_id).unwrap() {
+            batch.put_raft_state(region_id, &state).unwrap();
+        }
+        batch
+    }
+}
+
 pub struct RaftLogGCTask {
     pub raft_group_id: u64,
     pub from: u64,

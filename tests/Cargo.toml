@@ -45,13 +45,20 @@ path = "benches/channel/mod.rs"
 test = true
 
 [features]
-default = ["failpoints", "testexport", "test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
+
+test-engine-kv-rocksdb = [
+  "raftstore/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "raftstore/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",
 ]

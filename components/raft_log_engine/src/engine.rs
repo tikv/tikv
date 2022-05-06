@@ -9,7 +9,7 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineReadOnly,
+    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineDebug, RaftEngineReadOnly,
     RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
@@ -321,6 +321,24 @@ impl RaftEngineReadOnly for RaftLogEngine {
             let last = self.0.last_index(raft_group_id).unwrap();
             buf.reserve((last - first + 1) as usize);
             self.fetch_entries_to(raft_group_id, first, last + 1, None, buf)?;
+        }
+        Ok(())
+    }
+}
+
+impl RaftEngineDebug for RaftLogEngine {
+    fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Entry) -> Result<bool>,
+    {
+        if let Some(first_index) = self.first_index(raft_group_id) {
+            for idx in first_index..=self.last_index(raft_group_id).unwrap() {
+                if let Some(entry) = self.get_entry(raft_group_id, idx)? {
+                    if !f(&entry)? {
+                        break;
+                    }
+                }
+            }
         }
         Ok(())
     }

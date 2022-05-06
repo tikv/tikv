@@ -93,7 +93,7 @@ fn test_cdc_congest() {
         .unwrap();
 
     assert!(
-        rx.recv_timeout(Duration::from_millis(100)).unwrap(),
+        rx.recv_timeout(Duration::from_millis(1000)).unwrap(),
         "find unexpected delegate"
     );
     suite.stop();

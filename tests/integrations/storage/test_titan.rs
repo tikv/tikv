@@ -86,7 +86,7 @@ fn test_turnoff_titan() {
     assert!(cluster.pre_start_check().is_err());
 
     configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
-    assert!(cluster.pre_start_check().is_ok());
+    cluster.pre_start_check().unwrap();
     cluster.start().unwrap();
     assert_eq!(cluster.must_get(b"k1"), None);
     for i in cluster.get_node_ids().into_iter() {
@@ -137,7 +137,7 @@ fn test_turnoff_titan() {
             return;
         }
     }
-    assert!(cluster.pre_start_check().is_ok());
+    cluster.pre_start_check().unwrap();
 }
 
 #[test]

@@ -1280,8 +1280,13 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     }
 }
 
-trait ConfiguredRaftEngine: RaftEngine {
-    fn build(_: &TiKvServer<Self>, _: &Arc<Env>, _: &Option<Cache>) -> Self;
+pub trait ConfiguredRaftEngine: RaftEngine {
+    fn build(
+        _: &TiKvConfig,
+        _: &Arc<Env>,
+        _: &Option<Arc<DataKeyManager>>,
+        _: &Option<Cache>,
+    ) -> Self;
     fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         None
     }
@@ -1289,32 +1294,34 @@ trait ConfiguredRaftEngine: RaftEngine {
 }
 
 impl ConfiguredRaftEngine for RocksEngine {
-    fn build(server: &TiKvServer<Self>, env: &Arc<Env>, block_cache: &Option<Cache>) -> Self {
+    fn build(
+        config: &TiKvConfig,
+        env: &Arc<Env>,
+        key_manager: &Option<Arc<DataKeyManager>>,
+        block_cache: &Option<Cache>,
+    ) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
-            &server.config.storage.data_dir,
-            &server.config.raft_engine.config().dir,
-            &server.config.raft_store.raftdb_path,
+            &config.storage.data_dir,
+            &config.raft_engine.config().dir,
+            &config.raft_store.raftdb_path,
         );
         let should_dump = raft_data_state_machine.before_open_target();
 
-        let raft_db_path = &server.config.raft_store.raftdb_path;
-        let config_raftdb = &server.config.raftdb;
+        let raft_db_path = &config.raft_store.raftdb_path;
+        let config_raftdb = &config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
         let raftdb =
             engine_rocks::raw_util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
-                .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
+                .expect("failed to open raftdb");
         let mut raftdb = RocksEngine::from_db(Arc::new(raftdb));
         raftdb.set_shared_block_cache(block_cache.is_some());
 
         if should_dump {
-            let raft_engine = RaftLogEngine::new(
-                server.config.raft_engine.config(),
-                server.encryption_key_manager.clone(),
-                None,
-            )
-            .expect("open raft engine");
+            let raft_engine =
+                RaftLogEngine::new(config.raft_engine.config(), key_manager.clone(), None)
+                    .expect("failed to open raft engine for migration");
             dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
             raft_data_state_machine.after_dump_data();
         }
@@ -1334,33 +1341,35 @@ impl ConfiguredRaftEngine for RocksEngine {
 }
 
 impl ConfiguredRaftEngine for RaftLogEngine {
-    fn build(server: &TiKvServer<Self>, env: &Arc<Env>, block_cache: &Option<Cache>) -> Self {
+    fn build(
+        config: &TiKvConfig,
+        env: &Arc<Env>,
+        key_manager: &Option<Arc<DataKeyManager>>,
+        block_cache: &Option<Cache>,
+    ) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
-            &server.config.storage.data_dir,
-            &server.config.raft_store.raftdb_path,
-            &server.config.raft_engine.config().dir,
+            &config.storage.data_dir,
+            &config.raft_store.raftdb_path,
+            &config.raft_engine.config().dir,
         );
         let should_dump = raft_data_state_machine.before_open_target();
 
-        let raft_config = server.config.raft_engine.config();
-        let raft_engine = RaftLogEngine::new(
-            raft_config,
-            server.encryption_key_manager.clone(),
-            get_io_rate_limiter(),
-        )
-        .unwrap_or_else(|e| fatal!("Failed to create raft engine: {}", e));
+        let raft_config = config.raft_engine.config();
+        let raft_engine =
+            RaftLogEngine::new(raft_config, key_manager.clone(), get_io_rate_limiter())
+                .expect("failed to open raft engine");
 
         if should_dump {
-            let config_raftdb = &server.config.raftdb;
+            let config_raftdb = &config.raftdb;
             let mut raft_db_opts = config_raftdb.build_opt();
             raft_db_opts.set_env(env.clone());
             let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
             let raftdb = engine_rocks::raw_util::new_engine_opt(
-                &server.config.raft_store.raftdb_path,
+                &config.raft_store.raftdb_path,
                 raft_db_opts,
                 raft_cf_opts,
             )
-            .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
+            .expect("failed to open raftdb for migration");
             let raftdb = RocksEngine::from_db(Arc::new(raftdb));
             dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
             raft_data_state_machine.after_dump_data();
@@ -1381,7 +1390,12 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             .unwrap();
 
         // Create raft engine
-        let raft_engine = CER::build(self, &env, &block_cache);
+        let raft_engine = CER::build(
+            &self.config,
+            &env,
+            &self.encryption_key_manager,
+            &block_cache,
+        );
 
         // Create kv engine.
         let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)

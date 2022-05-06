@@ -125,7 +125,9 @@ pub fn clear_prepare_bootstrap_key(
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{Engines, Peekable, CF_DEFAULT};
+    use engine_traits::{
+        Engines, Peekable, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, CF_DEFAULT,
+    };
     use tempfile::Builder;
 
     use super::*;
@@ -141,9 +143,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let raft_engine =
-            engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, CF_DEFAULT, None)
-                .unwrap();
+        let raft_engine = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None).unwrap();
         let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
         let region = initial_region(1, 1, 1);
 
@@ -169,12 +169,7 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        assert!(
-            raft_engine
-                .get_value(&keys::raft_state_key(1))
-                .unwrap()
-                .is_some()
-        );
+        assert!(raft_engine.get_raft_state(1).unwrap().is_some());
 
         assert!(clear_prepare_bootstrap_key(&engines).is_ok());
         assert!(clear_prepare_bootstrap_cluster(&engines, 1).is_ok());
@@ -187,14 +182,6 @@ mod tests {
             )
             .unwrap()
         );
-        assert!(
-            is_range_empty(
-                &raft_engine,
-                CF_DEFAULT,
-                &keys::region_raft_prefix(1),
-                &keys::region_raft_prefix(2)
-            )
-            .unwrap()
-        );
+        assert!(RaftLogBatch::is_empty(&raft_engine.dump_all_data(1)));
     }
 }

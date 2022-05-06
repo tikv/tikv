@@ -587,7 +587,7 @@ impl Snapshot {
     }
 
     fn get_display_path(dir_path: impl AsRef<Path>, prefix: &str) -> String {
-        let cf_names = "(".to_owned() + &SNAPSHOT_CFS.join("|") + ")";
+        let cf_names = "(".to_owned() + SNAPSHOT_CFS.join("|").as_str() + ")";
         format!(
             "{}/{}_{}{}",
             dir_path.as_ref().display(),
@@ -1551,18 +1551,17 @@ pub mod tests {
         },
     };
 
-    use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
+    use encryption::{DataKeyManager, EncryptionConfig, FileConfig, MasterKeyConfig};
     use encryption_export::data_key_manager_from_config;
     use engine_test::{
-        ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt},
+        ctor::{CFOptions, ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftDBOptions},
         kv::KvTestEngine,
         raft::RaftTestEngine,
     };
     use engine_traits::{
-        Engines, ExternalSstFileInfo, KvEngine, Snapshot as EngineSnapshot, SstExt, SstWriter,
-        SstWriterBuilder, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+        Engines, ExternalSstFileInfo, KvEngine, RaftEngine, Snapshot as EngineSnapshot, SstExt,
+        SstWriter, SstWriterBuilder, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
     };
-    use file_system::{self, File, OpenOptions};
     use kvproto::{
         encryptionpb::EncryptionMethod,
         metapb::{Peer, Region},
@@ -1573,10 +1572,10 @@ pub mod tests {
     use tempfile::{Builder, TempDir};
     use tikv_util::time::Limiter;
 
-    use super::{
-        ApplyOptions, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, SnapManagerCore,
-        Snapshot, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
-    };
+    use super::*;
+    // ApplyOptions, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, SnapManagerCore,
+    // Snapshot, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
+    // };
     use crate::{
         coprocessor::CoprocessorHost,
         store::{peer_storage::JOB_STATUS_RUNNING, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER},
@@ -1598,10 +1597,10 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<E>
     where
-        E: KvEngine + EngineConstructorExt,
+        E: KvEngine + KvEngineConstructorExt,
     {
         let p = path.to_str().unwrap();
-        let db = E::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
+        let db = E::new_kv_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         Ok(db)
     }
 
@@ -1611,10 +1610,10 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<E>
     where
-        E: KvEngine + EngineConstructorExt,
+        E: KvEngine + KvEngineConstructorExt,
     {
         let p = path.to_str().unwrap();
-        let db = E::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
+        let db = E::new_kv_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
         for (i, cf) in db.cf_names().into_iter().enumerate() {
@@ -1628,19 +1627,15 @@ pub mod tests {
 
     pub fn get_test_db_for_regions(
         path: &TempDir,
-        raft_db_opt: Option<DBOptions>,
-        raft_cf_opt: Option<CFOptions<'_>>,
+        raft_db_opt: Option<RaftDBOptions>,
         kv_db_opt: Option<DBOptions>,
         kv_cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
     ) -> Result<Engines<KvTestEngine, RaftTestEngine>> {
         let p = path.path();
         let kv: KvTestEngine = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
-        let raft: RaftTestEngine = open_test_db(
-            p.join("raft").as_path(),
-            raft_db_opt,
-            raft_cf_opt.map(|opt| vec![opt]),
-        )?;
+        let raft: RaftTestEngine =
+            engine_test::raft::new_engine(p.join("raft").to_str().unwrap(), raft_db_opt)?;
         for &region_id in regions {
             // Put apply state into kv engine.
             let mut apply_state = RaftApplyState::default();
@@ -1650,7 +1645,7 @@ pub mod tests {
             apply_entry.set_term(0);
             apply_state.mut_truncated_state().set_index(10);
             kv.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
-            raft.put_msg(&keys::raft_log_key(region_id, 10), &apply_entry)?;
+            raft.append(region_id, vec![apply_entry])?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
@@ -1723,13 +1718,7 @@ pub mod tests {
         }
     }
 
-    pub fn gen_db_options_with_encryption() -> DBOptions {
-        let mut db_opt = DBOptions::new();
-        db_opt.with_default_ctr_encrypted_env(b"abcd".to_vec());
-        db_opt
-    }
-
-    fn create_enc_dir(prefix: &str) -> (TempDir, String, String) {
+    fn create_encryption_key_manager(prefix: &str) -> (TempDir, Arc<DataKeyManager>) {
         let dir = Builder::new().prefix(prefix).tempdir().unwrap();
         let master_path = dir.path().join("master_key");
 
@@ -1747,7 +1736,25 @@ pub mod tests {
 
         let key_path = master_path.to_str().unwrap().to_owned();
         let dict_path = dict_path.to_str().unwrap().to_owned();
-        (dir, key_path, dict_path)
+
+        let enc_cfg = EncryptionConfig {
+            data_encryption_method: EncryptionMethod::Aes128Ctr,
+            master_key: MasterKeyConfig::File {
+                config: FileConfig { path: key_path },
+            },
+            ..Default::default()
+        };
+        let key_manager = data_key_manager_from_config(&enc_cfg, &dict_path)
+            .unwrap()
+            .map(|x| Arc::new(x));
+        (dir, key_manager.unwrap())
+    }
+
+    pub fn gen_db_options_with_encryption(prefix: &str) -> (TempDir, DBOptions) {
+        let (_enc_dir, key_manager) = create_encryption_key_manager(prefix);
+        let mut db_opts = DBOptions::default();
+        db_opts.set_key_manager(Some(key_manager));
+        (_enc_dir, db_opts)
     }
 
     #[test]
@@ -1805,24 +1812,22 @@ pub mod tests {
 
     #[test]
     fn test_empty_snap_file() {
-        test_snap_file(open_test_empty_db, None);
-        test_snap_file(open_test_empty_db, Some(gen_db_options_with_encryption()));
+        test_snap_file(open_test_empty_db);
     }
 
     #[test]
     fn test_non_empty_snap_file() {
-        test_snap_file(open_test_db, None);
-        test_snap_file(open_test_db, Some(gen_db_options_with_encryption()));
+        test_snap_file(open_test_db);
     }
 
-    fn test_snap_file(get_db: DBBuilder<KvTestEngine>, db_opt: Option<DBOptions>) {
+    fn test_snap_file(get_db: DBBuilder<KvTestEngine>) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let src_db_dir = Builder::new()
             .prefix("test-snap-file-db-src")
             .tempdir()
             .unwrap();
-        let db = get_db(src_db_dir.path(), db_opt.clone(), None).unwrap();
+        let db = get_db(src_db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
 
         let src_dir = Builder::new()
@@ -1901,7 +1906,7 @@ pub mod tests {
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-        let dst_db = engine_test::kv::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap();
+        let dst_db = engine_test::kv::new_engine(dst_db_path, None, &dst_cfs, None).unwrap();
         let options = ApplyOptions {
             db: dst_db.clone(),
             region,
@@ -1909,8 +1914,8 @@ pub mod tests {
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
         };
-        // Verify thte snapshot applying is ok.
-        assert!(s4.apply(options).is_ok());
+        // Verify the snapshot applying is ok.
+        s4.apply(options).unwrap();
 
         // Ensure `delete()` works to delete the dest snapshot.
         s4.delete();
@@ -2446,8 +2451,7 @@ pub mod tests {
             })
             .collect();
         let engine =
-            get_test_db_for_regions(&kv_path, None, None, None, Some(kv_cf_opts), &regions)
-                .unwrap();
+            get_test_db_for_regions(&kv_path, None, None, Some(kv_cf_opts), &regions).unwrap();
 
         let snapfiles_path = Builder::new()
             .prefix("test-snapshot-max-total-size-snapshots")
@@ -2541,18 +2545,8 @@ pub mod tests {
 
     #[test]
     fn test_build_with_encryption() {
-        let (_enc_dir, key_path, dict_path) = create_enc_dir("test_build_with_encryption_enc");
-        let enc_cfg = EncryptionConfig {
-            data_encryption_method: EncryptionMethod::Aes128Ctr,
-            master_key: MasterKeyConfig::File {
-                config: FileConfig { path: key_path },
-            },
-            ..Default::default()
-        };
-        let enc_mgr = data_key_manager_from_config(&enc_cfg, &dict_path)
-            .unwrap()
-            .map(|x| Arc::new(x));
-        assert!(enc_mgr.is_some());
+        let (_enc_dir, key_manager) =
+            create_encryption_key_manager("test_build_with_encryption_enc");
 
         let snap_dir = Builder::new()
             .prefix("test_build_with_encryption_snap")
@@ -2560,7 +2554,7 @@ pub mod tests {
             .unwrap();
         let _mgr_path = snap_dir.path().to_str().unwrap();
         let snap_mgr = SnapManagerBuilder::default()
-            .encryption_key_manager(enc_mgr)
+            .encryption_key_manager(Some(key_manager))
             .build(snap_dir.path().to_str().unwrap());
         snap_mgr.init().unwrap();
 
