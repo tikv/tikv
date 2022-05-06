@@ -1806,8 +1806,10 @@ mod tests {
         let key_a = b"raaaaaaaaaaa";
         let key_b = b"rbbbbbbbbbbb";
 
-        // (key,expir_ts,is_delete,expect_exist)
+        // All data in engine. (key,expir_ts,is_delete,expect_exist)
         let test_raws = vec![
+            (key_a, 130, true, true), // ts(130) > safepoint
+            (key_a, 120, true, true), // ts(120) = safepoint
             (key_a, 100, true, true),
             (key_a, 50, false, false),
             (key_a, 10, false, false),
@@ -1841,6 +1843,7 @@ mod tests {
 
         prefixed_engine.write(&ctx, batch).unwrap();
 
+        // Simulate the keys passed in from the compaction filter
         let test_keys = vec![key_a, key_b];
 
         let to_gc_keys: Vec<Key> = test_keys

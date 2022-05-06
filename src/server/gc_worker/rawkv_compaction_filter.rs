@@ -59,7 +59,6 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             debug!("skip gc in compaction filter because of no safe point");
             return std::ptr::null_mut();
         }
-
         let filter = RawCompactionFilter::new(
             db,
             safe_point,
@@ -299,7 +298,7 @@ pub mod tests {
     use std::time::Duration;
 
     use api_version::RawValue;
-    use engine_traits::{Peekable, CF_DEFAULT};
+    use engine_traits::{DeleteStrategy, Peekable, Range, CF_DEFAULT};
     use kvproto::kvrpcpb::{ApiVersion, Context};
     use tikv_kv::{Engine, Modify, WriteData};
     use txn_types::TimeStamp;
@@ -412,15 +411,19 @@ pub mod tests {
             assert!(!expect_tasks, "no GC task is expected");
         };
         let user_key_del = b"r\0aaaaaaaaaaa";
+        let user_key_not_del = b"r\0zzzzzzzzzzz";
 
         // If it's deleted, it will call async scheduler GcTask.
-        let test_del_raws = vec![
+        let test_raws = vec![
+            (user_key_not_del, 630, false),
+            (user_key_not_del, 620, false),
+            (user_key_not_del, 610, false),
             (user_key_del, 9, true),
             (user_key_del, 5, false),
             (user_key_del, 1, false),
         ];
 
-        let modifies = test_del_raws
+        let modifies = test_raws
             .into_iter()
             .map(|(key, ts, is_delete)| {
                 (
@@ -447,6 +450,23 @@ pub mod tests {
         let check_key_del = make_key(user_key_del, 1);
         let (prefix_del, _commit_ts) = ApiV2::split_ts(check_key_del.as_slice()).unwrap();
         gc_and_check(true, prefix_del);
+
+        // Clean the engine, prepare for later tests.
+        let range_start_key =
+            keys::data_key(ApiV2::encode_raw_key(user_key_del, None).as_encoded());
+        let range_end_key = keys::data_key(
+            ApiV2::encode_raw_key(user_key_not_del, Some(TimeStamp::new(1))).as_encoded(),
+        );
+        raw_engine
+            .delete_ranges_cf(
+                CF_DEFAULT,
+                DeleteStrategy::DeleteByKey,
+                &[Range::new(
+                    range_start_key.as_slice(),
+                    range_end_key.as_slice(),
+                )],
+            )
+            .unwrap();
 
         let user_key_expire = b"r\0bbbbbbbbbbb";
 
