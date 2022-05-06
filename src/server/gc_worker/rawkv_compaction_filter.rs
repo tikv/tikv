@@ -1,27 +1,36 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::gc_worker::compaction_filter::{
-    CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
-    GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
+use std::{
+    ffi::CString,
+    mem,
+    sync::{atomic::Ordering, Arc},
 };
-use crate::server::gc_worker::GcTask;
-use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
+
 use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_rocks::raw::{
-    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
+use engine_rocks::{
+    raw::{
+        new_compaction_filter_raw, CompactionFilter, CompactionFilterContext,
+        CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
+        DBCompactionFilter,
+    },
+    RocksEngine,
 };
-use engine_rocks::RocksEngine;
-use engine_traits::raw_ttl::ttl_current_ts;
-use engine_traits::MiscExt;
+use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
 use prometheus::local::LocalHistogram;
 use raftstore::coprocessor::RegionInfoProvider;
-use std::ffi::CString;
-use std::mem;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::Key;
+
+use crate::{
+    server::gc_worker::{
+        compaction_filter::{
+            CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
+            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
+        },
+        GcTask,
+    },
+    storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
+};
 
 pub struct RawCompactionFilterFactory;
 
@@ -287,18 +296,18 @@ impl RawCompactionFilter {
 #[cfg(test)]
 pub mod tests {
 
-    use super::*;
-    use api_version::RawValue;
-    use kvproto::kvrpcpb::ApiVersion;
-    use kvproto::kvrpcpb::Context;
-
-    use crate::config::DbConfig;
-    use crate::server::gc_worker::TestGCRunner;
-    use crate::storage::kv::TestEngineBuilder;
-    use engine_traits::{Peekable, CF_DEFAULT};
     use std::time::Duration;
+
+    use api_version::RawValue;
+    use engine_traits::{Peekable, CF_DEFAULT};
+    use kvproto::kvrpcpb::{ApiVersion, Context};
     use tikv_kv::{Engine, Modify, WriteData};
     use txn_types::TimeStamp;
+
+    use super::*;
+    use crate::{
+        config::DbConfig, server::gc_worker::TestGCRunner, storage::kv::TestEngineBuilder,
+    };
 
     pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
         let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));

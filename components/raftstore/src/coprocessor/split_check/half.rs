@@ -1,15 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, Range};
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
+use kvproto::{metapb::Region, pdpb::CheckPolicy};
+use tikv_util::{box_try, config::ReadableSize};
 
-use tikv_util::box_try;
-use tikv_util::config::ReadableSize;
-
-use super::super::error::Result;
-use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
-use super::Host;
+use super::{
+    super::{
+        error::Result, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker,
+    },
+    Host,
+};
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
@@ -123,26 +123,26 @@ pub fn get_region_approximate_middle(
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
-    use std::sync::mpsc;
+    use std::{iter, sync::mpsc};
 
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
-    use kvproto::metapb::Peer;
-    use kvproto::metapb::Region;
-    use kvproto::pdpb::CheckPolicy;
+    use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, LARGE_CFS};
+    use kvproto::{
+        metapb::{Peer, Region},
+        pdpb::CheckPolicy,
+    };
     use tempfile::Builder;
-
-    use crate::store::{BucketRange, SplitCheckRunner, SplitCheckTask};
-    use engine_traits::{MiscExt, SyncMutable};
-    use tikv_util::config::ReadableSize;
-    use tikv_util::escape;
-    use tikv_util::worker::Runnable;
+    use tikv_util::{config::ReadableSize, escape, worker::Runnable};
     use txn_types::Key;
 
-    use super::super::size::tests::{must_generate_buckets, must_split_at};
-    use super::*;
-    use crate::coprocessor::{Config, CoprocessorHost};
+    use super::{
+        super::size::tests::{must_generate_buckets, must_split_at},
+        *,
+    };
+    use crate::{
+        coprocessor::{Config, CoprocessorHost},
+        store::{BucketRange, SplitCheckRunner, SplitCheckTask},
+    };
 
     #[test]
     fn test_split_check() {

@@ -29,8 +29,11 @@ use api_version::{dispatch_api_version, KvFormat};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::raw::{Cache, Env};
-use engine_rocks::{from_rocks_compression_type, FlowInfo, RocksEngine};
+use engine_rocks::{
+    from_rocks_compression_type,
+    raw::{Cache, Env},
+    FlowInfo, RocksEngine,
+};
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
     RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -42,6 +45,7 @@ use file_system::{
 };
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
+use grpcio_health::HealthService;
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -71,13 +75,12 @@ use tikv::{
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
-    server::raftkv::ReplicaReadLockChecker,
     server::{
-        config::Config as ServerConfig,
-        config::ServerConfigManager,
+        config::{Config as ServerConfig, ServerConfigManager},
         create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
+        raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
@@ -102,8 +105,7 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
-use crate::raft_engine_switch::*;
-use crate::{memory::*, setup::*, signal_handler};
+use crate::{memory::*, raft_engine_switch::*, setup::*, signal_handler};
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
@@ -771,6 +773,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .validate()
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        let health_service = HealthService::default();
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config.value().clone(),
@@ -779,6 +782,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.pd_client.clone(),
             self.state.clone(),
             self.background_worker.clone(),
+            Some(health_service.clone()),
         );
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
@@ -794,7 +798,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 &server_config.value(),
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
-                engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
                 resource_tag_factory,
                 Arc::clone(&self.quota_limiter),
             ),
@@ -807,6 +810,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
+            health_service,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(

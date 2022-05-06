@@ -15,12 +15,12 @@ test-engines-panic = [
 
 [dependencies]
 api_version = { path = "../api_version" }
+collections = { path = "../collections" }
 futures = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-raftstore = { path = "../raftstore", default-features = false }
 pd_client = { path = "../pd_client", default-features = false }
+raftstore = { path = "../raftstore", default-features = false }
 test_raftstore = { path = "../test_raftstore", default-features = false }
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
-collections = { path = "../collections" }
 txn_types = { path = "../txn_types", default-features = false }

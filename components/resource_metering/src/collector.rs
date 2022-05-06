@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::RawRecords;
-
 use std::sync::Arc;
+
+use crate::RawRecords;
 
 /// `Collector` is used to connect [Recorder] and [Reporter].
 ///

@@ -2,9 +2,10 @@
 
 use std::io::Write;
 
-use crate::Result;
 use byteorder::{BigEndian, ByteOrder};
 use tikv_util::box_err;
+
+use crate::Result;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Version {

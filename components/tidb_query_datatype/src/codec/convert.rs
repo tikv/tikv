@@ -1,21 +1,23 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
-use std::fmt::Display;
+use std::{borrow::Cow, fmt::Display};
 
-// use crate::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
-use crate::{Collation, FieldTypeAccessor};
-use crate::{FieldTypeTp, UNSPECIFIED_LENGTH};
 use tipb::FieldType;
 
-use super::mysql::{RoundMode, DEFAULT_FSP};
-use super::{Error, Result};
-use crate::codec::data_type::*;
-use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
-use crate::codec::mysql::decimal::max_or_min_dec;
-use crate::codec::mysql::{charset, Res};
-use crate::expr::EvalContext;
-use crate::expr::Flag;
+use super::{
+    mysql::{RoundMode, DEFAULT_FSP},
+    Error, Result,
+};
+// use crate::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
+use crate::{
+    codec::{
+        data_type::*,
+        error::ERR_DATA_OUT_OF_RANGE,
+        mysql::{charset, decimal::max_or_min_dec, Res},
+    },
+    expr::{EvalContext, Flag},
+    Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
+};
 
 /// A trait for converting a value to an `Int`.
 pub trait ToInt {
@@ -1101,17 +1103,20 @@ fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Cow<'_,
 mod tests {
     #![allow(clippy::float_cmp)]
 
-    use std::fmt::Debug;
-    use std::sync::Arc;
-
-    use crate::codec::error::{
-        ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
-    };
-    use crate::codec::mysql::{Res, UNSPECIFIED_FSP};
-    use crate::expr::{EvalConfig, EvalContext, Flag};
-    use crate::{Collation, FieldTypeFlag};
+    use std::{fmt::Debug, sync::Arc};
 
     use super::*;
+    use crate::{
+        codec::{
+            error::{
+                ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE,
+                WARN_DATA_TRUNCATED,
+            },
+            mysql::{Res, UNSPECIFIED_FSP},
+        },
+        expr::{EvalConfig, EvalContext, Flag},
+        Collation, FieldTypeFlag,
+    };
 
     #[test]
     fn test_int_to_int() {

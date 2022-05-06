@@ -2,16 +2,11 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::executor::block_on;
-use futures::stream::StreamExt;
-use protobuf::Message;
-
+use futures::{executor::block_on, stream::StreamExt};
 use kvproto::coprocessor::{Request, Response};
-use tipb::ColumnInfo;
-use tipb::{SelectResponse, StreamResponse};
-
-use tikv::coprocessor::Endpoint;
-use tikv::storage::Engine;
+use protobuf::Message;
+use tikv::{coprocessor::Endpoint, storage::Engine};
+use tipb::{ColumnInfo, SelectResponse, StreamResponse};
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 

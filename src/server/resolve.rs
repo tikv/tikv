@@ -1,20 +1,22 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Display, Formatter};
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::{
+    fmt::{self, Display, Formatter},
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+};
 
 use collections::HashMap;
 use engine_traits::KvEngine;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::GlobalReplicationState;
-use tikv_util::time::Instant;
-use tikv_util::worker::{Runnable, Scheduler, Worker};
+use raftstore::{router::RaftStoreRouter, store::GlobalReplicationState};
+use tikv_util::{
+    time::Instant,
+    worker::{Runnable, Scheduler, Worker},
+};
 
-use super::metrics::*;
-use super::Result;
+use super::{metrics::*, Result};
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
@@ -188,20 +190,18 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::marker::PhantomData;
-    use std::net::SocketAddr;
-    use std::ops::Sub;
-    use std::str::FromStr;
-    use std::sync::Arc;
-    use std::thread;
-    use std::time::Duration;
+    use std::{
+        marker::PhantomData, net::SocketAddr, ops::Sub, str::FromStr, sync::Arc, thread,
+        time::Duration,
+    };
 
     use collections::HashMap;
     use engine_test::kv::KvTestEngine;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use raftstore::router::RaftStoreBlackHole;
+
+    use super::*;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

@@ -6,27 +6,27 @@ publish = false
 description = "A vector query engine to run TiDB pushed down executors"
 
 [dependencies]
-protobuf = { version = "2.8", features = ["bytes"] }
 codec = { path = "../codec", default-features = false }
+collections = { path = "../collections" }
 fail = "0.5"
+futures = { version = "0.3", features = ["compat"] }
+itertools = "0.10"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+log_wrappers = { path = "../log_wrappers" }
 match_template = { path = "../match_template" }
+protobuf = { version = "2.8", features = ["bytes"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 smallvec = "1.4"
-tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
-tidb_query_common = { path = "../tidb_query_common", default-features = false }
-tidb_query_expr = { path = "../tidb_query_expr", default-features = false }
 tidb_query_aggr = { path = "../tidb_query_aggr", default-features = false }
+tidb_query_common = { path = "../tidb_query_common", default-features = false }
+tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
+tidb_query_expr = { path = "../tidb_query_expr", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
-log_wrappers = { path = "../log_wrappers" }
-collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-itertools = "0.10"
-futures = { version = "0.3", features = ["compat"] }
 
 [dev-dependencies]
 anyhow = "1.0"
-tipb_helper = { path = "../tipb_helper", default-features = false }
 tidb_query_codegen = { path = "../tidb_query_codegen", default-features = false }
+tipb_helper = { path = "../tipb_helper", default-features = false }

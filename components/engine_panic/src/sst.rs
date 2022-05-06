@@ -1,11 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
+use std::path::PathBuf;
+
 use engine_traits::{
     CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SeekKey,
     SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder,
 };
-use std::path::PathBuf;
+
+use crate::engine::PanicEngine;
 
 impl SstExt for PanicEngine {
     type SstReader = PanicSstReader;

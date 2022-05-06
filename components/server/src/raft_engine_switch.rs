@@ -1,5 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+
 use crossbeam::channel::{unbounded, Receiver};
 use engine_rocks::{self, RocksEngine};
 use engine_traits::{Iterable, Iterator, RaftEngine, RaftEngineReadOnly, RaftLogBatch, SeekKey};
@@ -7,8 +12,6 @@ use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft_log_engine::RaftLogEngine;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 const BATCH_THRESHOLD: usize = 32 * 1024;
 
@@ -210,9 +213,10 @@ fn run_dump_raft_engine_worker(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use engine_rocks::raw::DBOptions;
     use tikv::config::TiKvConfig;
+
+    use super::*;
 
     fn do_test_switch(custom_raft_db_wal: bool) {
         let data_path = tempfile::Builder::new().tempdir().unwrap().into_path();

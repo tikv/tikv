@@ -1,28 +1,27 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
-use std::hash::Hash;
-use std::sync::Arc;
+use std::{convert::TryFrom, hash::Hash, sync::Arc};
 
 use collections::HashMap;
-use tidb_query_datatype::Collation;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::box_try;
-use tipb::Aggregation;
-use tipb::{Expr, FieldType};
-
-use crate::interface::*;
-use crate::util::aggr_executor::*;
-use crate::util::hash_aggr_helper::HashAggregationHelper;
 use tidb_query_aggr::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::collation::SortKey;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::match_template_collator;
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        collation::SortKey,
+        data_type::*,
+    },
+    expr::{EvalConfig, EvalContext},
+    match_template_collator, Collation, EvalType, FieldTypeAccessor,
+};
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use tikv_util::box_try;
+use tipb::{Aggregation, Expr, FieldType};
+
+use crate::{
+    interface::*,
+    util::{aggr_executor::*, hash_aggr_helper::HashAggregationHelper},
+};
 
 macro_rules! match_template_hashable {
     ($t:tt, $($tail:tt)*) => {{
@@ -453,19 +452,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tidb_query_datatype::FieldTypeTp;
-    use tipb::ScalarFuncSig;
-
-    use crate::util::aggr_executor::tests::*;
-    use crate::util::mock_executor::MockExecutor;
-    use crate::BatchSlowHashAggregationExecutor;
-    use tidb_query_datatype::expr::EvalWarnings;
-    use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
-    use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
-    use tipb::ExprType;
+    use tidb_query_datatype::{expr::EvalWarnings, FieldTypeTp};
+    use tidb_query_expr::{
+        impl_arithmetic::{arithmetic_fn_meta, RealPlus},
+        RpnExpression, RpnExpressionBuilder,
+    };
+    use tipb::{ExprType, ScalarFuncSig};
     use tipb_helper::ExprDefBuilder;
+
+    use super::*;
+    use crate::{
+        util::{aggr_executor::tests::*, mock_executor::MockExecutor},
+        BatchSlowHashAggregationExecutor,
+    };
 
     // Test cases also cover BatchSlowHashAggregationExecutor.
 

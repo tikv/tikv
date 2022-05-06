@@ -1,26 +1,35 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    sync::{mpsc::channel, Arc},
+    thread,
+    time::Duration,
+};
+
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{
-    self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
+use kvproto::{
+    kvrpcpb::{self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest},
+    tikvpb::TikvClient,
 };
-use kvproto::tikvpb::TikvClient;
-use raftstore::store::util::new_peer;
-use raftstore::store::LocksStatus;
-use std::sync::Arc;
-use std::{sync::mpsc::channel, thread, time::Duration};
-use storage::mvcc::tests::must_get;
-use storage::mvcc::{self, tests::must_locked};
-use storage::txn::{self, commands};
+use raftstore::store::{util::new_peer, LocksStatus};
+use storage::{
+    mvcc::{
+        self,
+        tests::{must_get, must_locked},
+    },
+    txn::{self, commands},
+};
 use test_raftstore::new_server_cluster;
-use tikv::storage::kv::SnapshotExt;
-use tikv::storage::txn::tests::{
-    must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
-    must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
-};
 use tikv::storage::{
-    self, lock_manager::DummyLockManager, Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
+    self,
+    kv::SnapshotExt,
+    lock_manager::DummyLockManager,
+    txn::tests::{
+        must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
+        must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
+    },
+    Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};

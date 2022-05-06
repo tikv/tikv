@@ -1,10 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
-
-use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
-use engine_traits::{IterOptions, ReadOptions};
+use engine_traits::{CfName, IterOptions, ReadOptions, DATA_KEY_PREFIX_LEN};
 use txn_types::{Key, TimeStamp, Value};
+
+use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
 
 const VEC_SHRINK_THRESHOLD: usize = 512; // shrink vec when it's over 512.
 
@@ -241,17 +240,19 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::raw::encoded::RawEncodeSnapshot;
-    use crate::storage::TestEngineBuilder;
+    use std::{
+        fmt::Debug,
+        iter::Iterator as StdIterator,
+        sync::mpsc::{channel, Sender},
+    };
+
     use api_version::{ApiV2, KvFormat, RawValue};
-    use engine_traits::raw_ttl::ttl_to_expire_ts;
-    use engine_traits::CF_DEFAULT;
+    use engine_traits::{raw_ttl::ttl_to_expire_ts, CF_DEFAULT};
     use kvproto::kvrpcpb::Context;
-    use std::fmt::Debug;
-    use std::iter::Iterator as StdIterator;
-    use std::sync::mpsc::{channel, Sender};
     use tikv_kv::{Engine, Iterator as EngineIterator, Modify, WriteData};
+
+    use super::*;
+    use crate::storage::{raw::encoded::RawEncodeSnapshot, TestEngineBuilder};
 
     fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> tikv_kv::Callback<T> {
         Box::new(move |x: tikv_kv::Result<T>| {

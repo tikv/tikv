@@ -1,23 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::time::Duration;
-use std::{cmp, i32, isize};
-
-use super::Result;
-use grpcio::CompressionAlgorithms;
-use regex::Regex;
+use std::{cmp, i32, isize, sync::Arc, time::Duration};
 
 use collections::HashMap;
+use engine_traits::{perf_level_serde, PerfLevel};
+use grpcio::CompressionAlgorithms;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
-use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::sys::SysQuota;
-use tikv_util::worker::Scheduler;
-
-pub use crate::storage::config::Config as StorageConfig;
 pub use raftstore::store::Config as RaftStoreConfig;
+use regex::Regex;
+use tikv_util::{
+    config::{self, ReadableDuration, ReadableSize, VersionTrack},
+    sys::SysQuota,
+    worker::Scheduler,
+};
 
-use super::snap::Task as SnapTask;
+use super::{snap::Task as SnapTask, Result};
+pub use crate::storage::config::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
@@ -133,6 +131,9 @@ pub struct Config {
     pub end_point_request_max_handle_duration: ReadableDuration,
     #[online_config(skip)]
     pub end_point_max_concurrency: usize,
+    #[serde(with = "perf_level_serde")]
+    #[online_config(skip)]
+    pub end_point_perf_level: PerfLevel,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     #[online_config(skip)]
@@ -234,6 +235,7 @@ impl Default for Config {
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
+            end_point_perf_level: PerfLevel::Uninitialized,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
@@ -437,8 +439,9 @@ fn validate_label_value(s: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tikv_util::config::ReadableDuration;
+
+    use super::*;
 
     #[test]
     fn test_config_validate() {

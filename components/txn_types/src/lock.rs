@@ -1,13 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::timestamp::{TimeStamp, TsSet};
-use crate::types::{Key, Mutation, Value, SHORT_VALUE_PREFIX};
-use crate::{Error, ErrorInner, Result};
+use std::{borrow::Cow, mem::size_of};
+
 use byteorder::ReadBytesExt;
 use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op};
-use std::{borrow::Cow, mem::size_of};
-use tikv_util::codec::bytes::{self, BytesEncoder};
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN};
+use tikv_util::codec::{
+    bytes::{self, BytesEncoder},
+    number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
+};
+
+use crate::{
+    timestamp::{TimeStamp, TsSet},
+    types::{Key, Mutation, Value, SHORT_VALUE_PREFIX},
+    Error, ErrorInner, Result,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {

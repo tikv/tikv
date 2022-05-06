@@ -1,18 +1,27 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    borrow::ToOwned, cmp::Ordering, path::PathBuf, pin::Pin, str, string::ToString, sync::Arc,
+    time::Duration, u64,
+};
+
 use encryption_export::data_key_manager_from_config;
-use engine_rocks::raw_util::{db_exist, new_engine_opt};
-use engine_rocks::RocksEngine;
+use engine_rocks::{
+    raw_util::{db_exist, new_engine_opt},
+    RocksEngine,
+};
 use engine_traits::{
     Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::debugpb::{Db as DBType, *};
-use kvproto::kvrpcpb::MvccInfo;
-use kvproto::metapb::{Peer, Region};
-use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::PeerState;
+use kvproto::{
+    debugpb::{Db as DBType, *},
+    kvrpcpb::MvccInfo,
+    metapb::{Peer, Region},
+    raft_cmdpb::RaftCmdRequest,
+    raft_serverpb::PeerState,
+};
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
@@ -20,16 +29,10 @@ use raft_log_engine::RaftLogEngine;
 use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::SecurityManager;
 use serde_json::json;
-use std::borrow::ToOwned;
-use std::cmp::Ordering;
-use std::path::PathBuf;
-use std::pin::Pin;
-use std::string::ToString;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{str, u64};
-use tikv::config::{ConfigController, TiKvConfig};
-use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
+use tikv::{
+    config::{ConfigController, TiKvConfig},
+    server::debug::{BottommostLevelCompaction, Debugger, RegionInfo},
+};
 use tikv_util::escape;
 
 use crate::util::*;

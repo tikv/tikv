@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::mem;
+
 use kvproto::{
     encryptionpb::EncryptionMeta,
     kvrpcpb::LockInfo,
     metapb::{Peer, Region, RegionEpoch},
     raft_cmdpb::{self, RaftCmdRequest, ReadIndexRequest},
 };
-use std::mem;
 
 /// Transmute vec from one type to the other type.
 ///
