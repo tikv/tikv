@@ -180,13 +180,13 @@ impl RawCompactionFilter {
             return Ok(CompactionFilterDecision::Keep);
         }
 
-        let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
+        let (mvcc_key_prefix, commit_ts) = ApiV2::split_ts(key)?;
 
         if self.mvcc_key_prefix != mvcc_key_prefix {
             self.switch_key_metrics();
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
-            if commit_ts >= self.safe_point {
+            if commit_ts.into_inner() >= self.safe_point {
                 return Ok(CompactionFilterDecision::Keep);
             }
             let raw_value = ApiV2::decode_raw_value(value)?;
@@ -201,7 +201,7 @@ impl RawCompactionFilter {
             // 2. If it's the latest version, and it's deleted or expired, while we do async gctask to deleted or expired records, both put records and deleted/expired records are actually kept within the compaction filter.
             Ok(CompactionFilterDecision::Keep)
         } else {
-            if commit_ts >= self.safe_point {
+            if commit_ts.into_inner() >= self.safe_point {
                 return Ok(CompactionFilterDecision::Keep);
             }
 
@@ -281,16 +281,6 @@ impl RawCompactionFilter {
                 info!("RawKV Compaction filter reports"; "total" => versions, "filtered" => filtered);
             }
         }
-    }
-}
-
-pub fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
-    match Key::split_on_ts_for(key) {
-        Ok((key, ts)) => Ok((key, ts.into_inner())),
-        Err(_) => Err(format!(
-            "invalid default cf key: {}",
-            log_wrappers::Value(key)
-        )),
     }
 }
 
@@ -387,16 +377,6 @@ pub mod tests {
         assert_eq!(is_exist_90, false);
     }
 
-    fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
-        match Key::split_on_ts_for(key) {
-            Ok((key, ts)) => Ok((key, ts.into_inner())),
-            Err(_) => Err(format!(
-                "invalid write cf key: {}",
-                log_wrappers::Value(key)
-            )),
-        }
-    }
-
     #[test]
     fn test_raw_call_gctask() {
         let engine = TestEngineBuilder::new()
@@ -459,7 +439,7 @@ pub mod tests {
         engine.write(&ctx, batch).unwrap();
 
         let check_key_del = make_key(user_key_del, 1);
-        let (prefix_del, _commit_ts) = split_ts(check_key_del.as_slice()).unwrap();
+        let (prefix_del, _commit_ts) = ApiV2::split_ts(check_key_del.as_slice()).unwrap();
         gc_and_check(true, prefix_del);
 
         let user_key_expire = b"r\0bbbbbbbbbbb";
@@ -491,7 +471,7 @@ pub mod tests {
         engine.write(&ctx, batch).unwrap();
 
         let check_key_expire = make_key(user_key_expire, 1);
-        let (prefix_expired, _commit_ts) = split_ts(check_key_expire.as_slice()).unwrap();
+        let (prefix_expired, _commit_ts) = ApiV2::split_ts(check_key_expire.as_slice()).unwrap();
         gc_and_check(true, prefix_expired);
     }
 }

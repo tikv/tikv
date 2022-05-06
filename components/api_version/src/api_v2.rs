@@ -218,6 +218,10 @@ impl ApiV2 {
         MemComparableByteCodec::encoded_len(src_len) + number::U64_SIZE
     }
 
+    pub fn split_ts(key: &[u8]) -> Result<(&[u8], TimeStamp)> {
+        Ok(Key::split_on_ts_for(key)?)
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
