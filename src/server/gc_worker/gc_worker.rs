@@ -477,20 +477,20 @@ where
             .engine
             .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
 
-        let mut raw_modifys = MvccRaw::new();
+        let mut raw_modifies = MvccRaw::new();
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
-            if let Err(e) = self.raw_gc_key(safe_point, key, &mut raw_modifys, &mut snapshot) {
+            if let Err(e) = self.raw_gc_key(safe_point, key, &mut raw_modifies, &mut snapshot) {
                 GC_KEY_FAILURES.inc();
                 error!(?e; "Raw GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
             }
             // Flush writeBatch to engine.
-            Self::flush_raw_gc(raw_modifys, &self.limiter, &self.engine)?;
-            // After flush, reset raw_modifys.
-            raw_modifys = MvccRaw::new();
+            Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+            // After flush, reset raw_modifies.
+            raw_modifies = MvccRaw::new();
             next_gc_key = keys.next();
         }
 
@@ -512,17 +512,27 @@ where
 
         cursor.seek(&start_key, &mut statistics)?;
 
+        let mut is_latest_version = true;
+
         while cursor.valid()? {
             let engine_slice = cursor.key(&mut statistics);
             if !Key::is_user_key_eq(engine_slice, key.clone().as_encoded()) {
                 break;
             }
 
-            let engine_key = Key::from_encoded_slice(engine_slice);
-            let write = Modify::Delete(CF_DEFAULT, engine_key);
+            // Skip the latest version before the safe point
+            if is_latest_version {
+                is_latest_version = false;
+                cursor.next(&mut statistics);
+                continue;
+            }
+
             if raw_modifys.write_size >= MAX_RAW_WRITE_SIZE {
                 return Ok(());
             }
+
+            let engine_key = Key::from_encoded_slice(engine_slice);
+            let write = Modify::Delete(CF_DEFAULT, engine_key);
 
             raw_modifys.write_size += write.size();
             raw_modifys.modifies.push(write);
@@ -1781,6 +1791,7 @@ mod tests {
         ];
 
         let modifies = test_raws
+            .clone()
             .into_iter()
             .map(|(key, ts, is_delete)| {
                 (
@@ -1810,40 +1821,29 @@ mod tests {
             .map(|key| ApiV2::encode_raw_key(key, None))
             .collect();
 
-        // Don't delete the raw if the raw's ts == safepoint
-        runner
-            .raw_gc_keys(
-                to_gc_keys.clone(),
-                TimeStamp::new(100),
-                Some((1, ri_provider.clone())),
-            )
-            .unwrap();
-
-        let engine_key_a = ApiV2::encode_raw_key(key_a, Some(100.into()));
-        let engine_key_b = ApiV2::encode_raw_key(key_b, Some(100.into()));
-        let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
-        let check_key_a = snapshot.get(&Key::from_encoded(engine_key_a.clone().into_encoded()));
-        let check_key_b = snapshot.get(&Key::from_encoded(engine_key_b.clone().into_encoded()));
-
-        assert_eq!(6, runner.stats.data.next);
-        assert_eq!(2, runner.stats.data.seek);
-        // If raw.ts == safepoint , it will not be delete. We just delete the raw.ts < safepoint
-        assert_eq!(check_key_a.unwrap().is_none(), false);
-        assert_eq!(check_key_b.unwrap().is_none(), true);
-
-        // Delete the raw, if raw.ts < safepoint
         runner
             .raw_gc_keys(to_gc_keys, TimeStamp::new(120), Some((1, ri_provider)))
             .unwrap();
-        let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
-        let check_key_a = snapshot.get(&Key::from_encoded(engine_key_a.into_encoded()));
-        let check_key_b = snapshot.get(&Key::from_encoded(engine_key_b.into_encoded()));
 
         assert_eq!(7, runner.stats.data.next);
-        assert_eq!(4, runner.stats.data.seek);
+        assert_eq!(2, runner.stats.data.seek);
 
-        assert_eq!(check_key_a.unwrap().is_none(), true);
-        assert_eq!(check_key_b.unwrap().is_none(), true);
+        let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
+
+        test_raws
+            .clone()
+            .into_iter()
+            .for_each(|(key, ts, is_delete)| {
+                let engine_key = ApiV2::encode_raw_key(key, Some(ts.into()));
+                let is_key_exist = snapshot.get(&Key::from_encoded(engine_key.into_encoded()));
+
+                if is_delete {
+                    // If raw.ts == safepoint, or if it is latest version before safepoint, it will not be delete.
+                    assert_eq!(is_key_exist.unwrap().is_none(), false);
+                } else {
+                    assert_eq!(is_key_exist.unwrap().is_none(), true);
+                }
+            });
     }
 
     #[test]

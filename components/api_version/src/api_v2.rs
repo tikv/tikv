@@ -338,7 +338,7 @@ mod tests {
         let (split_key, split_ts) = ApiV2::split_ts(key.as_slice()).unwrap();
 
         assert_eq!(encoded_key.into_encoded(), split_key.to_vec());
-        assert_eq!(split_ts.into_inner(), ts);
+        assert_eq!(ts, split_ts.into_inner());
     }
 
     #[test]
