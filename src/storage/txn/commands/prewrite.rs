@@ -815,6 +815,7 @@ mod tests {
         DummyLockManager, Engine, Snapshot, Statistics, TestEngineBuilder,
     };
     use concurrency_manager::ConcurrencyManager;
+    use engine_rocks::ReadPerfInstant;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
     use txn_types::{Key, Mutation, TimeStamp};
@@ -940,7 +941,6 @@ mod tests {
     #[test]
     fn test_prewrite_skip_too_many_tombstone() {
         use crate::server::gc_worker::gc_by_compact;
-        use crate::storage::kv::PerfStatisticsInstant;
         use engine_rocks::{set_perf_level, PerfLevel};
         let mut mutations = Vec::default();
         let pri_key_number = 0;
@@ -969,7 +969,7 @@ mod tests {
         // seek write cf.
         gc_by_compact(&engine, pri_key, 101);
         set_perf_level(PerfLevel::EnableTimeExceptForMutex);
-        let perf = PerfStatisticsInstant::new();
+        let perf = ReadPerfInstant::new();
         let mut statistic = Statistics::default();
         while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
             mutations.pop();
@@ -985,7 +985,7 @@ mod tests {
         .unwrap();
         let d = perf.delta();
         assert_eq!(1, statistic.write.seek);
-        assert_eq!(d.0.internal_delete_skipped_count, 0);
+        assert_eq!(d.internal_delete_skipped_count, 0);
     }
 
     #[test]

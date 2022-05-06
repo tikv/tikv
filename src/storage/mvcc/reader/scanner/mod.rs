@@ -579,15 +579,14 @@ pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::kv::{
-        Engine, PerfStatisticsInstant, RocksEngine, TestEngineBuilder, SEEK_BOUND,
-    };
+    use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder, SEEK_BOUND};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::tests::*;
     use crate::storage::txn::{
         Error as TxnError, ErrorInner as TxnErrorInner, TxnEntry, TxnEntryScanner,
     };
+    use engine_rocks::ReadPerfInstant;
     use engine_traits::MiscExt;
     use txn_types::OldValue;
 
@@ -992,12 +991,12 @@ mod tests {
         ];
         for (from_ts, expected_old_value, block_reads) in tests {
             let mut scanner = create_scanner(from_ts);
-            let perf_instant = PerfStatisticsInstant::new();
+            let perf_instant = ReadPerfInstant::new();
             match scanner.next_entry().unwrap().unwrap() {
                 TxnEntry::Prewrite { old_value, .. } => assert_eq!(old_value, expected_old_value),
                 TxnEntry::Commit { .. } => unreachable!(),
             }
-            let delta = perf_instant.delta().0;
+            let delta = perf_instant.delta();
             assert_eq!(delta.block_read_count, block_reads);
         }
 
@@ -1017,12 +1016,12 @@ mod tests {
         ];
         for (from_ts, expected_old_value, block_reads) in tests {
             let mut scanner = create_scanner(from_ts);
-            let perf_instant = PerfStatisticsInstant::new();
+            let perf_instant = ReadPerfInstant::new();
             match scanner.next_entry().unwrap().unwrap() {
                 TxnEntry::Prewrite { .. } => unreachable!(),
                 TxnEntry::Commit { old_value, .. } => assert_eq!(old_value, expected_old_value),
             }
-            let delta = perf_instant.delta().0;
+            let delta = perf_instant.delta();
             assert_eq!(delta.block_read_count, block_reads);
         }
     }

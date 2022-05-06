@@ -413,7 +413,7 @@ mod tests {
     use crate::server::TestRaftStoreRouter;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::TestStorageBuilderApiV1;
-    use engine_rocks::{PerfLevel, RocksSnapshot};
+    use engine_rocks::RocksSnapshot;
     use grpcio::EnvBuilder;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::transport::Transport;
@@ -503,7 +503,6 @@ mod tests {
             &cfg.value().clone(),
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
