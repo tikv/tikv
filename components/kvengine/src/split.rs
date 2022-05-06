@@ -144,5 +144,5 @@ pub fn get_split_shard_index(split_keys: &[Vec<u8>], key: &[u8]) -> usize {
             return i;
         }
     }
-    return split_keys.len();
+    split_keys.len()
 }

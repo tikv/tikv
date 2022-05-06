@@ -516,18 +516,16 @@ fn init_raft_state(raft_engine: &rfengine::RFEngine, region: &metapb::Region) ->
     let mut rs = RaftState::default();
     let rs_key = raft_state_key(region.get_region_epoch().get_version());
     let rs_val = raft_engine.get_state(region.id, rs_key.chunk());
-    if rs_val.is_none() {
-        if region.peers.len() > 0 {
-            // new split region.
-            rs.last_index = RAFT_INIT_LOG_INDEX;
-            rs.term = RAFT_INIT_LOG_TERM;
-            rs.commit = RAFT_INIT_LOG_INDEX;
-            let mut wb = rfengine::WriteBatch::new();
-            wb.set_state(region.id, rs_key.chunk(), rs.marshal().chunk());
-            raft_engine.write(wb)?;
-        }
-    } else {
-        rs.unmarshal(&rs_val.unwrap())
+    if let Some(val) = rs_val {
+        rs.unmarshal(&val);
+    } else if region.peers.len() > 0 {
+        // new split region.
+        rs.last_index = RAFT_INIT_LOG_INDEX;
+        rs.term = RAFT_INIT_LOG_TERM;
+        rs.commit = RAFT_INIT_LOG_INDEX;
+        let mut wb = rfengine::WriteBatch::new();
+        wb.set_state(region.id, rs_key.chunk(), rs.marshal().chunk());
+        raft_engine.write(wb)?;
     }
     Ok(rs)
 }
@@ -538,10 +536,10 @@ fn init_apply_state(kv_engine: &kvengine::Engine, region: &metapb::Region) -> Ra
         let applied_index = shard.get_write_sequence();
         return RaftApplyState::new(applied_index, term_bin.get_u64_le());
     }
-    if region.get_peers().len() > 0 {
+    if !region.get_peers().is_empty() {
         return RaftApplyState::new(RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM);
     }
-    return RaftApplyState::new(0, 0);
+    RaftApplyState::new(0, 0)
 }
 
 fn init_last_term(
@@ -558,8 +556,8 @@ fn init_last_term(
         assert!(last_index > RAFT_INIT_LOG_INDEX)
     }
     let term = engines.raft.get_term(region.get_id(), last_index);
-    if term.is_some() {
-        return Ok(term.unwrap());
+    if let Some(term) = term {
+        return Ok(term);
     }
     if let Some(shard) = engines.kv.get_shard(region.get_id()) {
         let term = shard.get_property(TERM_KEY).unwrap().get_u64_le();

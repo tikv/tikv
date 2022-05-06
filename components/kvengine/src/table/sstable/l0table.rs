@@ -106,11 +106,11 @@ impl L0TableCore {
         for i in 0..NUM_CFS {
             if let Some(cf_tbl) = &cfs[i] {
                 let smallest = cf_tbl.smallest();
-                if smallest.len() > 0 {
-                    if smallest_buf.is_empty() || smallest_buf.chunk() > smallest {
-                        smallest_buf.truncate(0);
-                        smallest_buf.extend_from_slice(smallest);
-                    }
+                if !smallest.is_empty()
+                    && (smallest_buf.is_empty() || smallest_buf.chunk() > smallest)
+                {
+                    smallest_buf.truncate(0);
+                    smallest_buf.extend_from_slice(smallest);
                 }
                 let biggest = cf_tbl.biggest();
                 if biggest > biggest_buf.chunk() {
@@ -119,8 +119,8 @@ impl L0TableCore {
                 }
             }
         }
-        assert!(smallest_buf.len() > 0);
-        assert!(biggest_buf.len() > 0);
+        assert!(!smallest_buf.is_empty());
+        assert!(!biggest_buf.is_empty());
         (smallest_buf.freeze(), biggest_buf.freeze())
     }
 
@@ -203,11 +203,11 @@ impl L0Builder {
         let mut smallest_buf = BytesMut::new();
         let mut biggest_buf = BytesMut::new();
         for builder in &self.builders {
-            if builder.get_smallest().len() > 0 {
-                if smallest_buf.len() == 0 || builder.get_smallest() < smallest_buf {
-                    smallest_buf.truncate(0);
-                    smallest_buf.extend_from_slice(builder.get_smallest());
-                }
+            if !builder.get_smallest().is_empty()
+                && (smallest_buf.is_empty() || builder.get_smallest() < smallest_buf)
+            {
+                smallest_buf.truncate(0);
+                smallest_buf.extend_from_slice(builder.get_smallest());
             }
             if builder.get_biggest() > biggest_buf {
                 biggest_buf.truncate(0);

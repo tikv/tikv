@@ -463,7 +463,7 @@ impl TiKVServer {
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(
                 self.config.resource_metering.clone(),
-                collector_reg_handle.clone(),
+                collector_reg_handle,
             );
         self.to_stop.push(reporter_worker);
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
@@ -495,7 +495,7 @@ impl TiKVServer {
             ));
             storage_read_pools.handle()
         };
-        let reporter = rfstore::store::FlowStatsReporter::new(pd_sender.clone());
+        let reporter = rfstore::store::FlowStatsReporter::new(pd_sender);
         let storage = create_raft_storage::<_, F>(
             engines.engine.clone(),
             &self.config.storage,
@@ -523,7 +523,7 @@ impl TiKVServer {
         } else {
             let cop_read_pools = ReadPool::from(coprocessor::readpool_impl::build_read_pool(
                 &self.config.readpool.coprocessor,
-                flow_reporter.clone(),
+                flow_reporter,
                 engines.engine.clone(),
             ));
             cop_read_pools.handle()
@@ -542,7 +542,7 @@ impl TiKVServer {
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config.value().clone(),
-            raft_store.clone(),
+            raft_store,
             self.pd_client.clone(),
             self.background_worker.clone(),
         );
@@ -577,9 +577,9 @@ impl TiKVServer {
         // `ConsistencyCheckObserver` must be registered before `Node::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
         let observer = match self.config.coprocessor.consistency_check_method {
-            ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
-                MvccConsistencyCheckObserver::new(safe_point.clone()),
-            ),
+            ConsistencyCheckMethod::Mvcc => {
+                BoxConsistencyCheckObserver::new(MvccConsistencyCheckObserver::new(safe_point))
+            }
             ConsistencyCheckMethod::Raw => {
                 BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default())
             }
@@ -811,7 +811,7 @@ impl kvengine::IDAllocator for PdIDAllocator {
                 }
             }
         }
-        timestamps.sort();
+        timestamps.sort_unstable();
         Ok(timestamps)
     }
 }

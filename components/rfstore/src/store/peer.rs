@@ -78,8 +78,7 @@ impl ProposalQueue {
         self.queue
             .binary_search_by_key(&(term, index), |p: &Proposal| (p.term, p.index))
             .ok()
-            .map(|i| self.queue[i].propose_time)
-            .flatten()
+            .and_then(|i| self.queue[i].propose_time)
     }
 
     // Find proposal in front or at the given term and index
@@ -216,20 +215,12 @@ impl ProposedAdminCmd {
     }
 }
 
+#[derive(Default)]
 struct CmdEpochChecker {
     // Although it's a deque, because of the characteristics of the settings from `admin_cmd_epoch_lookup`,
     // the max size of admin cmd is 2, i.e. split/merge and change peer.
     proposed_admin_cmd: VecDeque<ProposedAdminCmd>,
     term: u64,
-}
-
-impl Default for CmdEpochChecker {
-    fn default() -> CmdEpochChecker {
-        CmdEpochChecker {
-            proposed_admin_cmd: VecDeque::new(),
-            term: 0,
-        }
-    }
 }
 
 impl CmdEpochChecker {
@@ -531,7 +522,7 @@ impl Peer {
     /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
     pub fn activate(&self, msgs: &mut ApplyMsgs) {
-        let msg = ApplyMsg::Registration(MsgRegistration::new(&self));
+        let msg = ApplyMsg::Registration(MsgRegistration::new(self));
         msgs.msgs.push(msg);
     }
 
@@ -613,7 +604,7 @@ impl Peer {
             // Epoch version changed, disable read on the localreader for this region.
             self.leader_lease.expire_remote_lease();
         }
-        self.mut_store().set_region(region.clone());
+        self.mut_store().set_region(region);
 
         if !self.pending_remove {
             host.on_region_changed(
@@ -1661,11 +1652,11 @@ impl Peer {
         };
         if progress.is_some() || read_progress.is_some() {
             let mut reader = ctx.global.readers.get_mut(&self.region_id).unwrap();
-            if progress.is_some() {
-                self.maybe_update_read_progress(reader.value_mut(), progress.unwrap());
+            if let Some(progress) = progress {
+                self.maybe_update_read_progress(reader.value_mut(), progress);
             }
-            if read_progress.is_some() {
-                self.maybe_update_read_progress(reader.value_mut(), read_progress.unwrap());
+            if let Some(read_progress) = read_progress {
+                self.maybe_update_read_progress(reader.value_mut(), read_progress);
             }
         }
     }
@@ -1699,7 +1690,7 @@ impl Peer {
         }
         debug!("meta reader insert read delegate {}", self.region_id);
         meta.readers
-            .insert(self.region_id, ReadDelegate::from_peer(&self));
+            .insert(self.region_id, ReadDelegate::from_peer(self));
 
         if is_region_initialized(&prev_region) {
             info!(
@@ -1726,7 +1717,7 @@ impl Peer {
         {
             panic!("{} unexpected region {:?}", self.tag(), r);
         }
-        let prev = meta.regions.insert(region.get_id(), region.clone());
+        let prev = meta.regions.insert(region.get_id(), region);
         assert_eq!(prev, Some(prev_region));
         self.schedule_prepare_change_set(ctx, apply_result.change_set);
         true
@@ -2073,7 +2064,7 @@ impl Peer {
             } else {
                 Err(box_err!(
                     "{} can not read due to injected failure",
-                    self.tag
+                    self.tag()
                 ))
             }
         );
@@ -2450,10 +2441,7 @@ impl Peer {
                 self.term()
             ));
         }
-        if let Some(index) = self
-            .cmd_epoch_checker
-            .propose_check_epoch(&req, self.term())
-        {
+        if let Some(index) = self.cmd_epoch_checker.propose_check_epoch(req, self.term()) {
             return Ok(Either::Right(index));
         }
 

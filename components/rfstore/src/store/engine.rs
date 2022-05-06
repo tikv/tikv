@@ -17,6 +17,7 @@ pub struct Engines {
     pub kv: kvengine::Engine,
     pub raft: rfengine::RFEngine,
     raft_path: PathBuf,
+    #[allow(clippy::type_complexity)]
     pub meta_change_channel: Arc<Mutex<Option<(Sender<StoreMsg>, Receiver<StoreMsg>)>>>,
 }
 
@@ -36,17 +37,17 @@ impl Engines {
     }
 
     pub fn write_kv(&self, wb: &mut KVWriteBatch) {
-        for (_, batch) in &mut wb.batches {
+        for batch in &mut wb.batches.values_mut() {
             self.kv.write(batch)
         }
     }
 }
 
-impl Into<engine_traits::Engines<kvengine::Engine, rfengine::RFEngine>> for Engines {
-    fn into(self) -> engine_traits::Engines<Engine, RFEngine> {
-        engine_traits::Engines {
-            kv: self.kv.clone(),
-            raft: self.raft.clone(),
+impl From<Engines> for engine_traits::Engines<kvengine::Engine, rfengine::RFEngine> {
+    fn from(engines: Engines) -> Self {
+        Self {
+            kv: engines.kv.clone(),
+            raft: engines.raft,
         }
     }
 }

@@ -97,7 +97,7 @@ impl RaftBatchSystem {
         let ctx = GlobalContext {
             cfg,
             engines,
-            store: meta.clone(),
+            store: meta,
             readers: store_meta.readers.clone(),
             router: self.router.clone(),
             trans,
@@ -274,46 +274,46 @@ pub struct StoreMeta {
     /// Events:
     ///
     /// A1: The split log is committed.
-    /// 	If the new region is found and initialized, avoid update the new region.
-    /// 	Otherwise add pending create in store meta.
+    ///     If the new region is found and initialized, avoid update the new region.
+    ///     Otherwise add pending create in store meta.
     ///
     /// A2: Handle apply result of split.
-    /// 	If the new region is found, it must be initialized, then avoid create the peer.
-    /// 	Otherwise, create the peer and remove pending create.
+    ///     If the new region is found, it must be initialized, then avoid create the peer.
+    ///     Otherwise, create the peer and remove pending create.
     ///
     /// B1: store handle raft message maybe create peer.
-    /// 	If region or pending create is found, avoid create the peer.
-    /// 	Otherwise create the peer with the uninitialized region.
+    ///     If region or pending create is found, avoid create the peer.
+    ///     Otherwise create the peer with the uninitialized region.
     ///
     /// B2: new peer recevied snapshot.
-    /// 	If prev region is uninitialized and the region in store is initialized, avoid update the store meta.
-    /// 	Otherwise update the store meta.
+    ///     If prev region is uninitialized and the region in store is initialized, avoid update the store meta.
+    ///     Otherwise update the store meta.
     ///
     /// There are 5 possible sequences to analyze:
     ///
     /// - A1, A2
-    /// 	After A2, the peer can be found in router.
+    ///     After A2, the peer can be found in router.
     ///
     /// - A1, B1, A2
-    /// 	A1 set pending create in store meta.
-    /// 	B1 found the pending create in store meta, then avoid create peer.
+    ///     A1 set pending create in store meta.
+    ///     B1 found the pending create in store meta, then avoid create peer.
     ///
     /// - B1, A1, A2, B2,
-    /// 	B1 create the peer in the store meta.
-    /// 	A1 found the peer is already exists in store meta, but region is not initialized, add pending create.
-    /// 	A2 replace the uninitialized region by split, removed the pending create.
-    /// 	B2 found no pending create, and prev region is not initialized, meta region is initialized, avoid update the meta.
+    ///     B1 create the peer in the store meta.
+    ///     A1 found the peer is already exists in store meta, but region is not initialized, add pending create.
+    ///     A2 replace the uninitialized region by split, removed the pending create.
+    ///     B2 found no pending create, and prev region is not initialized, meta region is initialized, avoid update the meta.
     ///
     /// - B1, A1, B2, A2
-    /// 	B1 create the peer in the store meta.
-    /// 	A1 found the peer is already exists in store meta, but region is not initialized, add pending create.
-    /// 	B2 found pending create, avoid update the meta.
-    /// 	A2 replace the uninitialized region by split, removed the pending create.
+    ///     B1 create the peer in the store meta.
+    ///     A1 found the peer is already exists in store meta, but region is not initialized, add pending create.
+    ///     B2 found pending create, avoid update the meta.
+    ///     A2 replace the uninitialized region by split, removed the pending create.
     ///
     /// - B1. B2, A1, A2
-    /// 	B2 updated the meta with initialized region.
-    /// 	A1 found region is initialized, do not add pending create.
-    /// 	A2 do not create the initialized region on ready split.
+    ///     B2 updated the meta with initialized region.
+    ///     A1 found region is initialized, do not add pending create.
+    ///     A2 do not create the initialized region on ready split.
     pub(crate) pending_new_regions: HashMap<u64, bool>,
 }
 
@@ -615,7 +615,7 @@ impl<'a> StoreMsgHandler<'a> {
         // It's possible to acquire the lock and only send notification to
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.
-        for (id, _) in &self.ctx.peers {
+        for id in self.ctx.peers.keys() {
             self.ctx.global.router.report_unreachable(*id, store_id);
         }
     }
@@ -758,8 +758,7 @@ impl<'a> StoreMsgHandler<'a> {
             return;
         }
         let check_msg_result = self.check_msg(&msg);
-        if check_msg_result.is_err() {
-            let err = check_msg_result.unwrap_err();
+        if let Err(err) = check_msg_result {
             error!("failed to check message err:{:?}", err);
             return;
         }
@@ -920,7 +919,7 @@ impl<'a> StoreMsgHandler<'a> {
     }
 
     fn on_split_region(&mut self, regions: Vec<metapb::Region>) -> Option<u64> {
-        fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
+        fail_point!("on_split", self.ctx.store_id() == 3, |_| { None });
         let derived = regions.last().unwrap().clone();
         let derived_peer = self.get_peer(derived.get_id());
         let mut peer_fsm = derived_peer.peer_fsm.lock().unwrap();
@@ -929,7 +928,7 @@ impl<'a> StoreMsgHandler<'a> {
 
         let is_leader = peer_fsm.peer.is_leader();
         if is_leader {
-            peer_fsm.peer.heartbeat_pd(&self.ctx);
+            peer_fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
                 "notify pd with split";
@@ -1024,7 +1023,7 @@ impl<'a> StoreMsgHandler<'a> {
             if is_leader {
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.
-                new_peer.peer.heartbeat_pd(&self.ctx);
+                new_peer.peer.heartbeat_pd(self.ctx);
             }
             self.ctx.global.coprocessor_host.on_region_changed(
                 &new_region,
@@ -1073,7 +1072,7 @@ impl<'a> StoreMsgHandler<'a> {
                 self.ctx.global.engines.kv.trigger_flush(&shard);
             }
         }
-        fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
+        fail_point!("after_split", self.ctx.store_id() == 3, |_| { None });
         self.maybe_apply(region_id)
     }
 
@@ -1149,7 +1148,7 @@ impl<'a> StoreMsgHandler<'a> {
                 "peer_id" => peer_fsm.peer_id(),
                 "region" => ?peer_fsm.peer.region(),
             );
-            peer_fsm.peer.heartbeat_pd(&self.ctx);
+            peer_fsm.peer.heartbeat_pd(self.ctx);
 
             // Remove or demote leader will cause this raft group unavailable
             // until new leader elected, but we can't revert this operation

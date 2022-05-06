@@ -28,11 +28,11 @@ pub(crate) struct Epoch {
 }
 
 pub(crate) fn get_epoch(epoches: &mut HashMap<u32, Epoch>, epoch_id: u32) -> &mut Epoch {
-    if epoches.contains_key(&epoch_id) {
+    if let std::collections::hash_map::Entry::Vacant(e) = epoches.entry(epoch_id) {
+        let ep = Epoch::new(epoch_id);
+        e.insert(ep);
         epoches.get_mut(&epoch_id).unwrap()
     } else {
-        let ep = Epoch::new(epoch_id);
-        epoches.insert(epoch_id, ep);
         epoches.get_mut(&epoch_id).unwrap()
     }
 }
@@ -138,7 +138,7 @@ impl RFEngine {
         if crc32fast::hash(data) != checksum {
             return Err(Error::Checksum);
         }
-        while data.len() > 0 {
+        while !data.is_empty() {
             let region_id = LittleEndian::read_u64(data);
             data = &data[8..];
             let key_len = LittleEndian::read_u16(data) as usize;

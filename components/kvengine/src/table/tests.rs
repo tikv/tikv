@@ -110,10 +110,8 @@ impl Iterator for SimpleIterator {
             self.keys[self.latest_offsets[idx]].chunk().cmp(key) != Less
         }) as i32;
         self.ver_idx = 0;
-        if self.reversed {
-            if !self.valid() || self.key().cmp(key) != Equal {
-                self.idx -= 1;
-            }
+        if self.reversed && (!self.valid() || self.key().cmp(key) != Equal) {
+            self.idx -= 1;
         }
     }
 
@@ -132,7 +130,7 @@ impl Iterator for SimpleIterator {
 }
 
 #[allow(dead_code)]
-fn get_all<'a>(mut it: Box<dyn Iterator>) -> (Vec<Bytes>, Vec<Bytes>) {
+fn get_all(mut it: Box<dyn Iterator>) -> (Vec<Bytes>, Vec<Bytes>) {
     let mut keys = vec![];
     let mut vals = vec![];
     while it.valid() {
@@ -357,7 +355,7 @@ fn merge_iterator_duplicated() {
 #[test]
 fn test_multi_version_merge_iterator() {
     let mut rnd = rand::thread_rng();
-    for reversed in vec![false, true] {
+    for &reversed in &[false, true] {
         let it1 = Box::new(SimpleIterator::new_multi_version(100, 90, reversed));
         let it2 = Box::new(SimpleIterator::new_multi_version(90, 80, reversed));
         let it3 = Box::new(SimpleIterator::new_multi_version(80, 70, reversed));
@@ -368,7 +366,7 @@ fn test_multi_version_merge_iterator() {
         for _ in 1..100 {
             it.next();
             assert_eq!(it.valid(), true);
-            assert_ne!(cur_key, it.key().clone());
+            assert_ne!(cur_key, it.key().to_owned());
             cur_key = Bytes::copy_from_slice(it.key());
             let cur_ver = it.value().version;
             while it.next_version() {
@@ -376,7 +374,7 @@ fn test_multi_version_merge_iterator() {
             }
         }
         for _ in 0..100 {
-            let key = Bytes::from(format!("key{:03}", rnd.gen_range(0..100)));
+            let key = Bytes::from(format!("key{:03}", rnd.gen_range::<u8, _>(0..100)));
             it.seek(&key);
             assert_eq!(it.valid(), true);
             assert_eq!(it.key(), key);

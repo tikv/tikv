@@ -37,7 +37,7 @@ pub trait Iterator: Send {
                 return true;
             }
         }
-        return false;
+        false
     }
 
     fn next_all_version(&mut self) {
@@ -156,7 +156,7 @@ impl Value {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.meta == 0 && self.ptr == ptr::null()
+        self.meta == 0 && self.ptr.is_null()
     }
 
     pub(crate) fn is_valid(&self) -> bool {
@@ -290,6 +290,10 @@ impl LocalAddr {
 
     pub fn len(self) -> usize {
         (self.end - self.start) as usize
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len() == 0
     }
 }
 

@@ -170,7 +170,7 @@ mod tests {
         assert_eq!(it.key(), "k1".as_bytes());
         let v = it.value();
         assert_eq!(v.get_value(), "a1".as_bytes());
-        assert_eq!(v.meta, 'A' as u8);
+        assert_eq!(v.meta, b'A');
     }
 
     #[test]
@@ -190,7 +190,7 @@ mod tests {
             while it.valid() {
                 let v = it.value();
                 assert_eq!(v.get_value(), format!("{}", cnt % 10000).as_bytes());
-                assert_eq!(v.meta, 'A' as u8);
+                assert_eq!(v.meta, b'A');
                 cnt += 1;
                 it.next();
             }
@@ -211,7 +211,7 @@ mod tests {
             assert_eq!(it.valid(), false);
         }
         {
-            let mut it = ConcatIterator::new_with_tables(tables.clone(), true);
+            let mut it = ConcatIterator::new_with_tables(tables, true);
             it.rewind();
             assert_eq!(it.valid(), true);
             let mut cnt = 0;
@@ -221,7 +221,7 @@ mod tests {
                     v.get_value(),
                     format!("{}", 10000 - (cnt % 10000) - 1).as_bytes()
                 );
-                assert_eq!(v.meta, 'A' as u8);
+                assert_eq!(v.meta, b'A');
                 cnt += 1;
                 it.next();
             }

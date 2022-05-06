@@ -308,10 +308,10 @@ impl Iterable for Engine {
 pub struct EngineIterator;
 
 impl engine_traits::Iterator for EngineIterator {
-    fn seek(&mut self, _key: SeekKey) -> TraitsResult<bool> {
+    fn seek(&mut self, _key: SeekKey<'_>) -> TraitsResult<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, _key: SeekKey) -> TraitsResult<bool> {
+    fn seek_for_prev(&mut self, _key: SeekKey<'_>) -> TraitsResult<bool> {
         panic!()
     }
 
@@ -368,17 +368,17 @@ impl FlowControlFactorsExt for Engine {
         _level: usize,
     ) -> engine_traits::Result<Option<u64>> {
         // TODO(x)
-        return Ok(Some(1));
+        Ok(Some(1))
     }
 
     fn get_cf_num_immutable_mem_table(&self, _cf: &str) -> engine_traits::Result<Option<u64>> {
         // TODO(x)
-        return Ok(Some(1));
+        Ok(Some(1))
     }
 
     fn get_cf_pending_compaction_bytes(&self, _cf: &str) -> engine_traits::Result<Option<u64>> {
         // TODO(x)
-        return Ok(Some(0));
+        Ok(Some(0))
     }
 }
 
@@ -395,7 +395,7 @@ impl MiscExt for Engine {
         &self,
         _cf: &str,
         _strategy: DeleteStrategy,
-        _ranges: &[Range],
+        _ranges: &[Range<'_>],
     ) -> TraitsResult<()> {
         panic!()
     }
@@ -403,7 +403,7 @@ impl MiscExt for Engine {
     fn get_approximate_memtable_stats_cf(
         &self,
         _cf: &str,
-        _range: &Range,
+        _range: &Range<'_>,
     ) -> TraitsResult<(u64, u64)> {
         panic!()
     }
@@ -497,7 +497,7 @@ impl PerfContext for EnginePerfContext {
 impl RangePropertiesExt for Engine {
     fn get_range_approximate_keys(
         &self,
-        _range: Range,
+        _range: Range<'_>,
         _large_threshold: u64,
     ) -> TraitsResult<u64> {
         panic!()
@@ -506,7 +506,7 @@ impl RangePropertiesExt for Engine {
     fn get_range_approximate_keys_cf(
         &self,
         _cfname: &str,
-        _range: Range,
+        _range: Range<'_>,
         _large_threshold: u64,
     ) -> TraitsResult<u64> {
         panic!()
@@ -514,7 +514,7 @@ impl RangePropertiesExt for Engine {
 
     fn get_range_approximate_size(
         &self,
-        _range: Range,
+        _range: Range<'_>,
         _large_threshold: u64,
     ) -> TraitsResult<u64> {
         panic!()
@@ -523,7 +523,7 @@ impl RangePropertiesExt for Engine {
     fn get_range_approximate_size_cf(
         &self,
         _cfname: &str,
-        _range: Range,
+        _range: Range<'_>,
         _large_threshold: u64,
     ) -> TraitsResult<u64> {
         panic!()
@@ -531,7 +531,7 @@ impl RangePropertiesExt for Engine {
 
     fn get_range_approximate_split_keys(
         &self,
-        _range: Range,
+        _range: Range<'_>,
         _key_count: usize,
     ) -> TraitsResult<Vec<Vec<u8>>> {
         panic!()
@@ -540,7 +540,7 @@ impl RangePropertiesExt for Engine {
     fn get_range_approximate_split_keys_cf(
         &self,
         _cfname: &str,
-        _range: Range,
+        _range: Range<'_>,
         _key_count: usize,
     ) -> TraitsResult<Vec<Vec<u8>>> {
         panic!()
@@ -590,10 +590,10 @@ impl Iterable for EngineSnapshot {
 pub struct PanicSnapshotIterator;
 
 impl engine_traits::Iterator for PanicSnapshotIterator {
-    fn seek(&mut self, _key: SeekKey) -> TraitsResult<bool> {
+    fn seek(&mut self, _key: SeekKey<'_>) -> TraitsResult<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, _key: SeekKey) -> TraitsResult<bool> {
+    fn seek_for_prev(&mut self, _key: SeekKey<'_>) -> TraitsResult<bool> {
         panic!()
     }
 
@@ -650,10 +650,10 @@ impl Iterable for EngineSstReader {
 pub struct EngineSstReaderIterator;
 
 impl engine_traits::Iterator for EngineSstReaderIterator {
-    fn seek(&mut self, _key: SeekKey) -> TraitsResult<bool> {
+    fn seek(&mut self, _key: SeekKey<'_>) -> TraitsResult<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, _key: SeekKey) -> TraitsResult<bool> {
+    fn seek_for_prev(&mut self, _key: SeekKey<'_>) -> TraitsResult<bool> {
         panic!()
     }
 
@@ -786,7 +786,7 @@ impl TablePropertiesExt for Engine {
     fn table_properties_collection(
         &self,
         _cf: &str,
-        _ranges: &[Range],
+        _ranges: &[Range<'_>],
     ) -> TraitsResult<Self::TablePropertiesCollection> {
         panic!()
     }

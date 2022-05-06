@@ -113,9 +113,9 @@ impl Worker {
     }
 
     fn get_region_states(&mut self, region_id: u64) -> &mut BTreeMap<Bytes, Bytes> {
-        if !self.all_states.contains_key(&region_id) {
-            self.all_states.insert(region_id, BTreeMap::new());
-        }
+        self.all_states
+            .entry(region_id)
+            .or_insert_with(|| BTreeMap::new());
         self.all_states.get_mut(&region_id).unwrap()
     }
 
@@ -131,16 +131,16 @@ impl Worker {
         })?;
         let mut generated_files = 0;
         for (_, mut region_batch) in batch.regions {
-            let new_states = mem::replace(&mut region_batch.states, BTreeMap::default());
+            let new_states = std::mem::take(&mut region_batch.states);
             let region_states = self.get_region_states(region_batch.region_id);
             for (k, v) in &new_states {
-                if v.len() == 0 {
+                if v.is_empty() {
                     region_states.remove(k);
                 } else {
                     region_states.insert(k.clone(), v.clone());
                 }
             }
-            if region_batch.raft_logs.len() > 0 {
+            if !region_batch.raft_logs.is_empty() {
                 self.write_raft_log_file(epoch_idx, region_batch)?;
                 generated_files += 1;
             }
@@ -150,8 +150,8 @@ impl Worker {
             epoch_id, generated_files,
         );
         self.write_all_states(epoch_id)?;
-        let wal_filename = wal_file_name(&self.dir, epoch_id);
-        let recycle_filename = recycle_file_name(&self.dir, epoch_id);
+        let wal_filename = wal_file_name(self.dir.as_path(), epoch_id);
+        let recycle_filename = recycle_file_name(self.dir.as_path(), epoch_id);
         fs::rename(wal_filename, recycle_filename)?;
         Ok(())
     }
@@ -160,7 +160,13 @@ impl Worker {
         let epoch_id = self.epoches[epoch_idx].id;
         let first = region_batch.raft_logs.front().unwrap().index;
         let end = region_batch.raft_logs.back().unwrap().index + 1;
-        let filename = raft_log_file_name(&self.dir, epoch_id, region_batch.region_id, first, end);
+        let filename = raft_log_file_name(
+            self.dir.as_path(),
+            epoch_id,
+            region_batch.region_id,
+            first,
+            end,
+        );
         self.buf.truncate(0);
         region_batch.encode_to(&mut self.buf);
         let checksum = crc32fast::hash(&self.buf);
@@ -191,7 +197,8 @@ impl Worker {
             let mut raft_log_files = ep.raft_log_files.lock().unwrap();
             if let Some((first, end)) = raft_log_files.get(&region_id) {
                 if *end <= truncated_index {
-                    let filename = raft_log_file_name(&self.dir, ep.id, region_id, *first, *end);
+                    let filename =
+                        raft_log_file_name(self.dir.as_path(), ep.id, region_id, *first, *end);
                     if let Err(err) = fs::remove_file(filename.clone()) {
                         error!("failed to remove rlog file {:?}, {:?}", filename, err);
                     }
@@ -209,7 +216,7 @@ impl Worker {
             "region {} truncate raft log to {}, remove {} files, retain {} files",
             region_id, truncated_index, remove_cnt, retain_cnt
         );
-        if removed_epoch_ids.len() == 0 {
+        if removed_epoch_ids.is_empty() {
             return;
         }
         info!("remove epoches {:?}", &removed_epoch_ids);
@@ -218,7 +225,7 @@ impl Worker {
 }
 
 pub(crate) fn raft_log_file_name(
-    dir: &PathBuf,
+    dir: &Path,
     epoch_id: u32,
     region_id: u64,
     first: u64,
@@ -230,7 +237,7 @@ pub(crate) fn raft_log_file_name(
     ))
 }
 
-pub(crate) fn states_file_name(dir: &PathBuf, epoch_id: u32) -> PathBuf {
+pub(crate) fn states_file_name(dir: &Path, epoch_id: u32) -> PathBuf {
     dir.join(format!("{:08x}.states", epoch_id))
 }
 
@@ -238,7 +245,7 @@ pub(crate) fn wal_file_name(dir: &Path, epoch_id: u32) -> PathBuf {
     dir.join(format!("{:08x}.wal", epoch_id))
 }
 
-pub(crate) fn recycle_file_name(dir: &PathBuf, epoch_id: u32) -> PathBuf {
+pub(crate) fn recycle_file_name(dir: &Path, epoch_id: u32) -> PathBuf {
     dir.join("recycle").join(format!("{:08x}.wal", epoch_id))
 }
 

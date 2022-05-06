@@ -800,8 +800,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 statistics.add(&stat);
                                 consumer.consume(
                                     id,
-                                    v.map_err(|e| Error::from(txn::Error::from(e)))
-                                        .map(|v| (v, stat, delta)),
+                                    v.map_err(|e| Error::from(e)).map(|v| (v, stat, delta)),
                                     begin_instant,
                                 );
                                 continue;

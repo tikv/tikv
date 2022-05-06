@@ -51,7 +51,7 @@ impl RecoverHandler {
                         return Ok(());
                     }
                     let mut state = raft_serverpb::RegionLocalState::new();
-                    if let Err(_) = state.merge_from_bytes(v) {
+                    if state.merge_from_bytes(v).is_err() {
                         return Err(rfengine::Error::ParseError);
                     }
                     region = Some(state.take_region());
@@ -91,12 +91,10 @@ impl RecoverHandler {
 
 fn load_store_ident(rf_engine: &rfengine::RFEngine) -> Option<raft_serverpb::StoreIdent> {
     let val = rf_engine.get_state(0, STORE_IDENT_KEY);
-    if val.is_none() {
-        return None;
-    }
+    val.as_ref()?;
     let mut ident = raft_serverpb::StoreIdent::new();
     ident.merge_from_bytes(val.unwrap().chunk()).unwrap();
-    return Some(ident);
+    Some(ident)
 }
 
 impl kvengine::RecoverHandler for RecoverHandler {
@@ -126,7 +124,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
         let mut applier = Applier::new_for_recover(self.store_id, region_meta, snap, apply_state);
 
         for e in &entries {
-            if e.data.len() == 0 || e.entry_type != eraftpb::EntryType::EntryNormal {
+            if e.data.is_empty() || e.entry_type != eraftpb::EntryType::EntryNormal {
                 continue;
             }
             ctx.exec_log_index = e.get_index();
@@ -142,22 +140,18 @@ impl kvengine::RecoverHandler for RecoverHandler {
                     return Ok(());
                 }
                 Self::execute_admin_request(&mut applier, &mut ctx, req)?;
-            } else {
-                if let Some(custom) = rlog::get_custom_log(&req) {
-                    if rlog::is_engine_meta_log(custom.data.chunk()) {
-                        let mut cs = custom.get_change_set().unwrap();
-                        cs.sequence = e.get_index();
-                        if !meta.is_duplicated_change_set(&mut cs) {
-                            // We don't have a background region worker now, should do it synchronously.
-                            let cs = engine.prepare_change_set(cs, false)?;
-                            engine.apply_change_set(cs)?;
-                        }
-                    } else {
-                        if let Err(e) = applier.exec_custom_log(&mut ctx, &custom) {
-                            // Only duplicated pre-split may fail, we can ignore this error.
-                            warn!("failed to execute custom log {:?}", e);
-                        }
+            } else if let Some(custom) = rlog::get_custom_log(&req) {
+                if rlog::is_engine_meta_log(custom.data.chunk()) {
+                    let mut cs = custom.get_change_set().unwrap();
+                    cs.sequence = e.get_index();
+                    if !meta.is_duplicated_change_set(&mut cs) {
+                        // We don't have a background region worker now, should do it synchronously.
+                        let cs = engine.prepare_change_set(cs, false)?;
+                        engine.apply_change_set(cs)?;
                     }
+                } else if let Err(e) = applier.exec_custom_log(&mut ctx, &custom) {
+                    // Only duplicated pre-split may fail, we can ignore this error.
+                    warn!("failed to execute custom log {:?}", e);
                 }
             }
             applier.apply_state.applied_index = ctx.exec_log_index;

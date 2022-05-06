@@ -273,11 +273,10 @@ impl LocalReader {
                 debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
                 let meta_len = self.store_readers.len();
-                let meta_reader = if let Some(reader) = self.store_readers.get(&region_id) {
-                    Some(Arc::new(reader.value().clone()))
-                } else {
-                    None
-                };
+                let meta_reader = self
+                    .store_readers
+                    .get(&region_id)
+                    .map(|reader| Arc::new(reader.value().clone()));
                 // Remove the stale delegate
                 self.delegates.remove(&region_id);
                 self.delegates.resize(meta_len);
@@ -393,7 +392,7 @@ impl LocalReader {
             Ok(None) => self.redirect(RaftCommand::new(req, cb)),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
-                if let Some(ref delegate) = self.delegates.get(&req.get_header().get_region_id()) {
+                if let Some(delegate) = self.delegates.get(&req.get_header().get_region_id()) {
                     cmd_resp::bind_term(&mut response, delegate.term);
                 }
                 cb.invoke_read(ReadResponse {
@@ -495,6 +494,12 @@ impl TrackVer {
 
     fn any_new(&self) -> bool {
         self.version.load(Ordering::Relaxed) > self.local_ver
+    }
+}
+
+impl Default for TrackVer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

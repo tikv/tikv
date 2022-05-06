@@ -654,14 +654,11 @@ fn build_prewrite(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
 fn build_commit(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
     for m in modifies {
         match m {
-            Modify::Put(cf, key, val) => match cf {
-                CF_WRITE => {
-                    let commit_ts = key.decode_ts().unwrap();
-                    let raw_key = key.to_raw().unwrap();
-                    builder.append_commit(&raw_key, commit_ts.into_inner());
-                }
-                _ => unreachable!(),
-            },
+            Modify::Put(CF_WRITE, key, val) => {
+                let commit_ts = key.decode_ts().unwrap();
+                let raw_key = key.to_raw().unwrap();
+                builder.append_commit(&raw_key, commit_ts.into_inner());
+            }
             Modify::Delete(cf, key) => {
                 assert_eq!(cf, CF_LOCK);
             }
@@ -682,7 +679,7 @@ fn build_one_pc(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
                 CF_WRITE => {
                     let commit_ts = key.decode_ts().unwrap().into_inner();
                     let raw_key = key.to_raw().unwrap();
-                    let write = WriteRef::parse(&val).unwrap();
+                    let write = WriteRef::parse(val).unwrap();
                     let mut value = vec![];
                     if write.write_type == WriteType::Put {
                         if write.short_value.is_none() {
@@ -738,7 +735,7 @@ fn build_rollback(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
     }
 }
 
-fn is_same_key_del_lock(modifies: &Vec<Modify>, next_idx: usize, key: &Key) -> bool {
+fn is_same_key_del_lock(modifies: &[Modify], next_idx: usize, key: &Key) -> bool {
     if modifies.len() <= next_idx {
         return false;
     }

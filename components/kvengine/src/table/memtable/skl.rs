@@ -28,6 +28,12 @@ pub struct WriteBatch {
     pub(crate) buf: BytesMut,
 }
 
+impl Default for WriteBatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WriteBatch {
     pub fn new() -> Self {
         Self {
@@ -58,6 +64,10 @@ impl WriteBatch {
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn reset(&mut self) {
@@ -136,16 +146,16 @@ impl Node {
 
     fn cas_next_off(&self, h: usize, current: ArenaAddr, new: ArenaAddr) -> bool {
         let result = self.tower[h].compare_exchange(current.0, new.0, SeqCst, SeqCst);
-        !result.is_err()
+        result.is_ok()
     }
 }
 
-pub fn deref<T>(x: *mut T) -> &'static mut T {
+pub(super) fn deref<T>(x: *mut T) -> &'static mut T {
     unsafe { &mut *x }
 }
 
 pub fn get_node_offset(node: *mut Node) -> ArenaAddr {
-    if node == ptr::null_mut() {
+    if node.is_null() {
         return ArenaAddr(NULL_ARENA_ADDR);
     }
     deref(node).addr
@@ -196,7 +206,7 @@ pub struct SkipListCore {
 #[allow(dead_code)]
 impl SkipListCore {
     pub fn new(arena: Option<Arc<Arena>>) -> Self {
-        let a = arena.unwrap_or(Arc::new(Arena::new()));
+        let a = arena.unwrap_or_else(|| Arc::new(Arena::new()));
         let head_node = a.put_node(MAX_HEIGHT, &[], &WriteBatchEntry::default());
         Self {
             height: AtomicU32::new(1),
@@ -353,13 +363,12 @@ impl SkipListCore {
         {
             // check old value version.
             let old_val_addr = node.get_val_addr();
-            let old_val_off: ArenaAddr;
-            if old_val_addr.is_value_node_addr() {
+            let old_val_off = if old_val_addr.is_value_node_addr() {
                 let vn = self.arena.get_value_node(old_val_addr);
-                old_val_off = vn.val_addr;
+                vn.val_addr
             } else {
-                old_val_off = old_val_addr;
-            }
+                old_val_addr
+            };
             let old_v = self.arena.get_val(old_val_off);
             if entry.version <= old_v.version {
                 // Only happens in Restore backup, do nothing.
@@ -523,14 +532,13 @@ impl SkipListCore {
                 }
                 return (x, false);
             }
-            let cmp: std::cmp::Ordering;
-            if next == after_node {
+            let cmp = if next == after_node {
                 // We compared the same node on the upper level, no need to compare again.
-                cmp = Less;
+                Less
             } else {
                 let next_key = self.arena.get_key(deref(self.arena.get_node(next)));
-                cmp = key.cmp(next_key);
-            }
+                key.cmp(next_key)
+            };
             if cmp == Greater {
                 // x.key < next.key < key. We can continue to move right.
                 x = next;
@@ -690,6 +698,12 @@ impl Hint {
     }
 }
 
+impl Default for Hint {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct SKIterator {
     list: SkipList,
     n: ArenaAddr,
@@ -709,7 +723,7 @@ impl SKIterator {
         if self.n.is_null() {
             return;
         }
-        if self.val_list.len() > 0 {
+        if !self.val_list.is_empty() {
             self.val_list.truncate(0);
             self.val_list_idx = 0;
         }
@@ -845,9 +859,9 @@ mod tests {
         let v = l.get(key, 1);
         assert_eq!(v.is_empty(), true);
 
-        for less in vec![true, false] {
-            for allow_eq in vec![true, false] {
-                let (n, found) = l.find_near(key, less, allow_eq);
+        for less in &[true, false] {
+            for allow_eq in &[true, false] {
+                let (n, found) = l.find_near(key, *less, *allow_eq);
                 assert!(n.is_null());
                 assert_eq!(found, false);
             }

@@ -34,7 +34,7 @@ fn main() {
     if config.tenant_id == 0 {
         config.tenant_id = 1;
     }
-    if config.local_dir == "" {
+    if config.local_dir.is_empty() {
         config.local_dir = "/tmp".to_string();
     }
     info!("config is {:?}", &config);

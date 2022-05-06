@@ -6,7 +6,7 @@ use kvproto::raft_cmdpb::{CustomRequest, RaftCmdRequest};
 use protobuf::Message;
 use std::mem;
 
-pub(crate) fn get_custom_log(req: &RaftCmdRequest) -> Option<CustomRaftLog> {
+pub(crate) fn get_custom_log(req: &RaftCmdRequest) -> Option<CustomRaftLog<'_>> {
     if !req.has_custom_request() {
         return None;
     }
@@ -164,6 +164,12 @@ pub struct CustomBuilder {
     cnt: i32,
 }
 
+impl Default for CustomBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CustomBuilder {
     pub fn new() -> Self {
         Self {
@@ -250,6 +256,10 @@ impl CustomBuilder {
 
     pub fn len(&self) -> usize {
         self.cnt as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

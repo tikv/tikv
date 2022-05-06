@@ -81,7 +81,7 @@ impl Shard {
             end: end.clone(),
             parent_id: 0,
             data: RwLock::new(ShardData::new_empty(start, end)),
-            opt: opt.clone(),
+            opt,
             active: Default::default(),
             properties: Properties::new().apply_pb(props),
             compacting: Default::default(),
@@ -340,7 +340,7 @@ impl Shard {
     }
 
     pub fn new_snap_access(&self) -> SnapAccess {
-        SnapAccess::new(&self)
+        SnapAccess::new(self)
     }
 }
 
@@ -375,7 +375,7 @@ impl ShardData {
         l0_tbls: Vec<L0Table>,
         cfs: [ShardCF; 3],
     ) -> Self {
-        assert!(mem_tbls.len() > 0);
+        assert!(!mem_tbls.is_empty());
         Self {
             core: Arc::new(ShardDataCore {
                 start,
@@ -416,7 +416,7 @@ impl ShardDataCore {
             }
             false
         });
-        files.sort();
+        files.sort_unstable();
         files
     }
 
@@ -448,7 +448,7 @@ impl ShardDataCore {
 
     pub(crate) fn get_level_total_size(&self, level: &LevelHandler) -> u64 {
         let mut total_size = 0;
-        for (i, tbl) in level.tables.as_slice().into_iter().enumerate() {
+        for (i, tbl) in level.tables.as_slice().iter().enumerate() {
             let is_bound = i == 0 || i == level.tables.len() - 1;
             if is_bound && self.cover_full_table(tbl.smallest(), tbl.biggest()) {
                 total_size += tbl.size();
@@ -628,7 +628,7 @@ impl LevelHandler {
         if idx >= self.tables.len() {
             return None;
         }
-        return Some(&self.tables[idx]);
+        Some(&self.tables[idx])
     }
 
     pub(crate) fn get_table_by_id(&self, id: u64) -> Option<SSTable> {
@@ -739,17 +739,15 @@ pub fn get_splitting_start_end<'a: 'b, 'b>(
     split_keys: &'b [Vec<u8>],
     i: usize,
 ) -> (&'b [u8], &'b [u8]) {
-    let start_key: &'b [u8];
-    let end_key: &'b [u8];
-    if i != 0 {
-        start_key = split_keys[i - 1].as_slice();
+    let start_key = if i != 0 {
+        split_keys[i - 1].as_slice()
     } else {
-        start_key = start as &'b [u8];
-    }
-    if i == split_keys.len() {
-        end_key = end;
+        start as &'b [u8]
+    };
+    let end_key = if i == split_keys.len() {
+        end
     } else {
-        end_key = split_keys[i].as_slice();
-    }
+        split_keys[i].as_slice()
+    };
     (start_key, end_key)
 }

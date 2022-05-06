@@ -105,7 +105,7 @@ impl ShardMeta {
     }
 
     pub fn get_property(&self, key: &str) -> Option<Bytes> {
-        self.properties.get(key).map(|v| v.clone())
+        self.properties.get(key)
     }
 
     pub fn apply_change_set(&mut self, cs: &pb::ChangeSet) {
@@ -134,7 +134,7 @@ impl ShardMeta {
         }
         if cs.has_compaction() {
             let comp = cs.mut_compaction();
-            if is_move_down(&comp) {
+            if is_move_down(comp) {
                 if let Some(level) = self.file_level(comp.get_top_deletes()[0]) {
                     if level == comp.level {
                         return false;
@@ -179,7 +179,7 @@ impl ShardMeta {
             comp.conflicted = true;
             return true;
         }
-        return false;
+        false
     }
 
     fn apply_flush(&mut self, cs: &pb::ChangeSet) {
@@ -217,7 +217,7 @@ impl ShardMeta {
     }
 
     fn apply_compaction(&mut self, comp: &pb::Compaction) {
-        if is_move_down(&comp) {
+        if is_move_down(comp) {
             for tbl in comp.get_table_creates() {
                 self.move_down_file(tbl.id, tbl.cf, tbl.level);
             }
@@ -370,8 +370,7 @@ pub fn new_change_set(shard_id: u64, shard_ver: u64) -> pb::ChangeSet {
     cs
 }
 
-pub const GLOBAL_SHARD_END_KEY: Bytes =
-    Bytes::from_static(&[255, 255, 255, 255, 255, 255, 255, 255]);
+pub const GLOBAL_SHARD_END_KEY: &[u8] = &[255, 255, 255, 255, 255, 255, 255, 255];
 
 trait MetaReader {
     fn iterate_meta<F>(&self, f: F) -> Result<()>

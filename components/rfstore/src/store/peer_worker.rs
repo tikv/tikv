@@ -64,7 +64,7 @@ pub(crate) struct RaftWorker {
 }
 
 const MAX_BATCH_COUNT: usize = 1024;
-const MAX_BATCH_SIZE: usize = 1 * 1024 * 1024;
+const MAX_BATCH_SIZE: usize = 1024 * 1024;
 
 impl RaftWorker {
     pub(crate) fn new(
@@ -103,14 +103,11 @@ impl RaftWorker {
     pub(crate) fn run(&mut self) {
         let mut inboxes = Inboxes::new();
         loop {
-            let loop_start: tikv_util::time::Instant;
             self.handle_store_msg();
-            match self.receive_msgs(&mut inboxes) {
-                Ok(start_time) => {
-                    loop_start = start_time;
-                }
+            let loop_start = match self.receive_msgs(&mut inboxes) {
+                Ok(start_time) => start_time,
                 Err(_) => return,
-            }
+            };
             inboxes.inboxes.iter_mut().for_each(|(_, inbox)| {
                 self.process_inbox(inbox);
             });
@@ -152,7 +149,7 @@ impl RaftWorker {
         inboxes: &mut Inboxes,
     ) -> std::result::Result<tikv_util::time::Instant, RecvTimeoutError> {
         inboxes.inboxes.retain(|_, inbox| -> bool {
-            if inbox.msgs.len() == 0 {
+            if inbox.msgs.is_empty() {
                 false
             } else {
                 inbox.msgs.truncate(0);
@@ -166,15 +163,11 @@ impl RaftWorker {
                 let mut batch_size = msg.size();
                 let mut batch_cnt = 1;
                 self.append_msg(inboxes, region_id, msg);
-                loop {
-                    if let Ok((region_id, msg)) = self.receiver.try_recv() {
-                        batch_size += msg.size();
-                        batch_cnt += 1;
-                        self.append_msg(inboxes, region_id, msg);
-                        if batch_cnt > MAX_BATCH_COUNT || batch_size > MAX_BATCH_SIZE {
-                            break;
-                        }
-                    } else {
+                while let Ok((region_id, msg)) = self.receiver.try_recv() {
+                    batch_size += msg.size();
+                    batch_cnt += 1;
+                    self.append_msg(inboxes, region_id, msg);
+                    if batch_cnt > MAX_BATCH_COUNT || batch_size > MAX_BATCH_SIZE {
                         break;
                     }
                 }
@@ -198,7 +191,7 @@ impl RaftWorker {
                 }
             }
         }
-        return Ok(receive_time);
+        Ok(receive_time)
     }
 
     fn append_msg(&mut self, inboxes: &mut Inboxes, region_id: u64, msg: PeerMsg) {

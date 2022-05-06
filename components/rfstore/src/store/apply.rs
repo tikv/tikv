@@ -54,7 +54,7 @@ pub(crate) struct PendingCmdQueue {
 
 impl PendingCmdQueue {
     pub(crate) fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
-        if self.normals.len() == 0 {
+        if self.normals.is_empty() {
             return None;
         }
         if self.normals[0].term > term {
@@ -99,7 +99,7 @@ pub struct Range {
 }
 
 impl Debug for Range {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
@@ -130,6 +130,7 @@ pub struct NewSplitPeer {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ExecResult {
     ChangePeer(ChangePeer),
     SplitRegion { regions: Vec<Region> },
@@ -137,6 +138,7 @@ pub enum ExecResult {
     UnsafeDestroy,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ApplyResult {
     None,
     /// Additional result that needs to be sent back to raftstore.
@@ -277,7 +279,7 @@ impl Applier {
         log_index: u64,
     ) {
         let lock_val = self.get_lock_for_commit(kv, key, commit_ts, log_index);
-        if lock_val.len() == 0 {
+        if lock_val.is_empty() {
             return;
         }
         let lock = txn_types::Lock::parse(&lock_val).unwrap_or_else(|x| {
@@ -387,7 +389,7 @@ impl Applier {
     }
 
     #[allow(unused)]
-    pub(crate) fn exec_delete_range(&mut self, kv: &kvengine::Engine, cl: &CustomRaftLog) {
+    pub(crate) fn exec_delete_range(&mut self, kv: &kvengine::Engine, cl: &CustomRaftLog<'_>) {
         // TODO(x)
     }
 
@@ -431,7 +433,7 @@ impl Applier {
     pub(crate) fn exec_custom_log(
         &mut self,
         ctx: &mut ApplyContext,
-        cl: &CustomRaftLog,
+        cl: &CustomRaftLog<'_>,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         let wb = ctx.wb.get_engine_wb(self.region.get_id());
         let engine = &ctx.engine;
@@ -534,10 +536,10 @@ impl Applier {
             };
         }
         let custom = rlog::get_custom_log(req).unwrap();
-        return match self.exec_custom_log(ctx, &custom) {
+        match self.exec_custom_log(ctx, &custom) {
             Ok((resp, result)) => (resp, result),
             Err(e) => (err_resp(e, ctx.exec_log_term), ApplyResult::None),
-        };
+        }
     }
 
     fn handle_apply_result(
@@ -607,11 +609,11 @@ impl Applier {
         ctx: &mut ApplyContext,
         entry: &eraftpb::Entry,
     ) -> ApplyResult {
-        fail_point!(
-            "yield_apply_first_region",
-            self.region.get_start_key().is_empty() && !self.region.get_end_key().is_empty(),
-            |_| ApplyResult::Yield
-        );
+        // fail_point!(
+        // "yield_apply_first_region",
+        // self.region.get_start_key().is_empty() && !self.region.get_end_key().is_empty(),
+        // |_| ApplyResult::Yield
+        // );
 
         let index = entry.get_index();
         let term = entry.get_term();
@@ -657,12 +659,12 @@ impl Applier {
 
         fail_point!(
             "apply_on_conf_change_1_3_1",
-            (self.id == 1 || self.id == 3) && self.region_id() == 1,
+            (self.id() == 1 || self.id() == 3) && self.region_id() == 1,
             |_| panic!("should not use return")
         );
         fail_point!(
             "apply_on_conf_change_3_1",
-            self.id == 3 && self.region_id() == 1,
+            self.id() == 3 && self.region_id() == 1,
             |_| panic!("should not use return")
         );
         fail_point!(
@@ -687,7 +689,7 @@ impl Applier {
                 let add_ndoe_fp = || {
                     fail_point!(
                         "apply_on_add_node_1_2",
-                        self.id == 2 && self.region_id() == 1,
+                        self.id() == 2 && self.region_id() == 1,
                         |_| {}
                     )
                 };
@@ -1032,9 +1034,9 @@ impl Applier {
     ) -> ApplyResult {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
-        fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
-            ApplyResult::Yield
-        });
+        // fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
+        // ApplyResult::Yield
+        // });
         let (index, term) = (entry.get_index(), entry.get_term());
         let conf_change: ConfChangeV2 = match entry.get_entry_type() {
             EntryType::EntryConfChange => {
@@ -1128,7 +1130,7 @@ impl Applier {
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props_drainer: Drain<Proposal>) {
+    fn append_proposal(&mut self, props_drainer: Drain<'_, Proposal>) {
         let propose_num = props_drainer.len();
         if self.stopped {
             for p in props_drainer {
@@ -1159,7 +1161,7 @@ impl Applier {
     fn handle_raft_committed_entries(
         &mut self,
         ctx: &mut ApplyContext,
-        mut committed_entries_drainer: Drain<eraftpb::Entry>,
+        mut committed_entries_drainer: Drain<'_, eraftpb::Entry>,
     ) {
         if committed_entries_drainer.len() == 0 {
             return;
@@ -1169,7 +1171,7 @@ impl Applier {
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
         let mut results = VecDeque::<ExecResult>::new();
-        while let Some(entry) = committed_entries_drainer.next() {
+        for entry in committed_entries_drainer {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
@@ -1183,17 +1185,14 @@ impl Applier {
                     entry.get_index()
                 );
             }
-            let result;
             ctx.exec_log_index = entry.index;
             ctx.exec_log_term = entry.term;
-            match entry.get_entry_type() {
-                eraftpb::EntryType::EntryNormal => {
-                    result = self.handle_raft_entry_normal(ctx, &entry);
-                }
+            let result = match entry.get_entry_type() {
+                eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(ctx, &entry),
                 eraftpb::EntryType::EntryConfChange | eraftpb::EntryType::EntryConfChangeV2 => {
-                    result = self.handle_raft_entry_conf_change(ctx, &entry);
+                    self.handle_raft_entry_conf_change(ctx, &entry)
                 }
-            }
+            };
             match result {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => {
@@ -1201,7 +1200,7 @@ impl Applier {
                 }
             }
         }
-        ctx.finish_for(&self, results);
+        ctx.finish_for(self, results);
     }
 
     fn on_role_changed(&mut self, ctx: &mut ApplyContext, new_role: StateRole) {
@@ -1216,7 +1215,7 @@ impl Applier {
     }
 
     fn handle_apply(&mut self, ctx: &mut ApplyContext, mut apply: MsgApply) {
-        if (apply.entries.len() == 0 && apply.new_role.is_none())
+        if (apply.entries.is_empty() && apply.new_role.is_none())
             || self.pending_remove
             || self.stopped
         {
@@ -1350,7 +1349,7 @@ pub(crate) fn split_gen_new_region_metas(
     splits: &BatchSplitRequest,
 ) -> Result<Vec<metapb::Region>> {
     let requests = splits.get_requests();
-    if requests.len() == 0 {
+    if requests.is_empty() {
         return Err(box_err!("missing split key"));
     }
     let new_region_cnt = requests.len();
@@ -1359,7 +1358,7 @@ pub(crate) fn split_gen_new_region_metas(
     keys.push(old_region.start_key.clone());
     for request in requests {
         let split_key = &request.split_key;
-        if split_key.len() == 0 {
+        if split_key.is_empty() {
             return Err(box_err!("missing split key"));
         }
         if split_key <= keys.last().unwrap() {
@@ -1439,7 +1438,7 @@ pub(crate) fn build_split_pb(
 #[derive(Clone)]
 pub(crate) struct ApplyRouter {}
 
-pub(crate) const TERM_KEY: &'static str = "term";
+pub(crate) const TERM_KEY: &str = "term";
 
 pub(crate) struct ApplyContext {
     pub(crate) engine: kvengine::Engine,

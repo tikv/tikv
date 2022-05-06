@@ -131,7 +131,7 @@ impl Engine {
                 if !parents.contains(&parent.id) {
                     parents.insert(parent.id);
                     let parent_shard = self.load_shard(parent)?;
-                    recoverer.recover(&self, &parent_shard, parent)?;
+                    recoverer.recover(self, &parent_shard, parent)?;
                 }
             }
         }
@@ -283,7 +283,7 @@ impl EngineCore {
                     shard_ver: shard.ver,
                     start: shard.start.to_vec(),
                     end: shard.end.to_vec(),
-                    normal: Some(mem_tbl.clone()),
+                    normal: Some(mem_tbl),
                     initial: None,
                 })
                 .unwrap();
@@ -303,10 +303,10 @@ impl EngineCore {
                 parent_snap.base_version,
                 parent_snap.data_sequence,
             );
-            if mem_tbl.get_version() > parent_snap.base_version + parent_snap.data_sequence {
-                if mem_tbl.has_data_in_range(&shard.start, &shard.end) {
-                    mem_tbls.push(mem_tbl.clone());
-                }
+            if mem_tbl.get_version() > parent_snap.base_version + parent_snap.data_sequence
+                && mem_tbl.has_data_in_range(&shard.start, &shard.end)
+            {
+                mem_tbls.push(mem_tbl.clone());
             }
         }
         self.flush_tx

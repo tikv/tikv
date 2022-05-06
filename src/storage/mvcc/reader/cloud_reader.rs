@@ -18,7 +18,10 @@ impl CloudReader {
         }
     }
 
-    fn get_commit_by_item(item: &kvengine::Item, start_ts: TimeStamp) -> Option<TxnCommitRecord> {
+    fn get_commit_by_item(
+        item: &kvengine::Item<'_>,
+        start_ts: TimeStamp,
+    ) -> Option<TxnCommitRecord> {
         let user_meta = UserMeta::from_slice(item.user_meta());
         if user_meta.start_ts == start_ts.into_inner() {
             let (write_type, short_value) = if item.value_len() > 0 {
@@ -68,12 +71,11 @@ impl CloudReader {
             });
         }
         let user_meta = UserMeta::from_slice(item.user_meta());
-        let write: Write;
-        if user_meta.commit_ts == 0 {
-            write = Write::new(WriteType::Rollback, start_ts, None);
+        let write = if user_meta.commit_ts == 0 {
+            Write::new(WriteType::Rollback, start_ts, None)
         } else {
-            write = Write::new(WriteType::Lock, start_ts, None);
-        }
+            Write::new(WriteType::Lock, start_ts, None)
+        };
         Ok(TxnCommitRecord::SingleRecord {
             commit_ts: TimeStamp::new(user_meta.commit_ts),
             write,
@@ -103,7 +105,7 @@ impl CloudReader {
             return Ok(None);
         }
         let lock = Lock::parse(item.get_value())?;
-        return Ok(Some(lock));
+        Ok(Some(lock))
     }
 
     pub fn get(
@@ -122,7 +124,7 @@ impl CloudReader {
         if item.value_len() > 0 {
             return Ok(Some(item.get_value().to_vec()));
         }
-        return Ok(None);
+        Ok(None)
     }
 
     pub fn get_write(
@@ -145,9 +147,9 @@ impl CloudReader {
         self.statistics.processed_size += raw_key.len() + item.value_len();
         if item.user_meta_len() > 0 {
             let (commit_ts, write) = parse_write(item);
-            return Ok(Some((commit_ts, write.to_owned())));
+            return Ok(Some((commit_ts, write)));
         }
-        return Ok(None);
+        Ok(None)
     }
 
     #[inline(always)]
@@ -170,7 +172,7 @@ impl CloudReader {
         if item.value_len() > 0 {
             return Ok(OldValue::value(item.get_value().to_vec()));
         }
-        return Ok(OldValue::None);
+        Ok(OldValue::None)
     }
 
     /// Scan locks that satisfies `filter(lock)` returns true, from the given start key `start`.
@@ -233,16 +235,16 @@ impl CloudReader {
         if item.user_meta_len() > 0 {
             return Ok(Some(parse_write(item)));
         }
-        return Ok(None);
+        Ok(None)
     }
 }
 
-fn parse_write(item: kvengine::Item) -> (TimeStamp, Write) {
+fn parse_write(item: kvengine::Item<'_>) -> (TimeStamp, Write) {
     let user_meta = UserMeta::from_slice(item.user_meta());
     let commit_ts = user_meta.commit_ts;
     let write_type: WriteType;
     let short_value: Option<Value>;
-    if item.get_value().len() == 0 {
+    if item.get_value().is_empty() {
         write_type = WriteType::Delete;
         short_value = None;
     } else {

@@ -129,7 +129,7 @@ impl BlockIterator {
             let end = addr.start + self.entry_offs[i + 1] as usize;
             return LocalAddr::new(start, end);
         }
-        return LocalAddr::new(start, addr.end);
+        LocalAddr::new(start, addr.end)
     }
 
     fn set_idx(&mut self, i: i32) {
@@ -220,37 +220,31 @@ impl TableIterator {
 
     fn set_block(&mut self, b_pos: i32) -> bool {
         self.b_pos = b_pos;
-        let block: Bytes;
-        match self.t.load_block(self.b_pos as usize, &mut self.block_buf) {
-            Ok(b) => {
-                block = b;
-            }
+        let block = match self.t.load_block(self.b_pos as usize, &mut self.block_buf) {
+            Ok(b) => b,
             Err(e) => {
                 self.err = Some(e);
                 return false;
             }
-        }
+        };
         self.bi.set_block(block);
-        return true;
+        true
     }
 
     fn set_old_block(&mut self, b_pos: i32) -> bool {
         self.old_b_pos = b_pos;
-        let block: Bytes;
-        match self
+        let block = match self
             .t
             .load_old_block(self.old_b_pos as usize, &mut self.block_buf)
         {
-            Ok(b) => {
-                block = b;
-            }
+            Ok(b) => b,
             Err(e) => {
                 self.err = Some(e);
                 return false;
             }
-        }
+        };
         self.old_bi.set_block(block);
-        return true;
+        true
     }
 
     fn seek_to_first(&mut self) {
@@ -416,16 +410,16 @@ impl TableIterator {
         if old_b_pos == -1 {
             old_b_pos = 0;
         }
-        if self.old_bi.b.is_empty() || old_b_pos != self.old_b_pos {
-            if !self.set_old_block(old_b_pos) {
-                return self.old_bi.err.clone();
-            }
+        if (self.old_bi.b.is_empty() || old_b_pos != self.old_b_pos)
+            && !self.set_old_block(old_b_pos)
+        {
+            return self.old_bi.err.clone();
         }
         self.old_bi.seek(self.key_buf.chunk());
         assert!(self.old_bi.err.is_none());
         assert!(self.bi.old_ver == self.old_bi.ver);
         self.iter_state = IterState::OldVersion;
-        return None;
+        None
     }
 
     pub fn set_reversed(&mut self, reversed: bool) {
@@ -471,7 +465,7 @@ impl table::Iterator for TableIterator {
         }
         self.err = self.seek_old_block();
         assert!(self.err.is_none());
-        return true;
+        true
     }
 
     fn rewind(&mut self) {
@@ -495,14 +489,13 @@ impl table::Iterator for TableIterator {
     }
 
     fn value(&self) -> table::Value {
-        let bi: &BlockIterator;
-        if self.iter_state == IterState::NewVersion {
-            bi = &self.bi;
+        let bi = if self.iter_state == IterState::NewVersion {
+            &self.bi
         } else {
-            bi = &self.old_bi;
-        }
+            &self.old_bi
+        };
         let bin = bi.val_addr.get(bi.b.chunk());
-        return table::Value::new_with_meta_version(bi.meta, bi.ver, bi.user_meta_len, bin);
+        table::Value::new_with_meta_version(bi.meta, bi.ver, bi.user_meta_len, bin)
     }
 
     fn valid(&self) -> bool {

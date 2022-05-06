@@ -84,7 +84,7 @@ impl DFS for InMemFS {
         if let Some(file) = self.files.get(&file_id).as_deref() {
             return Ok(file.data.slice(..));
         }
-        return Err(Error::NotExists(file_id));
+        Err(Error::NotExists(file_id))
     }
 
     async fn create(&self, file_id: u64, data: Bytes, _opts: Options) -> Result<()> {
@@ -106,7 +106,7 @@ impl DFS for InMemFS {
     }
 
     fn tenant_id(&self) -> u32 {
-        return 0;
+        0
     }
 }
 
@@ -141,7 +141,8 @@ impl File for InMemFile {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<()> {
         let off_usize = offset as usize;
         let length = buf.len();
-        Ok(buf.copy_from_slice(&self.data[off_usize..off_usize + length]))
+        buf.copy_from_slice(&self.data[off_usize..off_usize + length]);
+        Ok(())
     }
 }
 
