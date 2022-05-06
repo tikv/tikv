@@ -431,6 +431,7 @@ impl RouterInner {
 
     pub async fn on_events(&self, kv: ApplyEvents) -> Vec<(String, Result<()>)> {
         use futures::FutureExt;
+        HANDLE_KV_HISTOGRAM.observe(kv.len() as _);
         let partitioned_events = kv.partition_by_range(&self.ranges.rl());
         let tasks = partitioned_events
             .into_iter()

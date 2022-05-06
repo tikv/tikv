@@ -2324,9 +2324,12 @@ impl Default for BackupConfig {
 pub struct BackupStreamConfig {
     pub num_threads: usize,
     #[online_config(skip)]
+    pub io_threads: usize,
+    #[online_config(skip)]
     pub enable: bool,
     pub temp_path: String,
     pub temp_file_size_limit_per_task: ReadableSize,
+    pub initial_scan_pending_memory_quota: ReadableSize,
 }
 
 impl BackupStreamConfig {
@@ -2341,13 +2344,17 @@ impl BackupStreamConfig {
 impl Default for BackupStreamConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::cpu_cores_quota();
+        let total_mem = SysQuota::memory_limit_in_bytes();
+        let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
+            io_threads: 2,
             enable: false,
             // TODO: may be use raft store directory
             temp_path: String::new(),
             temp_file_size_limit_per_task: ReadableSize::mb(128),
+            initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
         }
     }
 }
@@ -2650,8 +2657,8 @@ pub struct TiKvConfig {
     pub backup: BackupConfig,
 
     #[online_config(submodule)]
-    // The term "log-backup" and "backup-stream" points to the same object.
-    // But the product name is `log-backup`.
+    // The term "log backup" and "backup stream" are identity.
+    // The "log backup" should be the only product name exposed to the user.
     #[serde(rename = "log-backup")]
     pub backup_stream: BackupStreamConfig,
 

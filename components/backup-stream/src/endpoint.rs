@@ -28,6 +28,7 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
+use yatp::task::callback::Handle as YatpHandle;
 
 use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
 use crate::{
@@ -61,6 +62,8 @@ pub struct Endpoint<S: MetaStore + 'static, R, E, RT, PDC> {
     pd_client: Arc<PDC>,
     subs: SubscriptionTracer,
     concurrency_manager: ConcurrencyManager,
+    initial_scan_memory_quota: PendingMemoryQuota,
+    scan_pool: ScanPool,
 }
 
 impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
@@ -82,8 +85,10 @@ where
         pd_client: Arc<PDC>,
         cm: ConcurrencyManager,
     ) -> Self {
-        let pool = create_tokio_runtime(config.num_threads, "br-stream")
+        // Always use 2 threads for I/O tasks.
+        let pool = create_tokio_runtime(config.io_threads, "br-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
+        let scan_pool = create_scan_pool(config.num_threads);
 
         // TODO consider TLS?
         let meta_client = Some(cli);
@@ -107,7 +112,8 @@ where
             });
             pool.spawn(Self::starts_flush_ticks(range_router.clone()));
         }
-
+        let initial_scan_memory_quota =
+            PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
         info!("the endpoint of backup stream started"; "path" => %config.temp_path);
         Endpoint {
             meta_client,
@@ -122,6 +128,8 @@ where
             pd_client,
             subs: Default::default(),
             concurrency_manager: cm,
+            initial_scan_memory_quota,
+            scan_pool,
         }
     }
 }
@@ -145,8 +153,9 @@ where
         concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<EtcdStore, R, E, RT, PDC> {
         crate::metrics::STREAM_ENABLED.inc();
-        let pool = create_tokio_runtime(config.num_threads, "backup-stream")
+        let pool = create_tokio_runtime(config.io_threads, "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
+        let scan_pool = create_scan_pool(config.num_threads);
 
         // TODO consider TLS?
         let meta_client = match pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
@@ -182,6 +191,8 @@ where
             pool.spawn(Self::starts_flush_ticks(range_router.clone()));
         }
 
+        let initial_scan_memory_quota =
+            PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         Endpoint {
             meta_client,
@@ -196,6 +207,8 @@ where
             pd_client,
             subs: Default::default(),
             concurrency_manager,
+            initial_scan_memory_quota,
+            scan_pool,
         }
     }
 }
@@ -369,7 +382,6 @@ where
             utils::handle_on_event_result(&sched, router.on_events(kvs).await);
             metrics::HEAP_MEMORY
                 .sub(total_size as _);
-            HANDLE_KV_HISTOGRAM.observe(kv_count as _);
             let time_cost = sw.lap().as_secs_f64();
             if time_cost > SLOW_EVENT_THRESHOLD {
                 warn!("write to temp file too slow."; "time_cost" => ?time_cost, "region_id" => %region_id, "len" => %kv_count);
@@ -388,6 +400,8 @@ where
             self.range_router.clone(),
             self.subs.clone(),
             self.scheduler.clone(),
+            self.initial_scan_memory_quota.clone(),
+            self.pool.handle().clone(),
         )
     }
 
@@ -428,7 +442,7 @@ where
                 "end_key" => utils::redact(&end_key),
             );
         }
-        tokio::task::spawn_blocking(move || {
+        self.spawn_at_scan_pool(move || {
             let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
             match range_init_result {
                 Ok(()) => {
@@ -658,10 +672,15 @@ where
         })?;
         let region = region.clone();
 
-        self.pool.spawn_blocking(move || {
+        // we should not spawn initial scanning tasks to the tokio blocking pool
+        // beacuse it is also used for converting sync File I/O to async. (for now!)
+        // In that condition, if we blocking for some resouces(for example, the `MemoryQuota`)
+        // at the block threads, we may meet some ghosty deadlock.
+        self.spawn_at_scan_pool(move || {
+            let begin = Instant::now_coarse();
             match init.do_initial_scan(&region, last_checkpoint, snap) {
                 Ok(stat) => {
-                    info!("initial scanning of leader transforming finished!"; "statistics" => ?stat, "region" => %region.get_id(), "from_ts" => %last_checkpoint);
+                    info!("initial scanning of leader transforming finished!"; "cost" => ?begin.saturating_elapsed(), "region" => %region.get_id(), "from_ts" => %last_checkpoint);
                     utils::record_cf_stat("lock", &stat.lock);
                     utils::record_cf_stat("write", &stat.write);
                     utils::record_cf_stat("default", &stat.data);
@@ -670,6 +689,16 @@ where
             }
         });
         Ok(())
+    }
+
+    // spawn a task at the scan pool.
+    fn spawn_at_scan_pool(&self, task: impl FnOnce() + Send + 'static) {
+        self.scan_pool.spawn(move |_: &mut YatpHandle<'_>| {
+            tikv_alloc::add_thread_memory_accessor();
+            let _io_guard = file_system::WithIOType::new(file_system::IOType::Replication);
+            task();
+            tikv_alloc::remove_thread_memory_accessor();
+        })
     }
 
     fn find_task_by_region(&self, r: &Region) -> Option<String> {
@@ -852,14 +881,24 @@ where
     }
 }
 
+type ScanPool = yatp::ThreadPool<yatp::task::callback::TaskCell>;
+
+/// Create a yatp pool for doing initial scanning.
+fn create_scan_pool(num_threads: usize) -> ScanPool {
+    yatp::Builder::new("log-backup-scan")
+        .max_thread_count(num_threads)
+        .build_callback_pool()
+}
+
 /// Create a standard tokio runtime
 /// (which allows io and time reactor, involve thread memory accessor),
 fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .thread_name(thread_name)
         // Maybe make it more configurable?
-        // currently, blocking threads would be used for incremental scanning.
-        .max_blocking_threads(thread_count)
+        // currently, blocking threads would be used for tokio local I/O.
+        // (`File` API in `tokio::io` would use this pool.)
+        .max_blocking_threads(thread_count * 8)
         .worker_threads(thread_count)
         .enable_io()
         .enable_time()
