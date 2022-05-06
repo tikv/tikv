@@ -1,16 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ffi::CString;
-use std::marker::PhantomData;
+use std::{ffi::CString, marker::PhantomData};
+
+use api_version::{KeyMode, KvFormat, RawValue};
+use engine_rocks::{
+    raw::{
+        new_compaction_filter_raw, CompactionFilter, CompactionFilterContext,
+        CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
+        DBCompactionFilter,
+    },
+    RocksTtlProperties,
+};
+use engine_traits::raw_ttl::ttl_current_ts;
 
 use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
-use api_version::{KeyMode, KvFormat, RawValue};
-use engine_rocks::raw::{
-    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
-};
-use engine_rocks::RocksTtlProperties;
-use engine_traits::raw_ttl::ttl_current_ts;
 
 #[derive(Default)]
 pub struct TtlCompactionFilterFactory<F: KvFormat> {

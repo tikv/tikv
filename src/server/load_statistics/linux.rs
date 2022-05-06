@@ -1,14 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::time::Instant;
+use std::{
+    cmp,
+    sync::{atomic::Ordering, Arc},
+    time::Instant,
+};
 
 use collections::HashMap;
+use tikv_util::sys::thread::{self, Pid};
 
 use crate::server::load_statistics::ThreadLoadPool;
-use tikv_util::sys::thread::{self, Pid};
 
 /// A Linux-specific `ThreadLoadStatistics`. It collects threads load metrics.
 pub struct ThreadLoadStatistics {
@@ -112,8 +113,7 @@ fn calc_cpu_load(elapsed_millis: usize, start_usage: f64, end_usage: f64) -> usi
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
-    use std::time::Duration;
+    use std::{thread, time::Duration};
 
     use super::*;
 

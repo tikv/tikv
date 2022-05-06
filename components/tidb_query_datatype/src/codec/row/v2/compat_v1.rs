@@ -2,12 +2,12 @@
 
 //! A compatible layer for converting V2 row datum into V1 row datum.
 
-use crate::{FieldTypeAccessor, FieldTypeTp};
-use codec::number::NumberCodec;
-use codec::prelude::BufferWriter;
+use codec::{number::NumberCodec, prelude::BufferWriter};
 
-use crate::codec::datum_codec::DatumFlagAndPayloadEncoder;
-use crate::codec::{datum, Error, Result};
+use crate::{
+    codec::{datum, datum_codec::DatumFlagAndPayloadEncoder, Error, Result},
+    FieldTypeAccessor, FieldTypeTp,
+};
 
 #[inline]
 pub fn decode_v2_u64(v: &[u8]) -> Result<u64> {
@@ -134,14 +134,17 @@ impl<T: BufferWriter> V1CompatibleEncoder for T {}
 /// encoded-bytes using v1 directly.
 #[cfg(test)]
 mod tests {
-    use super::super::encoder_for_test::{Column, ScalarValueEncoder};
-    use super::V1CompatibleEncoder;
-    use crate::FieldTypeTp;
+    use std::{f64, i16, i32, i64, i8, u16, u32, u64, u8};
+
+    use super::{
+        super::encoder_for_test::{Column, ScalarValueEncoder},
+        V1CompatibleEncoder,
+    };
     use crate::{
         codec::{data_type::*, datum_codec::RawDatumDecoder},
         expr::EvalContext,
+        FieldTypeTp,
     };
-    use std::{f64, i16, i32, i64, i8, u16, u32, u64, u8};
 
     fn encode_to_v1_compatible(ctx: &mut EvalContext, col: &Column) -> Vec<u8> {
         let mut buf_v2 = vec![];

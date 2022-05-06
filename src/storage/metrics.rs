@@ -2,23 +2,20 @@
 
 //! Prometheus metrics for storage functionality.
 
+use std::{cell::RefCell, mem, sync::Arc};
+
+use collections::HashMap;
 use engine_rocks::ReadPerfContext;
+use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
+use pd_client::BucketMeta;
 use prometheus::*;
 use prometheus_static_metric::*;
+use raftstore::store::{util::build_key_range, ReadStats};
 
-use std::cell::RefCell;
-use std::mem;
-use std::sync::Arc;
-
-use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
-use crate::storage::kv::{FlowStatsReporter, Statistics};
-use collections::HashMap;
-use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb;
-use kvproto::pdpb::QueryKind;
-use pd_client::BucketMeta;
-use raftstore::store::util::build_key_range;
-use raftstore::store::ReadStats;
+use crate::{
+    server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail},
+    storage::kv::{FlowStatsReporter, Statistics},
+};
 
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,

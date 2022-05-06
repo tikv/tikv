@@ -1,36 +1,41 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::{Path, PathBuf};
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
-use std::{cmp, fs};
-
-use futures::channel::mpsc as future_mpsc;
-use grpcio::{ChannelBuilder, Environment};
+use std::{
+    cmp, fs,
+    path::{Path, PathBuf},
+    sync::*,
+    thread,
+    time::Duration,
+};
 
 use api_version::{dispatch_api_version, KvFormat, RawValue};
 use backup::Task;
 use collections::HashMap;
-use engine_traits::IterOptions;
-use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage_export::make_local_backend;
-use kvproto::brpb::*;
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::TikvClient;
+use futures::channel::mpsc as future_mpsc;
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::{brpb::*, kvrpcpb::*, tikvpb::TikvClient};
 use rand::Rng;
 use test_raftstore::*;
-use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query_common::storage::{IntervalRange, Range};
-use tikv::coprocessor::checksum_crc64_xor;
-use tikv::coprocessor::dag::TiKvStorage;
-use tikv::storage::kv::Engine;
-use tikv::storage::SnapshotStore;
-use tikv::{config::BackupConfig, storage::kv::SnapContext};
-use tikv_util::config::ReadableSize;
-use tikv_util::time::Instant;
-use tikv_util::worker::{LazyWorker, Worker};
-use tikv_util::HandyRwLock;
+use tidb_query_common::storage::{
+    scanner::{RangesScanner, RangesScannerOptions},
+    IntervalRange, Range,
+};
+use tikv::{
+    config::BackupConfig,
+    coprocessor::{checksum_crc64_xor, dag::TiKvStorage},
+    storage::{
+        kv::{Engine, SnapContext},
+        SnapshotStore,
+    },
+};
+use tikv_util::{
+    config::ReadableSize,
+    time::Instant,
+    worker::{LazyWorker, Worker},
+    HandyRwLock,
+};
 use txn_types::TimeStamp;
 
 pub struct TestSuite {

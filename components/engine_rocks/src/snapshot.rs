@@ -1,16 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Formatter};
-use std::sync::Arc;
+use std::{
+    fmt::{self, Debug, Formatter},
+    sync::Arc,
+};
 
 use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot};
-use rocksdb::rocksdb_options::UnsafeSnap;
-use rocksdb::{DBIterator, DB};
+use rocksdb::{rocksdb_options::UnsafeSnap, DBIterator, DB};
 
-use crate::db_vector::RocksDBVector;
-use crate::options::RocksReadOptions;
-use crate::util::get_cf_handle;
-use crate::RocksEngineIterator;
+use crate::{
+    db_vector::RocksDBVector, options::RocksReadOptions, util::get_cf_handle, RocksEngineIterator,
+};
 
 pub struct RocksSnapshot {
     db: Arc<DB>,

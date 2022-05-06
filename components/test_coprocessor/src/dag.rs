@@ -1,19 +1,19 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
-
+use kvproto::{
+    coprocessor::{KeyRange, Request},
+    kvrpcpb::Context,
+};
 use protobuf::Message;
-
-use kvproto::coprocessor::{KeyRange, Request};
-use kvproto::kvrpcpb::Context;
-use tipb::ColumnInfo;
-use tipb::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
-use tipb::{ByItem, Expr, ExprType};
-use tipb::{Chunk, DagRequest};
-
 use tidb_query_datatype::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv_util::codec::number::NumberEncoder;
+use tipb::{
+    Aggregation, ByItem, Chunk, ColumnInfo, DagRequest, ExecType, Executor, Expr, ExprType,
+    IndexScan, Limit, Selection, TableScan, TopN,
+};
+
+use super::*;
 
 pub struct DAGSelect {
     pub execs: Vec<Executor>,

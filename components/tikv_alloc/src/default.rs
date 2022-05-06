@@ -1,8 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::io;
+
 use super::error::{ProfError, ProfResult};
 use crate::AllocStats;
-use std::io;
 
 pub fn dump_stats() -> String {
     String::new()

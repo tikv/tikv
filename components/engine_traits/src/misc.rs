@@ -5,10 +5,9 @@
 //!
 //! FIXME: Things here need to be moved elsewhere.
 
-use crate::cf_names::CFNamesExt;
-use crate::errors::Result;
-use crate::flow_control_factors::FlowControlFactorsExt;
-use crate::range::Range;
+use crate::{
+    cf_names::CFNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt, range::Range,
+};
 
 #[derive(Clone, Debug)]
 pub enum DeleteStrategy {

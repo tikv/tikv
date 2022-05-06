@@ -1,22 +1,29 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::hash_map::Entry;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    collections::hash_map::Entry,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
-use futures::future::{self, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
+use futures::{
+    future::{self, TryFutureExt},
+    sink::SinkExt,
+    stream::TryStreamExt,
+};
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility};
-use tikv_util::worker::*;
-use tikv_util::{error, info, warn};
+use tikv_util::{error, info, warn, worker::*};
 
-use crate::channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY};
-use crate::delegate::{Downstream, DownstreamID, DownstreamState};
-use crate::endpoint::{Deregister, Task};
+use crate::{
+    channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY},
+    delegate::{Downstream, DownstreamID, DownstreamState},
+    endpoint::{Deregister, Task},
+};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -287,6 +294,7 @@ impl ChangeData for Service {
 #[cfg(feature = "failpoints")]
 async fn sleep_before_drain_change_event() {
     use std::time::{Duration, Instant};
+
     use tikv_util::timer::GLOBAL_TIMER_HANDLE;
     let should_sleep = || {
         fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
@@ -301,16 +309,14 @@ async fn sleep_before_drain_change_event() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     use futures::executor::block_on;
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
     use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
 
-    use crate::channel::{poll_timeout, recv_timeout, CdcEvent};
-
     use super::*;
+    use crate::channel::{poll_timeout, recv_timeout, CdcEvent};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = MemoryQuota::new(capacity);

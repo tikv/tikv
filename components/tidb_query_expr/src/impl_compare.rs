@@ -1,15 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{max, min, Ordering};
-use std::str;
+use std::{
+    cmp::{max, min, Ordering},
+    str,
+};
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::Collator;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::Time;
-use tidb_query_datatype::codec::Error;
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{
+    codec::{collation::Collator, data_type::*, mysql::Time, Error},
+    expr::EvalContext,
+};
 
 #[rpn_fn(nullable)]
 #[inline]
@@ -538,12 +539,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{builder::FieldTypeBuilder, Collation, FieldTypeFlag, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::test_util::RpnFnScalarEvaluator;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -815,8 +814,7 @@ mod tests {
 
     #[test]
     fn test_compare_decimal() {
-        use tidb_query_datatype::codec::convert::ConvertTo;
-        use tidb_query_datatype::expr::EvalContext;
+        use tidb_query_datatype::{codec::convert::ConvertTo, expr::EvalContext};
         fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
             let val = f.convert(ctx)?;
             Ok(val)

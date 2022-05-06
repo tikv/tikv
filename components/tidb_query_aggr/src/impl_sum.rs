@@ -2,14 +2,11 @@
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::EvalType;
+use tidb_query_datatype::{codec::data_type::*, expr::EvalContext, EvalType};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
-use super::summable::Summable;
-use super::*;
+use super::{summable::Summable, *};
 
 /// The parser for SUM aggregate function.
 pub struct AggrFnDefinitionParserSum;
@@ -31,6 +28,7 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         use std::convert::TryFrom;
+
         use tidb_query_datatype::FieldTypeAccessor;
 
         assert_eq!(root_expr.get_tp(), ExprType::Sum);
@@ -306,14 +304,15 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        FieldTypeAccessor, FieldTypeTp,
+    };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
-    use crate::parser::AggrDefinitionParser;
-
     use super::*;
+    use crate::parser::AggrDefinitionParser;
 
     #[test]
     fn test_sum_enum() {

@@ -1,9 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use test::Bencher;
-
 use kvproto::kvrpcpb::Context;
-
+use test::Bencher;
 use test_storage::SyncTestStorageBuilder;
 use test_util::*;
 use txn_types::{Key, Mutation};

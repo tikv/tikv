@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
+
 use engine_rocks::ReadPerfContext;
 use lazy_static::*;
 use prometheus::*;
 use prometheus_static_metric::*;
-use std::cell::RefCell;
 use tikv::storage::Statistics;
 
 /// Installing a new capture contains 2 phases, one for incremental scanning and one for

@@ -11,8 +11,7 @@
 //! single `TsoRequest` to the PD server. The other future receives `TsoResponse`s from the PD
 //! server and allocates timestamps for the requests.
 
-use crate::metrics::PD_PENDING_TSO_REQUEST_GAUGE;
-use crate::{Error, Result};
+use std::{cell::RefCell, collections::VecDeque, pin::Pin, rc::Rc, thread};
 
 use futures::{
     executor::block_on,
@@ -22,10 +21,11 @@ use futures::{
 };
 use grpcio::{CallOption, WriteFlags};
 use kvproto::pdpb::{PdClient, TsoRequest, TsoResponse};
-use std::{cell::RefCell, collections::VecDeque, pin::Pin, rc::Rc, thread};
 use tikv_util::{box_err, info};
 use tokio::sync::{mpsc, oneshot, watch};
 use txn_types::TimeStamp;
+
+use crate::{metrics::PD_PENDING_TSO_REQUEST_GAUGE, Error, Result};
 
 /// It is an empirical value.
 const MAX_BATCH_SIZE: usize = 64;

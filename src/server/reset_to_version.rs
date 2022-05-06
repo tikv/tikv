@@ -1,17 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Result;
-use engine_rocks::RocksEngine;
-use engine_rocks::{RocksEngineIterator, RocksWriteBatch};
-use engine_traits::WriteBatch;
-use engine_traits::WriteBatchExt;
-use engine_traits::{IterOptions, Iterator, CF_DEFAULT, CF_WRITE};
-use engine_traits::{Iterable, CF_LOCK};
-use engine_traits::{Mutable, SeekKey};
-use std::cell::RefCell;
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::{
+    cell::RefCell,
+    sync::{Arc, Mutex},
+    thread::JoinHandle,
+};
+
+use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatch};
+use engine_traits::{
+    IterOptions, Iterable, Iterator, Mutable, SeekKey, WriteBatch, WriteBatchExt, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
+};
 use txn_types::{Key, TimeStamp, Write, WriteRef};
+
+use super::Result;
 
 const BATCH_SIZE: usize = 256;
 
@@ -252,14 +254,16 @@ impl ResetToVersionManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-    use engine_rocks::raw_util::CFOptions;
-    use engine_rocks::Compat;
-    use engine_traits::{WriteBatch, WriteBatchExt};
-    use engine_traits::{CF_LOCK, CF_RAFT};
+    use engine_rocks::{
+        raw::{ColumnFamilyOptions, DBOptions},
+        raw_util::CFOptions,
+        Compat,
+    };
+    use engine_traits::{WriteBatch, WriteBatchExt, CF_LOCK, CF_RAFT};
     use tempfile::Builder;
     use txn_types::{Lock, LockType, WriteType};
+
+    use super::*;
 
     #[test]
     fn test_basic() {

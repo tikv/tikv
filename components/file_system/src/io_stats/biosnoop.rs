@@ -1,18 +1,20 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::metrics::*;
-use crate::IOBytes;
-use crate::IOType;
-
-use std::collections::VecDeque;
-use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::{
+    collections::VecDeque,
+    ptr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
+};
 
 use bcc::{table::Table, Kprobe, BPF};
 use crossbeam_utils::CachePadded;
 use strum::{EnumCount, IntoEnumIterator};
 use tikv_util::sys::thread;
+
+use crate::{metrics::*, IOBytes, IOType};
 
 /// Biosnoop leverages BCC to make use of eBPF to get disk IO of TiKV requests.
 /// The BCC code is in `biosnoop.c` which is compiled and attached kernel on
@@ -269,22 +271,22 @@ pub fn flush_io_latency_metrics() {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Seek, SeekFrom, Write},
+        sync::{Arc, Condvar, Mutex},
+    };
+
+    use libc::O_DIRECT;
+    use maligned::{AsBytes, AsBytesMut, A512};
+    use rand::Rng;
+    use tempfile::TempDir;
+    use test::Bencher;
+
     use super::{
         fetch_io_bytes, flush_io_latency_metrics, get_io_type, init, set_io_type, BPF_CONTEXT,
         MAX_THREAD_IDX,
     };
-    use crate::metrics::*;
-    use crate::IOType;
-    use crate::OpenOptions;
-
-    use libc::O_DIRECT;
-    use maligned::A512;
-    use maligned::{AsBytes, AsBytesMut};
-    use rand::Rng;
-    use std::sync::{Arc, Condvar, Mutex};
-    use std::{io::Read, io::Seek, io::SeekFrom, io::Write};
-    use tempfile::TempDir;
-    use test::Bencher;
+    use crate::{metrics::*, IOType, OpenOptions};
 
     #[test]
     fn test_biosnoop() {

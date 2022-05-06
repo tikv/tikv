@@ -1,10 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::{Error as IoError, ErrorKind, Result as IoResult};
-use std::path::{Path, PathBuf};
-use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, Mutex};
-use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    io::{Error as IoError, ErrorKind, Result as IoResult},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    thread::JoinHandle,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use crossbeam::channel::{self, select, tick};
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
@@ -14,15 +19,16 @@ use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo,
 use protobuf::Message;
 use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
-use crate::config::EncryptionConfig;
-
-use crate::crypter::{self, compat, Iv};
-use crate::encrypted_file::EncryptedFile;
-use crate::file_dict_file::FileDictionaryFile;
-use crate::io::{DecrypterReader, EncrypterWriter};
-use crate::master_key::Backend;
-use crate::metrics::*;
-use crate::{Error, Result};
+use crate::{
+    config::EncryptionConfig,
+    crypter::{self, compat, Iv},
+    encrypted_file::EncryptedFile,
+    file_dict_file::FileDictionaryFile,
+    io::{DecrypterReader, EncrypterWriter},
+    master_key::Backend,
+    metrics::*,
+    Error, Result,
+};
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
@@ -753,15 +759,17 @@ impl EncryptionKeyManager for DataKeyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::master_key::tests::{decrypt_called, encrypt_called, MockBackend};
-    use crate::master_key::{FileBackend, PlaintextBackend};
-
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
     use file_system::{remove_file, File};
     use matches::assert_matches;
     use tempfile::TempDir;
     use test_util::create_test_key_file;
+
+    use super::*;
+    use crate::master_key::{
+        tests::{decrypt_called, encrypt_called, MockBackend},
+        FileBackend, PlaintextBackend,
+    };
 
     lazy_static::lazy_static! {
         static ref LOCK_FOR_GAUGE: Mutex<i32> = Mutex::new(1);

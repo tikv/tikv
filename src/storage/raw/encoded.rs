@@ -1,15 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::{Iterator, Result, Snapshot, RAW_VALUE_TOMBSTONE};
-use crate::storage::Statistics;
+use std::marker::PhantomData;
 
 use api_version::KvFormat;
-use engine_traits::raw_ttl::ttl_current_ts;
-use engine_traits::CfName;
-use engine_traits::{IterOptions, ReadOptions};
-use std::marker::PhantomData;
+use engine_traits::{raw_ttl::ttl_current_ts, CfName, IterOptions, ReadOptions};
 use txn_types::{Key, Value};
+
+use crate::storage::{
+    kv::{Iterator, Result, Snapshot, RAW_VALUE_TOMBSTONE},
+    Statistics,
+};
 
 #[derive(Clone)]
 pub struct RawEncodeSnapshot<S: Snapshot, F: KvFormat> {

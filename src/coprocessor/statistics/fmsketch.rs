@@ -53,15 +53,14 @@ impl FmSketch {
 
 #[cfg(test)]
 mod tests {
+    use std::{iter::repeat, slice::from_ref};
+
+    use tidb_query_datatype::{
+        codec::{datum, datum::Datum, Result},
+        expr::EvalContext,
+    };
+
     use super::*;
-
-    use std::iter::repeat;
-    use std::slice::from_ref;
-
-    use tidb_query_datatype::codec::datum;
-    use tidb_query_datatype::codec::datum::Datum;
-    use tidb_query_datatype::codec::Result;
-    use tidb_query_datatype::expr::EvalContext;
 
     struct TestData {
         samples: Vec<Datum>,

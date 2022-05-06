@@ -1,30 +1,22 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::RocksEngine;
-use crate::options::RocksReadOptions;
-use engine_traits::Error;
-use engine_traits::IterOptions;
-use engine_traits::CF_DEFAULT;
+use std::{path::PathBuf, rc::Rc, sync::Arc};
+
 use engine_traits::{
-    ExternalSstFileInfo, SstCompressionType, SstMetaInfo, SstWriter, SstWriterBuilder,
+    Error, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SeekKey,
+    SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
 };
-use engine_traits::{Iterable, Result, SstExt, SstReader};
-use engine_traits::{Iterator, SeekKey};
 use fail::fail_point;
-use rocksdb::rocksdb::supported_compression;
-use rocksdb::DBCompressionType;
-use rocksdb::DBIterator;
-use rocksdb::ExternalSstFileInfo as RawExternalSstFileInfo;
-use rocksdb::DB;
-use rocksdb::{ColumnFamilyOptions, SstFileReader};
-use rocksdb::{Env, EnvOptions, SequentialFile, SstFileWriter};
-use std::rc::Rc;
-use std::sync::Arc;
+use kvproto::import_sstpb::SstMeta;
+use rocksdb::{
+    rocksdb::supported_compression, ColumnFamilyOptions, DBCompressionType, DBIterator, Env,
+    EnvOptions, ExternalSstFileInfo as RawExternalSstFileInfo, SequentialFile, SstFileReader,
+    SstFileWriter, DB,
+};
+
 // FIXME: Move RocksSeekKey into a common module since
 // it's shared between multiple iterators
-use crate::engine_iterator::RocksSeekKey;
-use kvproto::import_sstpb::SstMeta;
-use std::path::PathBuf;
+use crate::{engine::RocksEngine, engine_iterator::RocksSeekKey, options::RocksReadOptions};
 
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
@@ -364,10 +356,12 @@ pub fn from_rocks_compression_type(ct: DBCompressionType) -> Option<SstCompressi
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+
+    use tempfile::Builder;
+
     use super::*;
     use crate::util::new_default_engine;
-    use std::io::Read;
-    use tempfile::Builder;
 
     #[test]
     fn test_smoke() {

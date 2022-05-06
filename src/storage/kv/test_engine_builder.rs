@@ -1,15 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::config::BlockCacheConfig;
-use crate::storage::kv::{Result, RocksEngine};
-use engine_rocks::raw::ColumnFamilyOptions;
-use engine_rocks::raw_util::CFOptions;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+use engine_rocks::{raw::ColumnFamilyOptions, raw_util::CFOptions};
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IORateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tikv_util::config::ReadableSize;
+
+use crate::storage::{
+    config::BlockCacheConfig,
+    kv::{Result, RocksEngine},
+};
 
 // Duplicated from rocksdb_engine
 const TEMP_DIR: &str = "";
@@ -141,16 +146,17 @@ impl Default for TestEngineBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CfStatistics, TEST_ENGINE_CFS};
-    use super::super::{Engine, Snapshot};
-    use super::*;
-    use crate::storage::{Cursor, CursorBuilder, ScanMode};
     use engine_rocks::ReadPerfInstant;
     use engine_traits::IterOptions;
     use kvproto::kvrpcpb::Context;
     use tikv_kv::tests::*;
-    use txn_types::Key;
-    use txn_types::TimeStamp;
+    use txn_types::{Key, TimeStamp};
+
+    use super::{
+        super::{CfStatistics, Engine, Snapshot, TEST_ENGINE_CFS},
+        *,
+    };
+    use crate::storage::{Cursor, CursorBuilder, ScanMode};
 
     #[test]
     fn test_rocksdb() {

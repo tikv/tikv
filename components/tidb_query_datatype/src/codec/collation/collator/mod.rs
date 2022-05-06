@@ -7,36 +7,33 @@ mod utf8mb4_binary;
 mod utf8mb4_general_ci;
 mod utf8mb4_unicode_ci;
 
+use std::{
+    cmp::Ordering,
+    hash::{Hash, Hasher},
+    str,
+};
+
 pub use binary::*;
+use codec::prelude::*;
 pub use gbk_collation::*;
 pub use latin1_bin::*;
 pub use utf8mb4_binary::*;
 pub use utf8mb4_general_ci::*;
 pub use utf8mb4_unicode_ci::*;
 
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
-use std::str;
-
-use codec::prelude::*;
-
-use super::charset::*;
-use super::Collator;
+use super::{charset::*, Collator};
 use crate::codec::Result;
 
 pub const PADDING_SPACE: char = 0x20 as char;
 
 #[cfg(test)]
 mod tests {
-    use crate::codec::collation::Collator;
-    use crate::match_template_collator;
-    use crate::Collation;
+    use crate::{codec::collation::Collator, match_template_collator, Collation};
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]
     fn test_compare() {
-        use std::cmp::Ordering;
-        use std::collections::hash_map::DefaultHasher;
+        use std::{cmp::Ordering, collections::hash_map::DefaultHasher};
 
         let collations = [
             (Collation::Utf8Mb4Bin, 0),
@@ -370,10 +367,9 @@ mod tests {
 
     #[test]
     fn test_latin1_bin() {
+        use std::{cmp::Ordering, collections::hash_map::DefaultHasher, hash::Hasher};
+
         use crate::codec::collation::collator::CollatorLatin1Bin;
-        use std::cmp::Ordering;
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::Hasher;
 
         let cases = vec![
             (

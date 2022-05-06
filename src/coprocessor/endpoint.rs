@@ -1,41 +1,33 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::future::Future;
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::{borrow::Cow, time::Duration};
+use std::{borrow::Cow, future::Future, marker::PhantomData, sync::Arc, time::Duration};
 
 use async_stream::try_stream;
-use futures::channel::mpsc;
-use futures::prelude::*;
-use tidb_query_common::execute_stats::ExecSummary;
-use tokio::sync::Semaphore;
-
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
-use protobuf::CodedInputStream;
-use protobuf::Message;
-use tikv_kv::SnapshotExt;
-use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
-
-use crate::server::Config;
-use crate::storage::kv::{self, with_tls_engine};
-use crate::storage::mvcc::Error as MvccError;
-use crate::storage::{
-    self, need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
-};
-use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
-
-use crate::coprocessor::cache::CachedRequestHandler;
-use crate::coprocessor::interceptors::*;
-use crate::coprocessor::metrics::*;
-use crate::coprocessor::tracker::Tracker;
-use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
+use futures::{channel::mpsc, prelude::*};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
+use protobuf::{CodedInputStream, Message};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
+use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
+use tikv_kv::SnapshotExt;
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant};
+use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
+use tokio::sync::Semaphore;
 use txn_types::Lock;
+
+use crate::{
+    coprocessor::{cache::CachedRequestHandler, interceptors::*, metrics::*, tracker::Tracker, *},
+    read_pool::ReadPoolHandle,
+    server::Config,
+    storage::{
+        self,
+        kv::{self, with_tls_engine, SnapContext},
+        mvcc::Error as MvccError,
+        need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
+    },
+};
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -665,25 +657,24 @@ fn make_error_response(e: Error) -> coppb::Response {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::sync::{atomic, mpsc};
-    use std::thread;
-    use std::vec;
+    use std::{
+        sync::{atomic, mpsc},
+        thread, vec,
+    };
 
     use futures::executor::{block_on, block_on_stream};
     use kvproto::kvrpcpb::IsolationLevel;
-
-    use tipb::Executor;
-    use tipb::Expr;
-
-    use crate::config::CoprReadPoolConfig;
-    use crate::coprocessor::readpool_impl::build_read_pool_for_test;
-    use crate::read_pool::ReadPool;
-    use crate::storage::kv::RocksEngine;
-    use crate::storage::TestEngineBuilder;
     use protobuf::Message;
+    use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
+
+    use super::*;
+    use crate::{
+        config::CoprReadPoolConfig,
+        coprocessor::readpool_impl::build_read_pool_for_test,
+        read_pool::ReadPool,
+        storage::{kv::RocksEngine, TestEngineBuilder},
+    };
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -956,9 +947,11 @@ mod tests {
 
     #[test]
     fn test_full() {
-        use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
         use std::sync::Mutex;
+
         use tikv_util::yatp_pool::{DefaultTicker, YatpPoolBuilder};
+
+        use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 
         let engine = TestEngineBuilder::new().build().unwrap();
 

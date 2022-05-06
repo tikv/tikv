@@ -1,26 +1,33 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use prometheus::IntGauge;
-use std::error::Error;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::{
+    error::Error,
+    fmt::{self, Debug, Display, Formatter},
+    future::Future,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
 
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::compat::Future01CompatExt;
-use futures::compat::Stream01CompatExt;
-use futures::future::{self, FutureExt};
-use futures::stream::StreamExt;
+use futures::{
+    channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+    compat::{Future01CompatExt, Stream01CompatExt},
+    executor::block_on,
+    future::{self, FutureExt},
+    stream::StreamExt,
+};
+use prometheus::IntGauge;
+use yatp::{Remote, ThreadPool};
 
 use super::metrics::*;
-use crate::future::poll_future_notify;
-use crate::timer::GLOBAL_TIMER_HANDLE;
-use crate::yatp_pool::{DefaultTicker, YatpPoolBuilder};
-use futures::executor::block_on;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
-use yatp::{Remote, ThreadPool};
+use crate::{
+    future::poll_future_notify,
+    timer::GLOBAL_TIMER_HANDLE,
+    yatp_pool::{DefaultTicker, YatpPoolBuilder},
+};
 
 #[derive(Eq, PartialEq)]
 pub enum ScheduleError<T> {

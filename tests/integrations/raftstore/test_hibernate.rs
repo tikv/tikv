@@ -1,16 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::*;
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{atomic::*, *},
+    thread,
+    time::Duration,
+};
 
 use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
-use tikv_util::time::Instant;
-use tikv_util::HandyRwLock;
+use tikv_util::{time::Instant, HandyRwLock};
 
 #[test]
 fn test_proposal_prevent_sleep() {

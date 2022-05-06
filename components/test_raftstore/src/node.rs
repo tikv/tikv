@@ -1,43 +1,48 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex, RwLock},
+};
 
-use tempfile::TempDir;
-
-use kvproto::kvrpcpb::ApiVersion;
-use kvproto::metapb;
-use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{self, RaftMessage};
-use raft::eraftpb::MessageType;
-use raft::SnapshotStatus;
-
-use super::*;
-use crate::Config;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt, Peekable};
-use raftstore::coprocessor::config::SplitCheckConfigManager;
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::errors::Error as RaftError;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter};
-use raftstore::store::config::RaftstoreConfigManager;
-use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use raftstore::store::SnapManagerBuilder;
-use raftstore::store::*;
-use raftstore::Result;
+use kvproto::{
+    kvrpcpb::ApiVersion,
+    metapb,
+    raft_cmdpb::*,
+    raft_serverpb::{self, RaftMessage},
+};
+use raft::{eraftpb::MessageType, SnapshotStatus};
+use raftstore::{
+    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
+    errors::Error as RaftError,
+    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    store::{
+        config::RaftstoreConfigManager,
+        fsm::{store::StoreMeta, RaftBatchSystem, RaftRouter},
+        SnapManagerBuilder, *,
+    },
+    Result,
+};
 use resource_metering::CollectorRegHandle;
-use tikv::config::{ConfigController, Module};
-use tikv::import::SstImporter;
-use tikv::server::raftkv::ReplicaReadLockChecker;
-use tikv::server::Node;
-use tikv::server::Result as ServerResult;
-use tikv_util::config::VersionTrack;
-use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
+use tempfile::TempDir;
+use tikv::{
+    config::{ConfigController, Module},
+    import::SstImporter,
+    server::{raftkv::ReplicaReadLockChecker, Node, Result as ServerResult},
+};
+use tikv_util::{
+    config::VersionTrack,
+    time::ThreadReadId,
+    worker::{Builder as WorkerBuilder, LazyWorker},
+};
+
+use super::*;
+use crate::Config;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,

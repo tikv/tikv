@@ -3,11 +3,14 @@
 mod chunk;
 
 use test::Bencher;
-
-use tidb_query_datatype::codec::chunk::{Chunk, ChunkEncoder};
-use tidb_query_datatype::codec::datum::Datum;
-use tidb_query_datatype::codec::mysql::*;
-use tidb_query_datatype::FieldTypeTp;
+use tidb_query_datatype::{
+    codec::{
+        chunk::{Chunk, ChunkEncoder},
+        datum::Datum,
+        mysql::*,
+    },
+    FieldTypeTp,
+};
 use tipb::FieldType;
 
 #[bench]
