@@ -29,6 +29,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, RaftCmdExtraOpts, RegionSnapshot};
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
+use tikv_util::metrics::ThreadBuildWrapper;
 use tikv_util::time::{Instant, Limiter};
 
 use crate::import::duplicate_detect::DuplicateDetector;
@@ -73,12 +74,12 @@ where
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
             .name_prefix("sst-importer")
-            .after_start(move |_| {
+            .after_start_wrapper(move || {
                 tikv_util::thread_group::set_properties(props.clone());
                 tikv_alloc::add_thread_memory_accessor();
                 set_io_type(IOType::Import);
             })
-            .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
+            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
         importer.start_switch_mode_check(&threads, engine.clone());

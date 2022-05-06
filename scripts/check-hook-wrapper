@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# This script checks if use wrapper function to set hook for thread builder in TiKV.
+set -euo pipefail
+
+function error_msg() {
+   echo "If we need add after_start or before_stop hook for thread builder, we should use wrapper function such as after_start_wrapper and before_stop_wrapper. NOTE: we should use them together. See https://github.com/tikv/tikv/pull/12442 for more information." >&2
+}
+
+if [[ "$(uname)" == "Darwin" ]]; then
+   if grep -r -n --color=always --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'after_start' . | grep -v after_start_wrapper; then
+      error_msg
+      exit 1
+   fi
+   if grep -r -n --color=always --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'before_stop' . | grep -v before_stop_wrapper; then
+      error_msg
+      exit 1
+   fi
+else
+   if grep -r -n -P 'after_start(?!_wrapper)' -C 1 --color=always --include \*.rs --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target .; then
+      error_msg
+      exit 1
+   fi
+   if grep -r -n -P 'before_stop(?!_wrapper)' -C 1 --color=always --include \*.rs --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target .; then
+      error_msg
+      exit 1
+   fi
+fi
+
+if grep -r -n --color=always --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'on_thread_start' .; then
+   error_msg
+   exit 1
+fi
+if grep -r -n --color=always --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'on_thread_stop' .; then
+   error_msg
+   exit 1
+fi
+
+echo "Wrapper check passed."

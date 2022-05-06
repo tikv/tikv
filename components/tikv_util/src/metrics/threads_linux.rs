@@ -549,6 +549,28 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
     }
 }
 
+impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
+    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.after_start(move |_| {
+            add_thread_name_to_map();
+            f();
+        })
+    }
+
+    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.before_stop(move |_| {
+            f();
+            remove_thread_name_from_map();
+        })
+    }
+}
+
 pub fn tokio_spawn_wrapper<T>(f: T) -> tokio::task::JoinHandle<T::Output>
 where
     T: Future + Send + 'static,

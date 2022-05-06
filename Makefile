@@ -287,6 +287,7 @@ pre-clippy: unset-override
 clippy: pre-clippy
 	@./scripts/check-redact-log
 	@./scripts/check-docker-build
+	@./scripts/check-hook-wrapper
 	@./scripts/clippy-all
 
 pre-audit:
