@@ -45,13 +45,20 @@ path = "benches/channel/mod.rs"
 test = true
 
 [features]
-default = ["failpoints", "testexport", "test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
-cloud-aws = [ "external_storage_export/cloud-aws" ]
-cloud-gcp = [ "external_storage_export/cloud-gcp" ]
-cloud-azure = [ "external_storage_export/cloud-azure" ]
+cloud-aws = ["external_storage_export/cloud-aws"]
+cloud-gcp = ["external_storage_export/cloud-gcp"]
+cloud-azure = ["external_storage_export/cloud-azure"]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
+
+test-engine-kv-rocksdb = [
+  "raftstore/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "raftstore/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",
 ]
@@ -67,22 +74,26 @@ portable = ["tikv/portable"]
 
 [dependencies]
 api_version = { path = "../components/api_version", default-features = false }
-fail = "0.5"
 batch-system = { path = "../components/batch-system", default-features = false }
+cdc = { path = "../components/cdc", default-features = false }
+collections = { path = "../components/collections" }
 crc64fast = "0.1"
 crossbeam = "0.8"
-online_config = { path = "../components/online_config", default-features = false }
 encryption = { path = "../components/encryption", default-features = false }
-cdc = { path = "../components/cdc", default-features = false }
+error_code = { path = "../components/error_code", default-features = false }
+fail = "0.5"
+file_system = { path = "../components/file_system" }
 futures = "0.3"
-grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.10", default-features = false }
-log_wrappers = { path = "../components/log_wrappers" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+libc = "0.2"
+log_wrappers = { path = "../components/log_wrappers" }
+more-asserts = "0.2"
+online_config = { path = "../components/online_config", default-features = false }
 paste = "1.0"
 pd_client = { path = "../components/pd_client", default-features = false }
 protobuf = { version = "2.8", features = ["bytes"] }
-more-asserts = "0.2"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../components/raft_log_engine", default-features = false }
 raftstore = { path = "../components/raftstore", default-features = false }
@@ -90,58 +101,54 @@ rand = "0.8.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
-tidb_query_datatype = { path = "../components/tidb_query_datatype", default-features = false }
-tidb_query_common = { path = "../components/tidb_query_common", default-features = false }
 tidb_query_aggr = { path = "../components/tidb_query_aggr", default-features = false }
+tidb_query_common = { path = "../components/tidb_query_common", default-features = false }
+tidb_query_datatype = { path = "../components/tidb_query_datatype", default-features = false }
 tidb_query_executors = { path = "../components/tidb_query_executors", default-features = false }
 tidb_query_expr = { path = "../components/tidb_query_expr", default-features = false }
 tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util", default-features = false }
-error_code = { path = "../components/error_code", default-features = false }
-collections = { path = "../components/collections" }
-file_system = { path = "../components/file_system" }
+time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 toml = "0.5"
 txn_types = { path = "../components/txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
-time = "0.1"
-libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 
 [dev-dependencies]
+arrow = "13.0"
+byteorder = "1.2"
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
 causal_ts = { path = "../components/causal_ts" }
+concurrency_manager = { path = "../components/concurrency_manager", default-features = false }
 criterion = "0.3"
 criterion-cpu-time = "0.1"
-arrow = "0.10"
-rand_xorshift = "0.3"
 engine_rocks = { path = "../components/engine_rocks", default-features = false }
 engine_traits = { path = "../components/engine_traits", default-features = false }
 external_storage_export = { path = "../components/external_storage/export", default-features = false }
+file_system = { path = "../components/file_system" }
 hyper = { version = "0.14", default-features = false, features = ["runtime"] }
 keys = { path = "../components/keys", default-features = false }
-profiler = { path = "../components/profiler" }
 panic_hook = { path = "../components/panic_hook" }
-security = { path = "../components/security", default-features = false }
-sst_importer = {path = "../components/sst_importer", default-features = false }
-tipb_helper = { path = "../components/tipb_helper", default-features = false }
-tidb_query_datatype = { path = "../components/tidb_query_datatype", default-features = false }
-test_backup = { path = "../components/test_backup", default-features = false }
-test_util = { path = "../components/test_util", default-features = false }
-test_storage = { path = "../components/test_storage", default-features = false }
-test_coprocessor = { path = "../components/test_coprocessor", default-features = false }
-test_sst_importer = { path = "../components/test_sst_importer", default-features = false }
-test_raftstore = { path = "../components/test_raftstore", default-features = false }
-test_pd = { path = "../components/test_pd", default-features = false }
-byteorder = "1.2"
-serde_json = "1.0"
-tokio = { version = "1.5", features = ["rt-multi-thread"] }
-concurrency_manager = { path = "../components/concurrency_manager", default-features = false }
-file_system = { path = "../components/file_system" }
+profiler = { path = "../components/profiler" }
+rand_xorshift = "0.3"
 resource_metering = { path = "../components/resource_metering" }
+security = { path = "../components/security", default-features = false }
+serde_json = "1.0"
+sst_importer = { path = "../components/sst_importer", default-features = false }
+test_backup = { path = "../components/test_backup", default-features = false }
+test_coprocessor = { path = "../components/test_coprocessor", default-features = false }
+test_pd = { path = "../components/test_pd", default-features = false }
+test_raftstore = { path = "../components/test_raftstore", default-features = false }
+test_sst_importer = { path = "../components/test_sst_importer", default-features = false }
+test_storage = { path = "../components/test_storage", default-features = false }
+test_util = { path = "../components/test_util", default-features = false }
+tidb_query_datatype = { path = "../components/tidb_query_datatype", default-features = false }
+tipb_helper = { path = "../components/tipb_helper", default-features = false }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
 criterion-perf-events = "0.1"

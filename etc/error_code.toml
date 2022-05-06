@@ -73,6 +73,16 @@ error = '''
 KV:Codec:KeyNotFound
 '''
 
+["KV:Codec:ValueLength"]
+error = '''
+KV:Codec:ValueLength
+'''
+
+["KV:Codec:ValueMeta"]
+error = '''
+KV:Codec:ValueMeta
+'''
+
 ["KV:Coprocessor:Locked"]
 error = '''
 KV:Coprocessor:Locked
@@ -163,6 +173,11 @@ error = '''
 KV:Encryption:BothMasterKeyFail
 '''
 
+["KV:Encryption:TailRecordParseIncomplete"]
+error = '''
+KV:Encryption:TailRecordParseIncomplete
+'''
+
 ["KV:Engine:Engine"]
 error = '''
 KV:Engine:Engine
@@ -238,6 +253,11 @@ error = '''
 KV:PD:StoreTombstone
 '''
 
+["KV:PD:GlobalConfigNotFound"]
+error = '''
+KV:PD:GlobalConfigNotFound
+'''
+
 ["KV:PD:Unknown"]
 error = '''
 KV:PD:Unknown
@@ -288,11 +308,6 @@ error = '''
 KV:Raft:NotExists
 '''
 
-["KV:Raft:RequestSnapshotDropped"]
-error = '''
-KV:Raft:RequestSnapshotDropped
-'''
-
 ["KV:Raft:ConfChangeError"]
 error = '''
 KV:Raft:ConfChangeError
@@ -316,6 +331,11 @@ KV:Raftstore:EntryTooLarge
 ["KV:Raftstore:NotLeader"]
 error = '''
 KV:Raftstore:NotLeader
+'''
+
+["KV:Raftstore:DiskFull"]
+error = '''
+KV:Raftstore:DiskFull
 '''
 
 ["KV:Raftstore:StoreNotMatch"]
@@ -388,6 +408,26 @@ error = '''
 KV:Raftstore:ServerIsBusy
 '''
 
+["KV:Raftstore:DataIsNotReady"]
+error = '''
+KV:Raftstore:DataIsNotReady
+'''
+
+["KV:Raftstore:DeadlineExceeded"]
+error = '''
+KV:Raftstore:DeadlineExceeded
+'''
+
+["KV:Raftstore:PendingPrepareMerge"]
+error = '''
+KV:Raftstore:PendingPrepareMerge
+'''
+
+["KV:Raftstore:RecoveryInProgress"]
+error = '''
+KV:Raftstore:RecoveryInProgress
+'''
+
 ["KV:Raftstore:SnapAbort"]
 error = '''
 KV:Raftstore:SnapAbort
@@ -443,9 +483,9 @@ error = '''
 KV:SSTImporter:FileCorrupted
 '''
 
-["KV:SSTImporter:InvalidSSTPath"]
+["KV:SSTImporter:InvalidSstPath"]
 error = '''
-KV:SSTImporter:InvalidSSTPath
+KV:SSTImporter:InvalidSstPath
 '''
 
 ["KV:SSTImporter:InvalidChunk"]
@@ -476,6 +516,21 @@ KV:SSTImporter:BadFormat
 ["KV:SSTImporter:FileConflict"]
 error = '''
 KV:SSTImporter:FileConflict
+'''
+
+["KV:SSTImporter:TtlNotEnabled"]
+error = '''
+KV:SSTImporter:TtlNotEnabled
+'''
+
+["KV:SSTImporter:TtlLenNotEqualsToPairs"]
+error = '''
+KV:SSTImporter:TtlLenNotEqualsToPairs
+'''
+
+["KV:SSTImporter:IncompatibleApiVersion"]
+error = '''
+KV:SSTImporter:IncompatibleApiVersion
 '''
 
 ["KV:Storage:Timeout"]
@@ -518,6 +573,21 @@ error = '''
 KV:Storage:InvalidCF
 '''
 
+["KV:Storage:CFDeprecated"]
+error = '''
+KV:Storage:CFDeprecated
+'''
+
+["KV:Storage:TtlNotEnabled"]
+error = '''
+KV:Storage:TtlNotEnabled
+'''
+
+["KV:Storage:TtlLenNotEqualsToPairs"]
+error = '''
+KV:Storage:TtlLenNotEqualsToPairs
+'''
+
 ["KV:Storage:Protobuf"]
 error = '''
 KV:Storage:Protobuf
@@ -551,6 +621,21 @@ KV:Storage:KeyIsLocked
 ["KV:Storage:MaxTimestampNotSynced"]
 error = '''
 KV:Storage:MaxTimestampNotSynced
+'''
+
+["KV:Storage:DeadlineExceeded"]
+error = '''
+KV:Storage:DeadlineExceeded
+'''
+
+["KV:Storage:ApiVersionNotMatched"]
+error = '''
+KV:Storage:ApiVersionNotMatched
+'''
+
+["KV:Storage:InvalidKeyMode"]
+error = '''
+KV:Storage:InvalidKeyMode
 '''
 
 ["KV:Storage:Committed"]
@@ -616,6 +701,11 @@ KV:Storage:PessimisticLockNotFound
 ["KV:Storage:CommitTsTooLarge"]
 error = '''
 KV:Storage:CommitTsTooLarge
+'''
+
+["KV:Storage:AssertionFailed"]
+error = '''
+KV:Storage:AssertionFailed
 '''
 
 ["KV:Storage:Unknown"]

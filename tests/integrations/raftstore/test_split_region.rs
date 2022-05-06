@@ -1,25 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc::channel;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{fs, thread};
-
-use kvproto::metapb;
-use kvproto::pdpb;
-use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::RaftMessage;
-use raft::eraftpb::MessageType;
+use std::{
+    fs,
+    sync::{mpsc::channel, Arc},
+    thread,
+    time::Duration,
+};
 
 use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable, CF_WRITE};
 use keys::data_key;
+use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
-use raftstore::store::{Bucket, BucketRange, Callback, WriteResponse};
-use raftstore::Result;
+use raft::eraftpb::MessageType;
+use raftstore::{
+    store::{Bucket, BucketRange, Callback, WriteResponse},
+    Result,
+};
 use test_raftstore::*;
-use tikv::storage::kv::SnapshotExt;
-use tikv::storage::Snapshot;
+use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::config::*;
 use txn_types::{Key, PessimisticLock};
 
@@ -483,7 +482,9 @@ fn test_server_apply_new_version_snapshot() {
     test_apply_new_version_snapshot(&mut cluster);
 }
 
-fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test]
+fn test_server_split_with_stale_peer() {
+    let mut cluster = new_server_cluster(0, 3);
     // disable raft log gc.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
@@ -549,18 +550,6 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k3", b"v3");
     // node 3 must have k3.
     must_get_equal(&engine3, b"k3", b"v3");
-}
-
-#[test]
-fn test_node_split_with_stale_peer() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_split_with_stale_peer(&mut cluster);
-}
-
-#[test]
-fn test_server_split_with_stale_peer() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_split_with_stale_peer(&mut cluster);
 }
 
 fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {

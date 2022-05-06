@@ -1,25 +1,26 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
-use std::io::{Read, Result as IoResult, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    fs,
+    io::{Read, Result as IoResult, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineReadOnly,
+    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineDebug, RaftEngineReadOnly,
     RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
-use raft_engine::env::{DefaultFileSystem, FileSystem, Handle, WriteExt};
 use raft_engine::{
+    env::{DefaultFileSystem, FileSystem, Handle, WriteExt},
     Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
-use tikv_util::Either;
-
 pub use raft_engine::{Config as RaftEngineConfig, RecoveryMode};
+use tikv_util::Either;
 
 #[derive(Clone)]
 pub struct MessageExtTyped;
@@ -284,8 +285,8 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.0.is_empty()
     }
 
-    fn merge(&mut self, mut src: Self) {
-        self.0.merge(&mut src.0);
+    fn merge(&mut self, mut src: Self) -> Result<()> {
+        self.0.merge(&mut src.0).map_err(transfer_error)
     }
 }
 
@@ -320,6 +321,24 @@ impl RaftEngineReadOnly for RaftLogEngine {
             let last = self.0.last_index(raft_group_id).unwrap();
             buf.reserve((last - first + 1) as usize);
             self.fetch_entries_to(raft_group_id, first, last + 1, None, buf)?;
+        }
+        Ok(())
+    }
+}
+
+impl RaftEngineDebug for RaftLogEngine {
+    fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Entry) -> Result<bool>,
+    {
+        if let Some(first_index) = self.first_index(raft_group_id) {
+            for idx in first_index..=self.last_index(raft_group_id).unwrap() {
+                if let Some(entry) = self.get_entry(raft_group_id, idx)? {
+                    if !f(&entry)? {
+                        break;
+                    }
+                }
+            }
         }
         Ok(())
     }

@@ -59,6 +59,9 @@ Side effects
 
 ```release-note
 Please add a release note.
+
+Please refer to [Release Notes Language Style Guide](https://pingcap.github.io/tidb-dev-guide/contribute-to-tidb/release-notes-style-guide.html) to write a quality release note.
+
 If you don't think this PR needs a release note then fill it with None.
 If this PR will be picked to release branch, then a release note is probably required.
 ```

@@ -2,13 +2,14 @@
 
 // The implementation of this crate when jemalloc is turned on
 
-use super::error::{ProfError, ProfResult};
-use crate::AllocStats;
+use std::{collections::HashMap, ptr, slice, sync::Mutex, thread};
+
 use libc::{self, c_char, c_void};
-use std::collections::HashMap;
-use std::{ptr, slice, sync::Mutex, thread};
 use tikv_jemalloc_ctl::{epoch, stats, Error};
 use tikv_jemalloc_sys::malloc_stats_print;
+
+use super::error::{ProfError, ProfResult};
+use crate::AllocStats;
 
 pub type Allocator = tikv_jemallocator::Jemalloc;
 pub const fn allocator() -> Allocator {
@@ -41,8 +42,9 @@ pub fn remove_thread_memory_accessor() {
     thread_memory_map.remove(&thread::current().id());
 }
 
-pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
 use std::thread::ThreadId;
+
+pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
 
 pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
@@ -165,6 +167,7 @@ mod profiling {
     #[cfg(test)]
     mod tests {
         use std::fs;
+
         use tempfile::Builder;
 
         const OPT_PROF: &[u8] = b"opt.prof\0";

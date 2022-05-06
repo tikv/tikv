@@ -1,8 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::core::{Collector, Desc};
-use prometheus::proto::MetricFamily;
-use prometheus::{IntGaugeVec, Opts, Result};
+use prometheus::{
+    core::{Collector, Desc},
+    proto::MetricFamily,
+    IntGaugeVec, Opts, Result,
+};
 
 use crate::metrics::HIGH_PRIORITY_REGISTRY;
 

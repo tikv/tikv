@@ -3,12 +3,13 @@
 #![feature(test)]
 #![feature(bench_black_box)]
 
+use std::{borrow::Cow, hint::black_box, mem::forget};
+
 use concurrency_manager::ConcurrencyManager;
 use criterion::*;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::IsolationLevel;
 use rand::prelude::*;
-use std::{borrow::Cow, hint::black_box, mem::forget};
 use txn_types::{Key, Lock, LockType, TsSet};
 
 const KEY_LEN: usize = 64;

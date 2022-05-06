@@ -5,19 +5,19 @@ edition = "2018"
 publish = false
 
 [dependencies]
-byteorder = "1.2"
 bitflags = "1.0.1"
-farmhash = "1.1.5"
-error_code = { path = "../error_code", default-features = false }
+byteorder = "1.2"
 codec = { path = "../codec", default-features = false }
+collections = { path = "../collections" }
+error_code = { path = "../error_code", default-features = false }
+farmhash = "1.1.5"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+log_wrappers = { path = "../log_wrappers" }
 slog = "2.3"
 thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
-collections = { path = "../collections" }
-log_wrappers = { path = "../log_wrappers" }
 
 [dev-dependencies]
-rand = "0.8"
 panic_hook = { path = "../panic_hook" }
+rand = "0.8"

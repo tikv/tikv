@@ -1,23 +1,23 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    fmt,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
-use engine_traits::{EncryptionKeyManager, Iterable, KvEngine, SSTMetaInfo, SstReader};
+use engine_traits::{EncryptionKeyManager, Iterable, KvEngine, SstMetaInfo, SstReader};
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
-use kvproto::import_sstpb::*;
-use kvproto::kvrpcpb::ApiVersion;
+use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use crate::metrics::*;
-use crate::{Error, Result};
+use crate::{metrics::*, Error, Result};
 
 // `SyncableWrite` extends io::Write with sync
 trait SyncableWrite: io::Write + Send {
@@ -55,11 +55,11 @@ impl ImportPath {
             let temp_str = self
                 .temp
                 .to_str()
-                .ok_or_else(|| Error::InvalidSSTPath(self.temp.clone()))?;
+                .ok_or_else(|| Error::InvalidSstPath(self.temp.clone()))?;
             let save_str = self
                 .save
                 .to_str()
-                .ok_or_else(|| Error::InvalidSSTPath(self.save.clone()))?;
+                .ok_or_else(|| Error::InvalidSstPath(self.save.clone()))?;
             key_manager.link_file(temp_str, save_str)?;
             key_manager.delete_file(temp_str)?;
         }
@@ -273,7 +273,7 @@ impl ImportDir {
         &self,
         meta: &SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
-    ) -> Result<SSTMetaInfo> {
+    ) -> Result<SstMetaInfo> {
         let path = self.join(meta)?;
         let path_str = path.save.to_str().unwrap();
         let env = get_env(key_manager, get_io_rate_limiter())?;
@@ -331,7 +331,7 @@ impl ImportDir {
 
     pub fn ingest<E: KvEngine>(
         &self,
-        metas: &[SSTMetaInfo],
+        metas: &[SstMetaInfo],
         engine: &E,
         key_manager: Option<Arc<DataKeyManager>>,
         api_version: ApiVersion,
@@ -421,17 +421,17 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     let path = path.as_ref();
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => name,
-        None => return Err(Error::InvalidSSTPath(path.to_owned())),
+        None => return Err(Error::InvalidSstPath(path.to_owned())),
     };
 
     // A valid file name should be in the format:
     // "{uuid}_{region_id}_{region_epoch.conf_ver}_{region_epoch.version}_{cf}.sst"
     if !file_name.ends_with(SST_SUFFIX) {
-        return Err(Error::InvalidSSTPath(path.to_owned()));
+        return Err(Error::InvalidSstPath(path.to_owned()));
     }
     let elems: Vec<_> = file_name.trim_end_matches(SST_SUFFIX).split('_').collect();
     if elems.len() < 4 {
-        return Err(Error::InvalidSSTPath(path.to_owned()));
+        return Err(Error::InvalidSstPath(path.to_owned()));
     }
 
     let mut meta = SstMeta::default();
@@ -450,8 +450,9 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use engine_traits::CF_DEFAULT;
+
+    use super::*;
 
     #[test]
     fn test_sst_meta_to_path() {

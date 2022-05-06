@@ -1,14 +1,18 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::IntGauge;
-use std::error::Error;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io;
-use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder, JoinHandle};
+use std::{
+    error::Error,
+    fmt::{self, Debug, Display, Formatter},
+    io,
+    sync::{Arc, Mutex},
+    thread::{self, Builder, JoinHandle},
+};
 
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::stream::StreamExt;
+use futures::{
+    channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+    stream::StreamExt,
+};
+use prometheus::IntGauge;
 use tokio::task::LocalSet;
 
 use super::metrics::*;
@@ -197,16 +201,17 @@ impl<T: Display + Send + 'static> Worker<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::time::Instant;
-    use std::sync::mpsc::{self, Sender};
-    use std::time::Duration;
+    use std::{
+        sync::mpsc::{self, Sender},
+        time::Duration,
+    };
 
-    use crate::timer::GLOBAL_TIMER_HANDLE;
     use futures::compat::Future01CompatExt;
     use tokio::task::spawn_local;
     use tokio_timer::timer;
 
     use super::*;
+    use crate::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 
     struct StepRunner {
         timer: timer::Handle,

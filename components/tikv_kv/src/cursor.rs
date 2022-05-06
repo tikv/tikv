@@ -1,18 +1,18 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::Cell;
-use std::cmp::Ordering;
-use std::ops::Bound;
+use std::{cell::Cell, cmp::Ordering, ops::Bound};
 
-use engine_traits::CfName;
-use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
-use tikv_util::keybuilder::KeyBuilder;
-use tikv_util::metrics::CRITICAL_ERROR;
-use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
+use tikv_util::{
+    keybuilder::KeyBuilder, metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data,
+    set_panic_mark,
+};
 use txn_types::{Key, TimeStamp};
 
-use crate::stats::{StatsCollector, StatsKind};
-use crate::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
+use crate::{
+    stats::{StatsCollector, StatsKind},
+    CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND,
+};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -570,20 +570,22 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use engine_rocks::raw::ColumnFamilyOptions;
-    use engine_rocks::raw_util::{new_engine, CFOptions};
-    use engine_rocks::util::FixedPrefixSliceTransform;
-    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use std::sync::Arc;
+
+    use engine_rocks::{
+        raw::ColumnFamilyOptions,
+        raw_util::{new_engine, CFOptions},
+        util::{new_temp_engine, FixedPrefixSliceTransform},
+        RocksEngine, RocksSnapshot,
+    };
     use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
-    use std::sync::Arc;
+    use raftstore::store::RegionSnapshot;
     use tempfile::Builder;
     use txn_types::Key;
 
     use crate::{CfStatistics, Cursor, ScanMode};
-    use engine_rocks::util::new_temp_engine;
-    use raftstore::store::RegionSnapshot;
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 

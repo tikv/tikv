@@ -1,19 +1,25 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
-use std::path::Path;
+use std::{
+    cmp,
+    collections::{
+        BTreeMap,
+        Bound::{Excluded, Included, Unbounded},
+    },
+    path::Path,
+};
 
-use crate::properties::{RangeProperties, UserCollectedPropertiesDecoder};
-use crate::raw::EventListener;
 use collections::hash_set_with_capacity;
-use engine_traits::CompactedEvent;
-use engine_traits::CompactionJobInfo;
+use engine_traits::{CompactedEvent, CompactionJobInfo};
 use rocksdb::{
     CompactionJobInfo as RawCompactionJobInfo, CompactionReason, TablePropertiesCollectionView,
 };
-use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Included, Unbounded};
 use tikv_util::warn;
+
+use crate::{
+    properties::{RangeProperties, UserCollectedPropertiesDecoder},
+    raw::EventListener,
+};
 
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
 

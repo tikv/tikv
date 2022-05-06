@@ -1,8 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
-use engine_traits::{CompactExt, CompactedEvent, Result};
 use std::collections::BTreeMap;
+
+use engine_traits::{CompactExt, CompactedEvent, Result};
+
+use crate::engine::PanicEngine;
 
 impl CompactExt for PanicEngine {
     type CompactedEvent = PanicCompactedEvent;

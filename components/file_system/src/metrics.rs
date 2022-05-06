@@ -2,8 +2,7 @@
 
 use std::cell::RefCell;
 
-use prometheus::local::*;
-use prometheus::*;
+use prometheus::{local::*, *};
 use prometheus_static_metric::*;
 use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
 

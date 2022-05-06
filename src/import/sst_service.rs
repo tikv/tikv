@@ -1,46 +1,49 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::future::Future;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::{
+    future::Future,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
-use super::make_rpc_error;
 use collections::HashSet;
 use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
-use futures::executor::{ThreadPool, ThreadPoolBuilder};
-use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
-use futures::TryFutureExt;
+use futures::{
+    executor::{ThreadPool, ThreadPoolBuilder},
+    sink::SinkExt,
+    stream::TryStreamExt,
+    TryFutureExt,
+};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::{errorpb, kvrpcpb::Context};
+use kvproto::{
+    encryptionpb::EncryptionMethod,
+    errorpb,
+    import_sstpb::{RawWriteRequest_oneof_chunk as RawChunk, WriteRequest_oneof_chunk as Chunk, *},
+    kvrpcpb::Context,
+    raft_cmdpb::*,
+};
+use raftstore::{
+    router::RaftStoreRouter,
+    store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
+};
+use sst_importer::{error_inc, metrics::*, sst_meta_to_path, Config, Error, Result, SstImporter};
+use tikv_util::{
+    future::{create_stream_with_buffer, paired_future_callback},
+    time::{Instant, Limiter},
+};
 
-use kvproto::import_sstpb::RawWriteRequest_oneof_chunk as RawChunk;
-use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
-use kvproto::import_sstpb::*;
+use super::make_rpc_error;
+use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_GAUGE};
 
-use kvproto::raft_cmdpb::*;
-
-use crate::server::CONFIG_ROCKSDB_GAUGE;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, RaftCmdExtraOpts, RegionSnapshot};
-use tikv_util::future::create_stream_with_buffer;
-use tikv_util::future::paired_future_callback;
-use tikv_util::time::{Instant, Limiter};
-
-use crate::import::duplicate_detect::DuplicateDetector;
-use sst_importer::metrics::*;
-use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
-
-/// ImportSSTService provides tikv-server with the ability to ingest SST files.
+/// ImportSstService provides tikv-server with the ability to ingest SST files.
 ///
 /// It saves the SST sent from client to a file and then sends a command to
 /// raftstore to trigger the ingest process.
 #[derive(Clone)]
-pub struct ImportSSTService<E, Router>
+pub struct ImportSstService<E, Router>
 where
     E: KvEngine,
 {
@@ -48,7 +51,7 @@ where
     engine: E,
     router: Router,
     threads: ThreadPool,
-    importer: Arc<SSTImporter>,
+    importer: Arc<SstImporter>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
 }
@@ -58,7 +61,7 @@ pub struct SnapshotResult<E: KvEngine> {
     term: u64,
 }
 
-impl<E, Router> ImportSSTService<E, Router>
+impl<E, Router> ImportSstService<E, Router>
 where
     E: KvEngine,
     Router: 'static + RaftStoreRouter<E>,
@@ -67,8 +70,8 @@ where
         cfg: Config,
         router: Router,
         engine: E,
-        importer: Arc<SSTImporter>,
-    ) -> ImportSSTService<E, Router> {
+        importer: Arc<SstImporter>,
+    ) -> ImportSstService<E, Router> {
         let props = tikv_util::thread_group::current_properties();
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
@@ -82,7 +85,7 @@ where
             .create()
             .unwrap();
         importer.start_switch_mode_check(&threads, engine.clone());
-        ImportSSTService {
+        ImportSstService {
             cfg,
             engine,
             threads,
@@ -293,7 +296,7 @@ macro_rules! impl_write {
     };
 }
 
-impl<E, Router> ImportSst for ImportSSTService<E, Router>
+impl<E, Router> ImportSst for ImportSstService<E, Router>
 where
     E: KvEngine,
     Router: 'static + RaftStoreRouter<E>,

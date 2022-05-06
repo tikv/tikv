@@ -5,66 +5,71 @@
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
 
-use std::cmp;
-use std::collections::HashMap;
-use std::error::Error;
-use std::fs;
-use std::i32;
-use std::io::Write;
-use std::io::{Error as IoError, ErrorKind};
-use std::path::Path;
-use std::sync::{Arc, RwLock};
-use std::usize;
+use std::{
+    cmp,
+    collections::HashMap,
+    error::Error,
+    fs, i32,
+    io::{Error as IoError, ErrorKind, Write},
+    path::Path,
+    sync::{Arc, RwLock},
+    usize,
+};
 
-use api_version::{match_template_api_version, APIVersion};
+use api_version::{match_template_api_version, KvFormat};
 use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
-use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
-use engine_rocks::get_env;
-use engine_rocks::properties::MvccPropertiesCollectorFactory;
-use engine_rocks::raw::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
-    TitanDBOptions,
-};
-use engine_rocks::raw_util::CFOptions;
-use engine_rocks::util::{
-    FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
-};
 use engine_rocks::{
+    config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel},
+    get_env,
+    properties::MvccPropertiesCollectorFactory,
+    raw::{
+        BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+        DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
+        TitanDBOptions,
+    },
+    raw_util::CFOptions,
+    util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
     RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
     RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
-use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE,
+};
 use file_system::{IOPriority, IORateLimiter};
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
-use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
-use raftstore::store::Config as RaftstoreConfig;
-use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
+use raftstore::{
+    coprocessor::{Config as CopConfig, RegionInfoAccessor},
+    store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
+};
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
-use tikv_util::config::{
-    self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
+use tikv_util::{
+    config::{
+        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
+    },
+    sys::SysQuota,
+    time::duration_to_sec,
+    yatp_pool,
 };
-use tikv_util::sys::SysQuota;
-use tikv_util::time::duration_to_sec;
-use tikv_util::yatp_pool;
 
-use crate::coprocessor_v2::Config as CoprocessorV2Config;
-use crate::import::Config as ImportConfig;
-use crate::server::gc_worker::GcConfig;
-use crate::server::gc_worker::WriteCompactionFilterFactory;
-use crate::server::lock_manager::Config as PessimisticTxnConfig;
-use crate::server::ttl::TTLCompactionFilterFactory;
-use crate::server::Config as ServerConfig;
-use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
+use crate::{
+    coprocessor_v2::Config as CoprocessorV2Config,
+    import::Config as ImportConfig,
+    server::{
+        gc_worker::{GcConfig, WriteCompactionFilterFactory},
+        lock_manager::Config as PessimisticTxnConfig,
+        ttl::TtlCompactionFilterFactory,
+        Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
+    },
+    storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR},
+};
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
@@ -605,7 +610,7 @@ impl DefaultCfConfig {
                         cf_opts
                             .set_compaction_filter_factory(
                                 "ttl_compaction_filter_factory",
-                                TTLCompactionFilterFactory::<API>::default(),
+                                TtlCompactionFilterFactory::<API>::default(),
                             )
                             .unwrap();
                     }
@@ -3606,28 +3611,32 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
-    use itertools::Itertools;
-    use tempfile::Builder;
+    use std::{sync::Arc, time::Duration};
 
-    use super::*;
-    use crate::server::ttl::TTLCheckerTask;
-    use crate::storage::config_manager::StorageConfigManger;
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::txn::flow_controller::FlowController;
-    use crate::storage::{Storage, TestStorageBuilder};
-    use api_version::{APIVersion, APIV1};
+    use api_version::{ApiV1, KvFormat};
     use case_macros::*;
     use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
+    use futures::executor::block_on;
+    use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
-    use std::sync::Arc;
-    use std::time::Duration;
+    use tempfile::Builder;
     use tikv_kv::RocksEngine as RocksDBEngine;
-    use tikv_util::quota_limiter::{QuotaLimitConfigManager, QuotaLimiter};
-    use tikv_util::sys::SysQuota;
-    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use tikv_util::{
+        quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
+        sys::SysQuota,
+        worker::{dummy_scheduler, ReceiverWrapper},
+    };
+
+    use super::*;
+    use crate::{
+        server::ttl::TtlCheckerTask,
+        storage::{
+            config_manager::StorageConfigManger, lock_manager::DummyLockManager,
+            txn::flow_controller::FlowController, Storage, TestStorageBuilder,
+        },
+    };
 
     #[test]
     fn test_case_macro() {
@@ -3957,15 +3966,15 @@ mod tests {
         assert_eq!(res.get("raftstore.store-pool-size"), Some(&"17".to_owned()));
     }
 
-    fn new_engines<Api: APIVersion>(
+    fn new_engines<F: KvFormat>(
         cfg: TiKvConfig,
     ) -> (
-        Storage<RocksDBEngine, DummyLockManager, Api>,
+        Storage<RocksDBEngine, DummyLockManager, F>,
         ConfigController,
-        ReceiverWrapper<TTLCheckerTask>,
+        ReceiverWrapper<TtlCheckerTask>,
         Arc<FlowController>,
     ) {
-        assert_eq!(Api::TAG, cfg.storage.api_version());
+        assert_eq!(F::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
             ALL_CFS,
@@ -3980,7 +3989,7 @@ mod tests {
         )
         .unwrap();
         let storage =
-            TestStorageBuilder::<_, _, Api>::from_engine_and_lock_mgr(engine, DummyLockManager)
+            TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(engine, DummyLockManager)
                 .config(cfg.storage.clone())
                 .build()
                 .unwrap();
@@ -4016,7 +4025,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, _, flow_controller) = new_engines::<APIV1>(cfg);
+        let (storage, cfg_controller, _, flow_controller) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
@@ -4145,7 +4154,7 @@ mod tests {
         cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // update max_background_jobs
@@ -4219,7 +4228,7 @@ mod tests {
         // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.rate_limiter_auto_tuned = true;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // update rate_limiter_auto_tuned
@@ -4242,7 +4251,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // Can not update shared block cache through rocksdb module
@@ -4288,7 +4297,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (_, cfg_controller, mut rx, _) = new_engines::<APIV1>(cfg);
+        let (_, cfg_controller, mut rx, _) = new_engines::<ApiV1>(cfg);
 
         // Can not update shared block cache through rocksdb module
         cfg_controller
@@ -4296,7 +4305,7 @@ mod tests {
             .unwrap();
         match rx.recv() {
             None => unreachable!(),
-            Some(TTLCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
+            Some(TtlCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
         }
     }
 
@@ -4305,7 +4314,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.scheduler_worker_pool_size = 4;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let scheduler = storage.get_scheduler();
 
         let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);

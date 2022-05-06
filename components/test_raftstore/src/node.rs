@@ -1,46 +1,53 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex, RwLock},
+};
 
-use tempfile::TempDir;
-
-use kvproto::metapb;
-use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{self, RaftMessage};
-use raft::eraftpb::MessageType;
-use raft::SnapshotStatus;
-
-use super::*;
-use crate::Config;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt, Peekable};
-use raftstore::coprocessor::config::SplitCheckConfigManager;
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::errors::Error as RaftError;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter};
-use raftstore::store::config::RaftstoreConfigManager;
-use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use raftstore::store::SnapManagerBuilder;
-use raftstore::store::*;
-use raftstore::Result;
+use kvproto::{
+    kvrpcpb::ApiVersion,
+    metapb,
+    raft_cmdpb::*,
+    raft_serverpb::{self, RaftMessage},
+};
+use raft::{eraftpb::MessageType, SnapshotStatus};
+use raftstore::{
+    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
+    errors::Error as RaftError,
+    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    store::{
+        config::RaftstoreConfigManager,
+        fsm::{store::StoreMeta, RaftBatchSystem, RaftRouter},
+        SnapManagerBuilder, *,
+    },
+    Result,
+};
 use resource_metering::CollectorRegHandle;
-use tikv::config::{ConfigController, Module};
-use tikv::import::SSTImporter;
-use tikv::server::raftkv::ReplicaReadLockChecker;
-use tikv::server::Node;
-use tikv::server::Result as ServerResult;
-use tikv_util::config::VersionTrack;
-use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
+use tempfile::TempDir;
+use tikv::{
+    config::{ConfigController, Module},
+    import::SstImporter,
+    server::{raftkv::ReplicaReadLockChecker, Node, Result as ServerResult},
+};
+use tikv_util::{
+    config::VersionTrack,
+    time::ThreadReadId,
+    worker::{Builder as WorkerBuilder, LazyWorker},
+};
+
+use super::*;
+use crate::Config;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>>,
+    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>>,
 }
 
 #[derive(Clone)]
@@ -140,7 +147,7 @@ type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient, RocksEngine, RocksEngine>>,
+    nodes: HashMap<u64, Node<TestPdClient, RocksEngine, RaftTestEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
     cfg_controller: Option<ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
@@ -169,7 +176,7 @@ impl NodeCluster {
     pub fn get_node_router(
         &self,
         node_id: u64,
-    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>> {
+    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>> {
         self.trans
             .core
             .lock()
@@ -194,7 +201,7 @@ impl NodeCluster {
     pub fn get_node(
         &mut self,
         node_id: u64,
-    ) -> Option<&mut Node<TestPdClient, RocksEngine, RocksEngine>> {
+    ) -> Option<&mut Node<TestPdClient, RocksEngine, RaftTestEngine>> {
         self.nodes.get_mut(&node_id)
     }
 
@@ -212,11 +219,11 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: Config,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        router: RaftRouter<RocksEngine, RaftTestEngine>,
+        system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -233,6 +240,7 @@ impl Simulator for NodeCluster {
             Arc::clone(&self.pd_client),
             Arc::default(),
             bg_worker.clone(),
+            None,
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -272,7 +280,7 @@ impl Simulator for NodeCluster {
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
+            Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
         };
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
@@ -466,7 +474,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }
@@ -474,11 +482,11 @@ impl Simulator for NodeCluster {
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
 pub fn new_incompatible_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }

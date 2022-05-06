@@ -1,17 +1,23 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, Result as MvccResult, SnapshotReader};
-use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
-    WriteCommand, WriteContext, WriteResult,
-};
-use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Result as StorageResult, Snapshot};
 use std::mem;
+
 use txn_types::{Key, LockType, TimeStamp};
+
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{MvccTxn, Result as MvccResult, SnapshotReader},
+    txn::{
+        commands::{
+            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+            WriteCommand, WriteContext, WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Result as StorageResult, Snapshot,
+};
 
 command! {
     /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
@@ -92,18 +98,23 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::Engine;
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::commands::{WriteCommand, WriteContext};
-    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
-    use crate::storage::txn::tests::*;
-    use crate::storage::TestEngineBuilder;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use tikv_util::deadline::Deadline;
     use txn_types::Key;
+
+    use super::*;
+    use crate::storage::{
+        kv::Engine,
+        lock_manager::DummyLockManager,
+        mvcc::tests::*,
+        txn::{
+            commands::{WriteCommand, WriteContext},
+            scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
+            tests::*,
+        },
+        TestEngineBuilder,
+    };
 
     pub fn must_success<E: Engine>(
         engine: &E,

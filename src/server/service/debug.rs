@@ -2,25 +2,34 @@
 
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, MiscExt, RaftEngine};
-use futures::channel::oneshot;
-use futures::future::Future;
-use futures::future::{FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::{self, TryStreamExt};
-use grpcio::{Error as GrpcError, WriteFlags};
-use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use kvproto::debugpb::{self, *};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
-    StatusCmdType, StatusRequest,
+use futures::{
+    channel::oneshot,
+    future::{Future, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::{self, TryStreamExt},
 };
+use grpcio::{
+    Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
+    WriteFlags,
+};
+use kvproto::{
+    debugpb::{self, *},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
+        StatusCmdType, StatusRequest,
+    },
+};
+use raftstore::{
+    router::RaftStoreRouter,
+    store::msg::{Callback, RaftCmdExtraOpts},
+};
+use tikv_util::metrics;
 use tokio::runtime::Handle;
 
-use crate::config::ConfigController;
-use crate::server::debug::{Debugger, Error, Result};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::msg::{Callback, RaftCmdExtraOpts};
-use tikv_util::metrics;
+use crate::{
+    config::ConfigController,
+    server::debug::{Debugger, Error, Result},
+};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {

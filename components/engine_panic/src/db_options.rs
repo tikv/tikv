@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::{DBOptions, DBOptionsExt, Result, TitanDBOptions};
+
 use crate::engine::PanicEngine;
-use engine_traits::Result;
-use engine_traits::{DBOptions, DBOptionsExt, TitanDBOptions};
 
 impl DBOptionsExt for PanicEngine {
     type DBOptions = PanicDBOptions;

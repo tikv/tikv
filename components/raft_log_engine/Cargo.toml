@@ -5,19 +5,19 @@ publish = false
 edition = "2018"
 
 [dependencies]
-engine_traits = { path = "../engine_traits", default-features = false }
-tikv_util = { path = "../tikv_util", default-features = false }
 encryption = { path = "../encryption" }
+engine_traits = { path = "../engine_traits", default-features = false }
 file_system = { path = "../file_system" }
-num_cpus = "1"
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.4.0"
-time = "0.1"
+num_cpus = "1"
 online_config = { path = "../online_config" }
+protobuf = "2"
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft-engine = { git = "https://github.com/tikv/raft-engine.git" }
 serde = "1.0"
 serde_derive = "1.0"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raft-engine = "0.1.0"
-protobuf = "2"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tikv_util = { path = "../tikv_util", default-features = false }
+time = "0.1"

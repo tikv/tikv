@@ -1,38 +1,37 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ffi::CString;
-use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::{
+    ffi::CString,
+    sync::{
+        atomic::{AtomicI32, Ordering},
+        Arc, Mutex as StdMutex,
+    },
+    time::Duration,
+};
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use fail::fail_point;
-use futures::compat::Future01CompatExt;
-use futures::future::select_all;
-use futures::{FutureExt, TryFutureExt};
+use futures::{compat::Future01CompatExt, future::select_all, FutureExt, TryFutureExt};
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
-use kvproto::metapb::{Peer, PeerRole};
-use kvproto::tikvpb::TikvClient;
+use kvproto::{
+    kvrpcpb::{CheckLeaderRequest, LeaderInfo},
+    metapb::{Peer, PeerRole},
+    tikvpb::TikvClient,
+};
 use pd_client::PdClient;
 use protobuf::Message;
-use raftstore::store::fsm::StoreMeta;
-use raftstore::store::util::RegionReadProgressRegistry;
+use raftstore::store::{fsm::StoreMeta, util::RegionReadProgressRegistry};
 use security::SecurityManager;
-use tikv_util::info;
-use tikv_util::time::Instant;
-use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::Scheduler;
-use tokio::runtime::{Builder, Runtime};
-use tokio::sync::Mutex;
+use tikv_util::{info, time::Instant, timer::SteadyTimer, worker::Scheduler};
+use tokio::{
+    runtime::{Builder, Runtime},
+    sync::Mutex,
+};
 use txn_types::TimeStamp;
 
-use crate::endpoint::Task;
-use crate::errors::Result;
-use crate::metrics::*;
-use crate::util;
+use crate::{endpoint::Task, errors::Result, metrics::*, util};
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 

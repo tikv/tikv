@@ -1,34 +1,43 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::mem;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    mem,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
-use kvproto::cdcpb::{
-    Error as EventError, Event, EventEntries, EventLogType, EventRow, EventRowOpType,
-    Event_oneof_event,
+use kvproto::{
+    cdcpb::{
+        Error as EventError, Event, EventEntries, EventLogType, EventRow, EventRowOpType,
+        Event_oneof_event,
+    },
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb::{Region, RegionEpoch},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
+    },
 };
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{Region, RegionEpoch};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
+use raftstore::{
+    coprocessor::{Cmd, CmdBatch, ObserveHandle},
+    store::util::compare_region_epoch,
+    Error as RaftStoreError,
 };
-use raftstore::coprocessor::{Cmd, CmdBatch, ObserveHandle};
-use raftstore::store::util::compare_region_epoch;
-use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
-use tikv::storage::txn::TxnEntry;
-use tikv::storage::Statistics;
+use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
-use crate::channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES};
-use crate::metrics::*;
-use crate::old_value::{OldValueCache, OldValueCallback};
-use crate::service::ConnID;
-use crate::{Error, Result};
+use crate::{
+    channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
+    metrics::*,
+    old_value::{OldValueCache, OldValueCallback},
+    service::ConnID,
+    Error, Result,
+};
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -639,7 +648,8 @@ impl Delegate {
                     let resolved_ts = resolver.resolved_ts();
                     assert!(
                         commit_ts > resolved_ts,
-                        "commit_ts: {:?}, resolved_ts: {:?}",
+                        "region {} commit_ts: {:?}, resolved_ts: {:?}",
+                        self.region_id,
                         commit_ts,
                         resolved_ts
                     );
@@ -895,12 +905,12 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::executor::block_on;
-    use futures::stream::StreamExt;
-    use kvproto::errorpb::Error as ErrorHeader;
-    use kvproto::metapb::Region;
     use std::cell::Cell;
+
+    use futures::{executor::block_on, stream::StreamExt};
+    use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
+
+    use super::*;
 
     #[test]
     fn test_error() {

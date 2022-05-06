@@ -4,16 +4,13 @@ mod fixture;
 mod util;
 
 use criterion::measurement::Measurement;
-
+use test_coprocessor::*;
 use tidb_query_datatype::FieldTypeTp;
+use tikv::storage::RocksEngine;
 use tipb::{ExprType, ScalarFuncSig};
 use tipb_helper::ExprDefBuilder;
 
-use crate::util::executor_descriptor::*;
-use crate::util::store::*;
-use crate::util::BenchCase;
-use test_coprocessor::*;
-use tikv::storage::RocksEngine;
+use crate::util::{executor_descriptor::*, store::*, BenchCase};
 
 /// SELECT COUNT(1) FROM Table, or SELECT COUNT(PrimaryKey) FROM Table
 fn bench_select_count_1<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)

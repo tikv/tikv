@@ -1,20 +1,25 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::borrow::Cow;
-use std::cmp::{Ord, Ordering as CmpOrdering};
-use std::collections::VecDeque;
-use std::fmt::{self, Debug, Formatter};
-use std::mem;
-use std::ops::{Deref, DerefMut, Range as StdRange};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
-use std::sync::mpsc::SyncSender;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use std::vec::Drain;
-use std::{cmp, usize};
+use std::{
+    borrow::Cow,
+    cmp,
+    cmp::{Ord, Ordering as CmpOrdering},
+    collections::VecDeque,
+    fmt::{self, Debug, Formatter},
+    mem,
+    ops::{Deref, DerefMut, Range as StdRange},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc::SyncSender,
+        Arc, Mutex,
+    },
+    time::Duration,
+    usize,
+    vec::Drain,
+};
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
@@ -22,23 +27,21 @@ use batch_system::{
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_traits::PerfContext;
-use engine_traits::PerfContextKind;
 use engine_traits::{
-    DeleteStrategy, KvEngine, Mutable, RaftEngine, RaftEngineReadOnly, Range as EngineRange,
-    Snapshot, WriteBatch,
+    DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind, RaftEngine,
+    RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch, ALL_CFS,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
-use engine_traits::{SSTMetaInfo, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
-use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{PeerRole, Region, RegionEpoch};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-    RaftCmdRequest, RaftCmdResponse, Request,
-};
-use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
+use kvproto::{
+    import_sstpb::SstMeta,
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb::{PeerRole, Region, RegionEpoch},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+        RaftCmdRequest, RaftCmdResponse, Request,
+    },
+    raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
 };
 use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
@@ -47,39 +50,46 @@ use raft::eraftpb::{
 };
 use raft_proto::ConfChangeI;
 use smallvec::{smallvec, SmallVec};
-use sst_importer::SSTImporter;
+use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::memory::HeapSize;
-use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, Instant};
-use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, box_try, debug, error, info, safe_panic, slow_log, warn};
-use tikv_util::{Either, MustConsumeVec};
+use tikv_util::{
+    box_err, box_try,
+    config::{Tracker, VersionTrack},
+    debug, error, info,
+    memory::HeapSize,
+    mpsc::{loose_bounded, LooseBoundedSender, Receiver},
+    safe_panic, slow_log,
+    time::{duration_to_sec, Instant},
+    warn,
+    worker::Scheduler,
+    Either, MustConsumeVec,
+};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
-use crate::coprocessor::{
-    Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
-};
-use crate::store::fsm::RaftPollerBuilder;
-use crate::store::local_metrics::RaftMetrics;
-use crate::store::memory::*;
-use crate::store::metrics::*;
-use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
-use crate::store::peer::Peer;
-use crate::store::peer_storage::{
-    self, write_initial_apply_state, write_peer_state, CachedEntries,
-};
-use crate::store::util::{
-    admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner, ChangePeerI,
-    ConfChangeKind, KeysInfoFormatter, LatencyInspector,
-};
-use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{bytes_capacity, Error, Result};
-
 use super::metrics::*;
+use crate::{
+    bytes_capacity,
+    coprocessor::{Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel},
+    store::{
+        cmd_resp,
+        fsm::RaftPollerBuilder,
+        local_metrics::RaftMetrics,
+        memory::*,
+        metrics::*,
+        msg::{Callback, PeerMsg, ReadResponse, SignificantMsg},
+        peer::Peer,
+        peer_storage::{self, write_initial_apply_state, write_peer_state, CachedEntries},
+        util,
+        util::{
+            admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
+            ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
+        },
+        Config, RegionSnapshot, RegionTask,
+    },
+    Error, Result,
+};
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -273,7 +283,7 @@ pub enum ExecResult<S> {
         ranges: Vec<Range>,
     },
     IngestSst {
-        ssts: Vec<SSTMetaInfo>,
+        ssts: Vec<SstMetaInfo>,
     },
     TransferLeader {
         term: u64,
@@ -352,7 +362,7 @@ where
     tag: String,
     timer: Option<Instant>,
     host: CoprocessorHost<EK>,
-    importer: Arc<SSTImporter>,
+    importer: Arc<SstImporter>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     router: ApplyRouter<EK>,
     notifier: Box<dyn Notifier<EK>>,
@@ -386,9 +396,9 @@ where
     /// We must delete the ingested file before calling `callback` so that any ingest-request reaching this
     /// peer could see this update if leader had changed. We must also delete them after the applied-index
     /// has been persisted to kvdb because this entry may replay because of panic or power-off, which
-    /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
+    /// happened before `WriteBatch::write` and after `SstImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
-    delete_ssts: Vec<SSTMetaInfo>,
+    delete_ssts: Vec<SstMetaInfo>,
 
     /// The priority of this Handler.
     priority: Priority,
@@ -396,7 +406,7 @@ where
     yield_high_latency_operation: bool,
 
     /// The ssts waiting to be ingested in `write_to_db`.
-    pending_ssts: Vec<SSTMetaInfo>,
+    pending_ssts: Vec<SstMetaInfo>,
 
     /// The pending inspector should be cleaned at the end of a write.
     pending_latency_inspect: Vec<LatencyInspector>,
@@ -413,7 +423,7 @@ where
     pub fn new(
         tag: String,
         host: CoprocessorHost<EK>,
-        importer: Arc<SSTImporter>,
+        importer: Arc<SstImporter>,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         engine: EK,
         router: ApplyRouter<EK>,
@@ -1667,7 +1677,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &Request,
-        ssts: &mut Vec<SSTMetaInfo>,
+        ssts: &mut Vec<SstMetaInfo>,
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
@@ -2297,6 +2307,12 @@ where
             }
         }
 
+        fail_point!(
+            "on_handle_apply_split_2_after_mem_check",
+            self.id() == 2,
+            |_| unimplemented!()
+        );
+
         // region_id -> peer_id
         let mut already_exist_regions = Vec::new();
         for (region_id, new_split_peer) in new_split_regions.iter_mut() {
@@ -2308,12 +2324,12 @@ where
                 Ok(None) => (),
                 Ok(Some(state)) => {
                     if replace_regions.get(region_id).is_some() {
-                        // This peer must be the first one on local store. So if this peer is created on the other side,
-                        // it means no `RegionLocalState` in kv engine.
+                        // It's marked replaced, then further destroy will skip cleanup, so there
+                        // should be no region local state.
                         panic!(
                             "{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
                             self.tag, region_id, new_split_peer.peer_id, state
-                        );
+                        )
                     }
                     already_exist_regions.push((*region_id, new_split_peer.peer_id));
                     new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
@@ -3881,7 +3897,7 @@ pub struct Builder<EK: KvEngine> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
-    importer: Arc<SSTImporter>,
+    importer: Arc<SstImporter>,
     region_scheduler: Scheduler<RegionTask<<EK as KvEngine>::Snapshot>>,
     engine: EK,
     sender: Box<dyn Notifier<EK>>,
@@ -4138,8 +4154,9 @@ pub fn create_apply_batch_system<EK: KvEngine>(
 }
 
 mod memtrace {
-    use super::*;
     use memory_trace_macros::MemoryTraceHelper;
+
+    use super::*;
 
     #[derive(MemoryTraceHelper, Default, Debug)]
     pub struct ApplyMemoryTrace {
@@ -4212,34 +4229,39 @@ mod memtrace {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    use std::sync::atomic::*;
-    use std::sync::*;
-    use std::thread;
-    use std::time::*;
+    use std::{
+        cell::RefCell,
+        rc::Rc,
+        sync::{atomic::*, *},
+        thread,
+        time::*,
+    };
 
-    use crate::coprocessor::*;
-    use crate::store::msg::WriteResponse;
-    use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
-    use crate::store::util::{new_learner_peer, new_peer};
     use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
-    use kvproto::kvrpcpb::ApiVersion;
-    use kvproto::metapb::{self, RegionEpoch};
-    use kvproto::raft_cmdpb::*;
+    use kvproto::{
+        kvrpcpb::ApiVersion,
+        metapb::{self, RegionEpoch},
+        raft_cmdpb::*,
+    };
     use protobuf::Message;
+    use sst_importer::Config as ImportConfig;
     use tempfile::{Builder, TempDir};
+    use test_sst_importer::*;
+    use tikv_util::{config::VersionTrack, worker::dummy_scheduler};
     use uuid::Uuid;
 
-    use crate::store::{Config, RegionTask};
-    use sst_importer::Config as ImportConfig;
-    use test_sst_importer::*;
-    use tikv_util::config::VersionTrack;
-    use tikv_util::worker::dummy_scheduler;
-
     use super::*;
+    use crate::{
+        coprocessor::*,
+        store::{
+            msg::WriteResponse,
+            peer_storage::RAFT_INIT_LOG_INDEX,
+            util::{new_learner_peer, new_peer},
+            Config, RegionTask,
+        },
+    };
 
     impl GenSnapTask {
         fn new_for_test(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
@@ -4261,10 +4283,10 @@ mod tests {
         (path, engine)
     }
 
-    pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
+    pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SstImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer = Arc::new(
-            SSTImporter::new(&ImportConfig::default(), dir.path(), None, ApiVersion::V1).unwrap(),
+            SstImporter::new(&ImportConfig::default(), dir.path(), None, ApiVersion::V1).unwrap(),
         );
         (dir, importer)
     }

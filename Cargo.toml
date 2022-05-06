@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -39,6 +39,12 @@ cloud-azure = [
   "sst_importer/cloud-azure",
 ]
 testexport = ["raftstore/testexport", "api_version/testexport"]
+test-engine-kv-rocksdb = [
+  "engine_test/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "engine_test/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
 ]
@@ -56,18 +62,20 @@ testing = []
 name = "tikv"
 
 [dependencies]
-api_version = { path = "components/api_version", default-features = false }
 anyhow = "1.0"
+api_version = { path = "components/api_version", default-features = false }
 async-stream = "0.2"
 async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
 byteorder = "1.2"
+case_macros = { path = "components/case_macros" }
 causal_ts = { path = "components/causal_ts" }
 chrono = "0.4"
 codec = { path = "components/codec", default-features = false }
+collections = { path = "components/collections" }
 concurrency_manager = { path = "components/concurrency_manager", default-features = false }
-online_config = { path = "components/online_config" }
+coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.8"
@@ -84,15 +92,14 @@ futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-timer = "3.0"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"
-hyper-tls = "0.5"
-itertools = "0.10"
-openssl = "0.10"
-hyper = { version = "0.14", features = ["full"] }
 http = "0"
+hyper = { version = "0.14", features = ["full"] }
+hyper-tls = "0.5"
 into_other = { path = "components/into_other", default-features = false }
+itertools = "0.10"
 keys = { path = "components/keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
@@ -100,25 +107,33 @@ libc = "0.2"
 libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
+match_template = { path = "components/match_template" }
 memory_trace_macros = { path = "components/memory_trace_macros" }
 mime = "0.3.13"
 more-asserts = "0.2"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 notify = "4"
+num-traits = "0.2.14"
 num_cpus = "1"
+online_config = { path = "components/online_config" }
+openssl = "0.10"
+parking_lot = "0.12"
+paste = "1.0"
 pd_client = { path = "components/pd_client", default-features = false }
-case_macros = {path = "components/case_macros"}
 pin-project = "1.0"
 pnet_datalink = "0.23"
+prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raftstore = { path = "components/raftstore", default-features = false }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
+raftstore = { path = "components/raftstore", default-features = false }
 rand = "0.7.3"
 regex = "1.3"
-num-traits = "0.2.14"
+resource_metering = { path = "components/resource_metering" }
 rev_lines = "0.2.1"
+seahash = "4.1.0"
 security = { path = "components/security", default-features = false }
 semver = "0.11"
 serde = { version = "1.0", features = ["derive"] }
@@ -127,52 +142,44 @@ serde_ignored = "0.1"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-strum = { version = "0.20", features = ["derive"] }
-parking_lot = "0.12"
-prometheus = { version = "0.13", features = ["nightly"] }
-prometheus-static-metric = "0.5"
 sst_importer = { path = "components/sst_importer", default-features = false }
+strum = { version = "0.20", features = ["derive"] }
 sysinfo = "0.16"
 tempfile = "3.0"
-match_template = { path = "components/match_template" }
-paste = "1.0"
 thiserror = "1.0"
-tidb_query_datatype = { path = "components/tidb_query_datatype", default-features = false }
-tidb_query_common = { path = "components/tidb_query_common", default-features = false }
-tidb_query_expr = { path = "components/tidb_query_expr", default-features = false }
 tidb_query_aggr = { path = "components/tidb_query_aggr", default-features = false }
+tidb_query_common = { path = "components/tidb_query_common", default-features = false }
+tidb_query_datatype = { path = "components/tidb_query_datatype", default-features = false }
 tidb_query_executors = { path = "components/tidb_query_executors", default-features = false }
+tidb_query_expr = { path = "components/tidb_query_expr", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util", default-features = false }
-collections = { path = "components/collections" }
-coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 tokio = { version = "1.17", features = ["full"] }
-tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-openssl = "0.6"
+tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 toml = "0.5"
 txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-resource_metering = { path = "components/resource_metering" }
-seahash = "4.1.0"
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf-codec"] }
 
 [dev-dependencies]
+api_version = { path = "components/api_version", features = ["testexport"] }
 example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" } # should be a binary dependency
+hyper-openssl = "0.9"
 panic_hook = { path = "components/panic_hook" }
 reqwest = { version = "0.11", features = ["blocking"] }
 test_sst_importer = { path = "components/test_sst_importer", default-features = false }
 test_util = { path = "components/test_util", default-features = false }
 tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
-hyper-openssl = "0.9"
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
@@ -195,7 +202,6 @@ fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
-
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
@@ -208,63 +214,63 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229
 # will _not_ propagate the feature `x` into `cmd`'s direct dependencies.
 resolver = "2"
 members = [
-  "fuzz",
-  "fuzz/fuzzer-afl",
-  "fuzz/fuzzer-libfuzzer",
-  "fuzz/fuzzer-honggfuzz",
-  "tests",
-  "cmd/tikv-server",
   "cmd/tikv-ctl",
-  "components/test_backup",
-  "components/test_raftstore",
-  "components/test_storage",
-  "components/test_coprocessor",
-  "components/test_sst_importer",
-  "components/test_util",
-  "components/test_pd",
-  "components/tikv_alloc",
-  "components/match_template",
-  "components/codec",
-  "components/online_config",
-  "components/panic_hook",
-  "components/tipb_helper",
-  "components/log_wrappers",
-  "components/tikv_util",
-  "components/tidb_query_datatype",
-  "components/tidb_query_common",
-  "components/tidb_query_codegen",
-  "components/tidb_query_expr",
-  "components/tidb_query_aggr",
-  "components/tidb_query_executors",
-  "components/pd_client",
-  "components/external_storage",
-  "components/external_storage/export",
+  "cmd/tikv-server",
+  "components/api_version",
+  "components/backup",
+  "components/batch-system",
   "components/case_macros",
+  "components/causal_ts",
+  "components/cdc",
   "components/cloud",
   "components/cloud/aws",
   "components/cloud/azure",
   "components/cloud/gcp",
-  "components/backup",
-  "components/keys",
-  "components/sst_importer",
-  "components/txn_types",
-  "components/resolved_ts",
-  "components/batch-system",
-  "components/cdc",
-  "components/raftstore",
-  "components/into_other",
+  "components/codec",
+  "components/collections",
+  "components/concurrency_manager",
+  "components/coprocessor_plugin_api",
   "components/encryption",
   "components/encryption/export",
   "components/error_code",
-  "components/concurrency_manager",
-  "components/server",
+  "components/external_storage",
+  "components/external_storage/export",
   "components/file_system",
-  "components/collections",
-  "components/coprocessor_plugin_api",
-  "components/test_coprocessor_plugin/example_plugin",
+  "components/into_other",
+  "components/keys",
+  "components/log_wrappers",
+  "components/match_template",
+  "components/online_config",
+  "components/panic_hook",
+  "components/pd_client",
+  "components/raftstore",
+  "components/resolved_ts",
   "components/resource_metering",
-  "components/api_version",
-  "components/causal_ts",
+  "components/server",
+  "components/sst_importer",
+  "components/test_backup",
+  "components/test_coprocessor",
+  "components/test_coprocessor_plugin/example_plugin",
+  "components/test_pd",
+  "components/test_raftstore",
+  "components/test_sst_importer",
+  "components/test_storage",
+  "components/test_util",
+  "components/tidb_query_aggr",
+  "components/tidb_query_codegen",
+  "components/tidb_query_common",
+  "components/tidb_query_datatype",
+  "components/tidb_query_executors",
+  "components/tidb_query_expr",
+  "components/tikv_alloc",
+  "components/tikv_util",
+  "components/tipb_helper",
+  "components/txn_types",
+  "fuzz",
+  "fuzz/fuzzer-afl",
+  "fuzz/fuzzer-honggfuzz",
+  "fuzz/fuzzer-libfuzzer",
+  "tests",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
