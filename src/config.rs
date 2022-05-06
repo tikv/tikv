@@ -4844,6 +4844,7 @@ mod tests {
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
         cfg.storage.block_cache.capacity = None; // Either `None` and a value is computed or `Some(_)` fixed value.
         cfg.memory_usage_limit = None;
+        cfg.raft_engine.mut_config().memory_limit = None;
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
