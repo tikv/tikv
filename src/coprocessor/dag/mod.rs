@@ -2,7 +2,7 @@
 
 mod storage_impl;
 
-pub use self::storage_impl::TiKvStorage;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
@@ -11,11 +11,12 @@ use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
 
-use crate::coprocessor::metrics::*;
-use crate::coprocessor::{Deadline, RequestHandler, Result};
-use crate::storage::{Statistics, Store};
-use crate::tikv_util::quota_limiter::QuotaLimiter;
-use std::sync::Arc;
+pub use self::storage_impl::TiKvStorage;
+use crate::{
+    coprocessor::{metrics::*, Deadline, RequestHandler, Result},
+    storage::{Statistics, Store},
+    tikv_util::quota_limiter::QuotaLimiter,
+};
 
 pub struct DagHandlerBuilder<S: Store + 'static> {
     req: DagRequest,

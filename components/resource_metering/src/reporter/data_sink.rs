@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::error::Result;
-
 use std::sync::Arc;
 
 use kvproto::resource_usage_agent::ResourceUsageRecord;
+
+use crate::error::Result;
 
 /// This trait abstracts the interface to communicate with the remote.
 /// We can simply mock this interface to test without RPC.

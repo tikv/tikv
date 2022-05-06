@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::export::{create_storage_no_client, read_external_storage_into_file, ExternalStorage};
+use std::io::{self};
+
 use anyhow::Context;
 use external_storage::request::file_name_for_write;
 use file_system::File;
@@ -9,10 +10,11 @@ use futures_io::AsyncRead;
 use kvproto::brpb as proto;
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 use slog_global::info;
-use std::io::{self};
 use tikv_util::time::Limiter;
 use tokio::runtime::Runtime;
 use tokio_util::compat::Tokio02AsyncReadCompatExt;
+
+use crate::export::{create_storage_no_client, read_external_storage_into_file, ExternalStorage};
 
 pub fn write_receiver(
     runtime: &Runtime,

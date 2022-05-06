@@ -1,9 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::{codec::Result, Either};
+use std::io::{prelude::*, Cursor};
+
 use byteorder::ByteOrder;
 use bytes::{Buf, Bytes};
-use std::io::prelude::*;
-use std::io::Cursor;
+
+use crate::{codec::Result, Either};
 
 pub trait Iterator {
     fn next(&mut self) -> Result<()>;
@@ -100,8 +101,9 @@ impl EventEncoder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rand::Rng;
+
+    use super::*;
 
     #[test]
     fn test_encode_decode() {

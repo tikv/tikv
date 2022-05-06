@@ -7,11 +7,14 @@ use std::{
     iter::FromIterator,
 };
 
-use super::{MetadataClient, StreamTask};
-use crate::metadata::store::SlashEtcStore;
-use crate::{errors::Result, metadata::MetadataEvent};
 use kvproto::brpb::{Noop, StorageBackend};
 use tokio_stream::StreamExt;
+
+use super::{MetadataClient, StreamTask};
+use crate::{
+    errors::Result,
+    metadata::{store::SlashEtcStore, MetadataEvent},
+};
 
 fn test_meta_cli() -> MetadataClient<SlashEtcStore> {
     MetadataClient::new(SlashEtcStore::default(), 42)

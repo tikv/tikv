@@ -7,16 +7,15 @@ use engine_traits::KvEngine;
 use fail::fail_point;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
-use raftstore::coprocessor::*;
-use raftstore::store::RegionSnapshot;
-use raftstore::Error as RaftStoreError;
+use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
 use tikv::storage::Statistics;
-use tikv_util::worker::Scheduler;
-use tikv_util::{error, warn};
+use tikv_util::{error, warn, worker::Scheduler};
 
-use crate::endpoint::{Deregister, Task};
-use crate::old_value::{self, OldValueCache};
-use crate::Error as CdcError;
+use crate::{
+    endpoint::{Deregister, Task},
+    old_value::{self, OldValueCache},
+    Error as CdcError,
+};
 
 /// An Observer for CDC.
 ///
@@ -195,13 +194,14 @@ impl RegionChangeObserver for CdcObserver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::Duration;
+
     use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
-    use raftstore::coprocessor::RoleChange;
-    use raftstore::store::util::new_peer;
-    use std::time::Duration;
+    use raftstore::{coprocessor::RoleChange, store::util::new_peer};
     use tikv::storage::kv::TestEngineBuilder;
+
+    use super::*;
 
     #[test]
     fn test_register_and_deregister() {

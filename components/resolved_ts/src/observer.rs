@@ -6,9 +6,7 @@ use raft::StateRole;
 use raftstore::coprocessor::*;
 use tikv_util::worker::Scheduler;
 
-use crate::cmd::lock_only_filter;
-use crate::endpoint::Task;
-use crate::metrics::RTS_CHANNEL_PENDING_CMD_BYTES;
+use crate::{cmd::lock_only_filter, endpoint::Task, metrics::RTS_CHANNEL_PENDING_CMD_BYTES};
 
 pub struct Observer<E: KvEngine> {
     scheduler: Scheduler<Task<E::Snapshot>>,
@@ -137,13 +135,15 @@ impl<E: KvEngine> RegionChangeObserver for Observer<E> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use std::time::Duration;
+
     use engine_rocks::RocksSnapshot;
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use kvproto::raft_cmdpb::*;
-    use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+
+    use super::*;
 
     fn put_cf(cf: &str, key: &[u8], value: &[u8]) -> Request {
         let mut cmd = Request::default();

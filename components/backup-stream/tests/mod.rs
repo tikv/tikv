@@ -15,8 +15,11 @@ use backup_stream::{
 };
 use futures::{executor::block_on, Future};
 use grpcio::ChannelBuilder;
-use kvproto::{brpb::Local, tikvpb::*};
-use kvproto::{brpb::StorageBackend, kvrpcpb::*};
+use kvproto::{
+    brpb::{Local, StorageBackend},
+    kvrpcpb::*,
+    tikvpb::*,
+};
 use pd_client::PdClient;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};

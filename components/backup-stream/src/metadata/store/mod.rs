@@ -4,15 +4,15 @@ pub mod slash_etc;
 pub use slash_etc::SlashEtcStore;
 
 pub mod etcd;
+use std::{future::Future, pin::Pin};
+
+use async_trait::async_trait;
 pub use etcd::EtcdStore;
+use tokio_stream::Stream;
 
 // ==== Generic interface definition ====
-
 use super::keys::{KeyValue, MetaKey};
 use crate::errors::Result;
-use async_trait::async_trait;
-use std::{future::Future, pin::Pin};
-use tokio_stream::Stream;
 
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;

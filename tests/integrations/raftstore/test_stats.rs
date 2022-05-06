@@ -1,26 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{
+    sync::{Arc, *},
+    thread,
+    time::Duration,
+};
 
-use api_version::test_kv_format_impl;
-use api_version::KvFormat;
-use futures::executor::block_on;
-use kvproto::kvrpcpb::*;
-use kvproto::pdpb::QueryKind;
-use kvproto::tikvpb_grpc::TikvClient;
+use api_version::{test_kv_format_impl, KvFormat};
+use futures::{executor::block_on, SinkExt, StreamExt};
+use grpcio::*;
+use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use raftstore::store::QueryStats;
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::*;
-
-use futures::{SinkExt, StreamExt};
-use grpcio::*;
-
-use kvproto::tikvpb::*;
-
 use txn_types::Key;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {

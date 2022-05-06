@@ -8,11 +8,13 @@ extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use std::fs;
-use std::io::{self, Write};
-use std::marker::Unpin;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    fs,
+    io::{self, Write},
+    marker::Unpin,
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use encryption::{encryption_method_from_db_encryption_method, DecrypterReader, Iv};
@@ -21,13 +23,14 @@ use file_system::File;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
 use openssl::hash::{Hasher, MessageDigest};
-use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
-use tikv_util::time::{Instant, Limiter};
+use tikv_util::{
+    stream::{block_on_external_io, READ_BUF_SIZE},
+    time::{Instant, Limiter},
+};
 use tokio::time::timeout;
 
 mod hdfs;
-pub use hdfs::HdfsConfig;
-pub use hdfs::HdfsStorage;
+pub use hdfs::{HdfsConfig, HdfsStorage};
 mod local;
 pub use local::LocalStorage;
 mod noop;

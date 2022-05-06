@@ -1,52 +1,50 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::AsRef;
-use std::fmt;
-use std::marker::PhantomData;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{convert::AsRef, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
-
 use engine_traits::KvEngine;
-
 use error_code::ErrorCodeExt;
-use kvproto::brpb::StreamBackupError;
-use kvproto::metapb::Region;
+use kvproto::{brpb::StreamBackupError, metapb::Region};
+use online_config::ConfigChange;
 use pd_client::PdClient;
 use raft::StateRole;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::ChangeObserver;
-
-use tikv_util::time::Instant;
-
-use tokio::io::Result as TokioResult;
-use tokio::runtime::Handle;
-use tokio::runtime::Runtime;
+use raftstore::{
+    coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
+    router::RaftStoreRouter,
+    store::fsm::ChangeObserver,
+};
+use tikv::config::BackupStreamConfig;
+use tikv_util::{
+    box_err, debug, error, info,
+    time::Instant,
+    warn,
+    worker::{Runnable, Scheduler},
+    HandyRwLock,
+};
+use tokio::{
+    io::Result as TokioResult,
+    runtime::{Handle, Runtime},
+};
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
 
-use crate::annotate;
-use crate::errors::Error;
-use crate::event_loader::InitialDataLoader;
-use crate::metadata::store::{EtcdStore, MetaStore};
-use crate::metadata::{MetadataClient, MetadataEvent, StreamTask};
-use crate::router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL};
-use crate::subscription_track::SubscriptionTracer;
-use crate::utils::{self, StopWatch};
-use crate::{errors::Result, observer::BackupStreamObserver};
-use crate::{metrics, try_send};
-
-use online_config::ConfigChange;
-use raftstore::coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider};
-use tikv::config::BackupStreamConfig;
-
-use tikv_util::worker::{Runnable, Scheduler};
-use tikv_util::{box_err, debug, error, info};
-use tikv_util::{warn, HandyRwLock};
-
 use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
+use crate::{
+    annotate,
+    errors::{Error, Result},
+    event_loader::InitialDataLoader,
+    metadata::{
+        store::{EtcdStore, MetaStore},
+        MetadataClient, MetadataEvent, StreamTask,
+    },
+    metrics,
+    observer::BackupStreamObserver,
+    router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL},
+    subscription_track::SubscriptionTracer,
+    try_send,
+    utils::{self, StopWatch},
+};
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 

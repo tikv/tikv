@@ -1,26 +1,28 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
-
-use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::*;
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use kvproto::tikvpb::TikvClient;
-use raft::eraftpb::MessageType;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        *,
+    },
+    thread,
+    time::Duration,
+};
 
 use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::{
+    kvrpcpb::*,
+    raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
+    tikvpb::TikvClient,
+};
 use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use test_raftstore::*;
-use tikv::storage::kv::SnapshotExt;
-use tikv::storage::Snapshot;
-use tikv_util::config::*;
-use tikv_util::time::Instant;
-use tikv_util::HandyRwLock;
+use tikv::storage::{kv::SnapshotExt, Snapshot};
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 use txn_types::{Key, PessimisticLock};
 
 /// Test if merge is rollback as expected.

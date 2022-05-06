@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
 use bstr::{ByteSlice, B};
+
+use super::*;
 
 /// Collator for latin1_bin collation with padding behavior (trims right spaces).
 #[derive(Debug)]

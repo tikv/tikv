@@ -1,7 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::thread;
+use std::{
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    thread,
+};
 
 use kvproto::pdpb::*;
 use pd_client::REQUEST_RECONNECT_INTERVAL;

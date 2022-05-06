@@ -1,21 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::match_template_api_version;
-use api_version::KvFormat;
-use api_version::RawValue;
-use engine_traits::raw_ttl::ttl_to_expire_ts;
-use kvproto::import_sstpb::*;
-use kvproto::kvrpcpb::ApiVersion;
 use std::sync::Arc;
 
+use api_version::{match_template_api_version, KvFormat, RawValue};
 use encryption::DataKeyManager;
-use engine_traits::{KvEngine, SstWriter};
+use engine_traits::{raw_ttl::ttl_to_expire_ts, KvEngine, SstWriter};
+use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteType};
 
-use crate::import_file::ImportPath;
-use crate::metrics::*;
-use crate::Result;
+use crate::{import_file::ImportPath, metrics::*, Result};
 
 pub struct TxnSstWriter<E: KvEngine> {
     default: E::SstWriter,

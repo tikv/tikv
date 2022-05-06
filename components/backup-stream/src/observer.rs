@@ -2,19 +2,18 @@
 
 use std::sync::{Arc, RwLock};
 
-use crate::debug;
-use crate::try_send;
-use crate::utils::SegmentSet;
-
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::*;
+use tikv_util::{worker::Scheduler, HandyRwLock};
 
-use tikv_util::worker::Scheduler;
-use tikv_util::HandyRwLock;
-
-use crate::endpoint::{ObserveOp, Task};
+use crate::{
+    debug,
+    endpoint::{ObserveOp, Task},
+    try_send,
+    utils::SegmentSet,
+};
 
 /// An Observer for Backup Stream.
 ///
@@ -180,8 +179,7 @@ impl RegionChangeObserver for BackupStreamObserver {
 #[cfg(test)]
 
 mod tests {
-    use std::assert_matches::assert_matches;
-    use std::time::Duration;
+    use std::{assert_matches::assert_matches, time::Duration};
 
     use engine_panic::PanicEngine;
     use kvproto::metapb::Region;
@@ -190,14 +188,13 @@ mod tests {
         Cmd, CmdBatch, CmdObserveInfo, CmdObserver, ObserveHandle, ObserveLevel, ObserverContext,
         RegionChangeEvent, RegionChangeObserver, RoleChange, RoleObserver,
     };
-
-    use tikv_util::worker::dummy_scheduler;
-    use tikv_util::HandyRwLock;
-
-    use crate::endpoint::{ObserveOp, Task};
-    use crate::subscription_track::SubscriptionTracer;
+    use tikv_util::{worker::dummy_scheduler, HandyRwLock};
 
     use super::BackupStreamObserver;
+    use crate::{
+        endpoint::{ObserveOp, Task},
+        subscription_track::SubscriptionTracer,
+    };
 
     fn fake_region(id: u64, start: &[u8], end: &[u8]) -> Region {
         let mut r = Region::new();

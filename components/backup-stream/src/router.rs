@@ -14,6 +14,37 @@ use std::{
     time::Duration,
 };
 
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use external_storage::{BackendConfig, UnpinReader};
+use external_storage_export::{create_storage, ExternalStorage};
+use futures::io::Cursor;
+use kvproto::{
+    brpb::{DataFileInfo, FileType, Metadata},
+    raft_cmdpb::CmdType,
+};
+use openssl::hash::{Hasher, MessageDigest};
+use protobuf::Message;
+use raftstore::coprocessor::CmdBatch;
+use slog_global::debug;
+use tidb_query_datatype::codec::table::decode_table_id;
+use tikv_util::{
+    box_err,
+    codec::stream_event::EventEncoder,
+    error, info,
+    time::{Instant, Limiter},
+    warn,
+    worker::Scheduler,
+    Either, HandyRwLock,
+};
+use tokio::{
+    fs::{remove_file, File},
+    io::{AsyncWriteExt, BufWriter},
+    sync::{Mutex, RwLock},
+};
+use tokio_util::compat::TokioAsyncReadCompatExt;
+use txn_types::{Key, Lock, TimeStamp};
+
+use super::errors::Result;
 use crate::{
     annotate,
     endpoint::Task,
@@ -24,43 +55,6 @@ use crate::{
     try_send,
     utils::{self, SegmentMap, Slot, SlotMap, StopWatch},
 };
-
-use super::errors::Result;
-
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-
-use external_storage::{BackendConfig, UnpinReader};
-use external_storage_export::{create_storage, ExternalStorage};
-
-use futures::io::Cursor;
-use kvproto::{
-    brpb::{DataFileInfo, FileType, Metadata},
-    raft_cmdpb::CmdType,
-};
-use openssl::hash::{Hasher, MessageDigest};
-use protobuf::Message;
-use raftstore::coprocessor::CmdBatch;
-
-use slog_global::debug;
-use tidb_query_datatype::codec::table::decode_table_id;
-
-use tikv_util::{
-    box_err,
-    codec::stream_event::EventEncoder,
-    error, info,
-    time::{Instant, Limiter},
-    warn,
-    worker::Scheduler,
-    Either, HandyRwLock,
-};
-use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::Mutex;
-use tokio::{
-    fs::{remove_file, File},
-    sync::RwLock,
-};
-use tokio_util::compat::TokioAsyncReadCompatExt;
-use txn_types::{Key, Lock, TimeStamp};
 
 pub const FLUSH_STORAGE_INTERVAL: u64 = 300;
 pub const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 16;
@@ -1134,17 +1128,16 @@ struct TaskRange {
 
 #[cfg(test)]
 mod tests {
-    use crate::utils;
+    use std::{ffi::OsStr, time::Duration};
 
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
-
-    use std::{ffi::OsStr, time::Duration};
     use tikv_util::{
         codec::number::NumberEncoder,
         worker::{dummy_scheduler, ReceiverWrapper},
     };
 
     use super::*;
+    use crate::utils;
 
     #[derive(Debug)]
     struct KvEventsBuilder {

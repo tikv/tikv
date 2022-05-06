@@ -1,7 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use kvproto::pdpb::*;
 

@@ -1,8 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 use raft::eraftpb::MessageType;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use test_raftstore::*;
 
 // Test if a singleton can apply a log before persisting it.

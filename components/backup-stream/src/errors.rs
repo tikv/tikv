@@ -1,22 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    error::Error as StdError, fmt::Display, io::Error as IoError, result::Result as StdResult,
+};
+
 use error_code::ErrorCodeExt;
 use etcd_client::Error as EtcdError;
 use kvproto::errorpb::Error as StoreError;
 use pd_client::Error as PdError;
 use protobuf::ProtobufError;
 use raftstore::Error as RaftStoreError;
-use std::error::Error as StdError;
-use std::fmt::Display;
-use std::io::Error as IoError;
-use std::result::Result as StdResult;
 use thiserror::Error as ThisError;
 use tikv::storage::txn::Error as TxnError;
-use tikv_util::error;
-use tikv_util::worker::ScheduleError;
+use tikv_util::{error, worker::ScheduleError};
 
-use crate::endpoint::Task;
-use crate::metrics;
+use crate::{endpoint::Task, metrics};
 
 #[derive(ThisError, Debug)]
 pub enum Error {
@@ -159,9 +157,11 @@ impl Error {
 mod test {
     extern crate test;
 
-    use super::{ContextualResultExt, Error, Result};
-    use error_code::ErrorCodeExt;
     use std::io::{self, ErrorKind};
+
+    use error_code::ErrorCodeExt;
+
+    use super::{ContextualResultExt, Error, Result};
 
     #[test]
     fn test_contextual_error() {

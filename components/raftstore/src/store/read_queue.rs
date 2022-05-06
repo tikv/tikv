@@ -1,26 +1,30 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::collections::VecDeque;
-use std::{cmp, mem, u64, usize};
-
-use crate::store::fsm::apply;
-use crate::store::metrics::*;
-use crate::store::{Callback, Config};
-use crate::Result;
+use std::{cmp, collections::VecDeque, mem, u64, usize};
 
 use collections::HashMap;
 use engine_traits::Snapshot;
-use kvproto::kvrpcpb::LockInfo;
-use kvproto::raft_cmdpb::{self, RaftCmdRequest};
+use kvproto::{
+    kvrpcpb::LockInfo,
+    raft_cmdpb::{self, RaftCmdRequest},
+};
 use protobuf::Message;
-use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
-use tikv_util::memory::HeapSize;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now};
-use tikv_util::MustConsumeVec;
-use tikv_util::{box_err, debug, error};
+use tikv_util::{
+    box_err,
+    codec::number::{NumberEncoder, MAX_VAR_U64_LEN},
+    debug, error,
+    memory::HeapSize,
+    time::{duration_to_sec, monotonic_raw_now},
+    MustConsumeVec,
+};
 use time::Timespec;
 use uuid::Uuid;
+
+use crate::{
+    store::{fsm::apply, metrics::*, Callback, Config},
+    Result,
+};
 
 const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
@@ -434,8 +438,9 @@ impl ReadIndexContext {
 }
 
 mod memtrace {
-    use super::*;
     use tikv_util::memory::HeapSize;
+
+    use super::*;
 
     impl<S> HeapSize for ReadIndexRequest<S>
     where
@@ -511,8 +516,9 @@ mod read_index_ctx_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use engine_test::kv::KvTestSnapshot;
+
+    use super::*;
 
     #[test]
     fn test_read_queue_fold() {

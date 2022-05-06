@@ -3,14 +3,13 @@
 use std::{marker::PhantomData, time::Duration};
 
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
-
 use futures::executor::block_on;
+use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
     coprocessor::RegionInfoProvider,
     router::RaftStoreRouter,
     store::{fsm::ChangeObserver, Callback, SignificantMsg},
 };
-
 use tikv::storage::{
     kv::StatisticsSummary,
     mvcc::{DeltaScanner, ScannerBuilder},
@@ -24,18 +23,13 @@ use crate::{
     annotate, debug,
     endpoint::ObserveOp,
     errors::{ContextualResultExt, Error, Result},
-    router::ApplyEvent,
+    metrics,
+    router::{ApplyEvent, ApplyEvents, Router},
     subscription_track::{SubscriptionTracer, TwoPhaseResolver},
     try_send,
     utils::{self, RegionPager},
     Task,
 };
-use crate::{
-    metrics,
-    router::{ApplyEvents, Router},
-};
-
-use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 3;
 

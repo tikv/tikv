@@ -1,91 +1,104 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::cell::Cell;
-use std::cmp::{Ord, Ordering as CmpOrdering};
-use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use std::{mem, u64};
+use std::{
+    cell::Cell,
+    cmp::{Ord, Ordering as CmpOrdering},
+    collections::{
+        BTreeMap,
+        Bound::{Excluded, Included, Unbounded},
+    },
+    mem,
+    ops::{Deref, DerefMut},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+    u64,
+};
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
     HandlerBuilder, PollHandler, Priority,
 };
+use collections::HashMap;
+use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
-use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    CompactedEvent, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine, RaftLogBatch,
+    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+};
 use fail::fail_point;
-use futures::compat::Future01CompatExt;
-use futures::FutureExt;
+use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::HealthService;
-use kvproto::import_sstpb::SstMeta;
-use kvproto::import_sstpb::SwitchMode;
-use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::QueryStats;
-use kvproto::pdpb::StoreStats;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
-use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
-use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
+use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use kvproto::{
+    import_sstpb::{SstMeta, SwitchMode},
+    metapb::{self, Region, RegionEpoch},
+    pdpb::{QueryStats, StoreStats},
+    raft_cmdpb::{AdminCmdType, AdminRequest},
+    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
+    replication_modepb::{ReplicationMode, ReplicationStatus},
+};
+use pd_client::{FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
-use time::{self, Timespec};
-
-use collections::HashMap;
-use engine_traits::CompactedEvent;
-use engine_traits::{RaftEngine, RaftLogBatch, WriteOptions};
-use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::{FeatureGate, PdClient};
+use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::disk::{get_disk_status, DiskUsage};
-use tikv_util::time::{duration_to_sec, Instant as TiInstant};
-use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::{
-    box_err, box_try, debug, defer, error, info, is_zero_duration, slow_log, sys as sys_util, warn,
+    box_err, box_try,
+    config::{Tracker, VersionTrack},
+    debug, defer, error,
+    future::poll_future_notify,
+    info, is_zero_duration,
+    mpsc::{self, LooseBoundedSender, Receiver},
+    slow_log, sys as sys_util,
+    sys::disk::{get_disk_status, DiskUsage},
+    time::{duration_to_sec, Instant as TiInstant},
+    timer::SteadyTimer,
+    warn,
+    worker::{LazyWorker, Scheduler, Worker},
     Either, RingQueue,
 };
+use time::{self, Timespec};
 
-use crate::bytes_capacity;
-use crate::coprocessor::split_observer::SplitObserver;
-use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
-use crate::store::async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg};
-use crate::store::config::Config;
-use crate::store::fsm::metrics::*;
-use crate::store::fsm::peer::{
-    maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
+use crate::{
+    bytes_capacity,
+    coprocessor::{
+        split_observer::SplitObserver, BoxAdminObserver, CoprocessorHost, RegionChangeEvent,
+    },
+    store::{
+        async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+        config::Config,
+        fsm::{
+            create_apply_batch_system,
+            metrics::*,
+            peer::{
+                maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
+            },
+            ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
+            ApplyTaskRes,
+        },
+        local_metrics::{RaftMetrics, RaftReadyMetrics},
+        memory::*,
+        metrics::*,
+        peer_storage,
+        transport::Transport,
+        util,
+        util::{is_initial_msg, RegionReadProgressRegistry},
+        worker::{
+            AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
+            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
+            RaftlogFetchRunner, RaftlogFetchTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate,
+            RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask, SplitCheckTask,
+        },
+        Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
+        PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
+    },
+    Result,
 };
-use crate::store::fsm::ApplyNotifier;
-use crate::store::fsm::ApplyTaskRes;
-use crate::store::fsm::{
-    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
-};
-use crate::store::local_metrics::{RaftMetrics, RaftReadyMetrics};
-use crate::store::memory::*;
-use crate::store::metrics::*;
-use crate::store::peer_storage;
-use crate::store::transport::Transport;
-use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
-use crate::store::worker::{
-    AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
-    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-    RaftlogFetchRunner, RaftlogFetchTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate,
-    RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask, SplitCheckTask,
-};
-use crate::store::{
-    util, Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
-    PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
-};
-use crate::Result;
-use concurrency_manager::ConcurrencyManager;
-use resource_metering::CollectorRegHandle;
-use tikv_util::future::poll_future_notify;
 
 type Key = Vec<u8>;
 
@@ -2739,9 +2752,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
 #[cfg(test)]
 mod tests {
-    use engine_rocks::RangeOffsets;
-    use engine_rocks::RangeProperties;
-    use engine_rocks::RocksCompactedEvent;
+    use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
 
     use super::*;
 

@@ -1,9 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{assert_engine_error, default_engine};
 use engine_test::kv::KvTestEngine;
 use engine_traits::{Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt};
 use panic_hook::recover_safe;
+
+use super::{assert_engine_error, default_engine};
 
 #[test]
 fn write_batch_none_no_commit() {

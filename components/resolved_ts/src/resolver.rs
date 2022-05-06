@@ -1,10 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{cmp, collections::BTreeMap, sync::Arc};
+
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
-use std::cmp;
-use std::collections::BTreeMap;
-use std::sync::Arc;
 use txn_types::TimeStamp;
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
@@ -195,8 +194,9 @@ impl Resolver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use txn_types::Key;
+
+    use super::*;
 
     #[derive(Clone)]
     enum Event {

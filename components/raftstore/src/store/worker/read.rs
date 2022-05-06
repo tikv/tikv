@@ -1,42 +1,46 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::cell::Cell;
-use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    cell::Cell,
+    fmt::{self, Display, Formatter},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 
-use crossbeam::atomic::AtomicCell;
-use crossbeam::channel::TrySendError;
+use crossbeam::{atomic::AtomicCell, channel::TrySendError};
+use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use fail::fail_point;
-use kvproto::errorpb;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb;
-use kvproto::raft_cmdpb::{
-    CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
+use kvproto::{
+    errorpb,
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb,
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
 use pd_client::BucketMeta;
+use tikv_util::{
+    codec::number::decode_u64,
+    debug, error,
+    lru::LruCache,
+    time::{monotonic_raw_now, Instant, ThreadReadId},
+};
 use time::Timespec;
 
-use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::util::{self, LeaseState, RegionReadProgress, RemoteLease};
-use crate::store::{
-    cmd_resp, Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand,
-    ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
-};
-use crate::Error;
-use crate::Result;
-
-use engine_traits::{KvEngine, RaftEngine, Snapshot};
-use tikv_util::codec::number::decode_u64;
-use tikv_util::lru::LruCache;
-use tikv_util::time::monotonic_raw_now;
-use tikv_util::time::{Instant, ThreadReadId};
-use tikv_util::{debug, error};
-
 use super::metrics::*;
-use crate::store::fsm::store::StoreMeta;
+use crate::{
+    errors::RAFTSTORE_IS_BUSY,
+    store::{
+        cmd_resp,
+        fsm::store::StoreMeta,
+        util::{self, LeaseState, RegionReadProgress, RemoteLease},
+        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadResponse,
+        RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
+    },
+    Error, Result,
+};
 
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
@@ -912,23 +916,19 @@ impl ReadMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::*;
-    use std::thread;
+    use std::{sync::mpsc::*, thread};
 
     use crossbeam::channel::TrySendError;
-    use kvproto::raft_cmdpb::*;
-    use tempfile::{Builder, TempDir};
-    use time::Duration;
-
-    use crate::store::util::Lease;
-    use crate::store::Callback;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::ALL_CFS;
-    use tikv_util::codec::number::NumberEncoder;
-    use tikv_util::time::monotonic_raw_now;
+    use kvproto::raft_cmdpb::*;
+    use tempfile::{Builder, TempDir};
+    use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
+    use time::Duration;
     use txn_types::WriteBatchFlags;
 
     use super::*;
+    use crate::store::{util::Lease, Callback};
 
     struct MockRouter {
         p_router: SyncSender<RaftCommand<KvTestSnapshot>>,

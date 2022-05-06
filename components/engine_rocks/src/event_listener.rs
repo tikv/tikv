@@ -1,13 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::rocks_metrics::*;
-
 use file_system::{get_io_type, set_io_type, IOType};
 use rocksdb::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MutableStatus,
     SubcompactionJobInfo, WriteStallInfo,
 };
 use tikv_util::set_panic_mark;
+
+use crate::rocks_metrics::*;
 
 // Message for RocksDB status subcode kNoSpace.
 const NO_SPACE_ERROR: &str = "IO error: No space left on device";

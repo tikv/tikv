@@ -1,5 +1,21 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, HashMap},
+    ops::Bound,
+    sync::Arc,
+};
+
+use async_trait::async_trait;
+use slog_global::error;
+use tikv_util::warn;
+use tokio::sync::{
+    mpsc::{self, Sender},
+    Mutex,
+};
+use tokio_stream::StreamExt;
+
 use crate::{
     errors::Result,
     metadata::{
@@ -10,20 +26,6 @@ use crate::{
         },
     },
 };
-use async_trait::async_trait;
-use slog_global::error;
-use std::{
-    cell::Cell,
-    collections::{BTreeMap, HashMap},
-    ops::Bound,
-    sync::Arc,
-};
-use tikv_util::warn;
-use tokio::sync::{
-    mpsc::{self, Sender},
-    Mutex,
-};
-use tokio_stream::StreamExt;
 
 struct Subscriber {
     start_key: Vec<u8>,

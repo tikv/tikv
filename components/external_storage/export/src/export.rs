@@ -3,30 +3,22 @@
 //! To use External storage with protobufs as an application, import this module.
 //! external_storage contains the actual library code
 //! Cloud provider backends are under components/cloud
-use std::io::{self, Write};
-use std::path::Path;
-use std::sync::Arc;
+use std::{
+    io::{self, Write},
+    path::Path,
+    sync::Arc,
+};
 
+use async_trait::async_trait;
 #[cfg(feature = "cloud-aws")]
 pub use aws::{Config as S3Config, S3Storage};
 #[cfg(feature = "cloud-azure")]
 pub use azure::{AzureStorage, Config as AzureConfig};
-use engine_traits::FileEncryptionInfo;
-#[cfg(feature = "cloud-gcp")]
-pub use gcp::{Config as GCSConfig, GCSStorage};
-
-use kvproto::brpb::CloudDynamic;
-pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
-#[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
-use kvproto::brpb::{AzureBlobStorage, Gcs, S3};
-
-#[cfg(feature = "cloud-storage-dylib")]
-use crate::dylib;
-use async_trait::async_trait;
 #[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
 use cloud::blob::BlobConfig;
 use cloud::blob::{BlobStorage, PutResource};
 use encryption::DataKeyManager;
+use engine_traits::FileEncryptionInfo;
 #[cfg(feature = "cloud-storage-dylib")]
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
@@ -36,11 +28,21 @@ pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, UnpinReader,
 };
 use futures_io::AsyncRead;
-use kvproto::brpb::{Noop, StorageBackend};
-use tikv_util::stream::block_on_external_io;
-use tikv_util::time::{Instant, Limiter};
+#[cfg(feature = "cloud-gcp")]
+pub use gcp::{Config as GCSConfig, GCSStorage};
+pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
+#[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
+use kvproto::brpb::{AzureBlobStorage, Gcs, S3};
+use kvproto::brpb::{CloudDynamic, Noop, StorageBackend};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
+use tikv_util::{
+    stream::block_on_external_io,
+    time::{Instant, Limiter},
+};
+
+#[cfg(feature = "cloud-storage-dylib")]
+use crate::dylib;
 
 pub fn create_storage(
     storage_backend: &StorageBackend,
@@ -260,8 +262,9 @@ pub fn make_cloud_backend(config: CloudDynamic) -> StorageBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_create_storage() {

@@ -7,21 +7,20 @@ use std::{
     time::Duration,
 };
 
-use crate::{
-    errors::{Error, Result},
-    Task,
-};
-
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::{channel::mpsc, executor::block_on, StreamExt};
 use kvproto::raft_cmdpb::{CmdType, Request};
 use raft::StateRole;
 use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
-
 use tikv::storage::CfStatistics;
 use tikv_util::{box_err, time::Instant, warn, worker::Scheduler, Either};
 use tokio::sync::{Mutex, RwLock};
 use txn_types::Key;
+
+use crate::{
+    errors::{Error, Result},
+    Task,
+};
 
 /// wrap a user key with encoded data key.
 pub fn wrap_key(v: Vec<u8>) -> Vec<u8> {

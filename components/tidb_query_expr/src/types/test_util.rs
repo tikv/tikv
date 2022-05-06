@@ -2,14 +2,17 @@
 
 use std::any::Any;
 
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    codec::{
+        batch::LazyBatchColumnVec,
+        data_type::{EvaluableRet, ScalarValue},
+    },
+    expr::EvalContext,
+};
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use crate::types::function::RpnFnMeta;
-use crate::RpnExpressionBuilder;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::codec::data_type::{EvaluableRet, ScalarValue};
-use tidb_query_datatype::expr::EvalContext;
+use crate::{types::function::RpnFnMeta, RpnExpressionBuilder};
 
 /// Helper utility to evaluate RPN function over scalar inputs.
 ///

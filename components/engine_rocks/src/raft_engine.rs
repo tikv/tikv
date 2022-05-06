@@ -1,8 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::{util, RocksEngine, RocksWriteBatch};
-
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly,
     RaftLogBatch, RaftLogGCTask, Result, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
@@ -12,6 +10,8 @@ use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
+
+use crate::{util, RocksEngine, RocksWriteBatch};
 
 impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {

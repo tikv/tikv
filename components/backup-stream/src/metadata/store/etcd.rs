@@ -1,21 +1,24 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{pin::Pin, sync::Arc};
+
+use async_trait::async_trait;
 use etcd_client::{
     DeleteOptions, EventType, GetOptions, SortOrder, SortTarget, Txn, TxnOp, WatchOptions,
 };
-use std::pin::Pin;
-use std::sync::Arc;
+use futures::StreamExt;
 use tikv_util::warn;
 use tokio::sync::Mutex;
-
-use futures::StreamExt;
 use tokio_stream::Stream;
 
 use super::{GetExtra, GetResponse, Keys, KvChangeSubscription, KvEventType, MetaStore, Snapshot};
-use crate::errors::Result;
-use crate::metadata::keys::{KeyValue, MetaKey};
-use crate::metadata::store::{KvEvent, Subscription};
-use async_trait::async_trait;
+use crate::{
+    errors::Result,
+    metadata::{
+        keys::{KeyValue, MetaKey},
+        store::{KvEvent, Subscription},
+    },
+};
 // Can we get rid of the mutex? (which means, we must use a singleton client.)
 // Or make a pool of clients?
 #[derive(Clone)]

@@ -2,20 +2,14 @@
 
 use std::sync::Arc;
 
-use crate::debug;
-
-use crate::metrics::TRACK_REGION;
-use crate::utils;
-use dashmap::mapref::one::RefMut;
-use dashmap::DashMap;
-
+use dashmap::{mapref::one::RefMut, DashMap};
 use kvproto::metapb::Region;
-
 use raftstore::coprocessor::*;
 use resolved_ts::Resolver;
-
 use tikv_util::{info, warn};
 use txn_types::TimeStamp;
+
+use crate::{debug, metrics::TRACK_REGION, utils};
 
 /// A utility to tracing the regions being subscripted.
 #[derive(Clone, Default, Debug)]
