@@ -3,7 +3,7 @@
 use lazy_static::lazy_static;
 use prometheus::*;
 
-use crate::metrics::HIGH_PRIORITY_REGISTRY;
+use crate::metrics::*;
 
 lazy_static! {
     pub static ref FUTUREPOOL_RUNNING_TASK_VEC: IntGaugeVec =
@@ -20,11 +20,12 @@ lazy_static! {
         &["name"]
     )
     .unwrap();
-    pub static ref FUTUREPOOL_SCHEDULE_DURATION_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref FUTUREPOOL_SCHEDULE_DURATION_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_futurepool_schedule_duration",
         "Histogram of future_pool handle duration.",
         &["name"],
-        exponential_buckets(0.0005, 2.0, 15).unwrap()
+        exponential_buckets(0.0005, 2.0, 15).unwrap(),
+        UNUSED_METRICS_REGISTRY
     )
     .unwrap();
 }

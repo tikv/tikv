@@ -11,7 +11,7 @@ use kvproto::pdpb::QueryKind;
 use pd_client::BucketMeta;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
-use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
+use tikv_util::metrics::*;
 
 use crate::server::metrics::{GcKeysCF, GcKeysDetail};
 use prometheus::*;
@@ -156,7 +156,7 @@ lazy_static! {
         "Bucketed histogram of coprocessor request duration",
         &["req"],
         exponential_buckets(0.0005, 2.0, 20).unwrap(),
-        HIGH_PRIORITY_REGISTRY
+        FULL_HISTOGRAM_REGISTRY
     )
     .unwrap();
     pub static ref COPR_REQ_HISTOGRAM_STATIC: CoprReqHistogram =
@@ -181,11 +181,12 @@ lazy_static! {
     .unwrap();
     pub static ref COPR_REQ_WAIT_TIME_STATIC: ReqWaitHistogram =
         auto_flush_from!(COPR_REQ_WAIT_TIME, ReqWaitHistogram);
-    pub static ref COPR_REQ_HANDLER_BUILD_TIME: HistogramVec = register_histogram_vec!(
+    pub static ref COPR_REQ_HANDLER_BUILD_TIME: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_coprocessor_request_handler_build_seconds",
         "Bucketed histogram of coprocessor request handler build duration",
         &["req"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap(),
+        UNUSED_METRICS_REGISTRY
     )
     .unwrap();
     pub static ref COPR_REQ_HANDLER_BUILD_TIME_STATIC: CoprReqHistogram =
@@ -249,11 +250,12 @@ lazy_static! {
     )
     .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
-        register_histogram_vec!(
+        register_histogram_vec_with_registry!(
             "tikv_coprocessor_mem_lock_check_duration_seconds",
             "Duration of memory lock checking for coprocessor",
             &["result"],
-            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+            exponential_buckets(1e-6f64, 4f64, 10).unwrap(), // 1us ~ 262ms
+            FULL_HISTOGRAM_REGISTRY
         )
         .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =

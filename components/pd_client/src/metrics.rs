@@ -2,7 +2,7 @@
 
 use lazy_static::lazy_static;
 use prometheus::*;
-use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
+use tikv_util::metrics::*;
 
 lazy_static! {
     pub static ref PD_REQUEST_HISTOGRAM_VEC: HistogramVec = register_histogram_vec_with_registry!(
@@ -57,16 +57,18 @@ lazy_static! {
         HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
-    pub static ref REGION_READ_KEYS_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref REGION_READ_KEYS_HISTOGRAM: Histogram = register_histogram_with_registry!(
         "tikv_region_read_keys",
         "Histogram of keys written for regions",
-        exponential_buckets(1.0, 2.0, 20).unwrap()
+        exponential_buckets(1.0, 2.0, 20).unwrap(),
+        UNUSED_METRICS_REGISTRY
     )
     .unwrap();
-    pub static ref REGION_READ_BYTES_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref REGION_READ_BYTES_HISTOGRAM: Histogram = register_histogram_with_registry!(
         "tikv_region_read_bytes",
         "Histogram of bytes written for regions",
-        exponential_buckets(256.0, 2.0, 20).unwrap()
+        exponential_buckets(256.0, 2.0, 20).unwrap(),
+        UNUSED_METRICS_REGISTRY
     )
     .unwrap();
     pub static ref REGION_WRITTEN_BYTES_HISTOGRAM: Histogram = register_histogram!(

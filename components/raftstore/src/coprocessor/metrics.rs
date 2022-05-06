@@ -2,10 +2,10 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    exponential_buckets, register_histogram, register_histogram_with_registry,
+    exponential_buckets, register_histogram_with_registry,
     register_int_gauge_vec_with_registry, Histogram, IntGaugeVec,
 };
-use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
+use tikv_util::metrics::*;
 
 lazy_static! {
     pub static ref REGION_SIZE_HISTOGRAM: Histogram = register_histogram_with_registry!(
@@ -15,10 +15,11 @@ lazy_static! {
         HIGH_PRIORITY_REGISTRY
     ).unwrap();
 
-    pub static ref REGION_KEYS_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref REGION_KEYS_HISTOGRAM: Histogram = register_histogram_with_registry!(
         "tikv_raftstore_region_keys",
         "Bucketed histogram of approximate region keys.",
-        exponential_buckets(1.0, 2.0, 30).unwrap()
+        exponential_buckets(1.0, 2.0, 30).unwrap(),
+        UNUSED_METRICS_REGISTRY
     ).unwrap();
 
     pub static ref REGION_COUNT_GAUGE_VEC: IntGaugeVec =

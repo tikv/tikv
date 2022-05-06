@@ -240,16 +240,18 @@ make_static_metric! {
 
 lazy_static! {
     pub static ref STORE_TIME_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_store_duration_secs",
             "Bucketed histogram of store time duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            HIGH_PRIORITY_REGISTRY
         ).unwrap();
     pub static ref APPLY_TIME_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_apply_duration_secs",
             "Bucketed histogram of apply time duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            HIGH_PRIORITY_REGISTRY
         ).unwrap();
 
     pub static ref STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM: Histogram =
@@ -318,34 +320,39 @@ lazy_static! {
 
     /// Waterfall Metrics
     pub static ref STORE_WF_BATCH_WAIT_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_store_wf_batch_wait_duration_seconds",
             "Bucketed histogram of proposals' wait batch duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            HIGH_PRIORITY_REGISTRY
         ).unwrap();
     pub static ref STORE_WF_SEND_TO_QUEUE_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_store_wf_send_to_queue_duration_seconds",
             "Bucketed histogram of proposals' send to write queue duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            HIGH_PRIORITY_REGISTRY
         ).unwrap();
     pub static ref STORE_WF_BEFORE_WRITE_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_store_wf_before_write_duration_seconds",
             "Bucketed histogram of proposals' before write duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            HIGH_PRIORITY_REGISTRY
         ).unwrap();
     pub static ref STORE_WF_WRITE_KVDB_END_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_store_wf_write_kvdb_end_duration_seconds",
             "Bucketed histogram of proposals' write kv db end duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            HIGH_PRIORITY_REGISTRY
         ).unwrap();
     pub static ref STORE_WF_WRITE_END_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_store_wf_write_end_duration_seconds",
             "Bucketed histogram of proposals' write db end duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            HIGH_PRIORITY_REGISTRY
         ).unwrap();
     pub static ref STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
@@ -354,16 +361,18 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_store_wf_commit_log_duration_seconds",
             "Bucketed histogram of proposals' commit and persist duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            HIGH_PRIORITY_REGISTRY
         ).unwrap();
     pub static ref STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_store_wf_commit_not_persist_log_duration_seconds",
             "Bucketed histogram of proposals' commit but not persist duration",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            HIGH_PRIORITY_REGISTRY
         ).unwrap();
 
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -467,7 +476,7 @@ lazy_static! {
             "Bucketed histogram of peer processing raft duration.",
             &["type"],
             exponential_buckets(0.0005, 2.0, 20).unwrap(),
-            HIGH_PRIORITY_REGISTRY
+            FULL_HISTOGRAM_REGISTRY
         ).unwrap();
 
     pub static ref PEER_PROPOSE_LOG_SIZE_HISTOGRAM: Histogram =
@@ -615,10 +624,11 @@ lazy_static! {
         auto_flush_from!(RAFT_EVENT_DURATION_VEC, RaftEventDuration);
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_read_index_pending_duration",
             "Duration of pending read index.",
-            exponential_buckets(0.001, 2.0, 20).unwrap() // max 1000s
+            exponential_buckets(0.001, 2.0, 20).unwrap(), // max 1000s
+            UNUSED_METRICS_REGISTRY
         ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_COUNT: IntGauge =
@@ -672,11 +682,12 @@ lazy_static! {
         linear_buckets(0.0, 0.05, 20).unwrap()
     ).unwrap();
 
-    pub static ref QUERY_REGION_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref QUERY_REGION_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_query_region",
         "Histogram of query",
         &["type"],
-        exponential_buckets(8.0, 2.0, 24).unwrap()
+        exponential_buckets(8.0, 2.0, 24).unwrap(),
+        UNUSED_METRICS_REGISTRY
     ).unwrap();
 
 
@@ -700,10 +711,11 @@ lazy_static! {
         auto_flush_from!(COMPACTION_GUARD_ACTION_COUNTER_VEC, CompactionGuardActionVec);
 
     pub static ref RAFT_PEER_PENDING_DURATION: Histogram =
-    register_histogram!(
+    register_histogram_with_registry!(
         "tikv_raftstore_peer_pending_duration_seconds",
         "Bucketed histogram of region peer pending duration.",
-        exponential_buckets(0.1, 1.5, 30).unwrap()  // 0.1s ~ 5.3 hours
+        exponential_buckets(0.1, 1.5, 30).unwrap(),  // 0.1s ~ 5.3 hours
+        UNUSED_METRICS_REGISTRY
     ).unwrap();
 
     pub static ref HIBERNATED_PEER_STATE_GAUGE: HibernatedPeerStateGauge = register_static_int_gauge_vec!(

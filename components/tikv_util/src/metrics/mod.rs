@@ -43,12 +43,14 @@ lazy_static! {
     pub static ref HIGH_PRIORITY_REGISTRY: Registry = Registry::new();
     // the registry for histograms that should always not be compacted.
     pub static ref FULL_HISTOGRAM_REGISTRY: Registry = Registry::new();
+    // the registry for metrics that are no appeared in current grafana.
+    pub static ref UNUSED_METRICS_REGISTRY: Registry = Registry::new();
 
     static ref METRICS_DUMP_COUNTER: AtomicU64 = Default::default();
 }
 
 // the factor in simplify mode to return full metrics.
-const METRICS_DUMP_FACTOR: u64 = 1;
+const METRICS_DUMP_FACTOR: u64 = 2;
 
 
 pub fn dump(should_simplify: bool) -> String {
@@ -71,6 +73,9 @@ pub fn dump(should_simplify: bool) -> String {
     );
     if !should_simplify || METRICS_DUMP_COUNTER.fetch_add(1, Ordering::Relaxed) % METRICS_DUMP_FACTOR == 0 {
         dump_metrics(prometheus::gather(), &encoder, &mut buffer, should_simplify, true);
+    }
+    if !should_simplify {
+        dump_metrics(UNUSED_METRICS_REGISTRY.gather(), &encoder, &mut buffer, false, false);
     }
 
     String::from_utf8(buffer).unwrap()

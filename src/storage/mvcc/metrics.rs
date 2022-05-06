@@ -2,6 +2,7 @@
 
 use prometheus::*;
 use prometheus_static_metric::*;
+use tikv_util::metrics::UNUSED_METRICS_REGISTRY;
 
 make_static_metric! {
     pub label_enum MvccConflictKind {
@@ -66,10 +67,11 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 30).unwrap()
     )
     .unwrap();
-    pub static ref CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM: Histogram = register_histogram_with_registry!(
         "tikv_concurrency_manager_lock_duration",
         "Histogram of the duration of lock key in the concurrency manager",
-        exponential_buckets(1e-7, 2.0, 20).unwrap() // 100ns ~ 100ms
+        exponential_buckets(1e-7, 2.0, 20).unwrap(), // 100ns ~ 100ms
+        UNUSED_METRICS_REGISTRY
     )
     .unwrap();
     pub static ref MVCC_CONFLICT_COUNTER: MvccConflictCounterVec = {

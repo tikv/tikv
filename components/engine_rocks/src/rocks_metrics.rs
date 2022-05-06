@@ -1304,11 +1304,12 @@ lazy_static! {
     pub static ref STORE_ENGINE_COMPACTION_DROP: EngineTickerMetrics =
         auto_flush_from!(STORE_ENGINE_COMPACTION_DROP_VEC, EngineTickerMetrics);
 
-    pub static ref STORE_ENGINE_COMPACTION_DURATIONS_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref STORE_ENGINE_COMPACTION_DURATIONS_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_engine_compaction_duration_seconds",
         "Histogram of compaction duration seconds",
         &["db", "cf"],
-        exponential_buckets(0.005, 2.0, 20).unwrap()
+        exponential_buckets(0.005, 2.0, 20).unwrap(),
+        UNUSED_METRICS_REGISTRY
     ).unwrap();
     pub static ref STORE_ENGINE_COMPACTION_NUM_CORRUPT_KEYS_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_compaction_num_corrupt_keys",

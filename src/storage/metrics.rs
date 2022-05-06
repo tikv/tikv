@@ -560,11 +560,12 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_LATCH_HISTOGRAM_VEC: SchedLatchDurationVec =
         auto_flush_from!(SCHED_LATCH_HISTOGRAM, SchedLatchDurationVec);
-    pub static ref SCHED_PROCESSING_READ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref SCHED_PROCESSING_READ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_scheduler_processing_read_duration_seconds",
         "Bucketed histogram of processing read duration",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap(),
+        UNUSED_METRICS_REGISTRY
     )
     .unwrap();
     pub static ref SCHED_PROCESSING_READ_HISTOGRAM_STATIC: ProcessingReadVec =
@@ -635,10 +636,11 @@ lazy_static! {
     pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC: CheckMemLockHistogramVec =
         auto_flush_from!(CHECK_MEM_LOCK_DURATION_HISTOGRAM, CheckMemLockHistogramVec);
 
-    pub static ref STORAGE_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
+    pub static ref STORAGE_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_storage_rocksdb_perf",
         "Total number of RocksDB internal operations from PerfContext",
-        &["req", "metric"]
+        &["req", "metric"],
+        UNUSED_METRICS_REGISTRY
     )
     .unwrap();
 

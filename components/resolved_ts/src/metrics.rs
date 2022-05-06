@@ -49,10 +49,11 @@ lazy_static! {
         &["reason"]
     )
     .unwrap();
-    pub static ref RTS_SCAN_DURATION_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref RTS_SCAN_DURATION_HISTOGRAM: Histogram = register_histogram_with_registry!(
         "tikv_resolved_ts_scan_duration_seconds",
         "Bucketed histogram of resolved-ts async scan duration",
-        exponential_buckets(0.005, 2.0, 20).unwrap()
+        exponential_buckets(0.005, 2.0, 20).unwrap(),
+        UNUSED_METRICS_REGISTRY
     )
     .unwrap();
     pub static ref RTS_SCAN_TASKS: IntGaugeVec = register_int_gauge_vec!(
@@ -95,10 +96,11 @@ lazy_static! {
         FULL_HISTOGRAM_REGISTRY,
     )
     .unwrap();
-    pub static ref RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM: Histogram = register_histogram_with_registry!(
         "tikv_resolved_ts_tikv_client_init_duration_seconds",
         "Bucketed histogram of resolved-ts tikv client initializing duration",
         exponential_buckets(0.005, 2.0, 20).unwrap(),
+        UNUSED_METRICS_REGISTRY
     )
     .unwrap();
     pub static ref RTS_MIN_LEADER_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(

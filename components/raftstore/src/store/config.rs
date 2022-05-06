@@ -13,19 +13,21 @@ use engine_traits::perf_level_serde;
 use engine_traits::PerfLevel;
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
-use prometheus::register_gauge_vec;
+use prometheus::register_gauge_vec_with_registry;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+use tikv_util::metrics::UNUSED_METRICS_REGISTRY;
 use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, error, info, warn};
 
 lazy_static! {
-    pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
+    pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec_with_registry!(
         "tikv_config_raftstore",
         "Config information of raftstore",
-        &["name"]
+        &["name"],
+        UNUSED_METRICS_REGISTRY
     )
     .unwrap();
 }
