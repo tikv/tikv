@@ -6,8 +6,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::Compat;
-use engine_traits::{Peekable, RaftEngineReadOnly};
+use engine_traits::RaftEngineReadOnly;
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage};
 use pd_client::PdClient;
@@ -105,11 +104,9 @@ fn test_stale_learner_restart() {
     fail::cfg("on_handle_apply_1003", "return").unwrap();
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
-    let state_key = keys::raft_state_key(r);
     let mut state: RaftLocalState = cluster
         .get_raft_engine(1)
-        .c()
-        .get_msg(&state_key)
+        .get_raft_state(r)
         .unwrap()
         .unwrap();
     let last_index = state.get_last_index();
@@ -117,8 +114,7 @@ fn test_stale_learner_restart() {
     while timer.saturating_elapsed() < Duration::from_secs(5) {
         state = cluster
             .get_raft_engine(2)
-            .c()
-            .get_msg(&state_key)
+            .get_raft_state(r)
             .unwrap()
             .unwrap();
         if last_index <= state.get_hard_state().get_commit() {

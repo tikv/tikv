@@ -14,7 +14,7 @@ num_cpus = "1"
 online_config = { path = "../online_config" }
 protobuf = "2"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raft-engine = "0.1.0"
+raft-engine = { git = "https://github.com/tikv/raft-engine.git" }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

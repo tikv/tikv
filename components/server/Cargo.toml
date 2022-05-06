@@ -17,6 +17,12 @@ failpoints = ["tikv/failpoints"]
 cloud-aws = ["encryption_export/cloud-aws"]
 cloud-gcp = ["encryption_export/cloud-gcp"]
 cloud-azure = ["encryption_export/cloud-azure"]
+test-engine-kv-rocksdb = [
+  "tikv/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "tikv/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]

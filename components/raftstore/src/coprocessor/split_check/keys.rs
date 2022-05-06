@@ -251,7 +251,7 @@ mod tests {
     fn test_split_check() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let cf_opts = ColumnFamilyOptions::new();
         let cfs_opts = ALL_CFS
             .iter()
@@ -361,7 +361,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS
@@ -401,7 +401,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS
