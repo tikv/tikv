@@ -482,7 +482,7 @@ impl Delegate {
         region_id: u64,
         request_id: u64,
         entries: Vec<Option<KvEntry>>,
-    ) -> Vec<CdcEvent> {
+    ) -> Result<Vec<CdcEvent>> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
@@ -490,20 +490,14 @@ impl Delegate {
             match entry {
                 Some(KvEntry::RawKvEntry(kv_pair)) => {
                     let mut row = EventRow::default();
-                    match decode_rawkv(kv_pair.0, kv_pair.1, &mut row) {
-                        Ok(()) => {
-                            let row_size = row.key.len() + row.value.len();
-                            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                                rows.push(Vec::with_capacity(entries_len));
-                                current_rows_size = 0;
-                            }
-                            current_rows_size += row_size;
-                            rows.last_mut().unwrap().push(row);
-                        }
-                        Err(e) => {
-                            warn!("cdc decode_rawkv failed"; "error" => ?e);
-                        }
+                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row)?;
+                    let row_size = row.key.len() + row.value.len();
+                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
+                        rows.push(Vec::with_capacity(entries_len));
+                        current_rows_size = 0;
                     }
+                    current_rows_size += row_size;
+                    rows.last_mut().unwrap().push(row);
                 }
                 Some(KvEntry::TxnEntry(txn_entry)) => {
                     match txn_entry {
@@ -572,7 +566,8 @@ impl Delegate {
             }
         }
 
-        rows.into_iter()
+        let rows = rows
+            .into_iter()
             .filter(|rs| !rs.is_empty())
             .map(|rs| {
                 let event_entries = EventEntries {
@@ -586,7 +581,8 @@ impl Delegate {
                     ..Default::default()
                 })
             })
-            .collect()
+            .collect();
+        Ok(rows)
     }
 
     fn sink_data(
