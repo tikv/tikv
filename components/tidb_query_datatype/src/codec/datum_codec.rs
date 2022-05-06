@@ -3,18 +3,22 @@
 //! The unified entry for encoding and decoding an evaluable type to / from datum bytes.
 //! Datum bytes consists of 1 byte datum flag and variable bytes datum payload.
 
-use crate::{FieldTypeAccessor, FieldTypeTp};
 use codec::prelude::*;
 use tipb::FieldType;
 
 use super::data_type::*;
-use crate::codec::datum;
-use crate::codec::mysql::{
-    DecimalDecoder, DecimalEncoder, DurationDecoder, EnumDecoder, EnumEncoder, JsonDecoder,
-    JsonEncoder, TimeDecoder,
+use crate::{
+    codec::{
+        datum,
+        mysql::{
+            DecimalDecoder, DecimalEncoder, DurationDecoder, EnumDecoder, EnumEncoder, JsonDecoder,
+            JsonEncoder, TimeDecoder,
+        },
+        Error, Result,
+    },
+    expr::EvalContext,
+    FieldTypeAccessor, FieldTypeTp,
 };
-use crate::codec::{Error, Result};
-use crate::expr::EvalContext;
 
 /// A decoder to decode the payload part of a datum.
 ///

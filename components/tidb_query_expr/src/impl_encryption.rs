@@ -1,16 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{ByteOrder, LittleEndian};
-use flate2::read::{ZlibDecoder, ZlibEncoder};
-use flate2::Compression;
-use openssl::hash::{self, MessageDigest};
 use std::io::Read;
+
+use byteorder::{ByteOrder, LittleEndian};
+use flate2::{
+    read::{ZlibDecoder, ZlibEncoder},
+    Compression,
+};
+use openssl::hash::{self, MessageDigest};
 use tidb_query_codegen::rpn_fn;
-
-use tidb_query_datatype::expr::{Error, EvalContext};
-
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::{
+    codec::data_type::*,
+    expr::{Error, EvalContext},
+};
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;

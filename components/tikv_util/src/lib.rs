@@ -8,18 +8,27 @@
 #[cfg(test)]
 extern crate test;
 
-use std::collections::hash_map::Entry;
-use std::collections::vec_deque::{Iter, VecDeque};
-use std::fs::File;
-use std::ops::{Deref, DerefMut};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::Duration;
-use std::{env, thread};
+use std::{
+    collections::{
+        hash_map::Entry,
+        vec_deque::{Iter, VecDeque},
+    },
+    env,
+    fs::File,
+    ops::{Deref, DerefMut},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    },
+    thread,
+    time::Duration,
+};
 
-use nix::sys::wait::{wait, WaitStatus};
-use nix::unistd::{fork, ForkResult};
+use nix::{
+    sys::wait::{wait, WaitStatus},
+    unistd::{fork, ForkResult},
+};
 use rand::rngs::ThreadRng;
 
 #[macro_use]
@@ -430,8 +439,7 @@ impl<T> Drop for MustConsumeVec<T> {
 
 /// Exit the whole process when panic.
 pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
-    use std::panic;
-    use std::process;
+    use std::{panic, process};
 
     // HACK! New a backtrace ahead for caching necessary elf sections of this
     // tikv-server, in case it can not open more files during panicking
@@ -561,14 +569,16 @@ pub fn build_on_master_branch() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::io::Read;
-    use std::rc::Rc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::*;
+    use std::{
+        io::Read,
+        rc::Rc,
+        sync::atomic::{AtomicBool, Ordering},
+        *,
+    };
 
     use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_panic_hook() {

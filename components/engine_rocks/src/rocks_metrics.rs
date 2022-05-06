@@ -1,14 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::rocks_metrics_defs::*;
 use engine_traits::CF_DEFAULT;
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
-
 use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
 };
+
+use crate::rocks_metrics_defs::*;
 
 make_auto_flush_static_metric! {
     pub label_enum TickerName {
@@ -1609,12 +1609,11 @@ lazy_static! {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tempfile::Builder;
-
     use engine_traits::ALL_CFS;
     use rocksdb::HistogramData;
+    use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_flush() {

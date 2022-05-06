@@ -59,8 +59,7 @@ struct TempDirEnginePair {
 
 /// Create an engine with only CF_DEFAULT
 fn default_engine() -> TempDirEnginePair {
-    use engine_test::ctor::EngineConstructorExt;
-    use engine_test::kv::KvTestEngine;
+    use engine_test::{ctor::EngineConstructorExt, kv::KvTestEngine};
     use engine_traits::CF_DEFAULT;
 
     let dir = tempdir();
@@ -74,8 +73,7 @@ fn default_engine() -> TempDirEnginePair {
 
 /// Create an engine with the specified column families
 fn engine_cfs(cfs: &[&str]) -> TempDirEnginePair {
-    use engine_test::ctor::EngineConstructorExt;
-    use engine_test::kv::KvTestEngine;
+    use engine_test::{ctor::EngineConstructorExt, kv::KvTestEngine};
 
     let dir = tempdir();
     let path = dir.path().to_str().unwrap();

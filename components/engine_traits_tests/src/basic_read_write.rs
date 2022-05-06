@@ -2,9 +2,9 @@
 
 //! Reading and writing
 
+use engine_traits::{Peekable, SyncMutable, ALL_CFS, CF_DEFAULT, CF_WRITE};
+
 use super::engine_cfs;
-use engine_traits::{Peekable, SyncMutable};
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE};
 
 // Store using put; load using get_cf(CF_DEFAULT)
 #[test]

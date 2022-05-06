@@ -1,16 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Result;
-use crate::store::SplitCheckTask;
-
-use engine_traits::perf_level_serde;
-use engine_traits::PerfLevel;
+use engine_traits::{perf_level_serde, PerfLevel};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
+use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
 
-use tikv_util::box_err;
-use tikv_util::config::ReadableSize;
-use tikv_util::worker::Scheduler;
+use super::Result;
+use crate::store::SplitCheckTask;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]

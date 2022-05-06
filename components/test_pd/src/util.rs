@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use pd_client::{Config, RpcClient};
 use security::{SecurityConfig, SecurityManager};
 use tikv_util::config::ReadableDuration;
-
-use std::sync::Arc;
 
 pub fn new_config(eps: Vec<(String, u16)>) -> Config {
     Config {

@@ -1,21 +1,26 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use smallvec::SmallVec;
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use smallvec::SmallVec;
+use tidb_query_common::{
+    storage::{IntervalRange, Storage},
+    Result,
+};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        row, table,
+    },
+    expr::{EvalConfig, EvalContext},
+    EvalType, FieldTypeAccessor,
+};
 use tipb::{ColumnInfo, FieldType, TableScan};
 
 use super::util::scan_executor::*;
 use crate::interface::*;
-use tidb_query_common::storage::{IntervalRange, Storage};
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::{row, table};
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
 
@@ -220,8 +225,10 @@ impl TableScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
         decoded_columns: &mut usize,
     ) -> Result<()> {
-        use tidb_query_datatype::codec::datum;
-        use tidb_query_datatype::codec::row::v2::{RowSlice, V1CompatibleEncoder};
+        use tidb_query_datatype::codec::{
+            datum,
+            row::v2::{RowSlice, V1CompatibleEncoder},
+        };
 
         let row = RowSlice::from_bytes(value)?;
         for (col_id, idx) in &self.column_id_index {
@@ -420,23 +427,20 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::iter;
-    use std::sync::Arc;
+    use std::{iter, sync::Arc};
 
     use kvproto::coprocessor::KeyRange;
-    use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeTp};
-    use tipb::ColumnInfo;
-    use tipb::FieldType;
+    use tidb_query_common::{
+        execute_stats::*, storage::test_fixture::FixtureStorage, util::convert_to_prefix_next,
+    };
+    use tidb_query_datatype::{
+        codec::{batch::LazyBatchColumnVec, data_type::*, datum, table, Datum},
+        expr::EvalConfig,
+        Collation, EvalType, FieldTypeAccessor, FieldTypeTp,
+    };
+    use tipb::{ColumnInfo, FieldType};
 
-    use tidb_query_common::execute_stats::*;
-    use tidb_query_common::storage::test_fixture::FixtureStorage;
-    use tidb_query_common::util::convert_to_prefix_next;
-    use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-    use tidb_query_datatype::codec::data_type::*;
-    use tidb_query_datatype::codec::{datum, table, Datum};
-    use tidb_query_datatype::expr::EvalConfig;
+    use super::*;
 
     /// Test Helper for normal test with fixed schema and data.
     /// Table Schema:  ID (INT, PK),   Foo (INT),     Bar (FLOAT, Default 4.5)

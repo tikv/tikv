@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::pdpb;
-use kvproto::pdpb::QueryKind;
 use std::mem;
+
+use kvproto::{pdpb, pdpb::QueryKind};
 
 static QUERY_KINDS: &[kvproto::pdpb::QueryKind] = &[
     QueryKind::Gc,

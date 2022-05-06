@@ -1,7 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::DBVector;
 use std::ops::Deref;
+
+use engine_traits::DBVector;
 
 #[derive(Debug)]
 pub struct PanicDBVector;

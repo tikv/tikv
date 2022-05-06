@@ -303,9 +303,11 @@ impl PessimisticLockPair for (Key, PessimisticLock) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Mutex;
+
     use tikv_util::defer;
+
+    use super::*;
 
     lazy_static! {
         static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
