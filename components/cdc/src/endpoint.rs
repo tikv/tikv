@@ -689,7 +689,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 observe_id
             );
         };
-        let is_build_resolver = delegate.resolver.is_none();
+        let is_build_resolver =
+            kv_api == ChangeDataRequestKvApi::TiDb && delegate.resolver.is_none();
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
 
         let region_epoch = request.take_region_epoch();

@@ -19,7 +19,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::ChangeObserver;
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
-use tikv::storage::kv::{Iterator, PerfStatisticsInstant, Snapshot};
+use tikv::storage::kv::{Iterator, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::raw::raw_mvcc::{RawMvccIterator, RawMvccSnapshot};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};

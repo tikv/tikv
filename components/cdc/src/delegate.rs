@@ -646,6 +646,8 @@ impl Delegate {
         };
         let send = move |downstream: &Downstream| {
             // No ready downstream or a dowsream that does not match the kv_api type, will be ignored.
+            // There will be one region that contains both Txn & Raw entries.
+            // The judgement here is for sending entries to downstreams with correct kv_api.
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
             }
