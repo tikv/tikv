@@ -23,7 +23,7 @@ log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2.8"
-kvproto = { git = "https://github.com/coocood/kvproto.git", branch = "cloud-native" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 raftstore = { path = "../raftstore"}
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft-proto = { version = "0.7.0", default-features = false }
