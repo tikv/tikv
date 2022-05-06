@@ -1,14 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc::channel;
-use std::usize;
-use test::Bencher;
+use std::{sync::mpsc::channel, usize};
 
 use crossbeam::channel;
-use futures::executor::block_on;
-use futures::stream::StreamExt;
-use tikv_util::metrics::thread_spawn_wrapper;
-use tikv_util::mpsc;
+use futures::{executor::block_on, stream::StreamExt};
+use test::Bencher;
+use tikv_util::{metrics::thread_spawn_wrapper, mpsc};
 
 #[bench]
 fn bench_thread_channel(b: &mut Bencher) {

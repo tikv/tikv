@@ -2,17 +2,22 @@
 
 mod future_pool;
 mod metrics;
-pub use future_pool::{Full, FuturePool};
-
-use crate::metrics::ThreadBuildWrapper;
-use crate::thread_group::GroupProperties;
-use crate::time::{Duration, Instant};
-use fail::fail_point;
 use std::sync::Arc;
-use yatp::pool::{CloneRunnerBuilder, Local, Runner};
-use yatp::queue::{multilevel, QueueType};
-use yatp::task::future::{Runner as FutureRunner, TaskCell};
-use yatp::ThreadPool;
+
+use fail::fail_point;
+pub use future_pool::{Full, FuturePool};
+use yatp::{
+    pool::{CloneRunnerBuilder, Local, Runner},
+    queue::{multilevel, QueueType},
+    task::future::{Runner as FutureRunner, TaskCell},
+    ThreadPool,
+};
+
+use crate::{
+    metrics::ThreadBuildWrapper,
+    thread_group::GroupProperties,
+    time::{Duration, Instant},
+};
 
 pub(crate) const TICK_INTERVAL: Duration = Duration::from_secs(1);
 

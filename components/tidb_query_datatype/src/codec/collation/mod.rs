@@ -4,16 +4,20 @@ mod charset;
 pub mod collator;
 pub mod encoding;
 
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
-use std::ops::Deref;
+use std::{
+    cmp::Ordering,
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    ops::Deref,
+};
 
 use codec::prelude::*;
 use num::Unsigned;
 
-use crate::codec::data_type::{Bytes, BytesGuard, BytesRef, BytesWriter};
-use crate::codec::Result;
+use crate::codec::{
+    data_type::{Bytes, BytesGuard, BytesRef, BytesWriter},
+    Result,
+};
 
 #[macro_export]
 macro_rules! match_template_collator {

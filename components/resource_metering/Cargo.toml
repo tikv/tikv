@@ -4,23 +4,23 @@ version = "0.0.1"
 edition = "2018"
 
 [dependencies]
-lazy_static = "1.3"
 collections = { path = "../collections" }
-libc = "0.2"
 crossbeam = "0.8"
+futures = "0.3"
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+lazy_static = "1.3"
+libc = "0.2"
+log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+online_config = { path = "../online_config" }
+pdqselect = "0.1"
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-tikv_util = { path = "../tikv_util" }
-grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
-online_config = { path = "../online_config" }
 serde = "1.0"
 serde_derive = "1.0"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-futures = "0.3"
-pdqselect = "0.1"
+tikv_util = { path = "../tikv_util" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }

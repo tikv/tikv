@@ -1,19 +1,26 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE,
-};
-use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResolveLockReadPhase, ResponsePolicy,
-    TypedCommand, WriteCommand, WriteContext, WriteResult,
-};
-use crate::storage::txn::{cleanup, commit, Error, ErrorInner, Result};
-use crate::storage::{ProcessResult, Snapshot};
 use collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
+
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{
+        Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
+        MAX_TXN_WRITE_SIZE,
+    },
+    txn::{
+        cleanup,
+        commands::{
+            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResolveLockReadPhase,
+            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+        },
+        commit, Error, ErrorInner, Result,
+    },
+    ProcessResult, Snapshot,
+};
 
 command! {
     /// Resolve locks according to `txn_status`.

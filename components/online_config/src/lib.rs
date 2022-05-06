@@ -1,7 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt::{self, Debug, Display, Formatter};
+use std::{
+    collections::HashMap,
+    fmt::{self, Debug, Display, Formatter},
+};
 
 pub use online_config_derive::*;
 

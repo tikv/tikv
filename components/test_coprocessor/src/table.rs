@@ -1,14 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
-
 use std::collections::BTreeMap;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::{self, ColumnInfo};
-
 use tidb_query_datatype::codec::table;
 use tikv_util::codec::number::NumberEncoder;
+use tipb::{self, ColumnInfo};
+
+use super::*;
 
 #[derive(Clone)]
 pub struct Table {

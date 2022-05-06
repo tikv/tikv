@@ -1,12 +1,13 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::ToOwned;
-use std::io;
-use std::io::prelude::*;
-use std::process::{Command, Stdio};
+use std::{
+    borrow::ToOwned,
+    io,
+    io::prelude::*,
+    process::{Command, Stdio},
+};
 
 use test::Bencher;
-
 use tidb_query_datatype::codec::mysql::{Json, JsonDecoder, JsonEncoder};
 use tikv_util::metrics::thread_spawn_wrapper;
 

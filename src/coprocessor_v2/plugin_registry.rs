@@ -1,17 +1,18 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    collections::{HashMap, HashSet},
+    ffi::{OsStr, OsString},
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::{mpsc, Arc, RwLock},
+    time::Duration,
+};
+
 use coprocessor_plugin_api::{allocator::HostAllocatorPtr, util::*, *};
 use libloading::{Error as DylibError, Library, Symbol};
 use notify::{DebouncedEvent, RecursiveMode, Watcher};
 use semver::Version;
-use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, RwLock};
-use std::time::Duration;
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Range,
-};
 use thiserror::Error;
 use tikv_util::metrics::thread_spawn_wrapper;
 
@@ -462,8 +463,9 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use coprocessor_plugin_api::util::pkgname_to_libname;
+
+    use super::*;
 
     fn initialize_library() -> PathBuf {
         let mut path = std::env::current_exe().unwrap();

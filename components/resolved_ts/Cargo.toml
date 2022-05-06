@@ -18,9 +18,8 @@ test-engines-panic = ["tikv/test-engines-panic"]
 
 [dependencies]
 collections = { path = "../collections" }
-crossbeam = "0.8"
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
-online_config = { path = "../online_config" }
+crossbeam = "0.8"
 engine_traits = { path = "../engine_traits", default-features = false }
 fail = "0.5"
 futures = "0.3"
@@ -29,27 +28,28 @@ hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
+online_config = { path = "../online_config" }
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raftstore = { path = "../raftstore", default-features = false }
-thiserror = "1.0"
-tikv = { path = "../../", default-features = false }
-tikv_util = { path = "../tikv_util", default-features = false }
-tokio = { version = "1.5", features = ["rt-multi-thread", "time"]}
-txn_types = { path = "../txn_types", default-features = false }
 security = { path = "../security", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+thiserror = "1.0"
+tikv = { path = "../../", default-features = false }
+tikv_util = { path = "../tikv_util", default-features = false }
+tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
+txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
 engine_rocks = { path = "../engine_rocks", default-features = false }
+panic_hook = { path = "../panic_hook" }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
-panic_hook = { path = "../panic_hook" }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 tikv_kv = { path = "../tikv_kv" }
 
 [[test]]

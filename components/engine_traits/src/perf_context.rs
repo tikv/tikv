@@ -39,14 +39,15 @@ pub trait PerfContextExt {
     fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext;
 }
 
-/// The raftstore subsystem the PerfContext is being created for.
+/// The subsystem the PerfContext is being created for.
 ///
 /// This is a leaky abstraction that supports the encapsulation of metrics
-/// reporting by the two raftstore subsystems that use `report_metrics`.
-#[derive(Eq, PartialEq, Copy, Clone)]
+/// reporting by the subsystems that use PerfContext.
+#[derive(Eq, PartialEq, Copy, Clone, Debug)]
 pub enum PerfContextKind {
     RaftstoreApply,
     RaftstoreStore,
+    GenericRead,
 }
 
 /// Reports metrics to prometheus

@@ -2,16 +2,15 @@
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tests {
-    use std::sync::{Arc, Mutex};
-    use std::thread::JoinHandle;
-    use std::time::Duration;
+    use std::{
+        sync::{Arc, Mutex},
+        thread::JoinHandle,
+        time::Duration,
+    };
 
     use collections::HashMap;
-    use resource_metering::{init_recorder, ResourceTagFactory};
-    use resource_metering::{Collector, RawRecord, RawRecords};
-    use tikv_util::metrics::thread_spawn_wrapper;
-    use tikv_util::sys::thread;
-
+    use resource_metering::{init_recorder, Collector, RawRecord, RawRecords, ResourceTagFactory};
+    use tikv_util::{metrics::thread_spawn_wrapper, sys::thread};
     use Operation::*;
 
     enum Operation {

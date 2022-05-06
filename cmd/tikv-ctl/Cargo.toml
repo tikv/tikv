@@ -27,8 +27,8 @@ cloud-azure = [
   "encryption_export/cloud-azure",
   "backup/cloud-azure",
 ]
-cloud-storage-grpc = [ "backup/cloud-storage-grpc" ]
-cloud-storage-dylib = [ "backup/cloud-storage-dylib" ]
+cloud-storage-grpc = ["backup/cloud-storage-grpc"]
+cloud-storage-dylib = ["backup/cloud-storage-dylib"]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]
@@ -42,23 +42,21 @@ nortcheck = ["engine_rocks/nortcheck"]
 backup = { path = "../../components/backup", default-features = false }
 cdc = { path = "../../components/cdc", default-features = false }
 chrono = "0.4"
-crossbeam = "0.8"
-tempfile = "3.0"
 clap = "2.32"
-structopt = "0.3"
+collections = { path = "../../components/collections" }
 concurrency_manager = { path = "../../components/concurrency_manager", default-features = false }
+crossbeam = "0.8"
 encryption_export = { path = "../../components/encryption/export", default-features = false }
 engine_rocks = { path = "../../components/engine_rocks", default-features = false }
 engine_traits = { path = "../../components/engine_traits", default-features = false }
 error_code = { path = "../../components/error_code", default-features = false }
 file_system = { path = "../../components/file_system", default-features = false }
 futures = "0.3"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 gag = "1.0"
-grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 hex = "0.4"
 keys = { path = "../../components/keys", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../../components/log_wrappers" }
@@ -67,26 +65,28 @@ pd_client = { path = "../../components/pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raft_log_engine = { path = "../../components/raft_log_engine", default-features = false }
 raft-engine-ctl = "0.1.0"
+raft_log_engine = { path = "../../components/raft_log_engine", default-features = false }
 raftstore = { path = "../../components/raftstore", default-features = false }
 rand = "0.8"
 regex = "1"
 security = { path = "../../components/security", default-features = false }
 serde_json = "1.0"
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 server = { path = "../../components/server" }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+structopt = "0.3"
+tempfile = "3.0"
 tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../../components/tikv_alloc" }
 tikv_util = { path = "../../components/tikv_util", default-features = false }
-collections = { path = "../../components/collections" }
+tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 toml = "0.5"
 txn_types = { path = "../../components/txn_types", default-features = false }
 
 [build-dependencies]
-time = "0.1"
 cc = "1.0"
+time = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

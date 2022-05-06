@@ -2,12 +2,10 @@
 
 #![feature(test)]
 
-use batch_system::test_runner::*;
-use batch_system::*;
-use criterion::*;
-use std::sync::atomic::*;
-use std::sync::Arc;
+use std::sync::{atomic::*, Arc};
 
+use batch_system::{test_runner::*, *};
+use criterion::*;
 use tikv_util::metrics::thread_spawn_wrapper;
 
 fn end_hook(tx: &std::sync::mpsc::Sender<()>) -> Message {

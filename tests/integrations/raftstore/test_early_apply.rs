@@ -1,9 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::*;
+
 use engine_rocks::RocksSnapshot;
 use raft::eraftpb::MessageType;
 use raftstore::store::*;
-use std::time::*;
 use test_raftstore::*;
 
 /// Allow lost situation.

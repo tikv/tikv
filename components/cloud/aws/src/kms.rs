@@ -1,18 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use async_trait::async_trait;
 use std::ops::Deref;
 
-use rusoto_core::request::DispatchSignedRequest;
-use rusoto_core::RusotoError;
+use async_trait::async_trait;
+use cloud::{
+    error::{Error, KmsError, Result},
+    kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
+};
+use rusoto_core::{request::DispatchSignedRequest, RusotoError};
 use rusoto_credential::ProvideAwsCredentials;
-use rusoto_kms::{DecryptError, GenerateDataKeyError};
-use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
+use rusoto_kms::{
+    DecryptError, DecryptRequest, GenerateDataKeyError, GenerateDataKeyRequest, Kms, KmsClient,
+};
 use tikv_util::stream::RetryError;
 
 use crate::util;
-use cloud::error::{Error, KmsError, Result};
-use cloud::kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey};
 
 const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
 pub const ENCRYPTION_VENDOR_NAME_AWS_KMS: &str = "AWS";
@@ -197,12 +199,13 @@ impl std::fmt::Debug for KmsClientDebug {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rusoto_credential::StaticProvider;
-    use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     // use rusoto_mock::MockRequestDispatcher;
     use cloud::kms::Location;
+    use rusoto_credential::StaticProvider;
+    use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     use rusoto_mock::MockRequestDispatcher;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_aws_kms() {

@@ -1,9 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
+
 use kvproto::metapb::PeerRole;
 use raft::{Progress, ProgressState, StateRole};
 use raftstore::store::{AbstractPeer, GroupState};
-use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum RaftProgressState {

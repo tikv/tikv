@@ -9,13 +9,11 @@ use std::{
 use engine_traits::CF_LOCK;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::TikvClient;
+use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::storage::Snapshot;
-use tikv_util::metrics::thread_spawn_wrapper;
-use tikv_util::HandyRwLock;
+use tikv_util::{metrics::thread_spawn_wrapper, HandyRwLock};
 use txn_types::{Key, PessimisticLock};
 
 /// When a follower applies log slowly, leader should not transfer leader

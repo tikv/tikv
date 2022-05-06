@@ -1,10 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{io, thread};
+
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
-use std::io;
-use std::thread;
 
 #[cfg(target_os = "linux")]
 mod threads_linux;
@@ -25,10 +25,9 @@ pub use self::threads_dummy::{monitor_threads, ThreadInfoStatistics};
 
 #[cfg(not(target_os = "linux"))]
 mod process_dummy;
+pub use self::allocator_metrics::monitor_allocator_stats;
 #[cfg(not(target_os = "linux"))]
 pub use self::process_dummy::monitor_process;
-
-pub use self::allocator_metrics::monitor_allocator_stats;
 
 pub mod allocator_metrics;
 
@@ -36,8 +35,9 @@ pub use self::metrics_reader::HistogramReader;
 
 mod metrics_reader;
 
-use kvproto::pdpb;
 use std::collections::HashMap;
+
+use kvproto::pdpb;
 pub type RecordPairVec = Vec<pdpb::RecordPair>;
 
 pub fn dump() -> String {

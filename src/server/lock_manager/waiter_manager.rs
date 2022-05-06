@@ -1,36 +1,39 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::config::Config;
-use super::deadlock::Scheduler as DetectorScheduler;
-use super::metrics::*;
-use crate::storage::lock_manager::{DiagnosticContext, Lock, WaitTimeout};
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
-use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use crate::storage::{
-    Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
+use std::{
+    cell::RefCell,
+    fmt::{self, Debug, Display, Formatter},
+    pin::Pin,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
 };
+
 use collections::HashMap;
-use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
-
-use std::cell::RefCell;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use futures::{
+    compat::{Compat01As03, Future01CompatExt},
+    future::Future,
+    task::{Context, Poll},
 };
-use std::time::{Duration, Instant};
-
-use futures::compat::Compat01As03;
-use futures::compat::Future01CompatExt;
-use futures::future::Future;
-use futures::task::{Context, Poll};
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
-use tikv_util::config::ReadableDuration;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{
+    config::ReadableDuration,
+    timer::GLOBAL_TIMER_HANDLE,
+    worker::{FutureRunnable, FutureScheduler, Stopped},
+};
 use tokio::task::spawn_local;
+
+use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
+use crate::storage::{
+    lock_manager::{DiagnosticContext, Lock, WaitTimeout},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp},
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+    Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
+};
 
 struct DelayInner {
     timer: Compat01As03<tokio_timer::Delay>,
@@ -634,20 +637,18 @@ impl FutureRunnable<Task> for WaiterManager {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::storage::PessimisticLockRes;
-    use tikv_util::future::paired_future_callback;
-    use tikv_util::worker::FutureWorker;
+    use std::{sync::mpsc, time::Duration};
 
-    use std::sync::mpsc;
-    use std::time::Duration;
-
-    use futures::executor::block_on;
-    use futures::future::FutureExt;
+    use futures::{executor::block_on, future::FutureExt};
     use kvproto::kvrpcpb::LockInfo;
     use rand::prelude::*;
-    use tikv_util::config::ReadableDuration;
-    use tikv_util::time::InstantExt;
+    use tikv_util::{
+        config::ReadableDuration, future::paired_future_callback, time::InstantExt,
+        worker::FutureWorker,
+    };
+
+    use super::*;
+    use crate::storage::PessimisticLockRes;
 
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {

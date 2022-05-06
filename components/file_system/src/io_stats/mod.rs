@@ -2,11 +2,11 @@
 
 #[cfg(not(any(target_os = "linux", feature = "bcc-iosnoop")))]
 mod stub {
-    use crate::IOBytes;
-    use crate::IOType;
-
     use std::cell::Cell;
+
     use strum::EnumCount;
+
+    use crate::{IOBytes, IOType};
 
     pub fn init() -> Result<(), String> {
         Err("No I/O tracing tool available".to_owned())
@@ -45,9 +45,10 @@ pub use proc::*;
 
 #[cfg(test)]
 mod tests {
+    use tikv_util::metrics::thread_spawn_wrapper;
+
     use super::*;
     use crate::IOType;
-    use tikv_util::metrics::thread_spawn_wrapper;
 
     #[bench]
     fn bench_fetch_io_bytes(b: &mut test::Bencher) {

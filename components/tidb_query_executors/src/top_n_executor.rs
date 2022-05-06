@@ -1,22 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::ptr::NonNull;
-use std::sync::Arc;
+use std::{cmp::Ordering, collections::BinaryHeap, ptr::NonNull, sync::Arc};
 
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
+    expr::{EvalConfig, EvalContext, EvalWarnings},
+};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use tipb::{Expr, FieldType, TopN};
 
-use crate::interface::*;
-use crate::util::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalWarnings;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_expr::RpnStackNode;
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::{interface::*, util::*};
 
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// The heap, which contains N rows at most.
@@ -470,14 +467,13 @@ impl Eq for HeapItemUnsafe {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
-
-    use crate::util::mock_executor::MockExecutor;
-    use tidb_query_datatype::expr::EvalWarnings;
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder, expr::EvalWarnings, Collation, FieldTypeFlag, FieldTypeTp,
+    };
     use tidb_query_expr::RpnExpressionBuilder;
+
+    use super::*;
+    use crate::util::mock_executor::MockExecutor;
 
     #[test]
     fn test_top_0() {
@@ -772,8 +768,10 @@ mod tests {
 
     #[test]
     fn test_integration_3() {
-        use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, IntIntPlus};
-        use tidb_query_expr::impl_op::is_null_fn_meta;
+        use tidb_query_expr::{
+            impl_arithmetic::{arithmetic_fn_meta, IntIntPlus},
+            impl_op::is_null_fn_meta,
+        };
 
         // Order by multiple expressions, data len > n.
         //

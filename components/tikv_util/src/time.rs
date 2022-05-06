@@ -1,17 +1,18 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
-use std::cmp::Ordering;
-use std::ops::{Add, AddAssign, Sub, SubAssign};
-use std::sync::mpsc::{self, Sender};
-use std::thread::{self, Builder, JoinHandle};
-use std::time::{SystemTime, UNIX_EPOCH};
+// Re-export duration.
+pub use std::time::Duration;
+use std::{
+    cell::RefCell,
+    cmp::Ordering,
+    ops::{Add, AddAssign, Sub, SubAssign},
+    sync::mpsc::{self, Sender},
+    thread::{self, Builder, JoinHandle},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use async_speed_limit::clock::{BlockingClock, Clock, StandardClock};
 use time::{Duration as TimeDuration, Timespec};
-
-// Re-export duration.
-pub use std::time::Duration;
 
 /// Converts Duration to milliseconds.
 #[inline]
@@ -200,12 +201,11 @@ impl Drop for Monitor {
     }
 }
 
-use crate::metrics::StdThreadBuildWrapper;
-
 use self::inner::monotonic_coarse_now;
 pub use self::inner::monotonic_now;
 /// Returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
+use crate::metrics::StdThreadBuildWrapper;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;
@@ -213,8 +213,9 @@ const NANOSECONDS_PER_MILLISECOND: i64 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
-    use super::NANOSECONDS_PER_SECOND;
     use time::{self, Timespec};
+
+    use super::NANOSECONDS_PER_SECOND;
 
     pub fn monotonic_raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
@@ -239,6 +240,7 @@ mod inner {
 #[cfg(target_os = "linux")]
 mod inner {
     use std::io;
+
     use time::Timespec;
 
     #[inline]
@@ -533,13 +535,17 @@ impl Default for ThreadReadId {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::ops::Sub;
-    use std::thread;
-    use std::time::{Duration, SystemTime};
+    use std::{
+        ops::Sub,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        thread,
+        time::{Duration, SystemTime},
+    };
 
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use super::*;
 
     #[test]
     fn test_time_monitor() {

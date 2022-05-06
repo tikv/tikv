@@ -1,9 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::mem::{forget, ManuallyDrop};
+
 use concurrency_manager::ConcurrencyManager;
 use futures::executor::block_on;
 use rand::prelude::*;
-use std::{mem::forget, mem::ManuallyDrop};
 use tikv_util::metrics::thread_spawn_wrapper;
 use txn_types::{Key, Lock, LockType};
 

@@ -1,36 +1,38 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::File;
-use std::io::Read;
-use std::iter::FromIterator;
-use std::path::PathBuf;
-
-use slog::Level;
+use std::{fs::File, io::Read, iter::FromIterator, path::PathBuf};
 
 use batch_system::Config as BatchSystemConfig;
 use causal_ts::Config as CausalTsConfig;
 use collections::{HashMap, HashSet};
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
-use engine_rocks::raw::{
-    CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
+use engine_rocks::{
+    config::{BlobRunMode, CompressionType, LogLevel},
+    raw::{
+        CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
+    },
 };
 use engine_traits::PerfLevel;
 use file_system::{IOPriority, IORateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raft_log_engine::RecoveryMode;
-use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
-use raftstore::store::Config as RaftstoreConfig;
+use raftstore::{
+    coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
+    store::Config as RaftstoreConfig,
+};
 use security::SecurityConfig;
-use tikv::config::*;
-use tikv::import::Config as ImportConfig;
-use tikv::server::config::GrpcCompressionType;
-use tikv::server::gc_worker::GcConfig;
-use tikv::server::lock_manager::Config as PessimisticTxnConfig;
-use tikv::server::Config as ServerConfig;
-use tikv::storage::config::{
-    BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
+use slog::Level;
+use tikv::{
+    config::*,
+    import::Config as ImportConfig,
+    server::{
+        config::GrpcCompressionType, gc_worker::GcConfig,
+        lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
+    },
+    storage::config::{
+        BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
+    },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
 
@@ -104,6 +106,7 @@ fn test_serde_custom_tikv_config() {
         end_point_enable_batch_if_possible: true,
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
         end_point_max_concurrency: 10,
+        end_point_perf_level: PerfLevel::EnableTime,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
         stats_concurrency: 10,
@@ -682,7 +685,7 @@ fn test_serde_custom_tikv_config() {
         region_max_keys: 100000,
         region_split_keys: 100000,
         consistency_check_method: ConsistencyCheckMethod::Raw,
-        perf_level: PerfLevel::EnableTime,
+        perf_level: PerfLevel::Uninitialized,
         enable_region_bucket: true,
         region_bucket_size: ReadableSize::mb(1),
         region_size_threshold_for_approximate: ReadableSize::mb(3),

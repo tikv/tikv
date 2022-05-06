@@ -1,22 +1,28 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Unbounded};
-use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::sync::{mpsc, Mutex};
-use std::time::Duration;
-
-use super::metrics::*;
-use super::{
-    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-    RegionChangeEvent, RegionChangeObserver, Result, RoleChange, RoleObserver,
+use std::{
+    collections::{
+        BTreeMap,
+        Bound::{Excluded, Unbounded},
+    },
+    fmt::{Display, Formatter, Result as FmtResult},
+    sync::{mpsc, Mutex},
+    time::Duration,
 };
+
 use collections::HashMap;
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
-use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
-use tikv_util::{box_err, debug, info, warn};
+use tikv_util::{
+    box_err, debug, info, warn,
+    worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker},
+};
+
+use super::{
+    metrics::*, BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost,
+    ObserverContext, RegionChangeEvent, RegionChangeObserver, Result, RoleChange, RoleObserver,
+};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to

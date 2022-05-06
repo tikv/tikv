@@ -1,21 +1,27 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::{Error, ErrorKind, Result};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::{
+    io::{Error, ErrorKind, Result},
+    sync::Mutex,
+    time::Duration,
+};
 
 use collections::HashMap;
-use prometheus::core::{Collector, Desc};
-use prometheus::{self, proto, GaugeVec, IntGaugeVec, Opts};
-
-use crate::sys::thread::{self, Pid};
-use crate::time::Instant;
+use futures::Future;
 use procinfo::pid;
+use prometheus::{
+    self,
+    core::{Collector, Desc},
+    proto, GaugeVec, IntGaugeVec, Opts,
+};
 
 use super::ThreadBuildWrapper;
-use crate::metrics::StdThreadBuildWrapper;
-use crate::yatp_pool::{PoolTicker, YatpPoolBuilder};
-use futures::Future;
+use crate::{
+    metrics::StdThreadBuildWrapper,
+    sys::thread::{self, Pid},
+    time::Instant,
+    yatp_pool::{PoolTicker, YatpPoolBuilder},
+};
 
 /// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
@@ -597,14 +603,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::yatp_pool::DefaultTicker;
+    use std::{env::temp_dir, fs, io::Write, sync, time::Duration};
+
     use futures::executor::block_on;
-    use std::env::temp_dir;
-    use std::io::Write;
-    use std::time::Duration;
-    use std::{fs, sync};
 
     use super::*;
+    use crate::yatp_pool::DefaultTicker;
 
     #[test]
     fn test_thread_stat_io() {

@@ -1,38 +1,46 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc::channel, mpsc::RecvTimeoutError, Arc};
-use std::thread;
-use std::time::Duration;
-
-use grpcio::*;
-use kvproto::kvrpcpb::{
-    self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest, Op,
-    PrewriteRequest, RawPutRequest,
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{channel, RecvTimeoutError},
+        Arc,
+    },
+    thread,
+    time::Duration,
 };
-use kvproto::tikvpb::TikvClient;
 
 use api_version::KvFormat;
 use collections::HashMap;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
+use grpcio::*;
+use kvproto::{
+    kvrpcpb::{
+        self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
+        Op, PrewriteRequest, RawPutRequest,
+    },
+    tikvpb::TikvClient,
+};
 use test_raftstore::*;
-use tikv::config::{ConfigController, Module};
-use tikv::storage::lock_manager::DummyLockManager;
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{
-    commands, flow_controller::FlowController, Error as TxnError, ErrorInner as TxnErrorInner,
+use tikv::{
+    config::{ConfigController, Module},
+    storage::{
+        self,
+        config_manager::StorageConfigManger,
+        kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
+        lock_manager::DummyLockManager,
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        test_util::*,
+        txn::{
+            commands, flow_controller::FlowController, Error as TxnError,
+            ErrorInner as TxnErrorInner,
+        },
+        Error as StorageError, ErrorInner as StorageErrorInner, *,
+    },
 };
-use tikv::storage::{self, config_manager::StorageConfigManger, test_util::*, *};
-use tikv::storage::{
-    kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
-    Error as StorageError, ErrorInner as StorageErrorInner,
-};
-use tikv_util::future::paired_future_callback;
-use tikv_util::worker::dummy_scheduler;
-use tikv_util::HandyRwLock;
-use txn_types::Key;
-use txn_types::{Mutation, OldValues, TimeStamp};
+use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
+use txn_types::{Key, Mutation, OldValues, TimeStamp};
 
 #[test]
 fn test_scheduler_leader_change_twice() {
