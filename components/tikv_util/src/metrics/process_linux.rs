@@ -10,8 +10,7 @@ use prometheus::{
     proto, IntCounter, IntGauge, Opts,
 };
 
-use crate::metrics::HIGH_PRIORITY_REGISTRY;
-use crate::sys::thread;
+use crate::{metrics::HIGH_PRIORITY_REGISTRY, sys::thread};
 
 /// Monitors current process.
 pub fn monitor_process() -> Result<()> {

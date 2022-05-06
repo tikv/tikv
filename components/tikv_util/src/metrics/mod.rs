@@ -31,8 +31,10 @@ pub use self::metrics_reader::HistogramReader;
 
 mod metrics_reader;
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kvproto::pdpb;
 pub type RecordPairVec = Vec<pdpb::RecordPair>;

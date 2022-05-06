@@ -3,7 +3,6 @@
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
-
 use tikv_util::metrics::*;
 
 make_auto_flush_static_metric! {

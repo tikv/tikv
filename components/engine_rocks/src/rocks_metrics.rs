@@ -4,11 +4,10 @@ use engine_traits::CF_DEFAULT;
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
-use tikv_util::metrics::*;
-
 use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
 };
+use tikv_util::metrics::*;
 
 use crate::rocks_metrics_defs::*;
 
