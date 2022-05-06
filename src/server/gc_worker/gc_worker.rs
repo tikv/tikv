@@ -226,6 +226,7 @@ struct KeysInRegions<R: Iterator<Item = Region>> {
     keys: Peekable<IntoIter<Key>>,
     regions: Peekable<R>,
 }
+
 impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
     type Item = Key;
     fn next(&mut self) -> Option<Key> {
@@ -393,6 +394,7 @@ where
             k.push(0);
             Key::from_raw(&k).into_encoded()
         };
+
         let snapshot = self
             .engine
             .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
@@ -491,6 +493,8 @@ where
             raw_modifys = MvccRaw::new();
             next_gc_key = keys.next();
         }
+
+        // TODO: To implement the metrics.
         Ok((0, 0))
     }
 
@@ -510,7 +514,7 @@ where
 
         while cursor.valid()? {
             let engine_slice = cursor.key(&mut statistics);
-            if !Key::is_user_key_eq(engine_slice, key.as_encoded()) {
+            if !Key::is_user_key_eq(engine_slice, key.clone().as_encoded()) {
                 break;
             }
 
@@ -1172,7 +1176,6 @@ mod tests {
     use std::{thread, time::Duration};
 
     use crate::config::DbConfig;
-    use crate::server::gc_worker::rawkv_compaction_filter::split_ts;
     use crate::storage::kv::{
         self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
         SnapContext, TestEngineBuilder, WriteData,
@@ -1727,14 +1730,6 @@ mod tests {
         assert_eq!(runner.stats.write.next, 100 * 2);
     }
 
-    fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
-        let res = Key::from_raw(key)
-            .append_ts(TimeStamp::new(ts))
-            .as_encoded()
-            .to_vec();
-        res
-    }
-
     #[test]
     fn test_raw_gc_keys() {
         // init engine and gc runner
@@ -1772,77 +1767,63 @@ mod tests {
         // Init env end...
 
         // Prepare data
-        let mut test_raws = vec![];
-
-        let value_not_delete = RawValue {
-            user_value: vec![0; 10],
-            expire_ts: Some(10),
-            is_delete: false,
-        };
-
-        let value_is_delete = RawValue {
-            user_value: vec![0; 10],
-            expire_ts: Some(10),
-            is_delete: true,
-        };
-
         let key_a = b"raaaaaaaaaaa";
         let key_b = b"rbbbbbbbbbbb";
 
-        test_raws.push((make_key(key_a, 100), value_is_delete.clone()));
-        test_raws.push((make_key(key_a, 50), value_not_delete.clone()));
-        test_raws.push((make_key(key_a, 10), value_not_delete.clone()));
-        test_raws.push((make_key(key_a, 5), value_not_delete.clone()));
+        let test_raws = vec![
+            (key_a, 100, true),
+            (key_a, 50, false),
+            (key_a, 10, false),
+            (key_a, 5, false),
+            (key_b, 50, true),
+            (key_b, 20, false),
+            (key_b, 10, false),
+        ];
 
-        test_raws.push((make_key(key_b, 50), value_is_delete));
-        test_raws.push((make_key(key_b, 20), value_not_delete.clone()));
-        test_raws.push((make_key(key_b, 10), value_not_delete));
+        let modifies = test_raws
+            .into_iter()
+            .map(|(key, ts, is_delete)| {
+                (
+                    ApiV2::encode_raw_key(key, Some(ts.into())),
+                    ApiV2::encode_raw_value(RawValue {
+                        user_value: &[0; 10][..],
+                        expire_ts: Some(10),
+                        is_delete,
+                    }),
+                )
+            })
+            .map(|(k, v)| Modify::Put(CF_DEFAULT, k, v))
+            .collect();
 
-        let mut keys = vec![];
+        let ctx = Context {
+            api_version: ApiVersion::V2,
+            ..Default::default()
+        };
+        let batch = WriteData::from_modifies(modifies);
 
-        let engine_key_a = make_key(key_a, 100);
-        let engine_key_b = make_key(key_b, 100);
+        prefixed_engine.write(&ctx, batch).unwrap();
 
-        let current_key_a = engine_key_a.as_slice();
-        let current_key_b = engine_key_b.as_slice();
+        let test_keys = vec![key_a, key_b];
 
-        let (mvcc_key_prefix_vec_a, _commit_ts_opt_a) = split_ts(current_key_a).unwrap();
-        let (mvcc_key_prefix_vec_b, _commit_ts_opt_b) = split_ts(current_key_b).unwrap();
-
-        let to_gc_key_a = Key::from_encoded_slice(mvcc_key_prefix_vec_a);
-        let to_gc_key_b = Key::from_encoded_slice(mvcc_key_prefix_vec_b);
-
-        keys.push(to_gc_key_a);
-        keys.push(to_gc_key_b);
-
-        // Write key-value pairs
-        for &(ref rawkey_vec, ref rawvalue_vec) in &test_raws {
-            let ctx = Context {
-                api_version: ApiVersion::V2,
-                ..Default::default()
-            };
-            let key = Key::from_encoded_slice(rawkey_vec);
-            //let _raw_key = rawkey_vec.to_vec();
-
-            let raw_value_vec = rawvalue_vec.clone();
-            let value_vec = ApiV2::encode_raw_value_owned(raw_value_vec);
-            let m = Modify::Put(CF_DEFAULT, key, value_vec);
-            let batch = WriteData::from_modifies(vec![m]);
-            prefixed_engine.write(&ctx, batch).unwrap();
-        }
+        let to_gc_keys: Vec<Key> = test_keys
+            .into_iter()
+            .map(|key| ApiV2::encode_raw_key(key, None))
+            .collect();
 
         // Don't delete the raw if the raw's ts == safepoint
         runner
             .raw_gc_keys(
-                keys.clone(),
+                to_gc_keys.clone(),
                 TimeStamp::new(100),
                 Some((1, ri_provider.clone())),
             )
             .unwrap();
 
+        let engine_key_a = ApiV2::encode_raw_key(key_a, Some(100.into()));
+        let engine_key_b = ApiV2::encode_raw_key(key_b, Some(100.into()));
         let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
-        let check_key_a = snapshot.get(&Key::from_encoded_slice(&*engine_key_a));
-        let check_key_b = snapshot.get(&Key::from_encoded_slice(&*engine_key_b));
+        let check_key_a = snapshot.get(&Key::from_encoded(engine_key_a.clone().into_encoded()));
+        let check_key_b = snapshot.get(&Key::from_encoded(engine_key_b.clone().into_encoded()));
 
         assert_eq!(6, runner.stats.data.next);
         assert_eq!(2, runner.stats.data.seek);
@@ -1852,11 +1833,11 @@ mod tests {
 
         // Delete the raw, if raw.ts < safepoint
         runner
-            .raw_gc_keys(keys.clone(), TimeStamp::new(120), Some((1, ri_provider)))
+            .raw_gc_keys(to_gc_keys, TimeStamp::new(120), Some((1, ri_provider)))
             .unwrap();
         let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
-        let check_key_a = snapshot.get(&Key::from_encoded_slice(&*engine_key_a));
-        let check_key_b = snapshot.get(&Key::from_encoded_slice(&*engine_key_b));
+        let check_key_a = snapshot.get(&Key::from_encoded(engine_key_a.into_encoded()));
+        let check_key_b = snapshot.get(&Key::from_encoded(engine_key_b.into_encoded()));
 
         assert_eq!(7, runner.stats.data.next);
         assert_eq!(4, runner.stats.data.seek);

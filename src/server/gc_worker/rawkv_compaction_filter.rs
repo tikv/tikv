@@ -6,8 +6,7 @@ use crate::server::gc_worker::compaction_filter::{
 };
 use crate::server::gc_worker::GcTask;
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-use api_version::api_v2::RAW_KEY_PREFIX;
-use api_version::{ApiV2, KvFormat};
+use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
@@ -174,13 +173,14 @@ impl RawCompactionFilter {
             return Ok(CompactionFilterDecision::Keep);
         }
 
-        let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
-
-        // If the key is not start with RAW_KEY_PREFIX or value is not targetValue, it's need be retained.
-        let key_mode = key[1];
-        if key_mode != RAW_KEY_PREFIX || value_type != CompactionFilterValueType::Value {
+        // If the key mode is not KeyMode::Raw or value is not targetValue, it's need be retained.
+        let current_key = keys::origin_key(key);
+        let key_mode = ApiV2::parse_key_mode(current_key);
+        if key_mode != KeyMode::Raw || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
         }
+
+        let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
         if self.mvcc_key_prefix != mvcc_key_prefix {
             self.switch_key_metrics();
@@ -246,9 +246,6 @@ impl RawCompactionFilter {
     }
 
     fn raw_handle_delete(&mut self) {
-        // Valid MVCC records should begin with `DATA_PREFIX`.
-        debug!("raw_handle_delete:");
-        debug_assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
         self.mvcc_deletions.push(key);
     }
@@ -291,7 +288,7 @@ pub fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     match Key::split_on_ts_for(key) {
         Ok((key, ts)) => Ok((key, ts.into_inner())),
         Err(_) => Err(format!(
-            "invalid write cf key: {}",
+            "invalid default cf key: {}",
             log_wrappers::Value(key)
         )),
     }
@@ -303,29 +300,27 @@ pub mod tests {
     use super::*;
     use api_version::RawValue;
     use kvproto::kvrpcpb::ApiVersion;
-    use std::thread;
+    use kvproto::kvrpcpb::Context;
 
     use crate::config::DbConfig;
     use crate::server::gc_worker::TestGCRunner;
     use crate::storage::kv::TestEngineBuilder;
-    use engine_traits::{Peekable, SyncMutable, CF_DEFAULT};
+    use engine_traits::{Peekable, CF_DEFAULT};
     use std::time::Duration;
+    use tikv_kv::{Engine, Modify, WriteData};
     use txn_types::TimeStamp;
 
     pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
-        let key1 = Key::from_raw(key)
-            .append_ts(TimeStamp::new(ts))
-            .as_encoded()
-            .to_vec();
-        let res = keys::data_key(key1.as_slice());
+        let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
+        let res = keys::data_key(encode_key.as_encoded());
         res
     }
 
     #[test]
     fn test_raw_compaction_filter() {
         let mut cfg = DbConfig::default();
-        cfg.writecf.disable_auto_compactions = true;
-        cfg.writecf.dynamic_level_bytes = false;
+        cfg.defaultcf.disable_auto_compactions = true;
+        cfg.defaultcf.dynamic_level_bytes = false;
 
         let engine = TestEngineBuilder::new()
             .api_version(ApiVersion::V2)
@@ -334,65 +329,62 @@ pub mod tests {
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGCRunner::new(0);
 
-        let value1 = RawValue {
-            user_value: vec![0; 10],
-            expire_ts: Some(TimeStamp::max().physical()),
-            is_delete: false,
-        };
-
         let user_key = b"r\0aaaaaaaaaaa";
 
-        raw_engine
-            .put_cf(
-                CF_DEFAULT,
-                make_key(user_key, 100).as_slice(),
-                &ApiV2::encode_raw_value_owned(value1.clone()),
-            )
-            .unwrap();
-        raw_engine
-            .put_cf(
-                CF_DEFAULT,
-                make_key(user_key, 90).as_slice(),
-                &ApiV2::encode_raw_value_owned(value1.clone()),
-            )
-            .unwrap();
-        raw_engine
-            .put_cf(
-                CF_DEFAULT,
-                make_key(user_key, 70).as_slice(),
-                &ApiV2::encode_raw_value_owned(value1),
-            )
-            .unwrap();
+        let test_raws = vec![
+            (user_key, 100, false),
+            (user_key, 90, false),
+            (user_key, 70, false),
+        ];
+
+        let modifies = test_raws
+            .into_iter()
+            .map(|(key, ts, is_delete)| {
+                (
+                    make_key(key, ts),
+                    ApiV2::encode_raw_value(RawValue {
+                        user_value: &[0; 10][..],
+                        expire_ts: Some(TimeStamp::max().into_inner()),
+                        is_delete,
+                    }),
+                )
+            })
+            .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded_slice(k.as_slice()), v))
+            .collect();
+
+        let ctx = Context {
+            api_version: ApiVersion::V2,
+            ..Default::default()
+        };
+        let batch = WriteData::from_modifies(modifies);
+
+        engine.write(&ctx, batch).unwrap();
 
         gc_runner.safe_point(80).gc_raw(&raw_engine);
-        //Wait gc  end
-        thread::sleep(Duration::from_millis(1000));
 
         // If ts(70) < safepoint(80), and this userkey's latest verion is not deleted or expired, this version will be removed in do_filter.
-        let isexit70 = raw_engine
+        let is_exist_70 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(b"r\0a", 70).as_slice())
             .unwrap()
             .is_none();
-        assert_eq!(isexit70, true);
+        assert_eq!(is_exist_70, true);
 
         gc_runner.safe_point(90).gc_raw(&raw_engine);
-        // Wait gc end
-        thread::sleep(Duration::from_millis(1000));
 
-        let isexit100 = raw_engine
+        let is_exist_100 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(user_key, 100).as_slice())
             .unwrap()
             .is_none();
-        let isexit90 = raw_engine
+        let is_exist_90 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(user_key, 90).as_slice())
             .unwrap()
             .is_none();
 
         // If ts(100) > safepoint(80), it's need to be retained.
-        assert_eq!(isexit100, false);
+        assert_eq!(is_exist_100, false);
 
         // If ts(90) == safepoint(90), it's need to be retained.
-        assert_eq!(isexit90, false);
+        assert_eq!(is_exist_90, false);
     }
 
     fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
@@ -433,79 +425,70 @@ pub mod tests {
             }
             assert!(!expect_tasks, "no GC task is expected");
         };
-
-        let value1 = RawValue {
-            user_value: vec![0; 10],
-            expire_ts: Some(TimeStamp::max().into_inner()),
-            is_delete: false,
-        };
-
-        let value_is_delete = RawValue {
-            user_value: vec![0; 10],
-            expire_ts: Some(TimeStamp::max().into_inner()),
-            is_delete: true,
-        };
-
         let user_key_del = b"r\0aaaaaaaaaaa";
 
-        // If the  is true , it will call async scheduler GcTask.
-        raw_engine
-            .put_cf(
-                CF_DEFAULT,
-                make_key(user_key_del, 9).as_slice(),
-                &ApiV2::encode_raw_value_owned(value_is_delete),
-            )
-            .unwrap();
-        raw_engine
-            .put_cf(
-                CF_DEFAULT,
-                make_key(user_key_del, 5).as_slice(),
-                &ApiV2::encode_raw_value_owned(value1.clone()),
-            )
-            .unwrap();
-        raw_engine
-            .put_cf(
-                CF_DEFAULT,
-                make_key(user_key_del, 1).as_slice(),
-                &ApiV2::encode_raw_value_owned(value1),
-            )
-            .unwrap();
+        // If it's deleted, it will call async scheduler GcTask.
+        let test_del_raws = vec![
+            (user_key_del, 9, true),
+            (user_key_del, 5, false),
+            (user_key_del, 1, false),
+        ];
+
+        let modifies = test_del_raws
+            .into_iter()
+            .map(|(key, ts, is_delete)| {
+                (
+                    make_key(key, ts),
+                    ApiV2::encode_raw_value(RawValue {
+                        user_value: &[0; 10][..],
+                        expire_ts: Some(TimeStamp::max().into_inner()),
+                        is_delete,
+                    }),
+                )
+            })
+            .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded_slice(k.as_slice()), v))
+            .collect();
+
+        let ctx = Context {
+            api_version: ApiVersion::V2,
+            ..Default::default()
+        };
+
+        let batch = WriteData::from_modifies(modifies);
+
+        engine.write(&ctx, batch).unwrap();
 
         let check_key_del = make_key(user_key_del, 1);
         let (prefix_del, _commit_ts) = split_ts(check_key_del.as_slice()).unwrap();
         gc_and_check(true, prefix_del);
 
-        // Make a ttl expired RawValue.
-        let value_ttl_expired = RawValue {
-            user_value: vec![0; 10],
-            expire_ts: Some(10),
-            is_delete: false,
-        };
-
         let user_key_expire = b"r\0bbbbbbbbbbb";
 
-        // If raw_value expired, it will call async scheduler GcTask.
-        raw_engine
-            .put_cf(
-                CF_DEFAULT,
-                make_key(user_key_expire, 9).as_slice(),
-                &ApiV2::encode_raw_value_owned(value_ttl_expired.clone()),
-            )
-            .unwrap();
-        raw_engine
-            .put_cf(
-                CF_DEFAULT,
-                make_key(user_key_expire, 5).as_slice(),
-                &ApiV2::encode_raw_value_owned(value_ttl_expired.clone()),
-            )
-            .unwrap();
-        raw_engine
-            .put_cf(
-                CF_DEFAULT,
-                make_key(user_key_expire, 1).as_slice(),
-                &ApiV2::encode_raw_value_owned(value_ttl_expired),
-            )
-            .unwrap();
+        // If it's expired, it will call async scheduler GcTask.
+        let test_expired_raws = vec![
+            (user_key_expire, 9, false),
+            (user_key_expire, 5, false),
+            (user_key_expire, 1, false),
+        ];
+
+        let modifies: Vec<Modify> = test_expired_raws
+            .into_iter()
+            .map(|(key, ts, is_delete)| {
+                (
+                    make_key(key, ts),
+                    ApiV2::encode_raw_value(RawValue {
+                        user_value: &[0; 10][..],
+                        expire_ts: Some(10),
+                        is_delete,
+                    }),
+                )
+            })
+            .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded_slice(k.as_slice()), v))
+            .collect();
+
+        let batch = WriteData::from_modifies(modifies);
+
+        engine.write(&ctx, batch).unwrap();
 
         let check_key_expire = make_key(user_key_expire, 1);
         let (prefix_expired, _commit_ts) = split_ts(check_key_expire.as_slice()).unwrap();
