@@ -384,11 +384,10 @@ impl<S: Snapshot> PointGetter<S> {
 mod tests {
     use super::*;
 
+    use engine_rocks::ReadPerfInstant;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
-    use crate::storage::kv::{
-        CfStatistics, Engine, PerfStatisticsInstant, RocksEngine, TestEngineBuilder,
-    };
+    use crate::storage::kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit, must_gc,
         must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
@@ -690,21 +689,21 @@ mod tests {
         must_gc(&engine, b"foo3", 50);
 
         let mut getter = new_point_getter(&engine, TimeStamp::max());
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         must_get_value(&mut getter, b"foo", b"bar");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         must_get_none(&mut getter, b"foo1");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         must_get_none(&mut getter, b"foo2");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         must_get_value(&mut getter, b"foo3", b"bar3");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
     }
 
     #[test]

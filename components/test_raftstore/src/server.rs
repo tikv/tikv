@@ -24,7 +24,7 @@ use api_version::{dispatch_api_version, KvFormat};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
@@ -417,7 +417,6 @@ impl ServerCluster {
             &server_cfg.value().clone(),
             cop_read_pool.handle(),
             concurrency_manager.clone(),
-            PerfLevel::EnableCount,
             res_tag_factory,
             quota_limiter,
         );

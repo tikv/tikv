@@ -7,7 +7,6 @@ use std::sync::Arc;
 use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::Context;
 
-use engine_rocks::PerfLevel;
 use resource_metering::ResourceTagFactory;
 use tidb_query_datatype::codec::Datum;
 use tikv::config::CoprReadPoolConfig;
@@ -107,7 +106,6 @@ pub fn init_data_with_details<E: Engine>(
         cfg,
         pool.handle(),
         cm,
-        PerfLevel::EnableCount,
         ResourceTagFactory::new_for_test(),
         Arc::new(QuotaLimiter::default()),
     );
