@@ -21,9 +21,7 @@ use crate::server::Config;
 use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::{
-    self, need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
-};
+use crate::storage::{self, need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot};
 use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
 
 use crate::coprocessor::cache::CachedRequestHandler;

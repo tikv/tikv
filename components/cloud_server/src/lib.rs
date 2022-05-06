@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// TODO(youjiali1995): fix lint
+#![allow(unused)]
 #![feature(box_patterns)]
-#![feature(shrink_to)]
 #![recursion_limit = "400"]
 
 #[macro_use(fail_point)]

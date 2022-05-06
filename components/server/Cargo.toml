@@ -76,6 +76,3 @@ resource_metering = { path = "../resource_metering" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
-
-
-[patch.crates-io]
