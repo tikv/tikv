@@ -18,7 +18,6 @@ use txn_types::Key;
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     let engine = cluster.get_engine(1);
-    let raft_engine = cluster.get_raft_engine(1);
 
     let stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(stats.get_region_count(), 2);
@@ -27,7 +26,6 @@ fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     for i in 0..1000 {
         let last_available = stats.get_available();
         cluster.must_put(format!("k{}", i).as_bytes(), &value);
-        raft_engine.flush(true).unwrap();
         engine.flush(true).unwrap();
         sleep_ms(20);
 
@@ -59,8 +57,6 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     let engine = cluster.get_engine(1);
-    let raft_engine = cluster.get_raft_engine(1);
-    raft_engine.flush(true).unwrap();
     engine.flush(true).unwrap();
     let last_stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(last_stats.get_region_count(), 1);
@@ -70,7 +66,6 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let region = pd_client.get_region(b"").unwrap();
     cluster.must_split(&region, b"k2");
-    raft_engine.flush(true).unwrap();
     engine.flush(true).unwrap();
 
     // wait report region count after split
