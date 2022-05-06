@@ -2,9 +2,7 @@
 
 use engine_traits::{CfName, IterOptions, ReadOptions};
 
-use crate::{
-    self as kv, Error, ErrorInner,
-};
+use crate::{self as kv, Error, ErrorInner};
 
 use crate::{DummySnapshotExt, Iterator, Snapshot};
 use kvengine::SnapAccess;
