@@ -1232,8 +1232,11 @@ where
         failed_stores: HashSet<u64>,
     ) {
         match self.fsm.peer.force_leader {
-            Some(ForceLeaderState::PreForceLeader { .. }) => {
-                shared_state.finish_for_self(&self.ctx.router);
+            Some(ForceLeaderState::PreForceLeader {
+                shared_state: prev_shared_state,
+                ..
+            }) => {
+                prev_shared_state.finish_for_self(&self.ctx.router);
                 self.on_force_leader_fail();
             }
             Some(ForceLeaderState::ForceLeader { .. }) => {
@@ -1241,7 +1244,11 @@ where
                 shared_state.finish_for_self(&self.ctx.router);
                 return;
             }
-            Some(ForceLeaderState::WaitTicks { .. }) => {
+            Some(ForceLeaderState::WaitTicks {
+                shared_state: prev_shared_state,
+                ..
+            }) => {
+                prev_shared_state.finish_for_self(&self.ctx.router);
                 self.fsm.peer.force_leader = None;
             }
             None => {}

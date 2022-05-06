@@ -268,7 +268,7 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
 
     // Triggers the unsafe recovery store reporting process.
     let plan = pdpb::RecoveryPlan::default();
-    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    pd_client.must_set_unsafe_recovery_plan(nodes[1], plan);
     cluster.must_send_store_heartbeat(nodes[1]);
 
     // No store report is sent, since there are peers have unapplied entries.
