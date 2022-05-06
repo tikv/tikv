@@ -2,18 +2,13 @@
 
 use std::sync::Arc;
 
-use criterion::black_box;
-use criterion::measurement::Measurement;
-
+use criterion::{black_box, measurement::Measurement};
+use tidb_query_datatype::expr::EvalConfig;
+use tidb_query_executors::{interface::BatchExecutor, BatchSelectionExecutor};
+use tikv::storage::Statistics;
 use tipb::Expr;
 
-use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_executors::interface::BatchExecutor;
-use tidb_query_executors::BatchSelectionExecutor;
-use tikv::storage::Statistics;
-
-use crate::util::bencher::Bencher;
-use crate::util::FixtureBuilder;
+use crate::util::{bencher::Bencher, FixtureBuilder};
 
 pub trait SelectionBencher<M>
 where

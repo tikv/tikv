@@ -5,18 +5,19 @@ use std::cell::RefCell;
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
-use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::SnapshotStatus;
 use tikv_util::time::ThreadReadId;
 
-use crate::store::fsm::RaftRouter;
-use crate::store::transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter};
-use crate::store::{
-    Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand, SignificantMsg,
-    StoreMsg,
+use crate::{
+    store::{
+        fsm::RaftRouter,
+        transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter},
+        Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand,
+        SignificantMsg, StoreMsg,
+    },
+    DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
-use crate::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK>:

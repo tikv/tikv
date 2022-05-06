@@ -1,16 +1,21 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Range;
+
 use api_version::KvFormat;
 use async_trait::async_trait;
 use coprocessor_plugin_api::*;
 use futures::channel::oneshot::Canceled;
 use kvproto::kvrpcpb::Context;
-use std::ops::Range;
 use tikv_util::future::paired_future_callback;
 
-use crate::storage::errors::extract_kv_pairs;
-use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
-use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
+use crate::storage::{
+    self,
+    errors::extract_kv_pairs,
+    kv::{Error as KvError, ErrorInner as KvErrorInner},
+    lock_manager::LockManager,
+    Engine, Storage,
+};
 
 /// Implementation of the [`RawStorage`] trait.
 ///
@@ -203,10 +208,11 @@ impl From<Canceled> for PluginErrorShim {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
     use api_version::ApiV2;
     use kvproto::kvrpcpb::{ApiVersion, Context};
+
+    use super::*;
+    use crate::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
 
     #[tokio::test]
     async fn test_storage_api() {

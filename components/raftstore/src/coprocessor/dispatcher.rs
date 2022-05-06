@@ -1,14 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
-use std::marker::PhantomData;
-use std::mem;
-use std::ops::Deref;
+use std::{marker::PhantomData, mem, ops::Deref};
 
 use engine_traits::{CfName, KvEngine};
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
+use kvproto::{
+    metapb::Region,
+    pdpb::CheckPolicy,
+    raft_cmdpb::{ComputeHashRequest, RaftCmdRequest},
+};
 use protobuf::Message;
 use raft::eraftpb;
 use tikv_util::box_try;
@@ -555,15 +555,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::*;
     use std::sync::Arc;
 
     use engine_panic::PanicEngine;
-    use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{
-        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
+    use kvproto::{
+        metapb::Region,
+        raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request},
     };
     use tikv_util::box_err;
+
+    use crate::coprocessor::*;
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {

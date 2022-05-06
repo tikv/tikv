@@ -4,18 +4,21 @@ use std::sync::Arc;
 
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{Context, IsolationLevel};
-use kvproto::tikvpb::TikvClient;
+use kvproto::{
+    kvrpcpb::{Context, IsolationLevel},
+    tikvpb::TikvClient,
+};
 use more_asserts::{assert_ge, assert_le};
 use protobuf::Message;
+use test_coprocessor::*;
 use test_raftstore::{must_get_equal, new_peer, new_server_cluster};
+use test_storage::*;
+use tidb_query_datatype::{
+    codec::{datum, Datum},
+    expr::EvalContext,
+};
 use tikv_util::HandyRwLock;
 use tipb::SelectResponse;
-
-use test_coprocessor::*;
-use test_storage::*;
-use tidb_query_datatype::codec::{datum, Datum};
-use tidb_query_datatype::expr::EvalContext;
 use txn_types::{Key, Lock, LockType};
 
 #[test]

@@ -3,10 +3,9 @@
 // #[PerformanceCriticalPath]
 use std::sync::{Arc, Mutex};
 
+use collections::HashSet;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::MessageType;
-
-use collections::HashSet;
 
 use super::metrics::*;
 

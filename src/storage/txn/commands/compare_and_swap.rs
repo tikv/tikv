@@ -1,21 +1,26 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::{Modify, WriteData};
-use crate::storage::lock_manager::LockManager;
-use crate::storage::raw;
-use crate::storage::txn::commands::{
-    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
-};
-use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot};
 use api_version::{match_template_api_version, KvFormat, RawValue};
-use engine_traits::raw_ttl::ttl_to_expire_ts;
-use engine_traits::CfName;
+use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName};
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
 use tikv_kv::Statistics;
 use txn_types::{Key, Value};
+
+use crate::storage::{
+    kv::{Modify, WriteData},
+    lock_manager::LockManager,
+    raw,
+    txn::{
+        commands::{
+            Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+            WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Snapshot,
+};
 
 // TODO: consider add `KvFormat` generic parameter.
 command! {
@@ -98,13 +103,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{Engine, Statistics, TestEngineBuilder};
     use api_version::test_kv_format_impl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
+
+    use super::*;
+    use crate::storage::{lock_manager::DummyLockManager, Engine, Statistics, TestEngineBuilder};
 
     #[test]
     fn test_cas_basic() {

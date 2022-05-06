@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{sync::Arc, time::Duration};
+
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
-use std::sync::Arc;
-use std::time::Duration;
 use test_raftstore::{must_kv_prewrite, must_new_cluster_and_kv_client, must_new_cluster_mul};
 
 #[test]

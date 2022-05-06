@@ -45,13 +45,20 @@ path = "benches/channel/mod.rs"
 test = true
 
 [features]
-default = ["failpoints", "testexport", "test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
+
+test-engine-kv-rocksdb = [
+  "raftstore/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "raftstore/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",
 ]
@@ -111,7 +118,7 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 
 [dev-dependencies]
-arrow = "0.10"
+arrow = "13.0"
 byteorder = "1.2"
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.

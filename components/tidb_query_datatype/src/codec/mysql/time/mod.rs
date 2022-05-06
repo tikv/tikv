@@ -4,27 +4,29 @@ pub mod extension;
 mod tz;
 pub mod weekmode;
 
-pub use self::extension::*;
-pub use self::tz::Tz;
-pub use self::weekmode::WeekMode;
-
-use std::cmp::Ordering;
-use std::convert::{TryFrom, TryInto};
-use std::fmt::Write;
-use std::hash::{Hash, Hasher};
+use std::{
+    cmp::Ordering,
+    convert::{TryFrom, TryInto},
+    fmt::Write,
+    hash::{Hash, Hasher},
+};
 
 use bitfield::bitfield;
 use boolinator::Boolinator;
 use chrono::prelude::*;
-
-use crate::{FieldTypeAccessor, FieldTypeTp};
 use codec::prelude::*;
 use tipb::FieldType;
 
-use crate::codec::convert::ConvertTo;
-use crate::codec::mysql::{check_fsp, Decimal, Duration};
-use crate::codec::{Error, Result, TEN_POW};
-use crate::expr::{EvalContext, Flag, SqlMode};
+pub use self::{extension::*, tz::Tz, weekmode::WeekMode};
+use crate::{
+    codec::{
+        convert::ConvertTo,
+        mysql::{check_fsp, Decimal, Duration},
+        Error, Result, TEN_POW,
+    },
+    expr::{EvalContext, Flag, SqlMode},
+    FieldTypeAccessor, FieldTypeTp,
+};
 
 const MIN_TIMESTAMP: i64 = 0;
 pub const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
@@ -1965,11 +1967,13 @@ impl crate::codec::data_type::AsMySQLBool for Time {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::codec::mysql::{MAX_FSP, UNSPECIFIED_FSP};
-    use crate::expr::EvalConfig;
-
     use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        codec::mysql::{MAX_FSP, UNSPECIFIED_FSP},
+        expr::EvalConfig,
+    };
 
     #[derive(Debug, Default)]
     struct TimeEnv {

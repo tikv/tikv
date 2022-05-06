@@ -1,16 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::*;
-use std::time::Duration;
+use std::{sync::*, time::Duration};
 
 use api_version::{test_kv_format_impl, KvFormat};
 use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
 use concurrency_manager::ConcurrencyManager;
-use futures::executor::block_on;
-use futures::SinkExt;
+use futures::{executor::block_on, SinkExt};
 use grpcio::WriteFlags;
-use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::*;
+use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;

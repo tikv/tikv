@@ -2,6 +2,7 @@
 
 use std::io::{self, Error, ErrorKind};
 
+use async_trait::async_trait;
 use rusoto_core::{
     region::Region,
     request::{HttpClient, HttpConfig},
@@ -10,8 +11,6 @@ use rusoto_credential::{
     AutoRefreshingProvider, AwsCredentials, ChainProvider, CredentialsError, ProvideAwsCredentials,
 };
 use rusoto_sts::WebIdentityProvider;
-
-use async_trait::async_trait;
 
 #[allow(dead_code)] // This will be used soon, please remove the allow.
 const READ_BUF_SIZE: usize = 1024 * 1024 * 2;

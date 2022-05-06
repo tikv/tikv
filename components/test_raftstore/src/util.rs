@@ -1,56 +1,58 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::Write;
-use std::path::Path;
-use std::sync::{mpsc, Arc};
-use std::thread;
-use std::time::Duration;
+use std::{
+    fmt::Write,
+    path::Path,
+    sync::{mpsc, Arc},
+    thread,
+    time::Duration,
+};
 
-use crate::Config;
 use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::config::BlobRunMode;
-use engine_rocks::raw::DB;
-use engine_rocks::{get_env, Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{Engines, Iterable, Peekable, TabletFactory, ALL_CFS, CF_DEFAULT, CF_RAFT};
+use engine_rocks::{config::BlobRunMode, raw::DB, Compat, RocksEngine, RocksSnapshot};
+use engine_test::raft::RaftTestEngine;
+use engine_traits::{
+    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
+    CF_DEFAULT, CF_RAFT,
+};
 use file_system::IORateLimiter;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::*;
-use kvproto::metapb::{self, RegionEpoch};
-use kvproto::pdpb::{
-    ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
-    TransferLeader,
+use kvproto::{
+    encryptionpb::EncryptionMethod,
+    kvrpcpb::*,
+    metapb::{self, RegionEpoch},
+    pdpb::{
+        ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
+        TransferLeader,
+    },
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType,
+        RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType, StatusRequest,
+    },
+    raft_serverpb::{
+        PeerState, RaftApplyState, RaftLocalState, RaftTruncatedState, RegionLocalState,
+    },
+    tikvpb::TikvClient,
 };
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType, RaftCmdRequest,
-    RaftCmdResponse, Request, StatusCmdType, StatusRequest,
-};
-use kvproto::raft_serverpb::{
-    PeerState, RaftApplyState, RaftLocalState, RaftTruncatedState, RegionLocalState,
-};
-use kvproto::tikvpb::TikvClient;
+use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
-use raftstore::store::fsm::RaftRouter;
-use raftstore::store::*;
-use raftstore::Result;
+pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
+use raftstore::{
+    store::{fsm::RaftRouter, *},
+    Result,
+};
 use rand::RngCore;
+use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use tikv::config::*;
-use tikv::server::KvEngineFactoryBuilder;
-use tikv::storage::point_key_range;
-use tikv_util::config::*;
-use tikv_util::time::ThreadReadId;
-use tikv_util::{escape, HandyRwLock};
+use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
+use tikv_util::{config::*, escape, time::ThreadReadId, HandyRwLock};
 use txn_types::Key;
 
-use crate::{Cluster, ServerCluster, Simulator, TestPdClient};
-use pd_client::PdClient;
-
-pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
+use crate::{Cluster, Config, ServerCluster, Simulator, TestPdClient};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -94,7 +96,7 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
-pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &metapb::Region) {
+pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
     let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
@@ -112,16 +114,13 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &
             })
             .unwrap();
     }
-    let log_min_key = keys::raft_log_key(id, 0);
-    let log_max_key = keys::raft_log_key(id, u64::MAX);
+
     engine
         .raft
-        .scan(&log_min_key, &log_max_key, false, |k, v| {
-            panic!("[region {}] unexpected log ({:?}, {:?})", id, k, v);
-        })
+        .scan_entries(id, |_| panic!("[region {}] unexpected entry", id))
         .unwrap();
-    let state_key = keys::raft_state_key(id);
-    let state: Option<RaftLocalState> = engine.raft.get_msg(&state_key).unwrap();
+
+    let state: Option<RaftLocalState> = engine.raft.get_raft_state(id).unwrap();
     assert!(
         state.is_none(),
         "[region {}] raft state key should be removed: {:?}",
@@ -624,38 +623,30 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
 
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
-    router: Option<RaftRouter<RocksEngine, RocksEngine>>,
+    router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IORateLimiter>>,
     cfg: &Config,
 ) -> (
-    Engines<RocksEngine, RocksEngine>,
+    Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
     cfg.storage.data_dir = dir.path().to_str().unwrap().to_string();
+    cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
+    cfg.raft_engine.mut_config().dir = cfg.infer_raft_engine_path(None).unwrap();
     let key_manager =
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
-
-    let env = get_env(key_manager.clone(), limiter).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
+    let env = cfg
+        .build_shared_rocks_env(key_manager.clone(), limiter)
+        .unwrap();
 
-    let raft_path = dir.path().join("raft");
-    let raft_path_str = raft_path.to_str().unwrap();
+    let raft_engine = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut raft_db_opt = cfg.raftdb.build_opt();
-    raft_db_opt.set_env(env.clone());
-
-    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
-    let raft_engine = Arc::new(
-        engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
-    );
-
-    let mut raft_engine = RocksEngine::from_db(raft_engine);
-    raft_engine.set_shared_block_cache(cache.is_some());
     let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
     if let Some(cache) = cache {
         builder = builder.block_cache(cache);
@@ -1143,29 +1134,51 @@ pub fn get_tso(pd_client: &TestPdClient) -> u64 {
     block_on(pd_client.get_tso()).unwrap().into_inner()
 }
 
+pub fn get_raft_msg_or_default<M: protobuf::Message + Default>(
+    engines: &Engines<RocksEngine, RaftTestEngine>,
+    key: &[u8],
+) -> M {
+    engines
+        .kv
+        .get_msg_cf(CF_RAFT, key)
+        .unwrap()
+        .unwrap_or_default()
+}
+
 pub fn check_compacted(
-    all_engines: &HashMap<u64, Engines<RocksEngine, RocksEngine>>,
+    all_engines: &HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,
+    must_compacted: bool,
 ) -> bool {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
     let mut compacted_idx = HashMap::default();
 
     for (&id, engines) in all_engines {
-        let mut state: RaftApplyState = engines
-            .kv
-            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
-            .unwrap()
-            .unwrap_or_default();
+        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
         let idx = after_state.get_index();
         let term = after_state.get_term();
         if idx == before_state.get_index() || term == before_state.get_term() {
+            if must_compacted {
+                panic!(
+                    "Should be compacted, but Raft truncated state is not updated: {} state={:?}",
+                    id, before_state
+                );
+            }
             return false;
         }
         if idx - before_state.get_index() < compact_count {
+            if must_compacted {
+                panic!(
+                    "Should be compacted, but compact count is too small: {} {}<{}",
+                    id,
+                    idx - before_state.get_index(),
+                    compact_count
+                );
+            }
             return false;
         }
         assert!(term > before_state.get_term());
@@ -1173,15 +1186,16 @@ pub fn check_compacted(
     }
 
     // wait for actual deletion.
-    sleep_ms(100);
+    sleep_ms(250);
 
     for (id, engines) in all_engines {
         for i in 0..compacted_idx[id] {
-            let key = keys::raft_log_key(1, i);
-            if engines.raft.get_value(&key).unwrap().is_none() {
-                break;
+            if engines.raft.get_entry(1, i).unwrap().is_some() {
+                if must_compacted {
+                    panic!("Should be compacted, but found entry: {} {}", id, i);
+                }
+                return false;
             }
-            assert!(engines.raft.get_value(&key).unwrap().is_none());
         }
     }
     true

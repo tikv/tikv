@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::RocksEngine;
-use crate::raw::DB;
 use std::sync::Arc;
+
+use crate::{engine::RocksEngine, raw::DB};
 
 /// A trait to enter the world of engine traits from a raw `Arc<DB>`
 /// with as little syntax as possible.

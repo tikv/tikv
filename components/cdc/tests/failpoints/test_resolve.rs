@@ -1,16 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
+use std::time::Duration;
+
 use api_version::{test_kv_format_impl, KvFormat};
-use futures::executor::block_on;
-use futures::sink::SinkExt;
+use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
-use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::*;
+use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
-use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::*;
+
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_stale_resolver() {

@@ -5,10 +5,16 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
 cloud-aws = ["encryption_export/cloud-aws"]
 cloud-gcp = ["encryption_export/cloud-gcp"]
 cloud-azure = ["encryption_export/cloud-azure"]
+test-engine-kv-rocksdb = [
+  "raftstore/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "raftstore/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",
 ]
@@ -25,6 +31,7 @@ concurrency_manager = { path = "../concurrency_manager", default-features = fals
 crossbeam = "0.8"
 encryption_export = { path = "../encryption/export", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_test = { path = "../engine_test", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 fail = "0.5"
 file_system = { path = "../file_system" }
@@ -38,11 +45,12 @@ log_wrappers = { path = "../log_wrappers" }
 pd_client = { path = "../pd_client", default-features = false }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raftstore = { path = "../raftstore", default-features = false }
+raftstore = { path = "../raftstore", default-features = false, features = ["testexport"] }
 rand = "0.8"
 resolved_ts = { path = "../resolved_ts" }
 resource_metering = { path = "../resource_metering" }
 security = { path = "../security", default-features = false }
+server = { path = "../server" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }

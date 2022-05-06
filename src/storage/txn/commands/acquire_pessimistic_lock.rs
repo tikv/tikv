@@ -4,17 +4,18 @@
 use kvproto::kvrpcpb::{ExtraOp, LockInfo};
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::{LockManager, WaitTimeout};
-use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
-};
-use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-    WriteResult, WriteResultLockInfo,
-};
-use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::{
+    kv::WriteData,
+    lock_manager::{LockManager, WaitTimeout},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
+    txn::{
+        acquire_pessimistic_lock,
+        commands::{
+            Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand,
+            WriteContext, WriteResult, WriteResultLockInfo,
+        },
+        Error, ErrorInner, Result,
+    },
     Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
     Result as StorageResult, Snapshot,
 };

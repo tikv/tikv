@@ -3,18 +3,21 @@
 use std::sync::mpsc::channel;
 
 use api_version::{test_kv_format_impl, KvFormat, RawValue};
-use engine_rocks::raw::CompactOptions;
-use engine_rocks::util::get_cf_handle;
+use engine_rocks::{raw::CompactOptions, util::get_cf_handle};
 use engine_traits::{IterOptions, MiscExt, Peekable, SyncMutable, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::Context;
-use tikv::config::DbConfig;
-use tikv::server::ttl::check_ttl_and_compact_files;
-use tikv::storage::kv::{SnapContext, TestEngineBuilder};
-use tikv::storage::lock_manager::DummyLockManager;
-use tikv::storage::raw::encoded::RawEncodeSnapshot;
-use tikv::storage::test_util::{expect_ok_callback, expect_value};
-use tikv::storage::{Engine, Iterator, Snapshot, Statistics, TestStorageBuilder};
+use tikv::{
+    config::DbConfig,
+    server::ttl::check_ttl_and_compact_files,
+    storage::{
+        kv::{SnapContext, TestEngineBuilder},
+        lock_manager::DummyLockManager,
+        raw::encoded::RawEncodeSnapshot,
+        test_util::{expect_ok_callback, expect_value},
+        Engine, Iterator, Snapshot, Statistics, TestStorageBuilder,
+    },
+};
 use txn_types::Key;
 
 #[test]

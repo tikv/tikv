@@ -7,14 +7,11 @@
 pub use tidb_query_common::execute_stats::{
     ExecSummaryCollector, ExecuteStats, WithSummaryCollector,
 };
-
+use tidb_query_common::{
+    execute_stats::ExecSummaryCollectorEnabled, storage::IntervalRange, Result,
+};
+use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings};
 use tipb::FieldType;
-
-use tidb_query_common::execute_stats::ExecSummaryCollectorEnabled;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::expr::EvalWarnings;
 
 /// The interface for pull-based executors. It is similar to the Volcano Iterator model, but
 /// pulls data in batch and stores data by column.

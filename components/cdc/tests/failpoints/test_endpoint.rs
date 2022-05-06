@@ -1,20 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
+use std::{sync::mpsc, thread, time::Duration};
 
 use api_version::{test_kv_format_impl, KvFormat};
 use cdc::{recv_timeout, OldValueCache, Task, Validate};
-use futures::executor::block_on;
-use futures::sink::SinkExt;
+use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
-use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::*;
+use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv_util::debug;
-use tikv_util::worker::Scheduler;
+use tikv_util::{debug, worker::Scheduler};
 
 use crate::{new_event_feed, ClientReceiver, TestSuite, TestSuiteBuilder};
 

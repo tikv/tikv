@@ -1,23 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::io::AllowStdIo;
-use std::fs::File as StdFile;
-use std::io;
-use std::marker::Unpin;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::fs::{self, File};
-use tokio_util::compat::FuturesAsyncReadCompatExt;
+use std::{
+    fs::File as StdFile,
+    io,
+    marker::Unpin,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
+use async_trait::async_trait;
+use futures::io::AllowStdIo;
 use futures_io::AsyncRead;
 use futures_util::stream::TryStreamExt;
 use rand::Rng;
-
-use crate::UnpinReader;
+use tikv_util::stream::error_stream;
+use tokio::fs::{self, File};
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 use super::ExternalStorage;
-use async_trait::async_trait;
-use tikv_util::stream::error_stream;
+use crate::UnpinReader;
 
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
 
@@ -109,9 +110,11 @@ impl ExternalStorage for LocalStorage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
     use tempfile::Builder;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_local_storage() {

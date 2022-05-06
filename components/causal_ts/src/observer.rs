@@ -1,15 +1,18 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_traits::KvEngine;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use raft::StateRole;
-use raftstore::coprocessor;
-use raftstore::coprocessor::{
-    BoxQueryObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-    QueryObserver, RoleChange, RoleObserver,
+use raftstore::{
+    coprocessor,
+    coprocessor::{
+        BoxQueryObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+        QueryObserver, RoleChange, RoleObserver,
+    },
 };
-use std::sync::Arc;
 
 use crate::CausalTsProvider;
 
@@ -89,17 +92,19 @@ impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::BatchTsoProvider;
+    use std::{mem, sync::Arc, time::Duration};
+
     use api_version::{ApiV2, KvFormat};
     use futures::executor::block_on;
-    use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, Request as RaftRequest};
-    use std::mem;
-    use std::sync::Arc;
-    use std::time::Duration;
+    use kvproto::{
+        metapb::Region,
+        raft_cmdpb::{RaftCmdRequest, Request as RaftRequest},
+    };
     use test_raftstore::TestPdClient;
     use txn_types::{Key, TimeStamp};
+
+    use super::*;
+    use crate::BatchTsoProvider;
 
     fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>> {
         let pd_cli = Arc::new(TestPdClient::new(0, true));
