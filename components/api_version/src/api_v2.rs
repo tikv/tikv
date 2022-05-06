@@ -325,6 +325,23 @@ mod tests {
     }
 
     #[test]
+    fn test_key_split_ts() {
+        let user_key = b"r\0aaaaaaaaaaa";
+        let ts = 10;
+        let key = Key::from_raw(user_key)
+            .append_ts(ts.into())
+            .as_encoded()
+            .to_vec();
+
+        let encoded_key = ApiV2::encode_raw_key(user_key, None);
+
+        let (split_key, split_ts) = ApiV2::split_ts(key.as_slice()).unwrap();
+
+        assert_eq!(encoded_key.into_encoded(), split_key.to_vec());
+        assert_eq!(split_ts.into_inner(), ts);
+    }
+
+    #[test]
     fn test_append_ts_on_encoded_bytes() {
         let cases = vec![
             (true, vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb], 10),
