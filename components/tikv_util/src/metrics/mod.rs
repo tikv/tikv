@@ -37,7 +37,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 pub type RecordPairVec = Vec<pdpb::RecordPair>;
 
-
 lazy_static! {
     // the registry for high priority metrics.
     pub static ref HIGH_PRIORITY_REGISTRY: Registry = Registry::new();
@@ -52,7 +51,6 @@ lazy_static! {
 // the factor in simplify mode to return full metrics.
 const METRICS_DUMP_FACTOR: u64 = 2;
 
-
 pub fn dump(should_simplify: bool) -> String {
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
@@ -62,20 +60,34 @@ pub fn dump(should_simplify: bool) -> String {
         &encoder,
         &mut buffer,
         should_simplify,
-        true
+        true,
     );
     dump_metrics(
         FULL_HISTOGRAM_REGISTRY.gather(),
         &encoder,
         &mut buffer,
         should_simplify,
-        false
+        false,
     );
-    if !should_simplify || METRICS_DUMP_COUNTER.fetch_add(1, Ordering::Relaxed) % METRICS_DUMP_FACTOR == 0 {
-        dump_metrics(prometheus::gather(), &encoder, &mut buffer, should_simplify, true);
+    if !should_simplify
+        || METRICS_DUMP_COUNTER.fetch_add(1, Ordering::Relaxed) % METRICS_DUMP_FACTOR == 0
+    {
+        dump_metrics(
+            prometheus::gather(),
+            &encoder,
+            &mut buffer,
+            should_simplify,
+            true,
+        );
     }
     if !should_simplify {
-        dump_metrics(UNUSED_METRICS_REGISTRY.gather(), &encoder, &mut buffer, false, false);
+        dump_metrics(
+            UNUSED_METRICS_REGISTRY.gather(),
+            &encoder,
+            &mut buffer,
+            false,
+            false,
+        );
     }
 
     String::from_utf8(buffer).unwrap()
@@ -106,13 +118,13 @@ fn dump_metrics<'a, E: Encoder, W: std::io::Write>(
             // filter or compact histogram samples based on following rule:
             // 1. if the total cumulative count is 0(means no sample data at all), just remove this metric.
             // 2. if `compact_histogram` is true, then remove the middle in 3 successive sample bucket with the same cumulative count, or 2 if it is the last one.
-            // example: 
+            // example:
             // a histogram bucket sample can be represented as (bucket_threshold, accumulate_count) tuple for simplicity.
             // so give a full histogram buckets samples as:
             // (0.001, 10), (0.002, 10), (0.004, 10), (0.008, 15), (0.016, 15), (0.032, 16), (0.064, 16), (0.128, 16)
             // it can be campacted to:
             // (0.001, 10), (0.004, 10), (0.008, 15), (0.016, 15), (0.032, 16)
-            // NOTE: in theory, this is not information loss after this compact, but due to the implementation by prometheus, exprs that depend on 
+            // NOTE: in theory, this is not information loss after this compact, but due to the implementation by prometheus, exprs that depend on
             // adjacent bucket like `delta` can't be calculated correctly.
             MetricType::HISTOGRAM => {
                 metrics.retain_mut(|m| {
@@ -172,7 +184,7 @@ fn dump_metrics<'a, E: Encoder, W: std::io::Write>(
                         }
                         i += 1;
                     }
-    
+
                     buckets.truncate(j);
                     m.mut_histogram().set_bucket(buckets.into());
                     true

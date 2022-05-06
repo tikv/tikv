@@ -2,8 +2,8 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    exponential_buckets, register_histogram_with_registry,
-    register_int_gauge_vec_with_registry, Histogram, IntGaugeVec,
+    exponential_buckets, register_histogram_with_registry, register_int_gauge_vec_with_registry,
+    Histogram, IntGaugeVec,
 };
 use tikv_util::metrics::*;
 

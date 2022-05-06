@@ -23,13 +23,14 @@ use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, error, info, warn};
 
 lazy_static! {
-    pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec_with_registry!(
-        "tikv_config_raftstore",
-        "Config information of raftstore",
-        &["name"],
-        UNUSED_METRICS_REGISTRY
-    )
-    .unwrap();
+    pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec =
+        register_gauge_vec_with_registry!(
+            "tikv_config_raftstore",
+            "Config information of raftstore",
+            &["name"],
+            UNUSED_METRICS_REGISTRY
+        )
+        .unwrap();
 }
 
 with_prefix!(prefix_apply "apply-");

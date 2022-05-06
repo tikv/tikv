@@ -20,12 +20,13 @@ lazy_static! {
         &["name"]
     )
     .unwrap();
-    pub static ref FUTUREPOOL_SCHEDULE_DURATION_VEC: HistogramVec = register_histogram_vec_with_registry!(
-        "tikv_futurepool_schedule_duration",
-        "Histogram of future_pool handle duration.",
-        &["name"],
-        exponential_buckets(0.0005, 2.0, 15).unwrap(),
-        UNUSED_METRICS_REGISTRY
-    )
-    .unwrap();
+    pub static ref FUTUREPOOL_SCHEDULE_DURATION_VEC: HistogramVec =
+        register_histogram_vec_with_registry!(
+            "tikv_futurepool_schedule_duration",
+            "Histogram of future_pool handle duration.",
+            &["name"],
+            exponential_buckets(0.0005, 2.0, 15).unwrap(),
+            UNUSED_METRICS_REGISTRY
+        )
+        .unwrap();
 }

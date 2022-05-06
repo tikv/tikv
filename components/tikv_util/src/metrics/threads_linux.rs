@@ -203,7 +203,12 @@ impl Collector for ThreadsCollector {
             let mut mfs = mfs;
             for mf in &mut mfs {
                 let mut metrics = mf.take_metric().into_vec();
-                let threshold = metrics.iter().map(|m| m.get_gauge().get_value()).reduce(f64::max).unwrap() / 100.0;
+                let threshold = metrics
+                    .iter()
+                    .map(|m| m.get_gauge().get_value())
+                    .reduce(f64::max)
+                    .unwrap()
+                    / 100.0;
                 metrics.retain(|m| m.get_gauge().get_value() > threshold);
                 mf.set_metric(metrics.into());
             }

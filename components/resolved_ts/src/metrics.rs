@@ -88,21 +88,23 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec_with_registry!(
-        "tikv_resolved_ts_check_leader_duration_seconds",
-        "Bucketed histogram of resolved-ts check leader duration",
-        &["type"],
-        exponential_buckets(0.005, 2.0, 20).unwrap(),
-        FULL_HISTOGRAM_REGISTRY,
-    )
-    .unwrap();
-    pub static ref RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM: Histogram = register_histogram_with_registry!(
-        "tikv_resolved_ts_tikv_client_init_duration_seconds",
-        "Bucketed histogram of resolved-ts tikv client initializing duration",
-        exponential_buckets(0.005, 2.0, 20).unwrap(),
-        UNUSED_METRICS_REGISTRY
-    )
-    .unwrap();
+    pub static ref RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec_with_registry!(
+            "tikv_resolved_ts_check_leader_duration_seconds",
+            "Bucketed histogram of resolved-ts check leader duration",
+            &["type"],
+            exponential_buckets(0.005, 2.0, 20).unwrap(),
+            FULL_HISTOGRAM_REGISTRY,
+        )
+        .unwrap();
+    pub static ref RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram_with_registry!(
+            "tikv_resolved_ts_tikv_client_init_duration_seconds",
+            "Bucketed histogram of resolved-ts tikv client initializing duration",
+            exponential_buckets(0.005, 2.0, 20).unwrap(),
+            UNUSED_METRICS_REGISTRY
+        )
+        .unwrap();
     pub static ref RTS_MIN_LEADER_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_leader_resolved_ts_region",
         "The region which its leader peer has minimal resolved ts"
