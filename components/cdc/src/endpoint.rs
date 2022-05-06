@@ -604,7 +604,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         if (kv_api == ChangeDataRequestKvApi::RawKv && api_version != ApiVersion::V2)
             || (kv_api == ChangeDataRequestKvApi::TxnKv)
         {
-            error!("cdc rawkv are supported by api-version 2 only, TxnKv aren't supported now.");
+            error!("cdc RawKv is supported by api-version 2 only. TxnKv is not supported now.");
             let mut err_event = EventError::default();
             let mut err = ErrorCompatibility::default();
             err.set_required_version("6.1.0".to_string());
@@ -689,8 +689,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 observe_id
             );
         };
-        let is_build_resolver =
-            kv_api == ChangeDataRequestKvApi::TiDb && delegate.resolver.is_none();
+
+        // Now resolver is only used by tidb downstream.
+        // Resolver is created when the first tidb cdc request arrive.
+        let is_build_resolver = kv_api == ChangeDataRequestKvApi::TiDb && delegate.resolver.is_none();
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
 
         let region_epoch = request.take_region_epoch();
@@ -709,7 +711,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
             checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: is_build_resolver,
+            build_resolver: is_new_delegate,
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
             kv_api,
         };

@@ -4,6 +4,7 @@ use codec::byte::MemComparableByteCodec;
 use engine_traits::Result;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{bytes, Error};
+use txn_types::{Key, TimeStamp};
 
 use super::*;
 
@@ -12,7 +13,6 @@ pub const RAW_KEY_PREFIX_END: u8 = RAW_KEY_PREFIX + 1;
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
-pub const DATA_KEY_PREFIX_LEN: usize = 1;
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -219,6 +219,15 @@ impl ApiV2 {
         MemComparableByteCodec::encoded_len(src_len) + number::U64_SIZE
     }
 
+    pub fn get_rawkv_range() -> (u8, u8) {
+        (RAW_KEY_PREFIX, RAW_KEY_PREFIX_END)
+    }
+
+    pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp> {
+        let ts = Key::decode_ts_from(key)?;
+        Ok(ts)
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
@@ -383,7 +392,7 @@ mod tests {
             let key_with_ts = ApiV2::encode_raw_key(&key, Some(ts)).into_encoded();
             let (decoded_key, decoded_ts1) =
                 ApiV2::decode_raw_key_owned(Key::from_encoded(key_with_ts.clone()), true).unwrap();
-            let decoded_ts2 = Key::decode_ts_from(&key_with_ts).unwrap();
+            let decoded_ts2 = ApiV2::decode_ts_from(&key_with_ts).unwrap();
 
             assert_eq!(key, decoded_key, "case {}", idx);
             assert_eq!(ts, decoded_ts1.unwrap(), "case {}", idx);

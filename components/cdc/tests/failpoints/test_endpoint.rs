@@ -86,7 +86,7 @@ fn test_cdc_double_scan_io_error() {
 }
 
 fn test_cdc_double_scan_io_error_impl<F: KvFormat>() {
-    let mut suite = TestSuite::new(1, ApiVersion::V1);
+    let mut suite = TestSuite::new(1, F::TAG);
 
     let (k, v) = (b"xkey1".to_vec(), b"value".to_vec());
     // Prewrite

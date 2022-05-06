@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
+use api_version::{test_kv_format_impl, KvFormat};
 use futures::executor::block_on;
 use futures::sink::SinkExt;
 use grpcio::WriteFlags;
@@ -13,7 +14,11 @@ use tikv_util::config::*;
 
 #[test]
 fn test_stale_resolver() {
-    let mut suite = TestSuite::new(3, ApiVersion::V1);
+    test_kv_format_impl!(test_stale_resolver_impl<ApiV1 ApiV2>);
+}
+
+fn test_stale_resolver_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(3, F::TAG);
 
     let fp = "before_schedule_resolver_ready";
     fail::cfg(fp, "pause").unwrap();
@@ -27,7 +32,7 @@ fn test_stale_resolver() {
     // Sleep for a while to wait the scan is done
     sleep_ms(200);
 
-    let (k, v) = ("key1".to_owned(), "value".to_owned());
+    let (k, v) = ("xkey1".to_owned(), "value".to_owned());
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();

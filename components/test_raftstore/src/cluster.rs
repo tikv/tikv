@@ -1734,6 +1734,8 @@ impl<T: Simulator> Cluster<T> {
         bucket_ranges: Option<Vec<BucketRange>>,
         expect_buckets: Option<Buckets>,
     ) -> u64 {
+        0
+        /*
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let (tx, rx) = channel();
@@ -1761,6 +1763,7 @@ impl<T: Simulator> Cluster<T> {
         )
         .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        */
     }
 
     pub fn send_half_split_region_message(
@@ -1768,39 +1771,41 @@ impl<T: Simulator> Cluster<T> {
         region: &metapb::Region,
         expected_bucket_ranges: Option<Vec<BucketRange>>,
     ) {
-        let leader = self.leader_of_region(region.get_id()).unwrap();
-        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
-        let (tx, rx) = channel();
-        let cb = Callback::Test {
-            cb: Box::new(move |stat: PeerInternalStat| {
-                assert_eq!(
-                    expected_bucket_ranges.is_none(),
-                    stat.bucket_ranges.is_none()
-                );
-                if let Some(expected_bucket_ranges) = expected_bucket_ranges {
-                    let actual_bucket_ranges = stat.bucket_ranges.unwrap();
-                    assert_eq!(expected_bucket_ranges.len(), actual_bucket_ranges.len());
-                    for i in 0..actual_bucket_ranges.len() {
-                        assert_eq!(expected_bucket_ranges[i].0, actual_bucket_ranges[i].0);
-                        assert_eq!(expected_bucket_ranges[i].1, actual_bucket_ranges[i].1);
+        /*
+            let leader = self.leader_of_region(region.get_id()).unwrap();
+            let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+            let (tx, rx) = channel();
+            let cb = Callback::Test {
+                cb: Box::new(move |stat: PeerInternalStat| {
+                    assert_eq!(
+                        expected_bucket_ranges.is_none(),
+                        stat.bucket_ranges.is_none()
+                    );
+                    if let Some(expected_bucket_ranges) = expected_bucket_ranges {
+                        let actual_bucket_ranges = stat.bucket_ranges.unwrap();
+                        assert_eq!(expected_bucket_ranges.len(), actual_bucket_ranges.len());
+                        for i in 0..actual_bucket_ranges.len() {
+                            assert_eq!(expected_bucket_ranges[i].0, actual_bucket_ranges[i].0);
+                            assert_eq!(expected_bucket_ranges[i].1, actual_bucket_ranges[i].1);
+                        }
                     }
-                }
-                tx.send(1).unwrap();
-            }),
-        };
+                    tx.send(1).unwrap();
+                }),
+            };
 
-        CasualRouter::send(
-            &router,
-            region.get_id(),
-            CasualMessage::HalfSplitRegion {
-                region_epoch: region.get_region_epoch().clone(),
-                policy: CheckPolicy::Scan,
-                source: "test",
-                cb,
-            },
-        )
-        .unwrap();
-        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            CasualRouter::send(
+                &router,
+                region.get_id(),
+                CasualMessage::HalfSplitRegion {
+                    region_epoch: region.get_region_epoch().clone(),
+                    policy: CheckPolicy::Scan,
+                    source: "test",
+                    cb,
+                },
+            )
+            .unwrap();
+            rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        */
     }
 }
 

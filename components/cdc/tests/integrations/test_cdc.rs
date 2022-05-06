@@ -375,6 +375,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
 fn test_cdc_cluster_id_mismatch() {
     test_kv_format_impl!(test_cdc_cluster_id_mismatch_impl<ApiV1 ApiV2>);
 }
+
 fn test_cdc_cluster_id_mismatch_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(3, F::TAG);
 
@@ -620,7 +621,7 @@ fn test_cdc_rawkv_scan() {
     let (k2, v2) = (b"rkey2".to_vec(), b"value2".to_vec());
     suite.must_kv_put(1, k2, v2);
 
-    suite.set_tso(100);
+    suite.set_tso(1000);
     let (k3, v3) = (b"rkey3".to_vec(), b"value3".to_vec());
     suite.must_kv_put(1, k3.clone(), v3.clone());
 
@@ -629,7 +630,7 @@ fn test_cdc_rawkv_scan() {
 
     let mut req = suite.new_changedata_request(1);
     req.set_kv_api(ChangeDataRequestKvApi::RawKv);
-    req.set_checkpoint_ts(99);
+    req.set_checkpoint_ts(999);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
@@ -1314,7 +1315,6 @@ fn test_cdc_1pc() {
 
 fn test_cdc_1pc_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(1, F::TAG);
-
     let req = suite.new_changedata_request(1);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();

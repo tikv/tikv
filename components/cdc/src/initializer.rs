@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use api_version::{DATA_KEY_PREFIX_LEN, RAW_KEY_PREFIX};
+use api_version::ApiV2;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{ReadPerfContext, ReadPerfInstant, PROP_MAX_TS};
 use engine_traits::{
     IterOptions, KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection,
-    TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE,
+    TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
 };
 use fail::fail_point;
 use keys::{data_end_key, data_key};
@@ -222,11 +222,12 @@ impl<E: KvEngine> Initializer<E> {
             Scanner::TxnKvScanner(txnkv_scanner)
         } else {
             let mut iter_opt = IterOptions::default();
-            iter_opt.set_lower_bound(&[RAW_KEY_PREFIX], DATA_KEY_PREFIX_LEN);
-            iter_opt.set_upper_bound(&[RAW_KEY_PREFIX + 1], DATA_KEY_PREFIX_LEN);
+            let (raw_key_prefix, raw_key_prefix_end) = ApiV2::get_rawkv_range();
+            iter_opt.set_lower_bound(&[raw_key_prefix], DATA_KEY_PREFIX_LEN);
+            iter_opt.set_upper_bound(&[raw_key_prefix_end], DATA_KEY_PREFIX_LEN);
             let mut iter = RawMvccSnapshot::from_snapshot(snap).iter(iter_opt).unwrap();
 
-            iter.seek_to_first().unwrap();
+            iter.seek_to_first()?;
             Scanner::RawKvScanner(iter)
         };
 
@@ -333,8 +334,8 @@ impl<E: KvEngine> Initializer<E> {
                 Scanner::RawKvScanner(iter) => {
                     if iter.valid()? {
                         let key = iter.key();
-                        let ts = Key::decode_ts_from(key);
-                        if ts.is_ok() && ts.unwrap() > self.checkpoint_ts {
+                        let ts = ApiV2::decode_ts_from(key)?;
+                        if ts > self.checkpoint_ts {
                             let value = iter.value();
                             total_bytes += key.len() + value.len();
                             entries.push(Some(KvEntry::RawKvEntry((key.to_vec(), value.to_vec()))));

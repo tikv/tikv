@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
+use api_version::{test_kv_format_impl, KvFormat};
 use futures::executor::block_on;
 use futures::sink::SinkExt;
 use grpcio::WriteFlags;
@@ -18,7 +19,11 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_observe_duplicate_cmd() {
-    let mut suite = TestSuite::new(3, ApiVersion::V1);
+    test_kv_format_impl!(test_observe_duplicate_cmd_impl<ApiV1 ApiV2>);
+}
+
+fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(3, F::TAG);
 
     let region = suite.cluster.get_region(&[]);
     let req = suite.new_changedata_request(region.get_id());
@@ -37,7 +42,7 @@ fn test_observe_duplicate_cmd() {
         other => panic!("unknown event {:?}", other),
     }
 
-    let (k, v) = ("key1".to_owned(), "value".to_owned());
+    let (k, v) = ("xkey1".to_owned(), "value".to_owned());
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
