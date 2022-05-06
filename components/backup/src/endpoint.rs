@@ -687,8 +687,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         self.config_manager.clone()
     }
 
-<<<<<<< HEAD
-=======
     fn get_config(&self) -> BackendConfig {
         BackendConfig {
             s3_multi_part_size: self.config_manager.0.read().unwrap().s3_multi_part_size.0 as usize,
@@ -706,7 +704,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         }
     }
 
->>>>>>> c5aa84108... Backup: add S3 metrics && add s3_multi_part_size config  (#11666)
     fn spawn_backup_worker(
         &self,
         prs: Arc<Mutex<Progress<R>>>,
@@ -722,19 +719,21 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let concurrency_manager = self.concurrency_manager.clone();
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
-        let config = BackendConfig {
-            hdfs_config: HdfsConfig {
-                hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
-                linux_user: self
-                    .config_manager
-                    .0
-                    .read()
-                    .unwrap()
-                    .hadoop
-                    .linux_user
-                    .clone(),
-            },
+
+        // Check if we can open external storage.
+        let backend = match create_storage(&request.backend, self.get_config()) {
+            Ok(backend) => backend,
+            Err(err) => {
+                error_unknown!(?err; "backup create storage failed");
+                let mut response = BackupResponse::default();
+                response.set_error(crate::Error::Io(err).into());
+                if let Err(err) = tx.unbounded_send(response) {
+                    error_unknown!(?err; "backup failed to send response");
+                }
+                return;
+            }
         };
+        let backend = Arc::<dyn ExternalStorage>::from(backend);
 
         let limit = self.softlimit.limit();
         self.pool.borrow_mut().spawn(move || {
@@ -744,23 +743,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 tikv_alloc::remove_thread_memory_accessor();
             });
 
-            // Check if we can open external storage.
-            let backend = match create_storage(&request.backend, config) {
-                Ok(backend) => backend,
-                Err(err) => {
-                    error_unknown!(?err; "backup create storage failed");
-                    let mut response = BackupResponse::default();
-                    response.set_error(crate::Error::Io(err).into());
-                    if let Err(err) = tx.unbounded_send(response) {
-                        error_unknown!(?err; "backup failed to send response");
-                    }
-                    return;
-                }
-            };
-
             let storage = LimitedStorage {
                 limiter: request.limiter,
-                storage: Arc::new(backend),
+                storage: backend.clone(),
             };
 
             loop {
@@ -911,22 +896,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             is_raw_kv,
             request.cf,
         )));
-<<<<<<< HEAD
-=======
-        let backend = match create_storage(&request.backend, self.get_config()) {
-            Ok(backend) => backend,
-            Err(err) => {
-                error_unknown!(?err; "backup create storage failed");
-                let mut response = BackupResponse::default();
-                response.set_error(crate::Error::Io(err).into());
-                if let Err(err) = resp.unbounded_send(response) {
-                    error_unknown!(?err; "backup failed to send response");
-                }
-                return;
-            }
-        };
-        let backend = Arc::<dyn ExternalStorage>::from(backend);
->>>>>>> c5aa84108... Backup: add S3 metrics && add s3_multi_part_size config  (#11666)
         let concurrency = self.config_manager.0.read().unwrap().num_threads;
         self.pool.borrow_mut().adjust_with(concurrency);
         for _ in 0..concurrency {

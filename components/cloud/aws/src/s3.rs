@@ -16,21 +16,12 @@ use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
 use tokio::time::{sleep, timeout};
 
-<<<<<<< HEAD
 use cloud::blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, StringNonEmpty};
-pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
-use tikv_util::debug;
-use tikv_util::stream::{block_on_external_io, error_stream, retry};
-=======
-use cloud::blob::{
-    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
-};
 use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use tikv_util::debug;
-use tikv_util::stream::{error_stream, retry};
+use tikv_util::stream::{block_on_external_io, error_stream, retry};
 use tikv_util::time::Instant;
->>>>>>> c5aa84108... Backup: add S3 metrics && add s3_multi_part_size config  (#11666)
 
 use crate::util;
 
@@ -275,13 +266,8 @@ impl<'client> S3Uploader<'client> {
         mut self,
         reader: &mut (dyn AsyncRead + Unpin),
         est_len: u64,
-<<<<<<< HEAD
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if est_len <= MINIMUM_PART_SIZE as u64 {
-=======
-    ) -> Result<(), UploadError> {
         if est_len <= self.multi_part_size as u64 {
->>>>>>> c5aa84108... Backup: add S3 metrics && add s3_multi_part_size config  (#11666)
             // For short files, execute one put_object to upload the entire thing.
             let mut data = Vec::with_capacity(est_len as usize);
             reader.read_to_end(&mut data).await?;
@@ -548,12 +534,7 @@ impl BlobStorage for S3Storage {
 mod tests {
     use super::*;
     use rusoto_core::signature::SignedRequest;
-<<<<<<< HEAD
-    use rusoto_mock::MockRequestDispatcher;
-=======
     use rusoto_mock::{MockRequestDispatcher, MultipleMockRequestDispatcher};
-    use tikv_util::stream::block_on_external_io;
->>>>>>> c5aa84108... Backup: add S3 metrics && add s3_multi_part_size config  (#11666)
 
     #[test]
     fn test_s3_config() {
@@ -584,8 +565,8 @@ mod tests {
         assert!(S3Storage::new(config).is_err());
     }
 
-    #[tokio::test]
-    async fn test_s3_storage_multi_part() {
+    #[test]
+    fn test_s3_storage_multi_part() {
         let magic_contents = "567890";
 
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
@@ -614,13 +595,11 @@ mod tests {
 
         let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
 
-        let resp = s
-            .put(
-                "mykey",
-                PutResource(Box::new(magic_contents.as_bytes())),
-                magic_contents.len() as u64,
-            )
-            .await;
+        let resp = s.put(
+            "mykey",
+            Box::new(magic_contents.as_bytes()),
+            magic_contents.len() as u64,
+        );
         assert!(resp.is_ok());
         assert_eq!(
             CLOUD_REQUEST_HISTOGRAM_VEC
