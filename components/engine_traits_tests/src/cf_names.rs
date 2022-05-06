@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::{CFNamesExt, KvEngine, Snapshot, ALL_CFS, CF_DEFAULT, CF_WRITE};
+
 use super::{default_engine, engine_cfs};
-use engine_traits::{CFNamesExt, KvEngine, Snapshot};
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE};
 
 #[test]
 fn default_names() {

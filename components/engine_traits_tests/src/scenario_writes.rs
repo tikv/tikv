@@ -1,11 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::engine_cfs;
 use engine_test::kv::KvTestEngine;
-use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
-use engine_traits::{Peekable, Result, SyncMutable};
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    Mutable, Peekable, Result, SyncMutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT,
+    CF_WRITE,
+};
 use panic_hook::recover_safe;
+
+use super::engine_cfs;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Eq, PartialEq)]

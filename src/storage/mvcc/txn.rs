@@ -1,12 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-use crate::storage::kv::Modify;
+use std::fmt;
+
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use std::fmt;
 use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
+
+use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
+use crate::storage::kv::Modify;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -264,23 +266,19 @@ pub(crate) fn make_txn_error(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::*;
-
-    use crate::storage::kv::{RocksEngine, ScanMode, WriteData};
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader, SnapshotReader};
-    use crate::storage::txn::commands::*;
-    use crate::storage::txn::tests::*;
-    use crate::storage::txn::{
-        commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
-    };
-    use crate::storage::SecondaryLocksStatus;
-    use crate::storage::{
-        kv::{Engine, TestEngineBuilder},
-        TxnStatus,
-    };
     use kvproto::kvrpcpb::{AssertionLevel, Context};
     use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
+
+    use super::*;
+    use crate::storage::{
+        kv::{Engine, RocksEngine, ScanMode, TestEngineBuilder, WriteData},
+        mvcc::{tests::*, Error, ErrorInner, Mutation, MvccReader, SnapshotReader},
+        txn::{
+            commands::*, commit, prewrite, tests::*, CommitKind, TransactionKind,
+            TransactionProperties,
+        },
+        SecondaryLocksStatus, TxnStatus,
+    };
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();

@@ -2,16 +2,19 @@
 
 use std::convert::TryFrom;
 
-use crate::{EvalType, FieldTypeAccessor};
 use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
-use crate::codec::chunk::{ChunkColumnEncoder, Column};
-use crate::codec::data_type::{ChunkedVec, LogicalRows, VectorValue};
-use crate::codec::datum_codec::RawDatumDecoder;
-use crate::codec::Result;
-use crate::expr::EvalContext;
-use crate::match_template_evaltype;
+use crate::{
+    codec::{
+        chunk::{ChunkColumnEncoder, Column},
+        data_type::{ChunkedVec, LogicalRows, VectorValue},
+        datum_codec::RawDatumDecoder,
+        Result,
+    },
+    expr::EvalContext,
+    match_template_evaltype, EvalType, FieldTypeAccessor,
+};
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
 /// the `VectorValue` type.
@@ -270,7 +273,6 @@ impl LazyBatchColumn {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::codec::datum::{Datum, DatumEncoder};
 
     #[test]
@@ -404,8 +406,10 @@ mod benches {
     /// Bench performance of cloning a decoded column.
     #[bench]
     fn bench_lazy_batch_column_clone_decoded(b: &mut test::Bencher) {
-        use crate::codec::datum::{Datum, DatumEncoder};
-        use crate::FieldTypeTp;
+        use crate::{
+            codec::datum::{Datum, DatumEncoder},
+            FieldTypeTp,
+        };
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -434,8 +438,10 @@ mod benches {
     /// Note that there is a clone in the bench suite, whose cost should be excluded.
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode(b: &mut test::Bencher) {
-        use crate::codec::datum::{Datum, DatumEncoder};
-        use crate::FieldTypeTp;
+        use crate::{
+            codec::datum::{Datum, DatumEncoder},
+            FieldTypeTp,
+        };
 
         let mut ctx = EvalContext::default();
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
@@ -468,8 +474,10 @@ mod benches {
     /// Note that there is a clone in the bench suite, whose cost should be excluded.
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode_decoded(b: &mut test::Bencher) {
-        use crate::codec::datum::{Datum, DatumEncoder};
-        use crate::FieldTypeTp;
+        use crate::{
+            codec::datum::{Datum, DatumEncoder},
+            FieldTypeTp,
+        };
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 

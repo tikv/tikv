@@ -6,3 +6,5 @@ license_template_path = "etc/license.template"
 newline_style = "Unix"
 use_field_init_shorthand = true
 use_try_shorthand = true
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"

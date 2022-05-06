@@ -1,36 +1,38 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::File;
-use std::io::Read;
-use std::iter::FromIterator;
-use std::path::PathBuf;
-
-use slog::Level;
+use std::{fs::File, io::Read, iter::FromIterator, path::PathBuf};
 
 use batch_system::Config as BatchSystemConfig;
 use causal_ts::Config as CausalTsConfig;
 use collections::{HashMap, HashSet};
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
-use engine_rocks::raw::{
-    CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
+use engine_rocks::{
+    config::{BlobRunMode, CompressionType, LogLevel},
+    raw::{
+        CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
+    },
 };
 use engine_traits::PerfLevel;
 use file_system::{IOPriority, IORateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raft_log_engine::RecoveryMode;
-use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
-use raftstore::store::Config as RaftstoreConfig;
+use raftstore::{
+    coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
+    store::Config as RaftstoreConfig,
+};
 use security::SecurityConfig;
-use tikv::config::*;
-use tikv::import::Config as ImportConfig;
-use tikv::server::config::GrpcCompressionType;
-use tikv::server::gc_worker::GcConfig;
-use tikv::server::lock_manager::Config as PessimisticTxnConfig;
-use tikv::server::Config as ServerConfig;
-use tikv::storage::config::{
-    BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
+use slog::Level;
+use tikv::{
+    config::*,
+    import::Config as ImportConfig,
+    server::{
+        config::GrpcCompressionType, gc_worker::GcConfig,
+        lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
+    },
+    storage::config::{
+        BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
+    },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
 

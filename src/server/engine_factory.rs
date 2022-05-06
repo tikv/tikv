@@ -1,17 +1,22 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use engine_rocks::raw::{Cache, Env};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
+
 use engine_rocks::{
+    raw::{Cache, Env},
     CompactionListener, FlowListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine,
 };
 use engine_traits::{CompactionJobInfo, RaftEngine, Result, TabletFactory, CF_DEFAULT, CF_WRITE};
 use kvproto::kvrpcpb::ApiVersion;
-use raftstore::store::{RaftRouter, StoreMsg};
-use raftstore::RegionInfoAccessor;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::Mutex;
+use raftstore::{
+    store::{RaftRouter, StoreMsg},
+    RegionInfoAccessor,
+};
+
+use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
 struct FactoryInner {
     env: Arc<Env>,

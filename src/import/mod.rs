@@ -15,13 +15,12 @@
 mod duplicate_detect;
 mod sst_service;
 
-pub use self::sst_service::ImportSstService;
-pub use sst_importer::Config;
-pub use sst_importer::{Error, Result};
-pub use sst_importer::{SstImporter, TxnSstWriter};
+use std::fmt::Debug;
 
 use grpcio::{RpcStatus, RpcStatusCode};
-use std::fmt::Debug;
+pub use sst_importer::{Config, Error, Result, SstImporter, TxnSstWriter};
+
+pub use self::sst_service::ImportSstService;
 
 pub fn make_rpc_error<E: Debug>(err: E) -> RpcStatus {
     // FIXME: Just spewing debug error formatting here seems pretty unfriendly

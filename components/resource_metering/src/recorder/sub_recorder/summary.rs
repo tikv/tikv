@@ -1,13 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::recorder::localstorage::{LocalStorage, STORAGE};
-use crate::recorder::SubRecorder;
-use crate::RawRecords;
-
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 
 use collections::HashMap;
 use tikv_util::sys::thread::Pid;
+
+use crate::{
+    recorder::{
+        localstorage::{LocalStorage, STORAGE},
+        SubRecorder,
+    },
+    RawRecords,
+};
 
 /// Records how many keys have been read in the current context.
 pub fn record_read_keys(count: u32) {

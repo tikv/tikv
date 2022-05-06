@@ -1,11 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    io::{BufRead, Write},
+    ptr,
+};
+
 use byteorder::ReadBytesExt;
-use std::io::{BufRead, Write};
 
 use super::{BytesSlice, Error, Result};
 use crate::codec::number::{self, NumberEncoder};
-use std::ptr;
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -333,9 +336,10 @@ pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
     use super::*;
     use crate::codec::{bytes, number};
-    use std::cmp::Ordering;
 
     #[test]
     fn test_enc_dec_bytes() {

@@ -1,21 +1,22 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::encoded::RawEncodeSnapshot;
-use super::raw_mvcc::RawMvccSnapshot;
-
-use crate::coprocessor::checksum_crc64_xor;
-use crate::storage::kv::Result;
-use crate::storage::kv::{Cursor, ScanMode, Snapshot};
-use crate::storage::Statistics;
+use std::{marker::PhantomData, time::Duration};
 
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::{ApiVersion, KeyRange};
-use std::marker::PhantomData;
-use std::time::Duration;
 use tikv_util::time::Instant;
 use txn_types::{Key, KvPair};
 use yatp::task::future::reschedule;
+
+use super::{encoded::RawEncodeSnapshot, raw_mvcc::RawMvccSnapshot};
+use crate::{
+    coprocessor::checksum_crc64_xor,
+    storage::{
+        kv::{Cursor, Result, ScanMode, Snapshot},
+        Statistics,
+    },
+};
 
 const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
 const MAX_BATCH_SIZE: usize = 1024;

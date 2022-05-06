@@ -11,12 +11,14 @@ mod retry;
 mod service;
 mod split;
 
-pub use self::bootstrap::AlreadyBootstrapped;
-pub use self::incompatible::Incompatible;
-pub use self::leader_change::LeaderChange;
-pub use self::retry::{NotRetry, Retry};
-pub use self::service::Service;
-pub use self::split::Split;
+pub use self::{
+    bootstrap::AlreadyBootstrapped,
+    incompatible::Incompatible,
+    leader_change::LeaderChange,
+    retry::{NotRetry, Retry},
+    service::Service,
+    split::Split,
+};
 
 pub const DEFAULT_CLUSTER_ID: u64 = 42;
 

@@ -1,9 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
 use pin_project::pin_project;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 use crate::coprocessor::tracker::Tracker as CopTracker;
 

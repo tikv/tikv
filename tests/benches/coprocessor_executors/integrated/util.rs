@@ -1,22 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
-use criterion::black_box;
-use criterion::measurement::Measurement;
-
+use criterion::{black_box, measurement::Measurement};
 use kvproto::coprocessor::KeyRange;
+use test_coprocessor::*;
+use tidb_query_datatype::expr::EvalConfig;
+use tikv::{
+    coprocessor::dag::TiKvStorage,
+    storage::{RocksEngine, Store as TxnStore},
+};
 use tipb::Executor as PbExecutor;
 
-use test_coprocessor::*;
-
-use tidb_query_datatype::expr::EvalConfig;
-use tikv::coprocessor::dag::TiKvStorage;
-use tikv::storage::{RocksEngine, Store as TxnStore};
-
-use crate::util::bencher::Bencher;
-use crate::util::store::StoreDescriber;
+use crate::util::{bencher::Bencher, store::StoreDescriber};
 
 pub trait IntegratedBencher<M>
 where

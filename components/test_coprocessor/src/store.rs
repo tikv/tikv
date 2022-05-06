@@ -1,23 +1,26 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
-
 use std::collections::BTreeMap;
 
-use kvproto::kvrpcpb::{Context, IsolationLevel};
-
 use collections::HashMap;
+use kvproto::kvrpcpb::{Context, IsolationLevel};
 use test_storage::SyncTestStorageApiV1;
-use tidb_query_datatype::codec::{datum, table, Datum};
-use tidb_query_datatype::expr::EvalContext;
-use tikv::server::gc_worker::GcConfig;
-use tikv::storage::lock_manager::DummyLockManager;
-use tikv::storage::{
-    kv::{Engine, RocksEngine},
-    txn::FixtureStore,
-    SnapshotStore, StorageApiV1, TestStorageBuilderApiV1,
+use tidb_query_datatype::{
+    codec::{datum, table, Datum},
+    expr::EvalContext,
+};
+use tikv::{
+    server::gc_worker::GcConfig,
+    storage::{
+        kv::{Engine, RocksEngine},
+        lock_manager::DummyLockManager,
+        txn::FixtureStore,
+        SnapshotStore, StorageApiV1, TestStorageBuilderApiV1,
+    },
 };
 use txn_types::{Key, Mutation, TimeStamp};
+
+use super::*;
 
 pub struct Insert<'a, E: Engine> {
     store: &'a mut Store<E>,

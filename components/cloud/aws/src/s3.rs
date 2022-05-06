@@ -1,32 +1,28 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use async_trait::async_trait;
-use std::io;
-use std::time::Duration;
-use thiserror::Error;
+use std::{error::Error as StdError, io, time::Duration};
 
+use async_trait::async_trait;
+use cloud::{
+    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
+};
 use fail::fail_point;
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
-use rusoto_core::{
-    request::DispatchSignedRequest,
-    {ByteStream, RusotoError},
-};
+pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
+use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
-use std::error::Error as StdError;
-use tokio::time::{sleep, timeout};
-
-use cloud::blob::{
-    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
+use thiserror::Error;
+use tikv_util::{
+    debug,
+    stream::{error_stream, retry},
+    time::Instant,
 };
-use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
-pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
-use tikv_util::debug;
-use tikv_util::stream::{error_stream, retry};
-use tikv_util::time::Instant;
+use tokio::time::{sleep, timeout};
 
 use crate::util;
 
@@ -564,10 +560,11 @@ impl BlobStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rusoto_core::signature::SignedRequest;
     use rusoto_mock::{MockRequestDispatcher, MultipleMockRequestDispatcher};
     use tikv_util::stream::block_on_external_io;
+
+    use super::*;
 
     #[test]
     fn test_s3_config() {

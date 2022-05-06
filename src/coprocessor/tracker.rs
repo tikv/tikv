@@ -2,15 +2,13 @@
 
 use engine_rocks::{ReadPerfContext, RocksPerfContext};
 use engine_traits::{PerfContext, PerfContextKind};
-use kvproto::kvrpcpb;
-use kvproto::kvrpcpb::ScanDetailV2;
+use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
 use tikv_util::time::{self, Duration, Instant};
 use txn_types::Key;
 
 use super::metrics::*;
-use crate::coprocessor::*;
-use crate::storage::Statistics;
+use crate::{coprocessor::*, storage::Statistics};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TrackerState {
