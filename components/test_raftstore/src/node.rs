@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use tempfile::TempDir;
 
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
@@ -235,6 +236,7 @@ impl Simulator for NodeCluster {
             Arc::clone(&self.pd_client),
             Arc::default(),
             bg_worker.clone(),
+            None,
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -476,11 +478,11 @@ impl Simulator for NodeCluster {
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
 pub fn new_incompatible_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }

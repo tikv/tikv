@@ -13,9 +13,9 @@ name = "error_code_gen"
 path = "bin.rs"
 
 [dependencies]
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-tikv_alloc = { path = "../tikv_alloc" }
-grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 serde = { version = "1.0", features = ["derive"] }
+tikv_alloc = { path = "../tikv_alloc" }

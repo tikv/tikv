@@ -23,7 +23,6 @@ test-engines-panic = [
   "test-engine-raft-panic",
 ]
 
-
 [dependencies]
 encryption = { path = "../encryption", default-features = false }
 engine_panic = { path = "../engine_panic", default-features = false }

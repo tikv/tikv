@@ -150,6 +150,13 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     cfg
 }
 
+pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> TiKvConfig {
+    let mut cfg = TEST_CONFIG.clone();
+    cfg.server.cluster_id = cluster_id;
+    cfg.storage.set_api_version(api_ver);
+    cfg
+}
+
 // Create a base request.
 pub fn new_base_request(region_id: u64, epoch: RegionEpoch, read_quorum: bool) -> RaftCmdRequest {
     let mut req = RaftCmdRequest::default();
