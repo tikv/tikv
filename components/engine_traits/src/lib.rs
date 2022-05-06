@@ -326,9 +326,13 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+
+// FIXME: Move raft engine traits to a separate crate.
+
 mod raft_engine;
 pub use raft_engine::{
-    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, RAFT_LOG_MULTI_GET_CNT,
+    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask,
+    RAFT_LOG_MULTI_GET_CNT,
 };
 
 // These modules need further scrutiny

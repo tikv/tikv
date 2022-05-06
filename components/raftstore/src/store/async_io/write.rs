@@ -224,10 +224,10 @@ where
             panic!("task is not valid: {:?}", e);
         }
         if let Some(kv_wb) = task.kv_wb.take() {
-            self.kv_wb.merge(kv_wb);
+            self.kv_wb.merge(kv_wb).unwrap();
         }
         if let Some(raft_wb) = task.raft_wb.take() {
-            self.raft_wb.merge(raft_wb);
+            self.raft_wb.merge(raft_wb).unwrap();
         }
 
         let entries = std::mem::take(&mut task.entries);

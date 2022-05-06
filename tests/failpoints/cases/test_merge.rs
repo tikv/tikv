@@ -1509,11 +1509,11 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     let req2 = req.clone();
     let client2 = client.clone();
     let resp = thread::spawn(move || client2.kv_prewrite(&req2).unwrap());
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(Duration::from_millis(500));
 
     // Then, start merging. PrepareMerge should wait until prewrite is done.
     cluster.merge_region(left.id, right.id, Callback::None);
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(Duration::from_millis(500));
     assert!(txn_ext.pessimistic_locks.read().is_writable());
 
     // But a later prewrite request should fail because we have already banned all later proposals.
@@ -1647,7 +1647,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
     fail::cfg("raft_propose", "pause").unwrap();
 
     cluster.merge_region(left.id, right.id, Callback::None);
-    thread::sleep(Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(500));
     assert_eq!(
         txn_ext.pessimistic_locks.read().status,
         LocksStatus::MergingRegion
@@ -1658,7 +1658,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
 
     // But after that, the pessimistic locks status should remain unchanged.
     for _ in 0..5 {
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(500));
         if txn_ext.pessimistic_locks.read().status == LocksStatus::Normal {
             return;
         }

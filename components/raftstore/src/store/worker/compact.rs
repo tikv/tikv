@@ -319,7 +319,7 @@ mod tests {
     }
 
     fn open_db(path: &str) -> KvTestEngine {
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
         let cfs_opts = vec![
