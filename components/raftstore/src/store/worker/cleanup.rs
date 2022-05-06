@@ -2,13 +2,15 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use super::cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask};
-use super::compact::{Runner as CompactRunner, Task as CompactTask};
-
-use crate::store::StoreRouter;
 use engine_traits::KvEngine;
 use pd_client::PdClient;
 use tikv_util::worker::Runnable;
+
+use super::{
+    cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
+    compact::{Runner as CompactRunner, Task as CompactTask},
+};
+use crate::store::StoreRouter;
 
 pub enum Task {
     Compact(CompactTask),

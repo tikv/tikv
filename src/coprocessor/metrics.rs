@@ -1,21 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
-use std::mem;
-use std::sync::Arc;
+use std::{cell::RefCell, mem, sync::Arc};
 
-use crate::storage::{FlowStatsReporter, Statistics};
 use collections::HashMap;
 use engine_rocks::ReadPerfContext;
-use kvproto::metapb;
-use kvproto::pdpb::QueryKind;
+use kvproto::{metapb, pdpb::QueryKind};
 use pd_client::BucketMeta;
-use raftstore::store::util::build_key_range;
-use raftstore::store::ReadStats;
-
-use crate::server::metrics::{GcKeysCF, GcKeysDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
+use raftstore::store::{util::build_key_range, ReadStats};
+
+use crate::{
+    server::metrics::{GcKeysCF, GcKeysDetail},
+    storage::{FlowStatsReporter, Statistics},
+};
 
 make_auto_flush_static_metric! {
     pub label_enum ReqTag {

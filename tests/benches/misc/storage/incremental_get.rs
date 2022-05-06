@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use test::{black_box, Bencher};
+use std::sync::Arc;
 
 use engine_rocks::RocksSnapshot;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
-use std::sync::Arc;
+use test::{black_box, Bencher};
 use test_storage::SyncTestStorageBuilder;
 use tidb_query_datatype::codec::table;
 use tikv::storage::{Engine, SnapshotStore, Statistics, Store};

@@ -1,21 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{sync::Arc, thread, time::Duration};
 
-use futures::executor::block_on;
-use futures::{stream, SinkExt};
+use futures::{executor::block_on, stream, SinkExt};
 use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
-use kvproto::import_sstpb::*;
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::*;
+use kvproto::{import_sstpb::*, kvrpcpb::*, tikvpb::*};
 use security::SecurityConfig;
-use uuid::Uuid;
-
 use test_raftstore::*;
 use tikv::config::TiKvConfig;
 use tikv_util::HandyRwLock;
+use uuid::Uuid;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 

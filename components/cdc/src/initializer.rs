@@ -10,33 +10,47 @@ use engine_traits::{
 };
 use fail::fail_point;
 use keys::{data_end_key, data_key};
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{Region, RegionEpoch};
-use raftstore::coprocessor::ObserveID;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::ChangeObserver;
-use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
+use kvproto::{
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb::{Region, RegionEpoch},
+};
+use raftstore::{
+    coprocessor::ObserveID,
+    router::RaftStoreRouter,
+    store::{
+        fsm::ChangeObserver,
+        msg::{Callback, ReadResponse, SignificantMsg},
+    },
+};
 use resolved_ts::Resolver;
-use tikv::storage::kv::Snapshot;
-use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
-use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
-use tikv::storage::Statistics;
-use tikv_util::codec::number;
-use tikv_util::sys::inspector::{self_thread_inspector, ThreadInspector};
-use tikv_util::time::{Instant, Limiter};
-use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, debug, error, info, warn, Either};
+use tikv::storage::{
+    kv::Snapshot,
+    mvcc::{DeltaScanner, ScannerBuilder},
+    txn::{TxnEntry, TxnEntryScanner},
+    Statistics,
+};
+use tikv_util::{
+    box_err,
+    codec::number,
+    debug, error, info,
+    sys::inspector::{self_thread_inspector, ThreadInspector},
+    time::{Instant, Limiter},
+    warn,
+    worker::Scheduler,
+    Either,
+};
 use tokio::sync::Semaphore;
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp};
 
-use crate::channel::CdcEvent;
-use crate::delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState};
-use crate::endpoint::Deregister;
-use crate::metrics::*;
-use crate::old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors};
-use crate::service::ConnID;
-use crate::Task;
-use crate::{Error, Result};
+use crate::{
+    channel::CdcEvent,
+    delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState},
+    endpoint::Deregister,
+    metrics::*,
+    old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors},
+    service::ConnID,
+    Error, Result, Task,
+};
 
 #[derive(Clone, Copy, Debug)]
 struct ScanStat {
@@ -482,26 +496,27 @@ impl<E: KvEngine> Initializer<E> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::fmt::Display;
-    use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender};
-    use std::time::Duration;
+    use std::{
+        collections::BTreeMap,
+        fmt::Display,
+        sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
+        time::Duration,
+    };
 
     use collections::HashSet;
     use engine_rocks::RocksEngine;
     use engine_traits::{MiscExt, CF_WRITE};
-    use futures::executor::block_on;
-    use futures::StreamExt;
-    use kvproto::cdcpb::Event_oneof_event;
-    use kvproto::errorpb::Error as ErrorHeader;
-    use raftstore::coprocessor::ObserveHandle;
-    use raftstore::store::RegionSnapshot;
+    use futures::{executor::block_on, StreamExt};
+    use kvproto::{cdcpb::Event_oneof_event, errorpb::Error as ErrorHeader};
+    use raftstore::{coprocessor::ObserveHandle, store::RegionSnapshot};
     use test_raftstore::MockRaftStoreRouter;
-    use tikv::storage::kv::Engine;
-    use tikv::storage::txn::tests::{
-        must_acquire_pessimistic_lock, must_commit, must_prewrite_delete, must_prewrite_put,
+    use tikv::storage::{
+        kv::Engine,
+        txn::tests::{
+            must_acquire_pessimistic_lock, must_commit, must_prewrite_delete, must_prewrite_put,
+        },
+        TestEngineBuilder,
     };
-    use tikv::storage::TestEngineBuilder;
     use tikv_util::worker::{LazyWorker, Runnable};
     use tokio::runtime::{Builder, Runtime};
 

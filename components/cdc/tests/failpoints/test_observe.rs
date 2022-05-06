@@ -1,20 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
-use futures::executor::block_on;
-use futures::sink::SinkExt;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
+    time::Duration,
+};
+
+use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
-use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::*;
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::{cdcpb::*, kvrpcpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::sync::Arc;
-use std::time::Duration;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
+
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_observe_duplicate_cmd() {

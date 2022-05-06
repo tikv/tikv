@@ -1,12 +1,16 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Display, Formatter};
-use std::iter::Peekable;
-use std::mem;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
-use std::vec::IntoIter;
+use std::{
+    fmt::{self, Display, Formatter},
+    iter::Peekable,
+    mem,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        mpsc::Sender,
+        Arc, Mutex,
+    },
+    vec::IntoIter,
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
@@ -16,32 +20,42 @@ use engine_traits::{
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{Context, LockInfo};
-use kvproto::metapb::Region;
+use kvproto::{
+    kvrpcpb::{Context, LockInfo},
+    metapb::Region,
+};
 use pd_client::{FeatureGate, PdClient};
-use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::msg::StoreMsg;
-use raftstore::store::util::find_peer;
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
-use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler};
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionInfoProvider},
+    router::RaftStoreRouter,
+    store::{msg::StoreMsg, util::find_peer},
+};
+use tikv_util::{
+    config::{Tracker, VersionTrack},
+    time::{duration_to_sec, Instant, Limiter, SlowTimer},
+    worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
+};
 use txn_types::{Key, TimeStamp};
 
-use crate::server::metrics::*;
-use crate::storage::kv::{Engine, ScanMode, Statistics};
-use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn};
-use crate::storage::txn::Error as TxnError;
-
-use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
-use super::compaction_filter::{
-    CompactionFilterInitializer, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
-    GC_COMPACTION_FILTER_MVCC_DELETION_WASTED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+use super::{
+    applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback},
+    check_need_gc,
+    compaction_filter::{
+        CompactionFilterInitializer, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
+        GC_COMPACTION_FILTER_MVCC_DELETION_WASTED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+    },
+    config::{GcConfig, GcWorkerConfigManager},
+    gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
+    Callback, Error, ErrorInner, Result,
 };
-use super::config::{GcConfig, GcWorkerConfigManager};
-use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
-use super::{check_need_gc, Callback, Error, ErrorInner, Result};
-use crate::storage::txn::gc;
+use crate::{
+    server::metrics::*,
+    storage::{
+        kv::{Engine, ScanMode, Statistics},
+        mvcc::{GcInfo, MvccReader, MvccTxn},
+        txn::{gc, Error as TxnError},
+    },
+};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -1028,37 +1042,41 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::mpsc::{self, channel};
-    use std::{thread, time::Duration};
+    use std::{
+        collections::BTreeMap,
+        sync::mpsc::{self, channel},
+        thread,
+        time::Duration,
+    };
 
-    use crate::storage::kv::{
-        self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
-        SnapContext, TestEngineBuilder, WriteData,
-    };
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::mvcc::tests::must_get_none;
-    use crate::storage::mvcc::MAX_TXN_WRITE_SIZE;
-    use crate::storage::txn::tests::{
-        must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
-    };
-    use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilderApiV1};
     use api_version::KvFormat;
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::Op;
-    use kvproto::metapb::Peer;
+    use kvproto::{kvrpcpb::Op, metapb::Peer};
     use raft::StateRole;
-    use raftstore::coprocessor::region_info_accessor::RegionInfoAccessor;
-    use raftstore::coprocessor::RegionChangeEvent;
-    use raftstore::router::RaftStoreBlackHole;
-    use raftstore::store::RegionSnapshot;
-    use tikv_util::codec::number::NumberEncoder;
-    use tikv_util::future::paired_future_callback;
+    use raftstore::{
+        coprocessor::{region_info_accessor::RegionInfoAccessor, RegionChangeEvent},
+        router::RaftStoreBlackHole,
+        store::RegionSnapshot,
+    };
+    use tikv_util::{codec::number::NumberEncoder, future::paired_future_callback};
     use txn_types::Mutation;
 
     use super::*;
+    use crate::storage::{
+        kv::{
+            self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
+            SnapContext, TestEngineBuilder, WriteData,
+        },
+        lock_manager::DummyLockManager,
+        mvcc::{tests::must_get_none, MAX_TXN_WRITE_SIZE},
+        txn::{
+            commands,
+            tests::{must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback},
+        },
+        Engine, Storage, TestStorageBuilderApiV1,
+    };
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
     /// For test engines, they writes keys into db directly, but in production a 'z' prefix will be

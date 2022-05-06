@@ -2,19 +2,19 @@
 
 use std::time::Duration;
 
-use crate::store::{Config, Transport};
-use crate::Result;
-
 use collections::HashSet;
 use crossbeam::channel::unbounded;
 use engine_rocks::RocksWriteBatch;
-use engine_test::kv::KvTestEngine;
-use engine_test::new_temp_engine;
+use engine_test::{kv::KvTestEngine, new_temp_engine};
 use engine_traits::{Mutable, Peekable, WriteBatchExt};
 use kvproto::raft_serverpb::RaftMessage;
 use tempfile::Builder;
 
 use super::*;
+use crate::{
+    store::{Config, Transport},
+    Result,
+};
 
 fn must_have_entries_and_state(
     raft_engine: &KvTestEngine,

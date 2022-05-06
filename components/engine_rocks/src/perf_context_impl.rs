@@ -1,20 +1,19 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::perf_context_metrics::{
-    APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC,
-};
-use crate::{
-    raw_util, set_perf_flags, set_perf_level, PerfContext as RawPerfContext, PerfFlag, PerfFlags,
-};
+use std::{fmt::Debug, marker::PhantomData, ops::Sub};
 
 use derive_more::{Add, AddAssign, Sub, SubAssign};
 use engine_traits::{PerfContextKind, PerfLevel};
 use kvproto::kvrpcpb::ScanDetailV2;
 use lazy_static::lazy_static;
 use slog_derive::KV;
-use std::fmt::Debug;
-use std::marker::PhantomData;
-use std::ops::Sub;
+
+use crate::{
+    perf_context_metrics::{
+        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC,
+    },
+    raw_util, set_perf_flags, set_perf_level, PerfContext as RawPerfContext, PerfFlag, PerfFlags,
+};
 
 macro_rules! report_write_perf_context {
     ($ctx: expr, $metric: ident) => {

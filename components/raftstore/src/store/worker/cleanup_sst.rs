@@ -1,18 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt;
-use std::sync::Arc;
+use std::{fmt, marker::PhantomData, sync::Arc};
 
-use kvproto::import_sstpb::SstMeta;
-
-use crate::store::util::is_epoch_stale;
-use crate::store::{StoreMsg, StoreRouter};
 use engine_traits::KvEngine;
+use kvproto::import_sstpb::SstMeta;
 use pd_client::PdClient;
 use sst_importer::SstImporter;
-use std::marker::PhantomData;
-use tikv_util::error;
-use tikv_util::worker::Runnable;
+use tikv_util::{error, worker::Runnable};
+
+use crate::store::{util::is_epoch_stale, StoreMsg, StoreRouter};
 
 pub enum Task {
     DeleteSst { ssts: Vec<SstMeta> },

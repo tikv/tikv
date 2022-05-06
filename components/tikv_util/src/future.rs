@@ -1,15 +1,21 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::callback::must_call;
-use futures::channel::mpsc;
-use futures::channel::oneshot as futures_oneshot;
-use futures::future::{self, BoxFuture, Future, FutureExt, TryFutureExt};
-use futures::stream::{Stream, StreamExt};
-use futures::task::{self, ArcWake, Context, Poll};
+use std::{
+    cell::UnsafeCell,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
+};
 
-use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
+use futures::{
+    channel::{mpsc, oneshot as futures_oneshot},
+    future::{self, BoxFuture, Future, FutureExt, TryFutureExt},
+    stream::{Stream, StreamExt},
+    task::{self, ArcWake, Context, Poll},
+};
+
+use crate::callback::must_call;
 
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
@@ -191,9 +197,11 @@ impl ArcWake for PollAtWake {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::task::Poll;
     use std::sync::atomic::AtomicUsize;
+
+    use futures::task::Poll;
+
+    use super::*;
 
     #[test]
     fn test_in_place_wake() {

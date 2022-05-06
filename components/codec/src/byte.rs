@@ -1,11 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::intrinsics::unlikely;
-use std::io::Read;
+use std::{intrinsics::unlikely, io::Read};
 
-use crate::buffer::BufferReader;
-use crate::number::{self, NumberCodec, NumberDecoder, NumberEncoder};
-use crate::{ErrorInner, Result};
+use crate::{
+    buffer::BufferReader,
+    number::{self, NumberCodec, NumberDecoder, NumberEncoder},
+    ErrorInner, Result,
+};
 
 const MEMCMP_GROUP_SIZE: usize = 8;
 const MEMCMP_PAD_BYTE: u8 = 0;

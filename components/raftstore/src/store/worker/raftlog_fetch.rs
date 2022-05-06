@@ -1,9 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt;
+
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use raft::GetEntriesContext;
-use std::fmt;
 use tikv_util::worker::Runnable;
 
 use crate::store::{RaftlogFetchResult, SignificantMsg, SignificantRouter, MAX_INIT_ENTRY_COUNT};

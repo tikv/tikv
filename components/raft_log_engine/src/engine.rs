@@ -1,9 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
-use std::io::{Read, Result as IoResult, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    fs,
+    io::{Read, Result as IoResult, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
@@ -13,13 +15,12 @@ use engine_traits::{
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
-use raft_engine::env::{DefaultFileSystem, FileSystem, Handle, WriteExt};
 use raft_engine::{
+    env::{DefaultFileSystem, FileSystem, Handle, WriteExt},
     Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
-use tikv_util::Either;
-
 pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
+use tikv_util::Either;
 
 #[derive(Clone)]
 pub struct MessageExtTyped;

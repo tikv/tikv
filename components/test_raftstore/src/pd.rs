@@ -1,39 +1,51 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
-use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
-
-use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use futures::compat::Future01CompatExt;
-use futures::executor::block_on;
-use futures::future::{err, ok, ready, BoxFuture, FutureExt};
-use futures::{stream, stream::StreamExt};
-use tokio_timer::timer::Handle;
-
-use kvproto::metapb::{self, PeerRole};
-use kvproto::pdpb;
-use kvproto::replication_modepb::{
-    DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
-    StoreDrAutoSyncStatus,
+use std::{
+    cmp,
+    collections::{
+        BTreeMap,
+        Bound::{Excluded, Unbounded},
+    },
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock,
+    },
+    time::Duration,
 };
-use raft::eraftpb::ConfChangeType;
 
 use collections::{HashMap, HashMapEntry, HashSet};
 use fail::fail_point;
+use futures::{
+    channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    compat::Future01CompatExt,
+    executor::block_on,
+    future::{err, ok, ready, BoxFuture, FutureExt},
+    stream,
+    stream::StreamExt,
+};
 use keys::{self, data_key, enc_end_key, enc_start_key};
+use kvproto::{
+    metapb::{self, PeerRole},
+    pdpb,
+    replication_modepb::{
+        DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
+        StoreDrAutoSyncStatus,
+    },
+};
 use pd_client::{
     BucketStat, Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result,
 };
-use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
-use raftstore::store::QueryStats;
-use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
-use tikv_util::time::{Instant, UnixSecs};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{Either, HandyRwLock};
+use raft::eraftpb::ConfChangeType;
+use raftstore::store::{
+    util::{check_key_in_region, find_peer, is_learner},
+    QueryStats, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+};
+use tikv_util::{
+    time::{Instant, UnixSecs},
+    timer::GLOBAL_TIMER_HANDLE,
+    Either, HandyRwLock,
+};
+use tokio_timer::timer::Handle;
 use txn_types::TimeStamp;
 
 use super::*;

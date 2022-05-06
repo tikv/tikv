@@ -1,47 +1,54 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use fail::fail_point;
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::ops::Range;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::{Arc, Mutex};
-use std::{cmp, error, mem, u64};
+use std::{
+    cell::{Cell, RefCell},
+    cmp,
+    collections::VecDeque,
+    error, mem,
+    ops::Range,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc::{self, Receiver, TryRecvError},
+        Arc, Mutex,
+    },
+    u64,
+};
 
-use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, Mutable, Peekable};
+use collections::HashMap;
+use engine_traits::{
+    Engines, KvEngine, Mutable, Peekable, RaftEngine, RaftLogBatch, CF_RAFT, RAFT_LOG_MULTI_GET_CNT,
+};
+use fail::fail_point;
+use into_other::into_other;
 use keys::{self, enc_end_key, enc_start_key};
-use kvproto::metapb::{self, Region};
-use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
+use kvproto::{
+    metapb::{self, Region},
+    raft_serverpb::{
+        MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
+    },
 };
 use protobuf::Message;
-use raft::eraftpb::{self, ConfState, Entry, HardState, Snapshot};
 use raft::{
-    self, util::limit_size, Error as RaftError, GetEntriesContext, RaftState, Ready, Storage,
-    StorageError,
+    self,
+    eraftpb::{self, ConfState, Entry, HardState, Snapshot},
+    util::limit_size,
+    Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
+};
+use tikv_alloc::trace::TraceEvent;
+use tikv_util::{
+    box_err, box_try, debug, defer, error, info, time::Instant, warn, worker::Scheduler,
 };
 
-use crate::store::async_io::write::WriteTask;
-use crate::store::fsm::GenSnapTask;
-use crate::store::memory::*;
-use crate::store::peer::PersistSnapshotResult;
-use crate::store::util;
-use crate::store::worker::RaftlogFetchTask;
-use crate::{bytes_capacity, Error, Result};
-use collections::HashMap;
-use engine_traits::{RaftEngine, RaftLogBatch, RAFT_LOG_MULTI_GET_CNT};
-use into_other::into_other;
-use tikv_alloc::trace::TraceEvent;
-use tikv_util::time::Instant;
-use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
-
-use super::metrics::*;
-use super::worker::RegionTask;
-use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
+use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
+use crate::{
+    bytes_capacity,
+    store::{
+        async_io::write::WriteTask, fsm::GenSnapTask, memory::*, peer::PersistSnapshotResult, util,
+        worker::RaftlogFetchTask,
+    },
+    Error, Result,
+};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -2043,30 +2050,39 @@ impl CachedEntries {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::CoprocessorHost;
-    use crate::store::async_io::write::write_to_db_for_test;
-    use crate::store::fsm::apply::compact_raft_log;
-    use crate::store::worker::{RaftlogFetchRunner, RegionRunner, RegionTask};
-    use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_test::raft::RaftTestEngine;
-    use engine_traits::Engines;
-    use engine_traits::{Iterable, SyncMutable, WriteBatch, WriteBatchExt};
-    use engine_traits::{ALL_CFS, CF_DEFAULT};
+    use std::{
+        cell::RefCell,
+        path::Path,
+        sync::{atomic::*, mpsc::*, *},
+        time::Duration,
+    };
+
+    use engine_test::{
+        kv::{KvTestEngine, KvTestSnapshot},
+        raft::RaftTestEngine,
+    };
+    use engine_traits::{
+        Engines, Iterable, SyncMutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT,
+    };
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use raft::eraftpb::HardState;
-    use raft::eraftpb::{ConfState, Entry};
-    use raft::{Error as RaftError, GetEntriesContext, StorageError};
-    use std::cell::RefCell;
-    use std::path::Path;
-    use std::sync::atomic::*;
-    use std::sync::mpsc::*;
-    use std::sync::*;
-    use std::time::Duration;
+    use raft::{
+        eraftpb::{ConfState, Entry, HardState},
+        Error as RaftError, GetEntriesContext, StorageError,
+    };
     use tempfile::{Builder, TempDir};
     use tikv_util::worker::{dummy_scheduler, LazyWorker, Scheduler, Worker};
 
     use super::*;
+    use crate::{
+        coprocessor::CoprocessorHost,
+        store::{
+            async_io::write::write_to_db_for_test,
+            bootstrap_store,
+            fsm::apply::compact_raft_log,
+            initial_region, prepare_bootstrap_cluster,
+            worker::{RaftlogFetchRunner, RegionRunner, RegionTask},
+        },
+    };
 
     impl EntryCache {
         fn new_with_cb(cb: impl Fn(i64) + Send + 'static) -> Self {
@@ -2268,8 +2284,10 @@ mod tests {
         }
     }
 
-    use crate::store::{SignificantMsg, SignificantRouter};
-    use crate::Result as RaftStoreResult;
+    use crate::{
+        store::{SignificantMsg, SignificantRouter},
+        Result as RaftStoreResult,
+    };
 
     pub struct TestRouter<EK: KvEngine> {
         ch: SyncSender<SignificantMsg<EK::Snapshot>>,

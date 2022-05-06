@@ -1,23 +1,26 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::BTreeMap;
-use std::collections::Bound::{self, Excluded, Included, Unbounded};
-use std::default::Default;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::ops::RangeBounds;
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::{
+        BTreeMap,
+        Bound::{self, Excluded, Included, Unbounded},
+    },
+    default::Default,
+    fmt::{self, Debug, Display, Formatter},
+    ops::RangeBounds,
+    sync::{Arc, RwLock},
+};
 
 use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
+use super::SnapContext;
 use crate::{
     Callback as EngineCallback, DummySnapshotExt, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, Snapshot, WriteData,
 };
-
-use super::SnapContext;
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
@@ -293,11 +296,13 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
 
 #[cfg(test)]
 pub mod tests {
-    use super::super::tests::*;
-    use super::super::{CfStatistics, TEST_ENGINE_CFS};
-    use super::*;
-    use crate::{Cursor, ScanMode};
     use engine_traits::IterOptions;
+
+    use super::{
+        super::{tests::*, CfStatistics, TEST_ENGINE_CFS},
+        *,
+    };
+    use crate::{Cursor, ScanMode};
 
     #[test]
     fn test_btree_engine() {

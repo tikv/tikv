@@ -3,22 +3,23 @@
 // #[PerformanceCriticalPath]
 //! The implementation of write router for raftstore.
 
-use std::mem;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-
-use crate::store::async_io::write::WriteMsg;
-use crate::store::config::Config;
-use crate::store::fsm::store::PollContext;
-use crate::store::local_metrics::RaftMetrics;
-use crate::store::metrics::*;
+use std::{
+    mem,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
+use tikv_util::{info, time::Instant};
 
-use tikv_util::info;
-use tikv_util::time::Instant;
+use crate::store::{
+    async_io::write::WriteMsg, config::Config, fsm::store::PollContext, local_metrics::RaftMetrics,
+    metrics::*,
+};
 
 const RETRY_SCHEDULE_MILLISECONS: u64 = 10;
 

@@ -38,11 +38,13 @@ pub mod linux {
 
 #[cfg(target_os = "linux")]
 mod imp {
-    use libc::c_int;
-    use std::fs;
-    use std::io::{self, Error};
-    use std::iter::FromIterator;
+    use std::{
+        fs,
+        io::{self, Error},
+        iter::FromIterator,
+    };
 
+    use libc::c_int;
     pub use libc::pid_t as Pid;
     pub use procinfo::pid::{self, Stat as FullStat};
 
@@ -158,9 +160,10 @@ mod imp {
 
     #[cfg(test)]
     mod tests {
+        use std::io::ErrorKind;
+
         use super::*;
         use crate::sys::HIGH_PRI;
-        use std::io::ErrorKind;
 
         #[test]
         fn test_set_priority() {
@@ -184,11 +187,7 @@ mod imp {
 #[cfg(target_os = "macos")]
 #[allow(bad_style)]
 mod imp {
-    use std::io;
-    use std::iter::FromIterator;
-    use std::mem::size_of;
-    use std::ptr::null_mut;
-    use std::slice;
+    use std::{io, iter::FromIterator, mem::size_of, ptr::null_mut, slice};
 
     use libc::*;
 
@@ -299,8 +298,7 @@ mod imp {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod imp {
-    use std::io;
-    use std::iter::FromIterator;
+    use std::{io, iter::FromIterator};
 
     pub type Pid = u32;
 
@@ -365,10 +363,12 @@ pub fn current_thread_stat() -> io::Result<ThreadStat> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{
+        collections::HashSet,
+        sync::{Arc, Condvar, Mutex},
+    };
 
-    use std::collections::HashSet;
-    use std::sync::{Arc, Condvar, Mutex};
+    use super::*;
 
     #[test]
     fn test_thread_id() {

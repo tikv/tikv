@@ -1,48 +1,58 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
-use std::cmp::{self, Ordering as CmpOrdering, Reverse};
-use std::fmt::{self, Display, Formatter};
-use std::io::{self, ErrorKind, Read, Write};
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
-use std::{error::Error as StdError, result, str, thread, time, u64};
-
-use fail::fail_point;
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::metapb::Region;
-use kvproto::raft_serverpb::RaftSnapshotData;
-use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
-use openssl::symm::{Cipher, Crypter, Mode};
-use protobuf::Message;
-use raft::eraftpb::Snapshot as RaftSnapshot;
-use thiserror::Error;
+use std::{
+    borrow::Cow,
+    cmp::{self, Ordering as CmpOrdering, Reverse},
+    error::Error as StdError,
+    fmt::{self, Display, Formatter},
+    io::{self, ErrorKind, Read, Write},
+    path::{Path, PathBuf},
+    result, str,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock,
+    },
+    thread, time, u64,
+};
 
 use collections::{HashMap, HashMapEntry as Entry};
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine};
+use engine_traits::{CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use fail::fail_point;
 use file_system::{
     calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
     File, Metadata, OpenOptions,
 };
 use keys::{enc_end_key, enc_start_key};
-use tikv_util::time::{duration_to_sec, Instant, Limiter};
-use tikv_util::HandyRwLock;
-use tikv_util::{box_err, box_try, debug, error, info, warn};
-
-use crate::coprocessor::CoprocessorHost;
-use crate::store::metrics::{
-    CfNames, INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
-    SNAPSHOT_CF_SIZE,
+use kvproto::{
+    encryptionpb::EncryptionMethod,
+    metapb::Region,
+    raft_serverpb::{RaftSnapshotData, SnapshotCfFile, SnapshotMeta},
 };
-use crate::store::peer_storage::JOB_STATUS_CANCELLING;
-use crate::{Error as RaftStoreError, Result as RaftStoreResult};
+use openssl::symm::{Cipher, Crypter, Mode};
+use protobuf::Message;
+use raft::eraftpb::Snapshot as RaftSnapshot;
+use thiserror::Error;
+use tikv_util::{
+    box_err, box_try, debug, error, info,
+    time::{duration_to_sec, Instant, Limiter},
+    warn, HandyRwLock,
+};
+
+use crate::{
+    coprocessor::CoprocessorHost,
+    store::{
+        metrics::{
+            CfNames, INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM,
+            SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
+        },
+        peer_storage::JOB_STATUS_CANCELLING,
+    },
+    Error as RaftStoreError, Result as RaftStoreResult,
+};
 
 #[path = "snap/io.rs"]
 pub mod snap_io;
@@ -1531,31 +1541,35 @@ impl SnapManagerBuilder {
 
 #[cfg(test)]
 pub mod tests {
-    use file_system::{self, File, OpenOptions};
-    use std::cmp;
-    use std::io::{self, Read, Seek, SeekFrom, Write};
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, AtomicUsize};
-    use std::sync::Arc;
+    use std::{
+        cmp,
+        io::{self, Read, Seek, SeekFrom, Write},
+        path::{Path, PathBuf},
+        sync::{
+            atomic::{AtomicU64, AtomicUsize},
+            Arc,
+        },
+    };
 
     use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
     use encryption_export::data_key_manager_from_config;
-    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt};
-    use engine_test::kv::KvTestEngine;
-    use engine_test::raft::RaftTestEngine;
-    use engine_traits::Engines;
-    use engine_traits::SyncMutable;
-    use engine_traits::{ExternalSstFileInfo, SstExt, SstWriter, SstWriterBuilder};
-    use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use kvproto::encryptionpb::EncryptionMethod;
-    use kvproto::metapb::{Peer, Region};
-    use kvproto::raft_serverpb::{
-        RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
+    use engine_test::{
+        ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt},
+        kv::KvTestEngine,
+        raft::RaftTestEngine,
     };
-    use raft::eraftpb::Entry;
-
+    use engine_traits::{
+        Engines, ExternalSstFileInfo, KvEngine, Snapshot as EngineSnapshot, SstExt, SstWriter,
+        SstWriterBuilder, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    };
+    use file_system::{self, File, OpenOptions};
+    use kvproto::{
+        encryptionpb::EncryptionMethod,
+        metapb::{Peer, Region},
+        raft_serverpb::{RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta},
+    };
     use protobuf::Message;
+    use raft::eraftpb::Entry;
     use tempfile::{Builder, TempDir};
     use tikv_util::time::Limiter;
 
@@ -1563,11 +1577,11 @@ pub mod tests {
         ApplyOptions, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, SnapManagerCore,
         Snapshot, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
     };
-
-    use crate::coprocessor::CoprocessorHost;
-    use crate::store::peer_storage::JOB_STATUS_RUNNING;
-    use crate::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
-    use crate::Result;
+    use crate::{
+        coprocessor::CoprocessorHost,
+        store::{peer_storage::JOB_STATUS_RUNNING, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER},
+        Result,
+    };
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";

@@ -303,10 +303,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::cmp::Ordering;
+
     use byteorder::{BigEndian, WriteBytesExt};
     use kvproto::metapb::{Peer, Region};
-    use std::cmp::Ordering;
+
+    use super::*;
 
     #[test]
     fn test_region_id_key() {

@@ -1,16 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{mpsc, Arc},
+    thread,
+    time::Duration,
+};
 
 use kvproto::replication_modepb::*;
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
-use std::sync::mpsc;
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::*, HandyRwLock};
 
 fn prepare_cluster() -> Cluster<ServerCluster> {
     let mut cluster = new_server_cluster(0, 3);

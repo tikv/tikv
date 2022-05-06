@@ -1,14 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    sync::mpsc::{self, TryRecvError},
+    time::Duration,
+};
+
 use engine_rocks::RocksSnapshot;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
-
-use std::sync::mpsc::{self, TryRecvError};
-use std::time::Duration;
 
 struct CbReceivers {
     proposed: mpsc::Receiver<()>,
