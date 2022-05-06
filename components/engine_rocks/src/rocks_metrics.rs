@@ -5,7 +5,7 @@ use engine_traits::CF_DEFAULT;
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
-use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
+use tikv_util::metrics::*;
 
 use rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
@@ -1320,11 +1320,12 @@ lazy_static! {
         "Number of compaction reason",
         &["db", "cf", "reason"]
     ).unwrap();
-    pub static ref STORE_ENGINE_INGESTION_PICKED_LEVEL_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref STORE_ENGINE_INGESTION_PICKED_LEVEL_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_engine_ingestion_picked_level",
         "Histogram of ingestion picked level",
         &["db", "cf"],
-        linear_buckets(0.0, 1.0, 7).unwrap()
+        linear_buckets(0.0, 1.0, 7).unwrap(),
+        FULL_HISTOGRAM_REGISTRY
     ).unwrap();
     pub static ref STORE_ENGINE_LOCATE_VEC: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_engine_locate",

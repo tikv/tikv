@@ -18,7 +18,7 @@ use kvproto::pdpb::QueryKind;
 use pd_client::BucketMeta;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
-use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
+use tikv_util::metrics::*;
 
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,
@@ -534,10 +534,11 @@ lazy_static! {
     )
     .unwrap();
     pub static ref SCHED_THROTTLE_TIME: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_scheduler_throttle_duration_seconds",
             "Bucketed histogram of peer commits logs duration.",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
+            exponential_buckets(0.0005, 2.0, 12).unwrap(), // 0.5ms ~ 1s
+            FULL_HISTOGRAM_REGISTRY
         ).unwrap();
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_scheduler_command_duration_seconds",
@@ -623,11 +624,12 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
-    pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
+    pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_storage_check_mem_lock_duration_seconds",
         "Histogram of the duration of checking memory locks",
         &["type", "result"],
-        exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+        exponential_buckets(1e-6f64, 4f64, 10).unwrap(), // 1us ~ 262ms
+        FULL_HISTOGRAM_REGISTRY
     )
     .unwrap();
     pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC: CheckMemLockHistogramVec =

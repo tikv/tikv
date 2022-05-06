@@ -4,7 +4,7 @@ use prometheus::*;
 use prometheus_static_metric::*;
 
 use crate::storage::ErrorHeaderKind;
-use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
+use tikv_util::metrics::*;
 
 pub use crate::storage::kv::metrics::{
     GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
@@ -230,11 +230,12 @@ lazy_static! {
     )
     .unwrap();
     pub static ref REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
-        register_histogram_vec!(
+        register_histogram_vec_with_registry!(
             "tikv_replica_read_lock_check_duration_seconds",
             "Duration of memory lock checking for replica read",
             &["result"],
-            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+            exponential_buckets(1e-6f64, 4f64, 10).unwrap(), // 1us ~ 262ms
+            FULL_HISTOGRAM_REGISTRY
         )
         .unwrap();
     pub static ref ADDRESS_RESOLVE_HISTOGRAM: Histogram =
@@ -480,8 +481,8 @@ lazy_static! {
         "tikv_storage_engine_async_request_duration_seconds",
         "Bucketed histogram of processing successful asynchronous requests.",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap(),
-        HIGH_PRIORITY_REGISTRY
+        exponential_buckets(0.0005, 2.0, 15).unwrap(), // 0.5ms ~ 8s
+        FULL_HISTOGRAM_REGISTRY
     )
     .unwrap();
 }

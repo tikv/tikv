@@ -4,7 +4,7 @@ use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
 
-use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
+use tikv_util::metrics::*;
 
 make_auto_flush_static_metric! {
     pub label_enum PerfContextType {
@@ -253,10 +253,11 @@ lazy_static! {
         ).unwrap();
 
     pub static ref STORE_WRITE_TASK_WAIT_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_store_write_task_wait_duration_secs",
             "Bucketed histogram of store write task wait time duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            FULL_HISTOGRAM_REGISTRY
         ).unwrap();
     pub static ref STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
@@ -299,13 +300,14 @@ lazy_static! {
             "tikv_raftstore_append_log_duration_seconds",
             "Bucketed histogram of peer appending log duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap(),
-            HIGH_PRIORITY_REGISTRY
+            FULL_HISTOGRAM_REGISTRY
         ).unwrap();
     pub static ref STORE_WRITE_LOOP_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
+        register_histogram_with_registry!(
             "tikv_raftstore_store_write_loop_duration_seconds",
             "Bucketed histogram of store write loop duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap(),
+            FULL_HISTOGRAM_REGISTRY
         ).unwrap();
     pub static ref STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
@@ -397,7 +399,7 @@ lazy_static! {
             "tikv_raftstore_commit_log_duration_seconds",
             "Bucketed histogram of peer commits logs duration.",
             exponential_buckets(0.0005, 2.0, 20).unwrap(),
-            HIGH_PRIORITY_REGISTRY
+            FULL_HISTOGRAM_REGISTRY
         ).unwrap();
 
     pub static ref STORE_APPLY_LOG_HISTOGRAM: Histogram =
@@ -405,7 +407,7 @@ lazy_static! {
             "tikv_raftstore_apply_log_duration_seconds",
             "Bucketed histogram of peer applying log duration.",
             exponential_buckets(0.0005, 2.0, 20).unwrap(),
-            HIGH_PRIORITY_REGISTRY
+            FULL_HISTOGRAM_REGISTRY
         ).unwrap();
 
     pub static ref APPLY_TASK_WAIT_TIME_HISTOGRAM: Histogram =
@@ -413,7 +415,7 @@ lazy_static! {
             "tikv_raftstore_apply_wait_time_duration_secs",
             "Bucketed histogram of apply task wait time duration.",
             exponential_buckets(0.0005, 2.0, 20).unwrap(),
-            HIGH_PRIORITY_REGISTRY
+            FULL_HISTOGRAM_REGISTRY
         ).unwrap();
 
     pub static ref STORE_RAFT_READY_COUNTER_VEC: IntCounterVec =
@@ -498,7 +500,7 @@ lazy_static! {
             "tikv_raftstore_request_wait_time_duration_secs",
             "Bucketed histogram of request wait time duration.",
             exponential_buckets(0.0005, 2.0, 20).unwrap(),
-            HIGH_PRIORITY_REGISTRY
+            FULL_HISTOGRAM_REGISTRY
         ).unwrap();
 
     pub static ref PEER_GC_RAFT_LOG_COUNTER: IntCounter =
