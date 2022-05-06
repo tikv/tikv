@@ -4,8 +4,9 @@ use std::cell::RefCell;
 use std::mem;
 use std::sync::Arc;
 
-use crate::storage::{kv::PerfStatisticsDelta, FlowStatsReporter, Statistics};
+use crate::storage::{FlowStatsReporter, Statistics};
 use collections::HashMap;
+use engine_rocks::ReadPerfContext;
 use kvproto::metapb;
 use kvproto::pdpb::QueryKind;
 use pd_client::BucketMeta;
@@ -267,7 +268,7 @@ make_static_metric! {
 pub struct CopLocalMetrics {
     local_scan_details: HashMap<ReqTag, Statistics>,
     local_read_stats: ReadStats,
-    local_perf_stats: HashMap<ReqTag, PerfStatisticsDelta>,
+    local_perf_stats: HashMap<ReqTag, ReadPerfContext>,
 }
 
 thread_local! {
@@ -285,7 +286,7 @@ macro_rules! tls_flush_perf_stats {
         COPR_ROCKSDB_PERF_COUNTER_STATIC
             .get($tag)
             .$stat
-            .inc_by($local_stats.0.$stat as u64);
+            .inc_by($local_stats.$stat as u64);
     };
 }
 
@@ -440,7 +441,7 @@ pub fn tls_collect_query(
     });
 }
 
-pub fn tls_collect_perf_stats(cmd: ReqTag, perf_stats: &PerfStatisticsDelta) {
+pub fn tls_collect_perf_stats(cmd: ReqTag, perf_stats: &ReadPerfContext) {
     TLS_COP_METRICS.with(|m| {
         *(m.borrow_mut()
             .local_perf_stats

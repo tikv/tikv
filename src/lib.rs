@@ -24,7 +24,6 @@
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(drain_filter)]
-#![feature(negative_impls)]
 #![feature(deadline_api)]
 #![feature(generic_associated_types)]
 

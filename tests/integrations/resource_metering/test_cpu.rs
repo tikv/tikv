@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::PerfLevel;
 use futures::executor::block_on;
 use futures::StreamExt;
 use kvproto::kvrpcpb::Context;
@@ -223,7 +222,6 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         &Default::default(),
         pool.handle(),
         cm,
-        PerfLevel::EnableCount,
         test_suite.get_tag_factory(),
         Arc::new(QuotaLimiter::default()),
     );

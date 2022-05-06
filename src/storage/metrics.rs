@@ -2,6 +2,7 @@
 
 //! Prometheus metrics for storage functionality.
 
+use engine_rocks::ReadPerfContext;
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -10,7 +11,7 @@ use std::mem;
 use std::sync::Arc;
 
 use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
-use crate::storage::kv::{FlowStatsReporter, PerfStatisticsDelta, Statistics};
+use crate::storage::kv::{FlowStatsReporter, Statistics};
 use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
@@ -22,7 +23,7 @@ use raftstore::store::ReadStats;
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,
     local_read_stats: ReadStats,
-    local_perf_stats: HashMap<CommandKind, PerfStatisticsDelta>,
+    local_perf_stats: HashMap<CommandKind, ReadPerfContext>,
 }
 
 thread_local! {
@@ -40,7 +41,7 @@ macro_rules! tls_flush_perf_stats {
         STORAGE_ROCKSDB_PERF_COUNTER_STATIC
             .get($tag)
             .$stat
-            .inc_by($local_stats.0.$stat as u64);
+            .inc_by($local_stats.$stat as u64);
     };
 }
 
@@ -179,7 +180,7 @@ pub fn tls_collect_query_batch(
     });
 }
 
-pub fn tls_collect_perf_stats(cmd: CommandKind, perf_stats: &PerfStatisticsDelta) {
+pub fn tls_collect_perf_stats(cmd: CommandKind, perf_stats: &ReadPerfContext) {
     TLS_STORAGE_METRICS.with(|m| {
         *(m.borrow_mut()
             .local_perf_stats
