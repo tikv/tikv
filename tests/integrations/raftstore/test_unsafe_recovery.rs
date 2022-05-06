@@ -14,7 +14,7 @@ use tikv_util::config::ReadableDuration;
 use tikv_util::HandyRwLock;
 
 #[test]
-fn test_unsafe_recovery_update_region() {
+fn test_unsafe_recovery_demote_failed_voters() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
@@ -25,11 +25,26 @@ fn test_unsafe_recovery_update_region() {
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    let store0_peer = find_peer(&region, nodes[0]).unwrap().to_owned();
-    cluster.must_transfer_leader(region.get_id(), store0_peer);
     configure_for_lease_read(&mut cluster, None, None);
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
+
+    {
+        let put = new_put_cmd(b"k2", b"v2");
+        let req = new_request(
+            region.get_id(),
+            region.get_region_epoch().clone(),
+            vec![put],
+            true,
+        );
+        // marjority is lost, can't propose command successfully.
+        assert!(
+            cluster
+                .call_command_on_leader(req, Duration::from_millis(10))
+                .is_err()
+        );
+    }
+    cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
 
     let to_be_removed: Vec<metapb::Peer> = region
         .get_peers()
@@ -45,17 +60,22 @@ fn test_unsafe_recovery_update_region() {
     pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
     cluster.must_send_store_heartbeat(nodes[0]);
 
-    // Removes the boostrap region, since it overlaps with any regions we create.
-    let mut removed = false;
-    for _ in 1..11 {
+    let mut demoted = true;
+    for _ in 0..10 {
         let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-        if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == nodes[0] {
-            removed = true;
-            break;
+
+        demoted = true;
+        for peer in region.get_peers() {
+            if peer.get_id() != nodes[0] && peer.get_role() == metapb::PeerRole::Voter {
+                demoted = false;
+            }
         }
+        if demoted {
+            break;
+        } 
         sleep_ms(200);
     }
-    assert_eq!(removed, true);
+    assert_eq!(demoted, true);
 }
 
 #[test]

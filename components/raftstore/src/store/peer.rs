@@ -482,21 +482,25 @@ pub enum ForceLeaderState {
 // Following shared states are used while reporting to PD for unsafe recovery and shared among
 // all the regions per their life cycle.
 // The work flow is like:
-//                   start_unsafe_recovery_report
-//                                 |
-//            --------------------------------------------
-//           |                  |                         |
-//      wait apply          wait apply       ...      wait apply
-//           |                  |                         |
-//            --------------------------------------------
-//                                 |
-//            --------------------------------------------
-//           |                  |                         |
-//     fill out report    fill out report    ...    fill out report
-//           |                  |                         |
-//            --------------------------------------------
-//                                 |
-//                     send report (store heartbeat)
+//     1. report phase
+//            start_unsafe_recovery_report
+//            -> broadcast wait-apply commands
+//            -> wait for all the peers' apply indices meet their targets
+//            -> broadcast fill out report commands
+//            -> wait for all the peers fill out the reports for themsleves
+//            -> send a store report (through store heartbeat)
+//     2. force leader phase
+//            dispatch force leader commands
+//            -> wait for all the peers that recived the command become force leader
+//            -> start_unsafe_recovry_report
+//     3. plan execution phase
+//            dispatch recovery plans
+//            -> wait for all the creates, deletes and demotes to finish, for the demotes,
+//               procedures are:
+//                   -> exit residual joint state
+//                   -> demote failed voters, and promote self to be a voter if it is a learner
+//                   -> exit joint state
+//            -> start_unsafe_recovery_report
 #[derive(Copy, Clone, Debug)]
 pub struct UnsafeRecoveryReportContext {
     pub id: u64,

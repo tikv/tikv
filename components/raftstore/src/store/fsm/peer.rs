@@ -833,7 +833,7 @@ where
             self.fsm.peer.raft_group.raft.raft_log.committed
         };
         info!(
-            "unsafe recovery wait apply";
+            "Unsafe recovery wait apply";
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
             "force_leader" => self.fsm.peer.force_leader.is_some(),
@@ -1244,7 +1244,7 @@ where
         let ticks = if self.fsm.peer.is_leader() {
             if self.fsm.hibernate_state.group_state() == GroupState::Ordered {
                 warn!(
-                    "reject pre force leader due to already being leader";
+                    "Unsafe recovery, reject pre force leader due to already being leader";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                 );
@@ -1266,7 +1266,7 @@ where
                 || self.fsm.hibernate_state.group_state() == GroupState::Chaos
             {
                 warn!(
-                    "reject pre force leader due to leader lease may not expired";
+                    "Unsafe recovery, reject pre force leader due to leader lease may not expired";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                 );
@@ -1283,7 +1283,7 @@ where
 
         if let Some(ticks) = ticks {
             info!(
-                "enter wait ticks";
+                "Unsafe recovery, enter wait ticks";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "ticks" => ticks,
@@ -1312,7 +1312,7 @@ where
             .has_quorum(&expected_alive_voter)
         {
             warn!(
-                "reject pre force leader due to has quorum";
+                "Unsafe recovery, reject pre force leader due to has quorum";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
@@ -1344,7 +1344,7 @@ where
             .unwrap()
         {
             warn!(
-                "pre force leader failed to campaign";
+                "Unsafe recovery, pre force leader failed to campaign";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
@@ -1540,7 +1540,7 @@ where
         match check() {
             Err(err) => {
                 warn!(
-                    "pre force leader check failed";
+                    "Unsafe recovery, pre force leader check failed";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "alive_voter" => ?expected_alive_voter,

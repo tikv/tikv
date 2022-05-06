@@ -123,24 +123,7 @@ fn test_unsafe_recovery_execution_result_report() {
         );
     }
 
-    // Construct recovery plan.
-    let mut plan = pdpb::RecoveryPlan::default();
-    let mut force_leader = pdpb::ForceLeader::default();
-    force_leader.set_enter_force_leaders([region2.get_id()].to_vec());
-    force_leader.set_failed_stores([nodes[1], nodes[2]].to_vec());
-    plan.set_force_leader(force_leader);
-    // Triggers the unsafe recovery plan execution.
-    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
-    cluster.must_send_store_heartbeat(nodes[0]);
-    let mut store_report = None;
-    for _ in 0..20 {
-        store_report = pd_client.must_get_store_report(nodes[0]);
-        if store_report.is_some() {
-            break;
-        }
-        sleep_ms(100);
-    }
-    assert_ne!(store_report, None);
+    cluster.must_enter_force_leader(region2.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
 
     // Construct recovery plan.
     let mut plan = pdpb::RecoveryPlan::default();
@@ -186,6 +169,7 @@ fn test_unsafe_recovery_execution_result_report() {
     drop(apply_released_tx);
 
     // Store reports are sent once the entries are applied.
+    let mut store_report = None;
     for _ in 0..20 {
         store_report = pd_client.must_get_store_report(nodes[0]);
         if store_report.is_some() {

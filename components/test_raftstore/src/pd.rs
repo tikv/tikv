@@ -523,11 +523,11 @@ impl PdCluster {
             region.get_region_epoch().clone(),
         );
         assert!(end_key > start_key);
-        let created_by_unsafe_recover = (!start_key.is_empty() || !end_key.is_empty())
-            && incoming_epoch.get_version() == 1
-            && incoming_epoch.get_conf_ver() == 1;
+        let created_by_unsafe_recovery = (!start_key.is_empty() || !end_key.is_empty())
+            && incoming_epoch.get_version() == 0
+            && incoming_epoch.get_conf_ver() == 0;
         let overlaps = self.get_overlap(start_key, end_key);
-        if created_by_unsafe_recover {
+        if created_by_unsafe_recovery {
             // Allow recreated region by unsafe recover to overwrite other regions with a "older"
             // epoch.
             return Ok(overlaps);
