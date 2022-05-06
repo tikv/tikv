@@ -48,7 +48,8 @@ fn test_unsafe_recovery_send_report() {
     cluster.stop_node(nodes[2]);
 
     // Triggers the unsafe recovery store reporting process.
-    pd_client.must_set_require_report(true);
+    let plan = pdpb::RecoveryPlan::default();
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
     cluster.must_send_store_heartbeat(nodes[0]);
 
     // No store report is sent, since there are peers have unapplied entries.
@@ -266,7 +267,8 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
         .unwrap();
 
     // Triggers the unsafe recovery store reporting process.
-    pd_client.must_set_require_report(true);
+    let plan = pdpb::RecoveryPlan::default();
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
     cluster.must_send_store_heartbeat(nodes[1]);
 
     // No store report is sent, since there are peers have unapplied entries.

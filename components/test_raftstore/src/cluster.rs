@@ -1381,15 +1381,6 @@ impl<T: Simulator> Cluster<T> {
         // Triggers the unsafe recovery plan execution.
         self.pd_client.must_set_unsafe_recovery_plan(store_id, plan);
         self.must_send_store_heartbeat(store_id);
-        let mut store_report = None;
-        for _ in 0..20 {
-            store_report = self.pd_client.must_get_store_report(store_id);
-            if store_report.is_some() {
-                break;
-            }
-            sleep_ms(100);
-        }
-        assert_ne!(store_report, None);
     }
 
     pub fn exit_force_leader(&mut self, region_id: u64, store_id: u64) {
