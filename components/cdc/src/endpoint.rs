@@ -680,7 +680,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let sched = self.scheduler.clone();
 
         let is_build_resolver =
-            kv_api == ChangeDataRequestKvApi::TiDb && delegate.has_tidb_downstream();
+            kv_api == ChangeDataRequestKvApi::TiDb && !delegate.has_tidb_downstream();
 
         let downstream_ = downstream.clone();
         if let Err(err) = delegate.subscribe(downstream) {

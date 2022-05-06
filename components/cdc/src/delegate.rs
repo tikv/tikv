@@ -280,7 +280,9 @@ impl Delegate {
             // Check if the downstream is out dated.
             self.check_epoch_on_ready(&downstream)?;
         }
-        self.has_tidb_downstream = true;
+        if downstream.kv_api == ChangeDataRequestKvApi::TiDb {
+            self.has_tidb_downstream = true;
+        }
         self.add_downstream(downstream);
         Ok(())
     }
