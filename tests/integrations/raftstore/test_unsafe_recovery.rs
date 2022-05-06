@@ -23,6 +23,9 @@ fn test_unsafe_recovery_demote_failed_voters() {
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     configure_for_lease_read(&mut cluster, None, None);
+
+    let peer_on_store2 = find_peer(&region, nodes[2]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store2.clone());
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
 

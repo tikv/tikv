@@ -37,7 +37,7 @@ use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::{
-    box_err, box_try, debug, error, info,
+    box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
@@ -56,9 +56,7 @@ use crate::store::{
         UnsafeRecoveryReportContext,
     },
     transport::SignificantRouter,
-    util::{
-        is_epoch_stale, ConfChangeKind, KeysInfoFormatter, LatencyInspector, RaftstoreDuration,
-    },
+    util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
     worker::{
         query_stats::QueryStats,
         split_controller::{SplitInfo, TOP_N},

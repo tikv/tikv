@@ -79,7 +79,9 @@ use crate::{
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
             ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-            UnsafeRecoveryState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+            UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryFillOutReportSharedState,
+            UnsafeRecoveryForceLeaderSharedState, UnsafeRecoveryState,
+            UnsafeRecoveryWaitApplySharedState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         transport::Transport,
         util,

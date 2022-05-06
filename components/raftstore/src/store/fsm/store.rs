@@ -36,7 +36,7 @@ use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     import_sstpb::{SstMeta, SwitchMode},
     metapb::{self, Region, RegionEpoch},
-    pdpb::{QueryStats, StoreStats},
+    pdpb::{self, QueryStats, StoreStats},
     raft_cmdpb::{AdminCmdType, AdminRequest},
     raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
