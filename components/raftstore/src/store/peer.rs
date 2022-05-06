@@ -526,7 +526,9 @@ pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
 ) {
     info!("Unsafe recovery, preparing report");
     let wait_apply = UnsafeRecoveryWaitApplySharedState::new(report_context, router.clone());
-    router.broadcast_normal(|| PeerMsg::UnsafeRecoveryWaitApply(wait_apply.clone()));
+    router.broadcast_normal(|| {
+        PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryWaitApply(wait_apply.clone()))
+    });
 }
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryForceLeaderSharedState(Arc<InvokeClosureOnDrop>);
@@ -544,7 +546,7 @@ impl UnsafeRecoveryForceLeaderSharedState {
         UnsafeRecoveryForceLeaderSharedState(Arc::new(inner))
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UnsafeRecoveryExecutePlanSharedState(Arc<InvokeClosureOnDrop>);
 impl UnsafeRecoveryExecutePlanSharedState {
     pub fn new(
@@ -560,7 +562,7 @@ impl UnsafeRecoveryExecutePlanSharedState {
         UnsafeRecoveryExecutePlanSharedState(Arc::new(inner))
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UnsafeRecoveryWaitApplySharedState(Arc<InvokeClosureOnDrop>);
 impl UnsafeRecoveryWaitApplySharedState {
     pub fn new(
@@ -573,13 +575,16 @@ impl UnsafeRecoveryWaitApplySharedState {
             let router_ptr = thread_safe_router.lock().unwrap();
             let fill_out_report =
                 UnsafeRecoveryFillOutReportSharedState::new(report_context, (*router_ptr).clone());
-            (*router_ptr)
-                .broadcast_normal(|| PeerMsg::UnsafeRecoveryFillOutReport(fill_out_report.clone()));
+            (*router_ptr).broadcast_normal(|| {
+                PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryFillOutReport(
+                    fill_out_report.clone(),
+                ))
+            });
         }));
         UnsafeRecoveryWaitApplySharedState(Arc::new(inner))
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UnsafeRecoveryFillOutReportSharedState {
     _closure: Arc<InvokeClosureOnDrop>,
     reports: Arc<Mutex<Vec<pdpb::PeerReport>>>,

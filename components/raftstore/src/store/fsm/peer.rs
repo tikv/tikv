@@ -669,21 +669,6 @@ where
                         }
                     }
                 }
-                PeerMsg::UnsafeRecoveryDemoteFailedVoters {
-                    shared_state,
-                    failed_voters,
-                } => {
-                    self.on_unsafe_recovery_demote_failed_voters(shared_state, failed_voters);
-                }
-                PeerMsg::UnsafeRecoveryDestroy(shared_state) => {
-                    self.on_unsafe_recovery_destroy(shared_state)
-                }
-                PeerMsg::UnsafeRecoveryWaitApply(shared_state) => {
-                    self.on_unsafe_recovery_wait_apply(shared_state)
-                }
-                PeerMsg::UnsafeRecoveryFillOutReport(shared_state) => {
-                    self.on_unsafe_recovery_fill_out_report(shared_state)
-                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -1219,6 +1204,19 @@ where
                 self.on_enter_pre_force_leader(shared_state, failed_stores);
             }
             SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
+            SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
+                shared_state,
+                failed_voters,
+            } => self.on_unsafe_recovery_demote_failed_voters(shared_state, failed_voters),
+            SignificantMsg::UnsafeRecoveryDestroy(shared_state) => {
+                self.on_unsafe_recovery_destroy(shared_state)
+            }
+            SignificantMsg::UnsafeRecoveryWaitApply(shared_state) => {
+                self.on_unsafe_recovery_wait_apply(shared_state)
+            }
+            SignificantMsg::UnsafeRecoveryFillOutReport(shared_state) => {
+                self.on_unsafe_recovery_fill_out_report(shared_state)
+            }
         }
     }
 

@@ -1203,18 +1203,18 @@ where
                             }
                             for delete in plan.get_tombstones() {
                                 info!("Unsafe recovery, asked to delete peer"; "peer" => delete);
-                                if let Err(e) = router.force_send(
+                                if let Err(e) = router.significant_send(
                                     *delete,
-                                    PeerMsg::UnsafeRecoveryDestroy(shared_state.clone()),
+                                    SignificantMsg::UnsafeRecoveryDestroy(shared_state.clone()),
                                 ) {
                                     error!("fail to send delete peer message for recovery"; "err" => ?e);
                                 }
                             }
                             for demote in plan.get_demotes() {
                                 info!("Unsafe recovery, required to demote failed peers"; "demotion" => ?demote);
-                                if let Err(e) = router.force_send(
+                                if let Err(e) = router.significant_send(
                                     demote.get_region_id(),
-                                    PeerMsg::UnsafeRecoveryDemoteFailedVoters {
+                                    SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
                                         shared_state: shared_state.clone(),
                                         failed_voters: demote.get_failed_voters().to_vec(),
                                     },

@@ -344,6 +344,13 @@ where
         failed_stores: HashSet<u64>,
     },
     ExitForceLeaderState,
+    UnsafeRecoveryDemoteFailedVoters {
+        shared_state: UnsafeRecoveryExecutePlanSharedState,
+        failed_voters: Vec<metapb::Peer>,
+    },
+    UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSharedState),
+    UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySharedState),
+    UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSharedState),
 }
 
 /// Message that will be sent to a peer.
@@ -573,13 +580,6 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Asks region to change replication mode.
     UpdateReplicationMode,
     Destroy(u64),
-    UnsafeRecoveryDemoteFailedVoters {
-        shared_state: UnsafeRecoveryExecutePlanSharedState,
-        failed_voters: Vec<metapb::Peer>,
-    },
-    UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSharedState),
-    UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySharedState),
-    UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSharedState),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -608,20 +608,6 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
-            PeerMsg::UnsafeRecoveryDemoteFailedVoters { failed_voters, .. } => {
-                write!(
-                    fmt,
-                    "Demote following voters {:?} from the region",
-                    failed_voters
-                )
-            }
-            PeerMsg::UnsafeRecoveryDestroy { .. } => {
-                write!(fmt, "Destroy the peer for unsafe recovery")
-            }
-            PeerMsg::UnsafeRecoveryWaitApply(_) => write!(fmt, "WaitApply for unsafe recovery"),
-            PeerMsg::UnsafeRecoveryFillOutReport(_) => {
-                write!(fmt, "FillOutReport for unsafe recovery")
-            }
         }
     }
 }

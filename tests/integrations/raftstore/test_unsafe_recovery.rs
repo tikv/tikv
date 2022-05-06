@@ -72,7 +72,7 @@ fn test_unsafe_recovery_demote_failed_voters() {
         }
         if demoted {
             break;
-        } 
+        }
         sleep_ms(200);
     }
     assert_eq!(demoted, true);
