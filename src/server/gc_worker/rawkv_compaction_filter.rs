@@ -206,7 +206,7 @@ impl RawCompactionFilter {
                     self.raw_gc_mvcc_deletions();
                 }
             }
-            // 1. If it's the latest version, and not deleted or expaired ttl, it needs to be retained.
+            // 1. If it's the latest version, and not deleted or expired ttl, it needs to be retained.
             // 2. If it's the latest version, and it's deleted or expired, while we do async gctask to deleted or expired records, both put records and deleted/expired records are actually kept within the compaction filter.
             Ok(CompactionFilterDecision::Keep)
         } else {
@@ -362,28 +362,25 @@ pub mod tests {
         gc_runner.safe_point(80).gc_raw(&raw_engine);
 
         // If ts(70) < safepoint(80), and this userkey's latest verion is not deleted or expired, this version will be removed in do_filter.
-        let is_exist_70 = raw_engine
+        let entry70 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(b"r\0a", 70).as_slice())
-            .unwrap()
-            .is_none();
-        assert_eq!(is_exist_70, true);
+            .unwrap();
+        assert_eq!(entry70.is_none(), true);
 
         gc_runner.safe_point(90).gc_raw(&raw_engine);
 
-        let is_exist_100 = raw_engine
+        let entry100 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(user_key, 100).as_slice())
-            .unwrap()
-            .is_none();
-        let is_exist_90 = raw_engine
+            .unwrap();
+        let entry90 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(user_key, 90).as_slice())
-            .unwrap()
-            .is_none();
+            .unwrap();
 
         // If ts(100) > safepoint(80), it's need to be retained.
-        assert_eq!(is_exist_100, false);
+        assert_eq!(entry100.is_none(), false);
 
         // If ts(90) == safepoint(90), it's need to be retained.
-        assert_eq!(is_exist_90, false);
+        assert_eq!(entry90.is_none(), false);
     }
 
     #[test]

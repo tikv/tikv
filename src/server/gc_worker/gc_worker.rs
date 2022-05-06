@@ -516,7 +516,7 @@ where
         &mut self,
         safe_point: TimeStamp,
         key: &Key,
-        raw_modifys: &mut MvccRaw,
+        raw_modifies: &mut MvccRaw,
         kv_snapshot: &mut <E as Engine>::Snap,
     ) -> Result<()> {
         let start_key = key.clone().append_ts(safe_point.prev());
@@ -541,15 +541,15 @@ where
                 continue;
             }
 
-            if raw_modifys.write_size >= MAX_RAW_WRITE_SIZE {
+            if raw_modifies.write_size >= MAX_RAW_WRITE_SIZE {
                 return Ok(());
             }
 
             let engine_key = Key::from_encoded_slice(engine_slice);
             let write = Modify::Delete(CF_DEFAULT, engine_key);
 
-            raw_modifys.write_size += write.size();
-            raw_modifys.modifies.push(write);
+            raw_modifies.write_size += write.size();
+            raw_modifies.modifies.push(write);
 
             cursor.next(&mut statistics);
         }
@@ -559,9 +559,9 @@ where
         Ok(())
     }
 
-    fn flush_raw_gc(raw_modifys: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
-        let write_size = raw_modifys.write_size();
-        let modifies = raw_modifys.into_modifies();
+    fn flush_raw_gc(raw_modifies: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
+        let write_size = raw_modifies.write_size();
+        let modifies = raw_modifies.into_modifies();
         if !modifies.is_empty() {
             // rate limiter
             limiter.blocking_consume(write_size);
@@ -1806,20 +1806,21 @@ mod tests {
         let key_a = b"raaaaaaaaaaa";
         let key_b = b"rbbbbbbbbbbb";
 
+        // (key,expir_ts,is_delete,expect_exist)
         let test_raws = vec![
-            (key_a, 100, true),
-            (key_a, 50, false),
-            (key_a, 10, false),
-            (key_a, 5, false),
-            (key_b, 50, true),
-            (key_b, 20, false),
-            (key_b, 10, false),
+            (key_a, 100, true, true),
+            (key_a, 50, false, false),
+            (key_a, 10, false, false),
+            (key_a, 5, false, false),
+            (key_b, 50, true, true),
+            (key_b, 20, false, false),
+            (key_b, 10, false, false),
         ];
 
         let modifies = test_raws
             .clone()
             .into_iter()
-            .map(|(key, ts, is_delete)| {
+            .map(|(key, ts, is_delete, _expect_exist)| {
                 (
                     ApiV2::encode_raw_key(key, Some(ts.into())),
                     ApiV2::encode_raw_value(RawValue {
@@ -1859,11 +1860,11 @@ mod tests {
         test_raws
             .clone()
             .into_iter()
-            .for_each(|(key, ts, is_delete)| {
+            .for_each(|(key, ts, _is_delete, expect_exist)| {
                 let engine_key = ApiV2::encode_raw_key(key, Some(ts.into()));
                 let is_key_exist = snapshot.get(&Key::from_encoded(engine_key.into_encoded()));
 
-                if is_delete {
+                if expect_exist {
                     // If raw.ts == safepoint, or if it is latest version before safepoint, it will not be delete.
                     assert_eq!(is_key_exist.unwrap().is_none(), false);
                 } else {
