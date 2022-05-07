@@ -36,7 +36,6 @@ api_version = { path = "../api_version" }
 backup = { path = "../backup", default-features = false }
 causal_ts = { path = "../causal_ts" }
 cdc = { path = "../cdc", default-features = false }
-engine_rocks_helper = { path = "../engine_rocks_helper" }
 chrono = "0.4"
 clap = "2.32"
 collections = { path = "../collections" }
@@ -45,6 +44,7 @@ crossbeam = "0.8"
 encryption = { path = "../encryption", default-features = false }
 encryption_export = { path = "../encryption/export", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_rocks_helper = { path = "../engine_rocks_helper" }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 file_system = { path = "../file_system", default-features = false }
