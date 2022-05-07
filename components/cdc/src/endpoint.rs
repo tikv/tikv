@@ -617,7 +617,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             error!("cdc RawKv is supported by api-version 2 only. TxnKv is not supported now.");
             let mut err_event = EventError::default();
             let mut err = ErrorCompatibility::default();
-            err.set_required_version("6.1.0".to_string());
+            err.set_required_version("6.2.0".to_string());
             err_event.set_compatibility(err);
 
             let _ = downstream.sink_error_event(region_id, err_event);
