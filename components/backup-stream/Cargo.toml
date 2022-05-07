@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2018"
 
 [features]
-default = ["test-engines-rocksdb"]
-test-engines-rocksdb = [
-  "tikv/test-engines-rocksdb",
-]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+test-engine-kv-rocksdb = ["tikv/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["tikv/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
 failpoints = ["fail/failpoints"]
 backup-stream-debug = []
 
