@@ -364,7 +364,7 @@ pub mod tests {
         let entry70 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(b"r\0a", 70).as_slice())
             .unwrap();
-        assert_eq!(entry70.is_none(), true);
+        assert!(entry70.is_none());
 
         gc_runner.safe_point(90).gc_raw(&raw_engine);
 
@@ -376,10 +376,10 @@ pub mod tests {
             .unwrap();
 
         // If ts(100) > safepoint(80), it's need to be retained.
-        assert_eq!(entry100.is_none(), false);
+        assert!(entry100.is_some());
 
         // If ts(90) == safepoint(90), it's need to be retained.
-        assert_eq!(entry90.is_none(), false);
+        assert!(entry90.is_some());
     }
 
     #[test]
@@ -418,6 +418,9 @@ pub mod tests {
             (user_key_not_del, 630, false),
             (user_key_not_del, 620, false),
             (user_key_not_del, 610, false),
+            (user_key_not_del, 430, false),
+            (user_key_not_del, 420, false),
+            (user_key_not_del, 410, false),
             (user_key_del, 9, true),
             (user_key_del, 5, false),
             (user_key_del, 1, false),

@@ -1865,14 +1865,8 @@ mod tests {
             .into_iter()
             .for_each(|(key, ts, _is_delete, expect_exist)| {
                 let engine_key = ApiV2::encode_raw_key(key, Some(ts.into()));
-                let is_key_exist = snapshot.get(&Key::from_encoded(engine_key.into_encoded()));
-
-                if expect_exist {
-                    // If raw.ts == safepoint, or if it is latest version before safepoint, it will not be delete.
-                    assert_eq!(is_key_exist.unwrap().is_none(), false);
-                } else {
-                    assert_eq!(is_key_exist.unwrap().is_none(), true);
-                }
+                let entry = snapshot.get(&Key::from_encoded(engine_key.into_encoded()));
+                assert_eq!(entry.unwrap().is_some(), expect_exist);
             });
     }
 
