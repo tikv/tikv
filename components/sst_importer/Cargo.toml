@@ -15,6 +15,7 @@ cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
 [dependencies]
 api_version = { path = "../api_version", default-features = false }
 crc32fast = "1.2"
+dashmap = "5"
 encryption = { path = "../encryption", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
@@ -28,6 +29,7 @@ keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
+openssl = "0.10"
 prometheus = { version = "0.13", default-features = false }
 serde = "1.0"
 serde_derive = "1.0"

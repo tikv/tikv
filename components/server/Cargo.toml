@@ -30,10 +30,12 @@ test-engines-panic = [
   "tikv/test-engines-panic",
 ]
 nortcheck = ["engine_rocks/nortcheck"]
+backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
 [dependencies]
 api_version = { path = "../api_version" }
 backup = { path = "../backup", default-features = false }
+backup-stream = { path = "../backup-stream", default-features = false }
 causal_ts = { path = "../causal_ts" }
 cdc = { path = "../cdc", default-features = false }
 chrono = "0.4"
