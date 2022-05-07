@@ -834,7 +834,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "serde",
- "time 0.1.42",
+ "time",
 ]
 
 [[package]]
@@ -1225,7 +1225,7 @@ checksum = "22813a6dc45b335f9bade10bf7271dc477e81113e89eb251a0bc2a8a81c536e1"
 dependencies = [
  "bstr",
  "csv-core",
- "itoa 0.4.4",
+ "itoa",
  "ryu",
  "serde",
 ]
@@ -1484,7 +1484,7 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
- "time 0.1.42",
+ "time",
  "toml",
  "txn_types",
 ]
@@ -2317,7 +2317,7 @@ checksum = "527e8c9ac747e28542699a951517aa9a6945af506cd1f2e1b53a576c17b6cc11"
 dependencies = [
  "bytes",
  "fnv",
- "itoa 0.4.4",
+ "itoa",
 ]
 
 [[package]]
@@ -2364,7 +2364,7 @@ dependencies = [
  "http-body",
  "httparse",
  "httpdate",
- "itoa 0.4.4",
+ "itoa",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -2452,7 +2452,7 @@ dependencies = [
  "ahash 0.6.3",
  "atty",
  "indexmap",
- "itoa 0.4.4",
+ "itoa",
  "lazy_static",
  "log",
  "num-format",
@@ -2546,12 +2546,6 @@ name = "itoa"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "501266b7edd0174f8530248f87f99c88fbe60ca4ef3dd486835b8d8d53136f7f"
-
-[[package]]
-name = "itoa"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aab8fc367588b89dcee83ab0fd66b72b50b72fa1904d7095045ace2b0c81c35"
 
 [[package]]
 name = "jobserver"
@@ -3275,7 +3269,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bafe4179722c2894288ee77a9f044f02811c86af699344c498b0840c698a2465"
 dependencies = [
  "arrayvec",
- "itoa 0.4.4",
+ "itoa",
 ]
 
 [[package]]
@@ -3338,15 +3332,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19e64526ebdee182341572e50e9ad03965aa510cd94427a4549448f285e957a1"
 dependencies = [
  "hermit-abi",
- "libc 0.2.125",
-]
-
-[[package]]
-name = "num_threads"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aba1801fb138d8e85e11d0fc70baf4fe1cdfffda7c6cd34a854905df588e5ed0"
-dependencies = [
  "libc 0.2.125",
 ]
 
@@ -4110,7 +4095,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv_util",
- "time 0.1.42",
+ "time",
 ]
 
 [[package]]
@@ -4174,7 +4159,7 @@ dependencies = [
  "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
- "time 0.1.42",
+ "time",
  "tokio",
  "txn_types",
  "uuid",
@@ -4935,7 +4920,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799e97dc9fdae36a5c8b8f2cae9ce2ee9fdce2058c57a93e6099d919fd982f79"
 dependencies = [
  "indexmap",
- "itoa 0.4.4",
+ "itoa",
  "ryu",
  "serde",
 ]
@@ -4956,7 +4941,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edfa57a7f8d9c1d260a549e7224100f6c43d43f9103e06dd8b4095a9b2b43ce9"
 dependencies = [
  "form_urlencoded",
- "itoa 0.4.4",
+ "itoa",
  "ryu",
  "serde",
 ]
@@ -5136,15 +5121,15 @@ dependencies = [
 
 [[package]]
 name = "slog-term"
-version = "2.9.0"
+version = "2.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87d29185c55b7b258b4f120eab00f48557d4d9bc814f41713f449d35b0f8977c"
+checksum = "f3668dd2252f4381d64de0c79e6c8dc6bd509d1cab3535b35a3fc9bafd1241d5"
 dependencies = [
  "atty",
+ "chrono",
  "slog",
  "term",
  "thread_local",
- "time 0.3.9",
 ]
 
 [[package]]
@@ -5651,7 +5636,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "tikv_util",
- "time 0.1.42",
+ "time",
 ]
 
 [[package]]
@@ -5721,7 +5706,7 @@ dependencies = [
  "tidb_query_expr",
  "tikv",
  "tikv_util",
- "time 0.1.42",
+ "time",
  "tipb",
  "tipb_helper",
  "tokio",
@@ -5827,7 +5812,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tikv_util",
- "time 0.1.42",
+ "time",
 ]
 
 [[package]]
@@ -5926,7 +5911,7 @@ dependencies = [
  "tidb_query_common",
  "tidb_query_datatype",
  "tikv_util",
- "time 0.1.42",
+ "time",
  "tipb",
  "tipb_helper",
  "twoway",
@@ -6038,7 +6023,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_kv",
  "tikv_util",
- "time 0.1.42",
+ "time",
  "tipb",
  "tokio",
  "tokio-openssl",
@@ -6099,7 +6084,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
- "time 0.1.42",
+ "time",
  "tokio",
  "toml",
  "txn_types",
@@ -6145,7 +6130,7 @@ dependencies = [
  "clap 2.33.0",
  "server",
  "tikv",
- "time 0.1.42",
+ "time",
  "toml",
 ]
 
@@ -6248,7 +6233,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tikv_alloc",
- "time 0.1.42",
+ "time",
  "tokio",
  "tokio-executor",
  "tokio-timer",
@@ -6268,24 +6253,6 @@ dependencies = [
  "redox_syscall 0.1.56",
  "winapi 0.3.9",
 ]
-
-[[package]]
-name = "time"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2702e08a7a860f005826c6815dcac101b19b5eb330c27fe4a5928fec1d20ddd"
-dependencies = [
- "itoa 1.0.1",
- "libc 0.2.125",
- "num_threads",
- "time-macros",
-]
-
-[[package]]
-name = "time-macros"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42657b1a6f4d817cda8e7a0ace261fe0cc946cf3a80314390b22cc61ae080792"
 
 [[package]]
 name = "tinytemplate"
