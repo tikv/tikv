@@ -21,6 +21,7 @@ fn test_cdc_double_scan_deregister() {
 fn test_cdc_double_scan_deregister_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(1, F::TAG);
 
+    // If tikv enable ApiV2, txn key needs to start with 'x';
     let (k, v) = (b"xkey1".to_vec(), b"value".to_vec());
     // Prewrite
     let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();

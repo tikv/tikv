@@ -57,6 +57,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
         )))
         .unwrap();
 
+    // If tikv enable ApiV2, txn key needs to start with 'x';
     let (k, v) = ("xkey1".to_owned(), "value".to_owned());
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
@@ -219,6 +220,7 @@ fn test_cdc_rawkv_basic() {
         )))
         .unwrap();
 
+    // If tikv enable ApiV2, raw key needs to start with 'r';
     let (k, v) = (b"rkey1".to_vec(), b"value".to_vec());
     suite.must_kv_put(1, k, v);
     let mut events = receive_event(false).events.to_vec();

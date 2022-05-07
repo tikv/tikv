@@ -44,6 +44,7 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
         other => panic!("unknown event {:?}", other),
     }
 
+    // If tikv enable ApiV2, txn key needs to start with 'x';
     let (k, v) = ("xkey1".to_owned(), "value".to_owned());
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
