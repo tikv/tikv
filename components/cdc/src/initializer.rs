@@ -218,14 +218,15 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         let (mut hint_min_ts, mut old_value_cursors) = (None, None);
-        if kv_api == ChangeDataRequestKvApi::TiDb && self.ts_filter_is_helpful(&snap) {
-            hint_min_ts = Some(self.checkpoint_ts);
-            let wc = new_old_value_cursor(&snap, CF_WRITE);
-            let dc = new_old_value_cursor(&snap, CF_DEFAULT);
-            old_value_cursors = Some(OldValueCursors::new(wc, dc));
-        }
-
         let mut scanner = if kv_api == ChangeDataRequestKvApi::TiDb {
+            if self.ts_filter_is_helpful(&snap) {
+                hint_min_ts = Some(self.checkpoint_ts);
+                let wc = new_old_value_cursor(&snap, CF_WRITE);
+                let dc = new_old_value_cursor(&snap, CF_DEFAULT);
+                old_value_cursors = Some(OldValueCursors::new(wc, dc));
+            }
+
+            // Time range: (checkpoint_ts, max]
             let txnkv_scanner = ScannerBuilder::new(snap, TimeStamp::max())
                 .fill_cache(false)
                 .range(None, None)

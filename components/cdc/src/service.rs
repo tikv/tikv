@@ -16,7 +16,12 @@ use futures::{
     stream::TryStreamExt,
 };
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
-use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility};
+use kvproto::{
+    cdcpb::{
+        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi, Compatibility,
+    },
+    kvrpcpb::ApiVersion,
+};
 use tikv_util::{error, info, warn, worker::*};
 
 use crate::{
@@ -60,6 +65,11 @@ impl FeatureGate {
     // Returns the first version (v5.3.0) that supports validate cluster id.
     pub(crate) fn validate_cluster_id() -> semver::Version {
         semver::Version::new(5, 3, 0)
+    }
+
+    pub(crate) fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
+        kv_api == ChangeDataRequestKvApi::TiDb
+            || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
     }
 }
 

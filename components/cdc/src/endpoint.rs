@@ -613,9 +613,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             return;
         }
 
-        if (kv_api == ChangeDataRequestKvApi::RawKv && api_version != ApiVersion::V2)
-            || (kv_api == ChangeDataRequestKvApi::TxnKv)
-        {
+        if !FeatureGate::validate_kv_api(kv_api, api_version) {
             error!("cdc RawKv is supported by api-version 2 only. TxnKv is not supported now.");
             let mut err_event = EventError::default();
             let mut err = ErrorCompatibility::default();
