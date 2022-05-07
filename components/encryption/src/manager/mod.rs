@@ -209,12 +209,12 @@ impl Dicts {
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
-            info!("new encrypted file";
+            debug!("new encrypted file";
                   "fname" => fname,
                   "method" => format!("{:?}", method),
                   "iv" => hex::encode(iv.as_slice()));
         } else {
-            info!("new plaintext file"; "fname" => fname);
+            debug!("new plaintext file"; "fname" => fname);
         }
         Ok(file)
     }
@@ -242,9 +242,9 @@ impl Dicts {
         file_dict_file.remove(fname)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
         if file.method != compat(EncryptionMethod::Plaintext) {
-            info!("delete encrypted file"; "fname" => fname);
+            debug!("delete encrypted file"; "fname" => fname);
         } else {
-            info!("delete plaintext file"; "fname" => fname);
+            debug!("delete plaintext file"; "fname" => fname);
         }
         Ok(())
     }
