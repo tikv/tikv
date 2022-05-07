@@ -519,6 +519,7 @@ pub struct UnsafeRecoveryReportContext {
     pub id: u64,
     pub exit_force_leader_after_reporting: bool,
 }
+
 // Intends to use RAII to sync unsafe recovery procedures between peers, in addition to that,
 // it uses a closure to avoid having a raft router as a member variable, which is statically
 // dispatched, thus needs to propage the generics everywhere.
@@ -533,6 +534,7 @@ impl Drop for InvokeClosureOnDrop {
         self.0();
     }
 }
+
 pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
     router: &RaftRouter<EK, ER>,
     report_context: UnsafeRecoveryReportContext,
@@ -543,6 +545,7 @@ pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
         PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryWaitApply(wait_apply.clone()))
     });
 }
+
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryForceLeaderSharedState(Arc<InvokeClosureOnDrop>);
 impl UnsafeRecoveryForceLeaderSharedState {
@@ -559,6 +562,7 @@ impl UnsafeRecoveryForceLeaderSharedState {
         UnsafeRecoveryForceLeaderSharedState(Arc::new(inner))
     }
 }
+
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryExecutePlanSharedState(Arc<InvokeClosureOnDrop>);
 impl UnsafeRecoveryExecutePlanSharedState {
@@ -575,6 +579,7 @@ impl UnsafeRecoveryExecutePlanSharedState {
         UnsafeRecoveryExecutePlanSharedState(Arc::new(inner))
     }
 }
+
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryWaitApplySharedState(Arc<InvokeClosureOnDrop>);
 impl UnsafeRecoveryWaitApplySharedState {
@@ -597,6 +602,7 @@ impl UnsafeRecoveryWaitApplySharedState {
         UnsafeRecoveryWaitApplySharedState(Arc::new(inner))
     }
 }
+
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryFillOutReportSharedState {
     _closure: Arc<InvokeClosureOnDrop>,
@@ -4731,16 +4737,14 @@ where
     }
 
     pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
-        if let Some(UnsafeRecoveryState::WaitApply {
-            target_index,
-            shared_state: _,
-        }) = &self.unsafe_recovery_state
+        if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
+            &self.unsafe_recovery_state
         {
             if self.raft_group.raft.raft_log.applied >= *target_index || force {
                 info!(
                     "Unsafe recovery, finish wait apply";
                     "region_id" => self.region().get_id(),
-                    //"peer_id" => self.peer_id(),
+                    "peer_id" => self.peer_id(),
                     "target_index" => target_index,
                     "applied" =>  self.raft_group.raft.raft_log.applied,
                     "force" => force,

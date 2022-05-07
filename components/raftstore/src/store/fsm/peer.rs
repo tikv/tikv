@@ -1384,11 +1384,8 @@ where
         );
         assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
 
-        let (_shared_state, failed_stores) = match self.fsm.peer.force_leader.take() {
-            Some(ForceLeaderState::PreForceLeader {
-                shared_state,
-                failed_stores,
-            }) => (shared_state, failed_stores),
+        let failed_stores = match self.fsm.peer.force_leader.take() {
+            Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
             _ => unreachable!(),
         };
 
@@ -1490,8 +1487,6 @@ where
                 let owned_shared_state = shared_state.to_owned();
                 let s = mem::take(failed_stores);
                 self.on_enter_pre_force_leader(owned_shared_state, s);
-                // It is possible that this code block owns the last reference of "shared_state",
-                // explictly call "finish" to make sure the report is correctly triggered.
             } else {
                 *ticks -= 1;
             }
@@ -1518,7 +1513,7 @@ where
         }
 
         let expected_alive_voter: HashSet<_> =
-            self.get_force_leader_expected_alive_voter(&*failed_stores);
+            self.get_force_leader_expected_alive_voter(failed_stores);
         let check = || {
             if self.fsm.peer.raft_group.raft.state != StateRole::Candidate {
                 Err(format!(

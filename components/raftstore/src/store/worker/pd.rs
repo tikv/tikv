@@ -1212,27 +1212,27 @@ where
                                 },
                                 router.clone(),
                             );
-                            for create in plan.get_creates() {
+                            for create in plan.take_creates() {
                                 info!("Unsafe recovery, asked to create region"; "region" => ?create);
                                 if let Err(e) =
                                     router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
                                         shared_state: shared_state.clone(),
-                                        create: create.clone(),
+                                        create,
                                     })
                                 {
                                     error!("fail to send creat peer message for recovery"; "err" => ?e);
                                 }
                             }
-                            for delete in plan.get_tombstones() {
+                            for delete in plan.take_tombstones() {
                                 info!("Unsafe recovery, asked to delete peer"; "peer" => delete);
                                 if let Err(e) = router.significant_send(
-                                    *delete,
+                                    delete,
                                     SignificantMsg::UnsafeRecoveryDestroy(shared_state.clone()),
                                 ) {
                                     error!("fail to send delete peer message for recovery"; "err" => ?e);
                                 }
                             }
-                            for demote in plan.get_demotes() {
+                            for demote in plan.take_demotes() {
                                 info!("Unsafe recovery, required to demote failed peers"; "demotion" => ?demote);
                                 if let Err(e) = router.significant_send(
                                     demote.get_region_id(),
