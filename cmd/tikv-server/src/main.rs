@@ -9,8 +9,7 @@ use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use tikv::config::TiKvConfig;
 
 fn main() {
-    let build_timestamp = option_env!("TIKV_BUILD_TIME");
-    let version_info = tikv::tikv_version_info(build_timestamp);
+    let version_info = tikv::tikv_version_info();
 
     let matches = App::new("TiKV")
         .about("A distributed transactional key-value database powered by Rust and Raft")
