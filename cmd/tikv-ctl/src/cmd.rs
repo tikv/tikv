@@ -9,10 +9,7 @@ use std::{str, u64};
 use structopt::StructOpt;
 
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
-static VERSION_INFO: SyncLazy<String> = SyncLazy::new(|| {
-    let build_timestamp = option_env!("TIKV_BUILD_TIME");
-    tikv::tikv_version_info(build_timestamp)
-});
+static VERSION_INFO: SyncLazy<String> = SyncLazy::new(|| tikv::tikv_version_info());
 
 #[derive(StructOpt)]
 #[structopt(
