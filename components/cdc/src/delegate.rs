@@ -245,7 +245,7 @@ pub struct Delegate {
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
     api_version: ApiVersion,
-    has_tidb_downstream: bool,
+    has_resolver: bool,
 }
 
 impl Delegate {
@@ -265,12 +265,12 @@ impl Delegate {
             txn_extra_op,
             failed: false,
             api_version,
-            has_tidb_downstream: false,
+            has_resolver: false,
         }
     }
 
-    pub fn has_tidb_downstream(&self) -> bool {
-        self.has_tidb_downstream
+    pub fn has_resolver(&self) -> bool {
+        self.has_resolver
     }
 
     /// Let downstream subscribe the delegate.
@@ -281,7 +281,7 @@ impl Delegate {
             self.check_epoch_on_ready(&downstream)?;
         }
         if downstream.kv_api == ChangeDataRequestKvApi::TiDb {
-            self.has_tidb_downstream = true;
+            self.has_resolver = true;
         }
         self.add_downstream(downstream);
         Ok(())

@@ -679,8 +679,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
 
+        // Now resolver is only used by tidb downstream.
+        // Resolver is created when the first tidb cdc request arrive.
         let is_build_resolver =
-            kv_api == ChangeDataRequestKvApi::TiDb && !delegate.has_tidb_downstream();
+            kv_api == ChangeDataRequestKvApi::TiDb && !delegate.has_resolver();
 
         let downstream_ = downstream.clone();
         if let Err(err) = delegate.subscribe(downstream) {
@@ -705,8 +707,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             );
         };
 
-        // Now resolver is only used by tidb downstream.
-        // Resolver is created when the first tidb cdc request arrive.
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
 
         let region_epoch = request.take_region_epoch();
