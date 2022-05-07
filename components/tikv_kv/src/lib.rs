@@ -377,7 +377,7 @@ pub trait Snapshot: Sync + Send + Clone {
 
     /// Specific for KVEngine.
     fn get_kvengine_snap(&self) -> Option<&kvengine::SnapAccess> {
-        return None;
+        None
     }
 }
 

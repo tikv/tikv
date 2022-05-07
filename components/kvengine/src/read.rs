@@ -63,7 +63,7 @@ impl Deref for SnapAccess {
 }
 
 impl Debug for SnapAccess {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "snap access {}:{}, seq: {}",
@@ -104,12 +104,10 @@ impl SnapAccessCore {
     ) -> Iterator {
         let read_ts = if let Some(ts) = read_ts {
             ts
+        } else if CF_MANAGED[cf] && self.managed_ts != 0 {
+            self.managed_ts
         } else {
-            if CF_MANAGED[cf] && self.managed_ts != 0 {
-                self.managed_ts
-            } else {
-                u64::MAX
-            }
+            u64::MAX
         };
         Iterator {
             all_versions,
@@ -127,7 +125,7 @@ impl SnapAccessCore {
 
     /// get an Item by key. Caller need to call is_some() before get_value.
     /// We don't return Option because we may need AccessPath even if the item is none.
-    pub fn get(&self, cf: usize, key: &[u8], version: u64) -> Item {
+    pub fn get(&self, cf: usize, key: &[u8], version: u64) -> Item<'_> {
         let mut version = version;
         if version == 0 {
             version = u64::MAX;
@@ -176,10 +174,10 @@ impl SnapAccessCore {
                 return v;
             }
         }
-        return table::Value::new();
+        table::Value::new()
     }
 
-    pub fn multi_get(&self, cf: usize, keys: &[Vec<u8>], version: u64) -> Vec<Item> {
+    pub fn multi_get(&self, cf: usize, keys: &[Vec<u8>], version: u64) -> Vec<Item<'_>> {
         let mut items = Vec::with_capacity(keys.len());
         for key in keys {
             let item = self.get(cf, key, version);
@@ -278,7 +276,7 @@ impl SnapAccessCore {
         self.data.get_all_files()
     }
 
-    pub fn get_newer(&self, cf: usize, key: &[u8], version: u64) -> Item {
+    pub fn get_newer(&self, cf: usize, key: &[u8], version: u64) -> Item<'_> {
         let mut item = Item::new();
         item.val = self.get_newer_val(cf, key, version);
         item
@@ -308,7 +306,7 @@ impl SnapAccessCore {
                 return v;
             }
         }
-        return table::Value::new();
+        table::Value::new()
     }
 }
 
@@ -334,7 +332,7 @@ impl Iterator {
         self.key.chunk()
     }
 
-    pub fn item(&self) -> Item {
+    pub fn item(&self) -> Item<'_> {
         Item {
             val: self.val,
             path: AccessPath::default(),
@@ -367,11 +365,9 @@ impl Iterator {
                 break;
             }
             let val = self.inner.value();
-            if val.version > self.read_ts {
-                if !self.inner.seek_to_version(self.read_ts) {
-                    self.inner.next();
-                    continue;
-                }
+            if val.version > self.read_ts && !self.inner.seek_to_version(self.read_ts) {
+                self.inner.next();
+                continue;
             }
             self.update_item();
             if !self.all_versions && self.val.is_deleted() {
@@ -389,12 +385,10 @@ impl Iterator {
     pub fn seek(&mut self, key: &[u8]) {
         if !self.reversed {
             self.inner.seek(key);
+        } else if key.is_empty() {
+            self.inner.rewind();
         } else {
-            if key.len() == 0 {
-                self.inner.rewind();
-            } else {
-                self.inner.seek(key);
-            }
+            self.inner.seek(key);
         }
         self.parse_item();
     }
@@ -412,10 +406,8 @@ impl Iterator {
                         self.inner.next();
                     }
                 }
-            } else {
-                if self.inner.key() < self.start.chunk() {
-                    self.inner.seek(self.start.chunk())
-                }
+            } else if self.inner.key() < self.start.chunk() {
+                self.inner.seek(self.start.chunk())
             }
         }
         self.parse_item();
@@ -426,7 +418,7 @@ impl Iterator {
     }
 
     pub fn is_reverse(&self) -> bool {
-        return self.reversed;
+        self.reversed
     }
 
     pub fn set_bound(&mut self, bound: Bytes, bound_include: bool) {
@@ -442,19 +434,15 @@ impl Iterator {
                 } else {
                     self.inner.key() <= bound.chunk()
                 }
+            } else if self.bound_include {
+                self.inner.key() > bound.chunk()
             } else {
-                if self.bound_include {
-                    self.inner.key() > bound.chunk()
-                } else {
-                    self.inner.key() >= bound.chunk()
-                }
+                self.inner.key() >= bound.chunk()
             }
+        } else if self.reversed {
+            self.inner.key() < self.start.chunk()
         } else {
-            if self.reversed {
-                self.inner.key() < self.start.chunk()
-            } else {
-                self.inner.key() >= self.end.chunk()
-            }
+            self.inner.key() >= self.end.chunk()
         }
     }
 }

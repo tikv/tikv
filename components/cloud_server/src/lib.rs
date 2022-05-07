@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// TODO(youjiali1995): fix lint
+#![allow(unused)]
 #![feature(box_patterns)]
-#![feature(shrink_to)]
 #![recursion_limit = "400"]
 
 #[macro_use(fail_point)]
@@ -11,6 +12,9 @@ extern crate serde_derive;
 
 #[macro_use]
 extern crate tikv_util;
+
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 
 #[macro_use]
 pub mod setup;

@@ -67,7 +67,7 @@ impl EngineCore {
         let runtime = self.fs.get_runtime();
         let opts = dfs::Options::new(shard_id, shard_ver);
         let mut msg_count = 0;
-        for (id, _) in &ids {
+        for id in ids.keys() {
             let local_path = self.local_file_path(*id);
             if local_path.exists() {
                 continue;
@@ -96,7 +96,7 @@ impl EngineCore {
                 }
             }
         }
-        if errors.len() > 0 {
+        if !errors.is_empty() {
             return Err(errors.pop().unwrap().into());
         }
         let opts = dfs::Options::new(shard_id, shard_ver);
@@ -128,7 +128,7 @@ impl EngineCore {
                 self.rate_limiter
                     .request(IOType::Compaction, IOOp::Write, write_batch_size);
                 let end_off = std::cmp::min(start_off + write_batch_size, data.len());
-                file.write(&data[start_off..end_off])?;
+                file.write_all(&data[start_off..end_off])?;
                 file.sync_data()?;
                 start_off = end_off;
             }

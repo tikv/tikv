@@ -308,9 +308,7 @@ impl<'a> PeerMsgHandler<'a> {
         );
         self.fsm.peer.post_apply(self.ctx, &res);
         self.on_ready_result(&mut res.results);
-        if self.fsm.stopped {
-            return;
-        }
+        if self.fsm.stopped {}
     }
 
     fn on_transfer_leader_msg(&mut self, msg: &eraftpb::Message) {
@@ -327,7 +325,7 @@ impl<'a> PeerMsgHandler<'a> {
             match self
                 .fsm
                 .peer
-                .ready_to_transfer_leader(&mut self.ctx, msg.get_index(), &from)
+                .ready_to_transfer_leader(self.ctx, msg.get_index(), &from)
             {
                 Some(reason) => {
                     info!(
@@ -345,7 +343,7 @@ impl<'a> PeerMsgHandler<'a> {
                 }
             }
         } else {
-            self.fsm.peer.execute_transfer_leader(&mut self.ctx, msg);
+            self.fsm.peer.execute_transfer_leader(self.ctx, msg);
         }
     }
 
@@ -393,16 +391,10 @@ impl<'a> PeerMsgHandler<'a> {
             self.fsm.peer.step(msg.take_message())
         };
 
-        if is_snapshot {
-            if self.fsm.peer.has_pending_snapshot() {
-                self.destroy_regions_for_snapshot(regions_to_destroy);
-            }
+        if is_snapshot && self.fsm.peer.has_pending_snapshot() {
+            self.destroy_regions_for_snapshot(regions_to_destroy);
         }
-
-        if result.is_err() {
-            return result;
-        }
-        Ok(())
+        result
     }
 
     fn on_extra_message(&mut self, _msg: RaftMessage) {
@@ -535,13 +527,11 @@ impl<'a> PeerMsgHandler<'a> {
             return Ok(vec![]);
         }
         // TODO(x)
-        return Ok(vec![]);
+        Ok(vec![])
     }
 
     fn destroy_regions_for_snapshot(&mut self, regions_to_destroy: Vec<(u64, bool)>) {
-        if regions_to_destroy.is_empty() {
-            return;
-        }
+        if regions_to_destroy.is_empty() {}
         // TODO(x)
     }
 
@@ -856,7 +846,7 @@ impl<'a> PeerMsgHandler<'a> {
         if !self.fsm.peer.is_leader() {
             return;
         }
-        self.fsm.peer.heartbeat_pd(&self.ctx);
+        self.fsm.peer.heartbeat_pd(self.ctx);
     }
 
     fn on_generate_engine_change_set(&mut self, cs: kvenginepb::ChangeSet) {
@@ -903,8 +893,7 @@ impl<'a> PeerMsgHandler<'a> {
 
     fn on_apply_change_set_result(&mut self, result: kvengine::Result<kvenginepb::ChangeSet>) {
         let tag = self.peer.tag();
-        if result.is_err() {
-            let err = result.unwrap_err();
+        if let Err(err) = result {
             error!(
                 "region failed to apply change set";
                 "err" => ?err,

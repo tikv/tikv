@@ -216,7 +216,7 @@ impl RegionIDVer {
 impl slog::Value for RegionIDVer {
     fn serialize(
         &self,
-        _record: &Record,
+        _record: &Record<'_>,
         key: Key,
         serializer: &mut dyn Serializer,
     ) -> slog::Result {

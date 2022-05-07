@@ -13,7 +13,7 @@ use bytes::{Buf, Bytes};
 use moka::sync::SegmentedCache;
 use std::cmp::Ordering;
 use std::ops::Deref;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::slice;
 use std::sync::Arc;
 use xorf::{BinaryFuse8, Filter};
@@ -167,7 +167,7 @@ impl SSTableCore {
         let mut entries = 0;
         let mut old_entries = 0;
         let mut tombs = 0;
-        while prop_slice.len() > 0 {
+        while !prop_slice.is_empty() {
             let (key, val, remain) = parse_prop_data(prop_slice);
             prop_slice = remain;
             if key == PROP_KEY_SMALLEST.as_bytes() {
@@ -211,12 +211,11 @@ impl SSTableCore {
 
     pub fn load_block(&self, pos: usize, buf: &mut Vec<u8>) -> Result<Bytes> {
         let addr = self.idx.block_addrs[pos];
-        let length: usize;
-        if pos + 1 < self.idx.num_blocks() {
-            length = (self.idx.block_addrs[pos + 1].curr_off - addr.curr_off) as usize;
+        let length = if pos + 1 < self.idx.num_blocks() {
+            (self.idx.block_addrs[pos + 1].curr_off - addr.curr_off) as usize
         } else {
-            length = self.start_off as usize + self.footer.data_len() - addr.curr_off as usize;
-        }
+            self.start_off as usize + self.footer.data_len() - addr.curr_off as usize
+        };
         self.load_block_by_addr_len(addr, length, buf)
     }
 
@@ -252,7 +251,8 @@ impl SSTableCore {
             return Ok(raw_block.slice(4..));
         }
         buf.truncate(0);
-        buf.reserve(length);
+        // buf.reserve(length);
+        buf.resize(length, 0);
         unsafe {
             buf.set_len(length);
         }
@@ -290,25 +290,24 @@ impl SSTableCore {
 
     pub fn load_old_block(&self, pos: usize, buf: &mut Vec<u8>) -> Result<Bytes> {
         let addr = self.old_idx.block_addrs[pos];
-        let length: usize;
-        if pos + 1 < self.old_idx.num_blocks() {
-            length = (self.old_idx.block_addrs[pos + 1].curr_off - addr.curr_off) as usize;
+        let length = if pos + 1 < self.old_idx.num_blocks() {
+            (self.old_idx.block_addrs[pos + 1].curr_off - addr.curr_off) as usize
         } else {
-            length = self.footer.index_offset as usize - addr.curr_off as usize;
-        }
+            self.footer.index_offset as usize - addr.curr_off as usize
+        };
         self.load_block_by_addr_len(addr, length, buf)
     }
 
     pub fn id(&self) -> u64 {
-        return self.file.id();
+        self.file.id()
     }
 
     pub fn size(&self) -> u64 {
-        return self.file.size();
+        self.file.size()
     }
 
     pub fn index_size(&self) -> u64 {
-        return self.idx.bin.len() as u64;
+        self.idx.bin.len() as u64
     }
 
     pub fn filter_size(&self) -> u64 {
@@ -319,11 +318,11 @@ impl SSTableCore {
     }
 
     pub fn smallest(&self) -> &[u8] {
-        return self.smallest_buf.chunk();
+        self.smallest_buf.chunk()
     }
 
     pub fn biggest(&self) -> &[u8] {
-        return self.biggest_buf.chunk();
+        self.biggest_buf.chunk()
     }
 
     pub fn get_suggest_split_key(&self) -> Option<Bytes> {
@@ -353,7 +352,7 @@ impl Index {
     fn new(bin: Bytes, checksum_type: u8) -> Result<Self> {
         let data = bin.chunk();
         validate_checksum(data, checksum_type)?;
-        let mut offset = 4 as usize;
+        let mut offset = 4_usize;
         let num_blocks = LittleEndian::read_u32(&data[offset..]) as usize;
         offset += 4;
         let block_key_offs = unsafe {
@@ -412,13 +411,12 @@ impl Index {
 
     fn block_diff_key(&self, i: usize) -> &[u8] {
         let off = self.block_key_offs[i] as usize;
-        let end_off: usize;
-        if i + 1 < self.num_blocks() {
-            end_off = self.block_key_offs[i + 1] as usize;
+        let end_off = if i + 1 < self.num_blocks() {
+            self.block_key_offs[i + 1] as usize
         } else {
-            end_off = self.block_keys.len();
-        }
-        return &self.block_keys[off..end_off];
+            self.block_keys.len()
+        };
+        &self.block_keys[off..end_off]
     }
 }
 
@@ -462,7 +460,7 @@ fn validate_checksum(data: &[u8], checksum_type: u8) -> Result<()> {
 const FILE_SUFFIX: &str = ".sst";
 
 #[allow(dead_code)]
-fn parse_file_id(path: &PathBuf) -> Result<u64> {
+fn parse_file_id(path: &Path) -> Result<u64> {
     let name = path.file_name().unwrap().to_str().unwrap();
     if name.as_bytes().ends_with(FILE_SUFFIX.as_bytes()) {
         return Err(table::Error::InvalidFileName);
@@ -490,7 +488,7 @@ pub fn id_to_filename(id: u64) -> String {
     format!("{:016x}.sst", id)
 }
 
-pub fn new_filename(id: u64, dir: &PathBuf) -> PathBuf {
+pub fn new_filename(id: u64, dir: &Path) -> PathBuf {
     dir.join(id_to_filename(id))
 }
 
@@ -515,7 +513,7 @@ pub(crate) fn build_test_table_with_kvs(key_vals: Vec<(String, String)>) -> Arc<
     let id = TEST_ID_ALLOC.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let mut builder = new_table_builder_for_test(id);
     for (k, v) in key_vals {
-        let val_buf = Value::encode_buf('A' as u8, &[0], 0, v.as_bytes());
+        let val_buf = Value::encode_buf(b'A', &[0], 0, v.as_bytes());
         builder.add(k.as_bytes(), Value::decode(val_buf.as_slice()));
     }
     let mut buf = BytesMut::with_capacity(builder.estimated_size());
@@ -564,13 +562,13 @@ mod tests {
         let mut all_cnt = key_vals.len();
         for (k, v) in &key_vals {
             let val_str = format!("{}_{}", v, 9);
-            let val_buf = Value::encode_buf('A' as u8, &[0], 9, val_str.as_bytes());
+            let val_buf = Value::encode_buf(b'A', &[0], 9, val_str.as_bytes());
             builder.add(k.as_bytes(), Value::decode(val_buf.as_slice()));
             let mut r = rand::thread_rng();
             for i in (1..=8).rev() {
                 if r.gen_range(0..4) == 0 {
                     let val_str = format!("{}_{}", v, i);
-                    let val_buf = Value::encode_buf('A' as u8, &[0], i, val_str.as_bytes());
+                    let val_buf = Value::encode_buf(b'A', &[0], i, val_str.as_bytes());
                     builder.add(k.as_bytes(), Value::decode(val_buf.as_slice()));
                     all_cnt += 1;
                 }
@@ -630,7 +628,7 @@ mod tests {
             assert!(it.valid());
             let v = it.value();
             assert_eq!(v.get_value(), "0".as_bytes());
-            assert_eq!(v.meta, 'A' as u8);
+            assert_eq!(v.meta, b'A');
             assert_eq!(v.user_meta(), &[0u8]);
         }
     }
@@ -661,13 +659,13 @@ mod tests {
             assert!(it.valid());
             let v = it.value();
             assert_eq!(v.get_value(), format!("{}", n - 1).as_bytes());
-            assert_eq!(v.meta, 'A' as u8);
+            assert_eq!(v.meta, b'A');
             assert_eq!(v.user_meta(), &[0u8]);
             it.next();
             assert!(it.valid());
             let v = it.value();
             assert_eq!(v.get_value(), format!("{}", n - 2).as_bytes());
-            assert_eq!(v.meta, 'A' as u8);
+            assert_eq!(v.meta, b'A');
             assert_eq!(v.user_meta(), &[0u8]);
         }
     }
@@ -737,7 +735,7 @@ mod tests {
                 assert_eq!(k, test_key("key", count).as_bytes());
                 let v = it.value();
                 assert_eq!(v.get_value(), format!("{}", count).as_bytes());
-                assert_eq!(v.meta, 'A' as u8);
+                assert_eq!(v.meta, b'A');
                 count += 1;
                 it.next()
             }
@@ -758,7 +756,7 @@ mod tests {
                 assert!(it.valid());
                 let v = it.value();
                 assert_eq!(v.get_value(), format!("{}", i).as_bytes());
-                assert_eq!(v.meta, 'A' as u8);
+                assert_eq!(v.meta, b'A');
                 it.next();
             }
             it.next();
@@ -771,7 +769,7 @@ mod tests {
         let tf = build_test_table_with_prefix("key", 10000);
         let t = SSTable::new(tf, new_test_cache()).unwrap();
         let mut it = t.new_iterator(false);
-        let mut kid = 1010 as usize;
+        let mut kid = 1010_usize;
         let seek = test_key("key", kid);
         it.seek(seek.as_bytes());
         while it.valid() {
@@ -836,7 +834,7 @@ mod tests {
         let mut last_key = BytesMut::new();
         it.rewind();
         while it.valid() {
-            if last_key.len() > 0 {
+            if !last_key.is_empty() {
                 assert!(last_key < it.key());
             }
             last_key.truncate(0);
@@ -862,7 +860,7 @@ mod tests {
         last_key.truncate(0);
         rev_it.rewind();
         while rev_it.valid() {
-            if last_key.len() > 0 {
+            if !last_key.is_empty() {
                 assert!(last_key > rev_it.key());
             }
             last_key.truncate(0);
@@ -892,7 +890,7 @@ mod tests {
             while it.valid() {
                 let v = it.value();
                 assert_eq!(v.get_value(), format!("{}", cnt).as_bytes());
-                assert_eq!(v.meta, 'A' as u8);
+                assert_eq!(v.meta, b'A');
                 cnt += 1;
                 it.next();
             }
@@ -905,7 +903,7 @@ mod tests {
             while it.valid() {
                 let v = it.value();
                 assert_eq!(v.get_value(), format!("{}", 10000 - 1 - cnt).as_bytes());
-                assert_eq!(v.meta, 'A' as u8);
+                assert_eq!(v.meta, b'A');
                 cnt += 1;
                 it.next();
             }

@@ -81,12 +81,11 @@ impl EntrySlice {
     }
 
     fn get_entry(&self, i: usize) -> &[u8] {
-        let start_off: usize;
-        if i > 0 {
-            start_off = self.end_offs[i - 1] as usize;
+        let start_off = if i > 0 {
+            self.end_offs[i - 1] as usize
         } else {
-            start_off = 0;
-        }
+            0
+        };
         let slice = self.buf.as_slice();
         &slice[start_off..self.end_offs[i] as usize]
     }
@@ -163,7 +162,7 @@ impl Builder {
             }
             self.block_builder.add_entry(key, val);
             self.key_hashes.push(farmhash::fingerprint64(key));
-            if self.smallest.len() == 0 {
+            if self.smallest.is_empty() {
                 self.smallest.extend_from_slice(key);
             }
             if self.max_ts < val.version {
@@ -399,13 +398,12 @@ impl BlockBuilder {
         self.buf.put_u32_le(0); // checksum place holder.
         let begin_off = self.buf.len();
         let common_prefix_len = self.get_block_common_prefix_len();
-        let buf: &mut Vec<u8>;
-        if self.compression_tp == NO_COMPRESSION {
-            buf = &mut self.buf;
+        let buf = if self.compression_tp == NO_COMPRESSION {
+            &mut self.buf
         } else {
             self.compression_buf.truncate(0);
-            buf = &mut self.compression_buf;
-        }
+            &mut self.compression_buf
+        };
         let num_entries = self.block.tmp_keys.length();
         buf.put_u32_le(num_entries as u32);
         let mut offset = 0u32;
@@ -499,7 +497,7 @@ impl BlockBuilder {
                 zstd_sys::ZSTD_compressBound(self.compression_buf.len())
             };
             self.buf.reserve(compress_bound);
-            self.buf.set_len(buf_len + compress_bound);
+            // self.buf.set_len(buf_len + compress_bound);
             let src = &self.compression_buf;
             let dst = &mut self.buf[buf_len..];
             let size = if self.compression_tp == LZ4_COMPRESSION {
@@ -507,12 +505,12 @@ impl BlockBuilder {
                     src.as_ptr() as *const libc::c_char,
                     dst.as_mut_ptr() as *mut libc::c_char,
                     src.len() as i32,
-                    dst.len() as i32,
+                    compress_bound as i32,
                 ) as usize
             } else if self.compression_tp == ZSTD_COMPRESSION {
                 zstd_sys::ZSTD_compress(
                     dst.as_mut_ptr() as *mut libc::c_void,
-                    dst.len(),
+                    compress_bound,
                     src.as_ptr() as *const libc::c_void,
                     src.len(),
                     zstd_sys::ZSTD_defaultCLevel(),
@@ -569,7 +567,7 @@ mod tests {
         let val_buf = Value::encode_buf(1, &[1], 1, "abc".as_bytes());
         let val = Value::decode(&val_buf);
         es.append_value(val);
-        dbg!(es.buf);
-        dbg!(es.end_offs);
+        // dbg!(es.buf);
+        // dbg!(es.end_offs);
     }
 }

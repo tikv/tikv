@@ -13,6 +13,7 @@ use std::os::unix::fs::MetadataExt;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, HashMap, VecDeque},
     fs,
     num::ParseIntError,
@@ -74,7 +75,7 @@ impl WriteBatch {
     }
 
     pub fn is_empty(&self) -> bool {
-        return self.regions.is_empty();
+        self.regions.is_empty()
     }
 
     pub(crate) fn merge_region(&mut self, region_batch: RegionBatch) {
@@ -262,15 +263,15 @@ impl RaftLogOp {
 
 impl RFEngine {
     pub fn open(dir: &Path, wal_size: usize) -> Result<Self> {
-        maybe_create_dir(&dir)?;
+        maybe_create_dir(dir)?;
         let mut epoches = read_epoches(dir)?;
         let mut epoch_id = 1;
-        if epoches.len() > 0 {
+        if !epoches.is_empty() {
             epoch_id = epoches.last().unwrap().id;
         }
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1024);
-        let writer = WALWriter::new(dir.clone(), epoch_id, wal_size)?;
+        let writer = WALWriter::new(dir, epoch_id, wal_size)?;
         let mut en = Self {
             dir: dir.to_owned(),
             regions: Arc::new(DashMap::default()),
@@ -290,7 +291,7 @@ impl RFEngine {
             }
         }
         en.writer.lock().unwrap().seek(offset);
-        if epoches.len() > 0 {
+        if !epoches.is_empty() {
             epoches.pop();
         }
         {
@@ -311,7 +312,7 @@ impl RFEngine {
         let timer = Instant::now();
         let mut writer = self.writer.lock().unwrap();
         let epoch_id = writer.epoch_id;
-        for (_, data) in &wb.regions {
+        for data in wb.regions.values() {
             writer.append_region_data(data);
         }
         let size = writer.buf_size();
@@ -335,7 +336,7 @@ impl RFEngine {
             let mut region_data = region_ref.write().unwrap();
             let truncated = region_data.apply(batch_data);
             let truncated_index = region_data.truncated_idx;
-            if truncated.len() > 0 {
+            if !truncated.is_empty() {
                 self.task_sender
                     .send(Task::Truncate {
                         region_id,
@@ -354,9 +355,7 @@ impl RFEngine {
 
     pub fn get_term(&self, region_id: u64, index: u64) -> Option<u64> {
         let map_ref = self.regions.get(&region_id);
-        if map_ref.is_none() {
-            return None;
-        }
+        map_ref.as_ref()?;
         let map_ref = map_ref.unwrap();
         let region_data = map_ref.read().unwrap();
         region_data.term(index)
@@ -364,9 +363,7 @@ impl RFEngine {
 
     pub fn get_last_index(&self, region_id: u64) -> Option<u64> {
         let map_ref = self.regions.get(&region_id);
-        if map_ref.is_none() {
-            return None;
-        }
+        map_ref.as_ref()?;
         let map_ref = map_ref.unwrap();
         let region_data = map_ref.read().unwrap();
         let last = region_data.raft_logs.last_index();
@@ -378,14 +375,12 @@ impl RFEngine {
 
     pub fn get_state(&self, region_id: u64, key: &[u8]) -> Option<Bytes> {
         let map_ref = self.regions.get(&region_id);
-        if map_ref.is_none() {
-            return None;
-        }
+        map_ref.as_ref()?;
         let map_ref = map_ref.unwrap();
         let region_data = map_ref.read().unwrap();
         match region_data.get_state(key) {
             Some(val) => {
-                if val.len() > 0 {
+                if !val.is_empty() {
                     Some(val.clone())
                 } else {
                     None
@@ -397,9 +392,7 @@ impl RFEngine {
 
     pub fn get_last_state_with_prefix(&self, region_id: u64, prefix: &[u8]) -> Option<Bytes> {
         let map_ref = self.regions.get(&region_id);
-        if map_ref.is_none() {
-            return None;
-        }
+        map_ref.as_ref()?;
         let map_ref = map_ref.unwrap();
         let region_data = map_ref.read().unwrap();
         let mut end_prefix = Vec::from(prefix);
@@ -416,7 +409,10 @@ impl RFEngine {
         None
     }
 
-    pub(crate) fn get_or_init_region_data(&self, region_id: u64) -> Ref<u64, RwLock<RegionData>> {
+    pub(crate) fn get_or_init_region_data(
+        &self,
+        region_id: u64,
+    ) -> Ref<'_, u64, RwLock<RegionData>> {
         match self.regions.get(&region_id) {
             Some(region_data) => {
                 return region_data;
@@ -535,12 +531,10 @@ impl RFEngine {
         let mut disk_size = 0;
         let mut num_files = 0;
         if let Ok(read_dir) = self.dir.read_dir() {
-            for x in read_dir {
-                if let Ok(e) = x {
-                    if let Ok(m) = e.metadata() {
-                        num_files += 1;
-                        disk_size += m.size();
-                    }
+            for e in read_dir.flatten() {
+                if let Ok(m) = e.metadata() {
+                    num_files += 1;
+                    disk_size += m.size();
                 }
             }
         }
@@ -622,7 +616,7 @@ impl RegionData {
             truncated_blocks = self.raft_logs.truncate(self.truncated_idx);
         }
         for (key, val) in &batch.states {
-            if val.len() == 0 {
+            if val.is_empty() {
                 self.states.remove(key.chunk());
             } else {
                 self.states.insert(key.clone(), val.clone());
@@ -630,7 +624,7 @@ impl RegionData {
         }
         for op in &batch.raft_logs {
             let blocks = self.append(op.clone());
-            if blocks.len() > 0 {
+            if !blocks.is_empty() {
                 truncated_blocks.extend_from_slice(&blocks);
             }
         }
@@ -745,21 +739,25 @@ impl RaftLogs {
         let mut truncated_blocks = vec![];
         let next_idx = self.last_index() + 1;
         let op_idx = op.index;
-        if next_idx < op_idx {
-            // There is gap between existing logs and next log, clear all.
-            while let Some(block) = self.blocks.pop_front() {
-                truncated_blocks.push(block);
-            }
-        } else if op_idx < next_idx {
-            while let Some(mut block) = self.blocks.pop_back() {
-                if op_idx <= block.first_index() {
+        match op_idx.cmp(&next_idx) {
+            Ordering::Greater => {
+                // There is gap between existing logs and next log, clear all.
+                while let Some(block) = self.blocks.pop_front() {
                     truncated_blocks.push(block);
-                } else {
-                    block.truncate_right(op_idx);
-                    self.blocks.push_back(block);
-                    break;
                 }
             }
+            Ordering::Less => {
+                while let Some(mut block) = self.blocks.pop_back() {
+                    if op_idx <= block.first_index() {
+                        truncated_blocks.push(block);
+                    } else {
+                        block.truncate_right(op_idx);
+                        self.blocks.push_back(block);
+                        break;
+                    }
+                }
+            }
+            Ordering::Equal => {}
         }
         match self.blocks.back() {
             None => {
@@ -792,7 +790,7 @@ impl RaftLogs {
     }
 
     pub(crate) fn get(&self, index: u64) -> Option<eraftpb::Entry> {
-        if self.blocks.len() == 0 {
+        if self.blocks.is_empty() {
             return None;
         }
         let block_idx = search(self.blocks.len(), |i| self.blocks[i].last_index() >= index);
@@ -899,7 +897,7 @@ mod tests {
     fn test_rfengine() {
         init_logger();
         let tmp_dir = tempfile::tempdir().unwrap();
-        let wal_size = 128 * 1024 as usize;
+        let wal_size = 128 * 1024_usize;
         let mut engine = RFEngine::open(tmp_dir.path(), wal_size).unwrap();
         let mut wb = WriteBatch::new();
         for region_id in 1..=10_u64 {

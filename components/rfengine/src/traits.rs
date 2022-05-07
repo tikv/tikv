@@ -54,11 +54,11 @@ impl RaftEngineReadOnly for RFEngine {
             }
         }
         ENGINE_FETCH_ENTRIES_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
-        return Ok(buf.len() - old_len);
+        Ok(buf.len() - old_len)
     }
 
     fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
-        todo!()
+        unreachable!("todo")
     }
 }
 

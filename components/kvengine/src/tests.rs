@@ -64,15 +64,15 @@ fn test_engine() {
         meta_applier.run();
     });
     let mut keys = vec![];
-    for i in vec![1000, 3000, 6000, 9000] {
-        keys.push(i_to_key(i));
+    for i in &[1000, 3000, 6000, 9000] {
+        keys.push(i_to_key(*i));
     }
     let mut splitter = Splitter::new(keys.clone(), applier_tx.clone());
     let handle = thread::spawn(move || {
         splitter.run();
     });
     let (begin, end) = (0, 10000);
-    load_data(begin, end, applier_tx.clone());
+    load_data(begin, end, applier_tx);
     handle.join().unwrap();
     check_get(begin, end, &engine);
     check_iterater(begin, end, &engine);
@@ -141,7 +141,7 @@ impl MetaIterator for EngineTester {
 
 impl RecoverHandler for EngineTester {
     fn recover(&self, _engine: &Engine, _shard: &Arc<Shard>, _info: &ShardMeta) -> Result<()> {
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -273,7 +273,10 @@ impl MetaApplier {
     fn run(&self) {
         loop {
             let cs = unwrap_or_return!(self.meta_rx.recv(), "meta_applier recv");
-            unwrap_or_return!(self.engine.apply_change_set(cs), "meta_applier cs");
+            unwrap_or_return!(
+                self.engine.apply_change_set(ChangeSet::new(cs)),
+                "meta_applier cs"
+            );
         }
     }
 }
@@ -452,7 +455,7 @@ fn get_shard_for_key(key: &[u8], en: &Engine) -> Arc<Shard> {
             }
         }
     }
-    return en.get_shard(1).unwrap();
+    en.get_shard(1).unwrap()
 }
 
 pub(crate) fn init_logger() {

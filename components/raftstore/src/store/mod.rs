@@ -63,6 +63,7 @@ pub use self::transport::{
 };
 pub use self::txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt};
 pub use self::util::{RegionReadProgress, RegionReadProgressRegistry};
+pub use self::worker::metrics as worker_metrics;
 pub use self::worker::RefreshConfigTask;
 pub use self::worker::{
     AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, QueryStats, ReadDelegate,
@@ -71,4 +72,3 @@ pub use self::worker::{
 pub use self::worker::{Bucket, BucketRange, KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{CheckLeaderRunner, CheckLeaderTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};
-pub use self::worker::metrics as worker_metrics;

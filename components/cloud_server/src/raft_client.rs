@@ -32,6 +32,8 @@ use yatp::ThreadPool;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
+const _ON_RESOLVE_FP: &str = "transport_snapshot_on_resolve";
+
 /// A quick queue for sending raft messages.
 struct Queue {
     buf: ArrayQueue<RaftMessage>,
@@ -104,7 +106,7 @@ impl Queue {
     /// The method should be called in polling context. If the queue is empty,
     /// it will register current polling task for notifications.
     #[inline]
-    fn pop(&self, ctx: &Context) -> Option<RaftMessage> {
+    fn pop(&self, ctx: &Context<'_>) -> Option<RaftMessage> {
         self.buf.pop().or_else(|| {
             {
                 let mut waker = self.waker.lock().unwrap();
@@ -280,7 +282,7 @@ where
     R: RaftStoreRouter + 'static,
     B: Buffer<OutputMessage = M>,
 {
-    fn fill_msg(&mut self, ctx: &Context) {
+    fn fill_msg(&mut self, ctx: &Context<'_>) {
         while !self.buffer.full() {
             let msg = match self.queue.pop(ctx) {
                 Some(msg) => msg,
@@ -315,7 +317,7 @@ where
 {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<()> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let s = &mut *self;
         loop {
             s.fill_msg(ctx);

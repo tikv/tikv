@@ -378,14 +378,13 @@ impl StatusServer {
     ) -> hyper::Result<Response<Body>> {
         let path = req.uri().path();
         let last = get_last_path_segment(path);
-        let res;
-        if let Ok(region_id) = u64::from_str(last) {
+        let res = if let Ok(region_id) = u64::from_str(last) {
             let region_stats = engine.get_region_stats(region_id);
-            res = serde_json::to_string_pretty(&region_stats);
+            serde_json::to_string_pretty(&region_stats)
         } else {
             let engine_stats = engine.get_engine_stats();
-            res = serde_json::to_string_pretty(&engine_stats);
-        }
+            serde_json::to_string_pretty(&engine_stats)
+        };
         Ok(match res {
             Ok(json) => Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
@@ -411,7 +410,7 @@ impl StatusServer {
 fn get_last_path_segment(path: &str) -> &str {
     let mut last = "";
     for i in (0..path.len()).rev() {
-        if path.as_bytes()[i] == '/' as u8 {
+        if path.as_bytes()[i] == b'/' {
             last = &path[i + 1..];
             break;
         }
@@ -674,7 +673,7 @@ where
 
     fn poll_accept(
         self: Pin<&mut Self>,
-        cx: &mut Context,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<std::io::Result<Self::Conn>>> {
         self.project().0.poll_next(cx)
     }

@@ -46,45 +46,40 @@ const FLUSH_DEDUP_DURATION: Duration = Duration::from_secs(30);
 impl Engine {
     pub(crate) fn run_flush_worker(&self, rx: mpsc::Receiver<FlushTask>) {
         let mut flush_states = HashMap::new();
-        loop {
-            if let Ok(task) = rx.recv() {
-                let tbl_version = match task.normal.as_ref() {
-                    None => 0,
-                    Some(tbl) => tbl.get_version(),
-                };
-                let flush_state_key = FlushStateKey {
-                    shard_id: task.shard_id,
-                    shard_ver: task.shard_ver,
-                    tbl_version,
-                };
-                let now = Instant::now();
-                let mut min_flush_time = now - FLUSH_DEDUP_DURATION;
-                flush_states
-                    .retain(|_, flush_time: &mut Instant| flush_time.gt(&&mut min_flush_time));
-                if flush_states.get(&flush_state_key).is_some() {
-                    continue;
-                }
-                flush_states.insert(flush_state_key, now);
-                let engine = self.clone();
-                std::thread::spawn(move || {
-                    let res = if task.normal.is_some() {
-                        engine.flush_normal(task)
-                    } else {
-                        engine.flush_initial(task)
-                    };
-                    match res {
-                        Ok(cs) => {
-                            engine.meta_change_listener.on_change_set(cs);
-                        }
-                        Err(err) => {
-                            // TODO: handle DFS error by queue the failed operation and retry.
-                            panic!("{:?}", err);
-                        }
-                    }
-                });
-            } else {
-                break;
+        while let Ok(task) = rx.recv() {
+            let tbl_version = match task.normal.as_ref() {
+                None => 0,
+                Some(tbl) => tbl.get_version(),
+            };
+            let flush_state_key = FlushStateKey {
+                shard_id: task.shard_id,
+                shard_ver: task.shard_ver,
+                tbl_version,
+            };
+            let now = Instant::now();
+            let mut min_flush_time = now - FLUSH_DEDUP_DURATION;
+            flush_states.retain(|_, flush_time: &mut Instant| flush_time.gt(&&mut min_flush_time));
+            if flush_states.get(&flush_state_key).is_some() {
+                continue;
             }
+            flush_states.insert(flush_state_key, now);
+            let engine = self.clone();
+            std::thread::spawn(move || {
+                let res = if task.normal.is_some() {
+                    engine.flush_normal(task)
+                } else {
+                    engine.flush_initial(task)
+                };
+                match res {
+                    Ok(cs) => {
+                        engine.meta_change_listener.on_change_set(cs);
+                    }
+                    Err(err) => {
+                        // TODO: handle DFS error by queue the failed operation and retry.
+                        panic!("{:?}", err);
+                    }
+                }
+            });
         }
     }
 
@@ -161,10 +156,10 @@ impl Engine {
                 }
             }
         }
-        if errs.len() == 0 {
+        if errs.is_empty() {
             return Ok(cs);
         }
-        Err(errs.pop().unwrap().into())
+        Err(errs.pop().unwrap())
     }
 
     pub(crate) fn build_l0_table(&self, m: &CFTable, start: &[u8], end: &[u8]) -> L0Builder {
@@ -223,8 +218,8 @@ impl Engine {
                     dfs::Options::new(shard_id, shard_ver),
                 )
                 .await;
-            if res.is_err() {
-                tx.send(Err(res.unwrap_err().into())).unwrap();
+            if let Err(e) = res {
+                tx.send(Err(e.into())).unwrap();
                 return;
             }
             let mut l0_create = pb::L0Create::new();

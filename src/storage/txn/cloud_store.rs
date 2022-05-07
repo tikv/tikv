@@ -87,16 +87,8 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner> {
-        let lower_bound = if let Some(k) = lower_bound {
-            Some(Bytes::from(k.to_raw().unwrap()))
-        } else {
-            None
-        };
-        let upper_bound = if let Some(k) = upper_bound {
-            Some(Bytes::from(k.to_raw().unwrap()))
-        } else {
-            None
-        };
+        let lower_bound = lower_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
+        let upper_bound = upper_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
         let mut stats = Statistics::default();
         let lock_iter = self.snapshot.new_iterator(LOCK_CF, desc, false, None);
         self.check_locks(
@@ -212,7 +204,7 @@ impl<S: Snapshot> CloudStore<S> {
             )?;
             lock_iter.next();
         }
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -270,7 +262,7 @@ impl super::Scanner for CloudStoreScanner {
             self.stats.write.processed_keys += 1;
             self.stats.processed_size += iter_key.len() + item.value_len();
             let val = item.get_value();
-            if val.len() > 0 {
+            if !val.is_empty() {
                 let key = Key::from_raw(iter_key);
                 return Ok(Some((key, val.to_vec())));
             }

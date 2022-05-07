@@ -42,14 +42,14 @@ impl CompactionClient {
 
     pub(crate) fn compact(&self, req: CompactionRequest) -> Result<pb::Compaction> {
         if self.client.is_none() {
-            return local_compact(self.dfs.clone(), req);
+            local_compact(self.dfs.clone(), req)
         } else {
             let client = self.clone();
             let (tx, rx) = tikv_util::mpsc::bounded(1);
             self.dfs.get_runtime().spawn(async move {
                 tx.send(client.remote_compact(req).await).unwrap();
             });
-            return rx.recv().unwrap();
+            rx.recv().unwrap()
         }
     }
 
@@ -233,7 +233,7 @@ impl CompactDef {
             left: Bytes::copy_from_slice(self.top[0].smallest()),
             right: Bytes::copy_from_slice(self.top.last().unwrap().biggest()),
         };
-        if self.bot.len() > 0 {
+        if !self.bot.is_empty() {
             self.next_range = KeyRange {
                 left: Bytes::copy_from_slice(self.bot[0].smallest()),
                 right: Bytes::copy_from_slice(self.bot.last().unwrap().biggest()),
@@ -256,7 +256,7 @@ impl CompactDef {
     }
 
     pub(crate) fn move_down(&self) -> bool {
-        self.level > 0 && self.bot.len() == 0
+        self.level > 0 && self.bot.is_empty()
     }
 }
 
@@ -264,14 +264,13 @@ impl Engine {
     pub fn update_managed_safe_ts(&self, ts: u64) {
         loop {
             let old = load_u64(&self.managed_safe_ts);
-            if old < ts {
-                if self
+            if old < ts
+                && self
                     .managed_safe_ts
                     .compare_exchange(old, ts, Ordering::Release, Ordering::Relaxed)
                     .is_err()
-                {
-                    continue;
-                }
+            {
+                continue;
             }
             break;
         }
@@ -350,7 +349,7 @@ impl Engine {
         }
         scf.set_has_overlapping(&mut cd);
         let req = self.build_compact_ln_request(&shard, &cd)?;
-        if req.bottoms.len() == 0 && req.cf as usize == WRITE_CF {
+        if req.bottoms.is_empty() && req.cf as usize == WRITE_CF {
             info!(
                 "move down L{} CF{} for {}:{}, score:{}",
                 pri.level, pri.cf, shard.id, shard.ver, pri.score
@@ -394,7 +393,7 @@ impl Engine {
         shard: &Shard,
     ) -> Result<Option<CompactionRequest>> {
         let data = shard.get_data();
-        if data.l0_tbls.len() == 0 {
+        if data.l0_tbls.is_empty() {
             store_bool(&shard.compacting, false);
             info!("zero L0 tables");
             return Ok(None);
@@ -516,7 +515,7 @@ pub(crate) struct KeyRange {
     pub right: Bytes,
 }
 
-pub(crate) fn get_key_range(tables: &Vec<SSTable>) -> KeyRange {
+pub(crate) fn get_key_range(tables: &[SSTable]) -> KeyRange {
     let mut smallest = tables[0].smallest();
     let mut biggest = tables[0].biggest();
     for i in 1..tables.len() {
@@ -534,11 +533,7 @@ pub(crate) fn get_key_range(tables: &Vec<SSTable>) -> KeyRange {
     }
 }
 
-pub(crate) fn get_tables_in_range(
-    tables: &Vec<SSTable>,
-    start: &[u8],
-    end: &[u8],
-) -> (usize, usize) {
+pub(crate) fn get_tables_in_range(tables: &[SSTable], start: &[u8], end: &[u8]) -> (usize, usize) {
     let left = search(tables.len(), |i| start <= tables[i].biggest());
     let right = search(tables.len(), |i| end < tables[i].smallest());
     (left, right)
@@ -555,7 +550,7 @@ pub(crate) fn compact_l0(
     let mut mult_cf_bot_tbls = vec![];
     for cf in 0..NUM_CFS {
         let bot_ids = &req.multi_cf_bottoms[cf];
-        let bot_files = load_table_files(&bot_ids, fs.clone(), opts)?;
+        let bot_files = load_table_files(bot_ids, fs.clone(), opts)?;
         let mut bot_tbls = in_mem_files_to_tables(&bot_files);
         bot_tbls.sort_by(|a, b| a.smallest().cmp(b.smallest()));
         mult_cf_bot_tbls.push(bot_tbls);
@@ -600,7 +595,7 @@ pub(crate) fn compact_l0(
             Ok(tbl_create) => table_creates.push(tbl_create),
         }
     }
-    if errors.len() > 0 {
+    if !errors.is_empty() {
         return Err(errors.pop().unwrap().into());
     }
     Ok(table_creates)
@@ -635,8 +630,8 @@ pub(crate) fn load_table_files(
             }
         }
     }
-    if errors.len() > 0 {
-        return Err(errors.pop().unwrap().into());
+    if !errors.is_empty() {
+        return Err(errors.pop().unwrap());
     }
     Ok(files)
 }
@@ -672,7 +667,7 @@ fn build_compact_l0_iterator(
             iters.push(iter);
         }
     }
-    if bot_tbls.len() > 0 {
+    if !bot_tbls.is_empty() {
         let iter = ConcatIterator::new_with_tables(bot_tbls, false);
         iters.push(Box::new(iter));
     }
@@ -716,7 +711,7 @@ impl CompactL0Helper {
         while iter.valid() {
             // See if we need to skip this key.
             let key = iter.key();
-            if self.skip_key.len() > 0 {
+            if !self.skip_key.is_empty() {
                 if key == self.skip_key {
                     iter.next_all_version();
                     continue;
@@ -810,7 +805,7 @@ pub(crate) fn compact_tables(
             let key = iter.key();
             let kv_size = val.encoded_size() + key.len();
             // See if we need to skip this key.
-            if skip_key.len() > 0 {
+            if !skip_key.is_empty() {
                 if key == skip_key {
                     iter.next_all_version();
                     continue;
@@ -819,7 +814,7 @@ pub(crate) fn compact_tables(
                 }
             }
             if key != last_key {
-                if last_key.len() > 0 && builder.estimated_size() + kv_size > req.max_table_size {
+                if !last_key.is_empty() && builder.estimated_size() + kv_size > req.max_table_size {
                     break;
                 }
                 if key >= req.end.as_slice() {
@@ -897,7 +892,7 @@ pub(crate) fn compact_tables(
             Ok(tbl_create) => tbl_creates.push(tbl_create),
         }
     }
-    if errors.len() > 0 {
+    if !errors.is_empty() {
         return Err(errors.pop().unwrap().into());
     }
     Ok(tbl_creates)
@@ -921,7 +916,7 @@ fn filter(safe_ts: u64, cf: usize, val: table::Value) -> Decision {
     if cf == WRITE_CF {
         if user_meta.len() == 16 {
             let version = LittleEndian::read_u64(&user_meta[8..]);
-            if version < safe_ts && val.get_value().len() == 0 {
+            if version < safe_ts && val.get_value().is_empty() {
                 return Decision::MarkTombStone;
             }
         }
@@ -937,7 +932,7 @@ fn filter(safe_ts: u64, cf: usize, val: table::Value) -> Decision {
         }
     }
     // Older version are discarded automatically, we need to keep the first valid version.
-    return Decision::Keep;
+    Decision::Keep
 }
 
 pub async fn handle_remote_compaction(
@@ -1003,5 +998,5 @@ fn local_compact(dfs: Arc<dyn dfs::DFS>, req: CompactionRequest) -> Result<pb::C
         "finish compact L{} CF{} for {}:{}",
         req.level, req.cf, req.shard_id, req.shard_ver
     );
-    return Ok(comp);
+    Ok(comp)
 }

@@ -123,7 +123,7 @@ impl EngineCore {
         let comp = cs.get_compaction();
         let mut del_files = HashMap::new();
         if comp.conflicted {
-            if is_move_down(&comp) {
+            if is_move_down(comp) {
                 return;
             }
             for create in comp.get_table_creates() {

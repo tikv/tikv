@@ -91,7 +91,6 @@ fn alloc_aligned(n_bytes: usize) -> Vec<u8> {
     let cap_units = aligned.capacity();
 
     mem::forget(aligned);
-    let result =
-        unsafe { Vec::from_raw_parts(ptr as *mut u8, 0, cap_units * mem::size_of::<AlignTo4K>()) };
-    result
+
+    unsafe { Vec::from_raw_parts(ptr as *mut u8, 0, cap_units * mem::size_of::<AlignTo4K>()) }
 }

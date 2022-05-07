@@ -16,7 +16,7 @@ use super::WriteBatchEntry;
 pub const NULL_ARENA_ADDR: u64 = 0;
 
 const NULL_BLOCK_OFF: u32 = 0xffff_ffff;
-const MAX_VAL_SIZE: u32 = 1 << 24 - 1;
+const MAX_VAL_SIZE: u32 = 1 << (24 - 1);
 
 const BLOCK_ALIGN: u32 = 8;
 const ALIGN_MASK: u32 = 0xffff_fff8;
@@ -72,7 +72,7 @@ impl ArenaAddr {
     }
 
     pub fn is_null(self) -> bool {
-        return self.0 == NULL_ARENA_ADDR;
+        self.0 == NULL_ARENA_ADDR
     }
 }
 
@@ -85,19 +85,25 @@ pub struct Arena {
     pub(crate) rand_id: i32,
 }
 
+impl Default for Arena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[allow(dead_code)]
 impl Arena {
     pub fn new() -> Self {
         let mut rng = rand::thread_rng();
         let rand_id = rng.gen_range(0..i32::MAX);
         let total_size = Arc::new(AtomicU32::new(0));
-        let s = Self {
+
+        Self {
             nodes: ArenaSegment::new(total_size.clone()),
             values: ArenaSegment::new(total_size.clone()),
             total_size,
             rand_id,
-        };
-        s
+        }
     }
 
     pub fn put_key(&self, key: &[u8]) -> ArenaAddr {
@@ -122,6 +128,7 @@ impl Arena {
         addr
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub fn put_node(&self, height: usize, buf: &[u8], entry: &WriteBatchEntry) -> &mut Node {
         let node_size = mem::size_of::<Node>() - (MAX_HEIGHT - height) * 8;
         let node_addr = self.nodes.alloc(node_size as u32);
@@ -242,6 +249,7 @@ impl ArenaSegment {
             .get_bytes(addr.block_off(), addr.size())
     }
 
+    #[allow(clippy::mut_from_ref)]
     fn get_mut_bytes(&self, addr: ArenaAddr) -> &mut [u8] {
         self.get_block(addr.block_idx())
             .get_mut_bytes(addr.block_off(), addr.size())
@@ -288,6 +296,7 @@ impl ArenaBlock {
         }
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub fn get_mut_bytes(&self, offset: u32, size: usize) -> &mut [u8] {
         unsafe { slice::from_raw_parts_mut::<u8>(self.ptr.add(offset as usize), size) }
     }

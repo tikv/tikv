@@ -267,7 +267,7 @@ where
         );
 
         let region = initial_region(store_id, region_id, peer_id);
-        store::prepare_bootstrap_cluster(&engines, &region)?;
+        store::prepare_bootstrap_cluster(engines, &region)?;
         Ok(region)
     }
 
@@ -300,20 +300,20 @@ where
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
                         "injected error: node_after_bootstrap_cluster"
                     )));
-                    store::clear_prepare_bootstrap_state(&engines)?;
+                    store::clear_prepare_bootstrap_state(engines)?;
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
                     Ok(region) => {
                         if region == first_region {
-                            store::clear_prepare_bootstrap_state(&engines)?;
+                            store::clear_prepare_bootstrap_state(engines)?;
                         } else {
                             info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
                             let epoch = region.get_region_epoch();
                             let region_ver = epoch.get_version();
                             let conf_ver = epoch.get_conf_ver();
                             store::clear_prepare_bootstrap_cluster(
-                                &engines, region_id, region_ver, conf_ver,
+                                engines, region_id, region_ver, conf_ver,
                             )?;
                         }
                         return Ok(());

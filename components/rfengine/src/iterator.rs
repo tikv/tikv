@@ -33,7 +33,7 @@ impl WALIterator {
     where
         F: FnMut(RegionBatch),
     {
-        let filename = wal_file_name(&self.dir, self.epoch_id);
+        let filename = wal_file_name(self.dir.as_path(), self.epoch_id);
         let fd = fs::File::open(filename)?;
         let mut buf_reader = BufReader::new(fd);
         loop {
@@ -46,10 +46,10 @@ impl WALIterator {
                 }
                 Ok(data) => {
                     let mut batch = data.chunk();
-                    if batch.len() == 0 {
+                    if batch.is_empty() {
                         return Ok(());
                     }
-                    while batch.len() > 0 {
+                    while !batch.is_empty() {
                         let region_data = RegionBatch::decode(batch);
                         batch = &batch[region_data.encoded_len()..];
                         f(region_data);

@@ -121,8 +121,8 @@ impl<'a> MergeIterator<'a> {
         if !self.bigger.valid {
             return;
         }
-        while self.smaller.valid {
-            match self.smaller.iter.key().cmp(&self.bigger.iter.key()) {
+        if self.smaller.valid {
+            match self.smaller.iter.key().cmp(self.bigger.iter.key()) {
                 Equal => {
                     self.same_key = true;
                     if !self.smaller.is_first {

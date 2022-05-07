@@ -53,7 +53,7 @@ impl Clone for RegionSnapshot {
             snap: self.snap.clone(),
             max_ts_sync_status: self.max_ts_sync_status.clone(),
             term: self.term,
-            txn_extra_op: self.txn_extra_op.clone(),
+            txn_extra_op: self.txn_extra_op,
         }
     }
 }

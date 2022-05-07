@@ -154,8 +154,8 @@ where
         router,
     };
     let scheduler = worker.start("addr-resolver", runner);
-    let resolver = PdStoreAddrResolver::new(scheduler);
-    resolver
+
+    PdStoreAddrResolver::new(scheduler)
 }
 
 impl tikv::server::StoreAddrResolver for PdStoreAddrResolver {

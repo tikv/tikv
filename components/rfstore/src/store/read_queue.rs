@@ -84,6 +84,7 @@ impl Drop for ReadIndexRequest {
     }
 }
 
+#[derive(Default)]
 pub struct ReadIndexQueue {
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
@@ -93,18 +94,6 @@ pub struct ReadIndexQueue {
     contexts: HashMap<Uuid, usize>,
 
     retry_countdown: usize,
-}
-
-impl Default for ReadIndexQueue {
-    fn default() -> ReadIndexQueue {
-        ReadIndexQueue {
-            reads: VecDeque::new(),
-            ready_cnt: 0,
-            handled_cnt: 0,
-            contexts: HashMap::default(),
-            retry_countdown: 0,
-        }
-    }
 }
 
 impl ReadIndexQueue {

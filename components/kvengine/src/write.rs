@@ -49,10 +49,8 @@ impl WriteBatch {
             if version == 0 {
                 panic!("version is zero for managed CF")
             }
-        } else {
-            if version != 0 {
-                panic!("version is not zero for not managed CF")
-            }
+        } else if version != 0 {
+            panic!("version is not zero for not managed CF")
         }
     }
 

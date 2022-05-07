@@ -20,6 +20,12 @@ impl Deref for CFTable {
     }
 }
 
+impl Default for CFTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CFTable {
     pub fn new() -> Self {
         Self {
@@ -51,6 +57,12 @@ pub struct CFTableCore {
     arena: Arc<Arena>,
     ver: AtomicU64,
     props: Mutex<Option<kvenginepb::Properties>>,
+}
+
+impl Default for CFTableCore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CFTableCore {
@@ -98,7 +110,7 @@ impl CFTableCore {
     }
 
     pub fn get_version(&self) -> u64 {
-        return self.ver.load(Ordering::Acquire);
+        self.ver.load(Ordering::Acquire)
     }
 
     pub fn has_data_in_range(&self, start: &[u8], end: &[u8]) -> bool {
