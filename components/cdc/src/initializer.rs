@@ -420,7 +420,8 @@ impl<E: KvEngine> Initializer<E> {
 
     async fn sink_scan_events(&mut self, entries: Vec<Option<KvEntry>>, done: bool) -> Result<()> {
         let mut barrier = None;
-        let mut events = Delegate::convert_to_grpc_events(self.region_id, self.request_id, entries)?;
+        let mut events =
+            Delegate::convert_to_grpc_events(self.region_id, self.request_id, entries)?;
         if done {
             let (cb, fut) = tikv_util::future::paired_future_callback();
             events.push(CdcEvent::Barrier(Some(cb)));

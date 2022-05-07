@@ -681,8 +681,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
         // Now resolver is only used by tidb downstream.
         // Resolver is created when the first tidb cdc request arrive.
-        let is_build_resolver =
-            kv_api == ChangeDataRequestKvApi::TiDb && !delegate.has_resolver();
+        let is_build_resolver = kv_api == ChangeDataRequestKvApi::TiDb && !delegate.has_resolver();
 
         let downstream_ = downstream.clone();
         if let Err(err) = delegate.subscribe(downstream) {
