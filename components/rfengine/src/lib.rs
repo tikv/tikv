@@ -16,6 +16,9 @@ pub mod writer;
 #[macro_use]
 extern crate serde_derive;
 
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+
 pub use engine::*;
 use iterator::*;
 use load::*;

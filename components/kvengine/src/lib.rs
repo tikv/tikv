@@ -27,6 +27,9 @@ extern crate serde_derive;
 extern crate slog_global;
 extern crate core;
 
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+
 mod metrics;
 #[cfg(test)]
 mod tests;

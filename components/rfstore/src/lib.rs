@@ -5,6 +5,9 @@
 #![feature(in_band_lifetimes)]
 #![feature(backtrace)]
 
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+
 pub mod errors;
 pub mod mvcc;
 pub mod router;

@@ -13,6 +13,9 @@ extern crate serde_derive;
 #[macro_use]
 extern crate tikv_util;
 
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+
 #[macro_use]
 pub mod setup;
 mod node;
