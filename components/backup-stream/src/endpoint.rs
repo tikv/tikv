@@ -30,11 +30,11 @@ use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
 use yatp::task::callback::Handle as YatpHandle;
 
-use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
+use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
 use crate::{
     annotate,
     errors::{Error, Result},
-    event_loader::InitialDataLoader,
+    event_loader::{InitialDataLoader, PendingMemoryQuota},
     metadata::{
         store::{EtcdStore, MetaStore},
         MetadataClient, MetadataEvent, StreamTask,

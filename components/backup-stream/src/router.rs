@@ -50,7 +50,7 @@ use crate::{
     endpoint::Task,
     errors::{ContextualResultExt, Error},
     metadata::StreamTask,
-    metrics::SKIP_KV_COUNTER,
+    metrics::{HANDLE_KV_HISTOGRAM, SKIP_KV_COUNTER},
     subscription_track::TwoPhaseResolver,
     try_send,
     utils::{self, SegmentMap, Slot, SlotMap, StopWatch},
