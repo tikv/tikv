@@ -124,7 +124,6 @@ impl<S: Snapshot> EventLoader<S> {
 /// Like [`cdc::Initializer`], but supports initialize over range.
 /// Note: maybe we can merge those two structures?
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct InitialDataLoader<E, R, RT> {
     router: RT,
     regions: R,

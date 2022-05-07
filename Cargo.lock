@@ -266,9 +266,9 @@ name = "aws"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "bytes 1.0.1",
+ "bytes",
  "cloud",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "futures-util",
  "grpcio",
@@ -321,7 +321,7 @@ source = "git+https://github.com/Azure/azure-sdk-for-rust#b3c53f4cec4a6b541e4938
 dependencies = [
  "async-trait",
  "base64",
- "bytes 1.0.1",
+ "bytes",
  "chrono",
  "dyn-clone",
  "futures 0.3.15",
@@ -368,7 +368,7 @@ dependencies = [
  "async-trait",
  "azure_core",
  "base64",
- "bytes 1.0.1",
+ "bytes",
  "chrono",
  "futures 0.3.15",
  "http",
@@ -452,7 +452,7 @@ name = "backup-stream"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "bytes 0.4.12",
+ "bytes",
  "chrono",
  "concurrency_manager",
  "crossbeam",
@@ -465,7 +465,7 @@ dependencies = [
  "etcd-client",
  "external_storage",
  "external_storage_export",
- "fail 0.4.0",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "grpcio",
@@ -516,7 +516,7 @@ dependencies = [
  "criterion",
  "crossbeam",
  "derive_more",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "lazy_static",
  "online_config",
@@ -625,15 +625,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
 
 [[package]]
-name = "boringssl-src"
-version = "0.5.1+b9232f9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13550d246f6517024ac7f53ae2f1016bb3ed3b238f1489f8564380b635071664"
-dependencies = [
- "cmake",
-]
-
-[[package]]
 name = "bstr"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -656,16 +647,6 @@ name = "byteorder"
 version = "1.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08c48aae112d48ed9f069b33538ea9e3e90aa263cfa3d1c24309612b1f7472de"
-
-[[package]]
-name = "bytes"
-version = "0.4.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "206fdffcfa2df7cbe15601ef46c813fce0965eb3286db6b56c583b814b51c81c"
-dependencies = [
- "byteorder",
- "iovec",
-]
 
 [[package]]
 name = "bytes"
@@ -782,7 +763,7 @@ dependencies = [
  "crossbeam",
  "engine_rocks",
  "engine_traits",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "futures-timer",
  "getset",
@@ -929,7 +910,7 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "futures-io",
  "kvproto",
  "lazy_static",
@@ -956,7 +937,7 @@ name = "codec"
 version = "0.0.1"
 dependencies = [
  "byteorder",
- "bytes 1.0.1",
+ "bytes",
  "error_code",
  "libc 0.2.125",
  "panic_hook",
@@ -981,7 +962,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "crossbeam-skiplist",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "kvproto",
  "parking_lot 0.12.0",
@@ -1406,13 +1387,13 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "byteorder",
- "bytes 1.0.1",
+ "bytes",
  "crc32fast",
  "crossbeam",
  "derive_more",
  "engine_traits",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "futures-util",
@@ -1481,7 +1462,7 @@ dependencies = [
  "derive_more",
  "encryption",
  "engine_traits",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "keys",
  "kvproto",
@@ -1529,7 +1510,7 @@ version = "0.0.1"
 dependencies = [
  "case_macros",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "kvproto",
  "log_wrappers",
@@ -1636,10 +1617,10 @@ name = "external_storage"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "bytes 1.0.1",
+ "bytes",
  "encryption",
  "engine_traits",
- "fail 0.5.0",
+ "fail",
  "ffi-support",
  "file_system",
  "futures 0.3.15",
@@ -1664,7 +1645,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
- "tokio-util 0.6.6",
+ "tokio-util 0.7.0",
  "url",
 ]
 
@@ -1704,19 +1685,8 @@ dependencies = [
  "tempfile",
  "tikv_util",
  "tokio",
- "tokio-util 0.6.6",
+ "tokio-util 0.7.0",
  "url",
-]
-
-[[package]]
-name = "fail"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3be3c61c59fdc91f5dbc3ea31ee8623122ce80057058be560654c5d410d181a6"
-dependencies = [
- "lazy_static",
- "log",
- "rand 0.7.3",
 ]
 
 [[package]]
@@ -2233,7 +2203,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "925586932dbbea927e913783da0be160ee74e0b0519d7b20cec35547a0a84631"
 dependencies = [
  "bindgen 0.59.2",
- "boringssl-src",
  "cc",
  "cmake",
  "libc 0.2.125",
@@ -2249,7 +2218,7 @@ version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "825343c4eef0b63f541f8903f395dc5beb362a979b5799a84062527ef1e37726"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "fnv",
  "futures-core",
  "futures-sink",
@@ -2346,7 +2315,7 @@ version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "527e8c9ac747e28542699a951517aa9a6945af506cd1f2e1b53a576c17b6cc11"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "fnv",
  "itoa 0.4.4",
 ]
@@ -2357,7 +2326,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60daa14be0e0786db0f03a9e57cb404c9d756eed2b6c62b9ea98ec5743ec75a9"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "http",
  "pin-project-lite",
 ]
@@ -2386,7 +2355,7 @@ version = "0.14.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b61cf2d1aebcf6e6352c97b81dc2244ca29194be1b276f5d8ad5c6330fffb11"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "futures-channel",
  "futures-core",
  "futures-util",
@@ -2440,7 +2409,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6183ddfa99b85da61a140bea0efc93fdf56ceaa041b37d553518030827f9905"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "hyper",
  "native-tls",
  "tokio",
@@ -3600,7 +3569,7 @@ version = "0.1.0"
 dependencies = [
  "collections",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
@@ -3952,7 +3921,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de5e2533f59d08fcf364fd374ebda0692a70bd6d7e66ef97f306f45c6c5d8020"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "prost-derive",
 ]
 
@@ -3962,7 +3931,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "355f634b43cdd80724ee7848f95770e7e70eefa6dcf14fea676216573b8fd603"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "heck 0.3.1",
  "itertools 0.10.0",
  "log",
@@ -3993,7 +3962,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "603bbd6394701d13f3f25aada59c7de9d35a6a5887cfc156181234a44002771b"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "prost",
 ]
 
@@ -4002,7 +3971,7 @@ name = "protobuf"
 version = "2.8.0"
 source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "heck 0.3.1",
  "hex 0.3.2",
 ]
@@ -4062,7 +4031,7 @@ name = "raft"
 version = "0.7.0"
 source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "fxhash",
  "getset",
  "protobuf",
@@ -4080,7 +4049,7 @@ dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
- "fail 0.5.0",
+ "fail",
  "fs2",
  "hashbrown 0.12.0",
  "hex 0.4.2",
@@ -4117,7 +4086,7 @@ name = "raft-proto"
 version = "0.7.0"
 source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "protobuf",
  "protobuf-build",
 ]
@@ -4151,7 +4120,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
- "bytes 1.0.1",
+ "bytes",
  "collections",
  "concurrency_manager",
  "crc32fast",
@@ -4164,7 +4133,7 @@ dependencies = [
  "engine_test",
  "engine_traits",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "fs2",
  "futures 0.3.15",
@@ -4449,7 +4418,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0460542b551950620a3648c6aa23318ac6b3cd779114bd873209e6e8b5eb1c34"
 dependencies = [
  "base64",
- "bytes 1.0.1",
+ "bytes",
  "encoding_rs 0.8.29 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-core",
  "futures-util",
@@ -4486,7 +4455,7 @@ dependencies = [
  "crossbeam",
  "engine_rocks",
  "engine_traits",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "hex 0.4.2",
@@ -4608,7 +4577,7 @@ source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d
 dependencies = [
  "async-trait",
  "base64",
- "bytes 1.0.1",
+ "bytes",
  "crc32fast",
  "futures 0.3.15",
  "http",
@@ -4648,7 +4617,7 @@ version = "0.46.0"
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
 dependencies = [
  "async-trait",
- "bytes 1.0.1",
+ "bytes",
  "futures 0.3.15",
  "rusoto_core",
  "serde",
@@ -4675,7 +4644,7 @@ version = "0.46.0"
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
 dependencies = [
  "async-trait",
- "bytes 1.0.1",
+ "bytes",
  "futures 0.3.15",
  "rusoto_core",
  "serde",
@@ -4689,7 +4658,7 @@ version = "0.46.0"
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
 dependencies = [
  "base64",
- "bytes 1.0.1",
+ "bytes",
  "chrono",
  "digest",
  "futures 0.3.15",
@@ -4714,7 +4683,7 @@ version = "0.46.0"
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
 dependencies = [
  "async-trait",
- "bytes 1.0.1",
+ "bytes",
  "chrono",
  "futures 0.3.15",
  "rusoto_core",
@@ -5440,7 +5409,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d20ec2d6525a66afebdff9e1d8ef143c9deae9a3b040c61d3cfa9ae6fda80060"
 dependencies = [
  "base64",
- "bytes 1.0.1",
+ "bytes",
  "chrono",
  "futures-util",
  "http",
@@ -5583,7 +5552,7 @@ name = "test_pd"
 version = "0.0.1"
 dependencies = [
  "collections",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
@@ -5608,7 +5577,7 @@ dependencies = [
  "engine_rocks",
  "engine_test",
  "engine_traits",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "grpcio",
@@ -5672,7 +5641,7 @@ dependencies = [
  "backtrace",
  "collections",
  "encryption_export",
- "fail 0.5.0",
+ "fail",
  "grpcio",
  "kvproto",
  "rand 0.8.3",
@@ -5707,7 +5676,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage_export",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "grpcio",
@@ -5906,7 +5875,7 @@ dependencies = [
  "anyhow",
  "codec",
  "collections",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "itertools 0.10.0",
  "kvproto",
@@ -5993,7 +5962,7 @@ dependencies = [
  "engine_traits_tests",
  "error_code",
  "example_plugin",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "futures-executor",
@@ -6205,7 +6174,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "into_other",
@@ -6233,7 +6202,7 @@ dependencies = [
  "async-speed-limit",
  "backtrace",
  "byteorder",
- "bytes 1.0.1",
+ "bytes",
  "chrono",
  "codec",
  "collections",
@@ -6242,7 +6211,7 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "error_code",
- "fail 0.5.0",
+ "fail",
  "futures 0.3.15",
  "futures-util",
  "gag",
@@ -6354,7 +6323,7 @@ version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af73ac49756f3f7c01172e34a23e5d0216f6c32333757c2c61feb2bbff5a5ee"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "libc 0.2.125",
  "memchr",
  "mio 0.8.0",
@@ -6449,9 +6418,8 @@ version = "0.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940a12c99365c31ea8dd9ba04ec1be183ffe4920102bb7122c2f515437601e8e"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
  "log",
  "pin-project-lite",
@@ -6464,7 +6432,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64910e1b9c1901aaf5375561e35b9c057d95ff41a44ede043a03e09279eabaf1"
 dependencies = [
- "bytes 1.0.1",
+ "bytes",
  "futures-core",
  "futures-io",
  "futures-sink",
@@ -6491,7 +6459,7 @@ dependencies = [
  "async-stream 0.3.3",
  "async-trait",
  "base64",
- "bytes 1.0.1",
+ "bytes",
  "futures-core",
  "futures-util",
  "h2",
@@ -7043,7 +7011,7 @@ source = "git+https://github.com/tikv/yatp.git?branch=master#5f3d58002b383bfd001
 dependencies = [
  "crossbeam-deque",
  "dashmap",
- "fail 0.5.0",
+ "fail",
  "lazy_static",
  "num_cpus",
  "parking_lot_core 0.9.1",

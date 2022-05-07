@@ -1,4 +1,4 @@
-// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{convert::AsRef, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
 
@@ -49,13 +49,9 @@ use crate::{
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 
 pub struct Endpoint<S: MetaStore + 'static, R, E, RT, PDC> {
-    #[allow(dead_code)]
-    config: BackupStreamConfig,
     meta_client: Option<MetadataClient<S>>,
     range_router: Router,
-    #[allow(dead_code)]
     scheduler: Scheduler<Task>,
-    #[allow(dead_code)]
     observer: BackupStreamObserver,
     pool: Runtime,
     store_id: u64,
@@ -114,7 +110,6 @@ where
 
         info!("the endpoint of backup stream started"; "path" => %config.temp_path);
         Endpoint {
-            config,
             meta_client,
             range_router,
             scheduler,
@@ -189,7 +184,6 @@ where
 
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         Endpoint {
-            config,
             meta_client,
             range_router,
             scheduler,
@@ -574,6 +568,8 @@ where
                 .update_service_safe_point(
                     format!("backup-stream-{}-{}", task, store_id),
                     TimeStamp::new(rts),
+                    // Add a service safe point for 10mins (2x the default flush interval).
+                    // It would probably be safe.
                     Duration::from_secs(600),
                 )
                 .await
@@ -843,7 +839,9 @@ where
             Task::ModifyObserve(op) => self.on_modify_observe(op),
             Task::ForceFlush(task) => self.on_force_flush(task, self.store_id),
             Task::FatalError(task, err) => self.on_fatal_error(task, err),
-            _ => (),
+            Task::ChangeConfig(_) => {
+                warn!("change config online isn't supported for now.")
+            }
         }
     }
 

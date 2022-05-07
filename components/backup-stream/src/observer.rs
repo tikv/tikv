@@ -171,7 +171,10 @@ impl RegionChangeObserver for BackupStreamObserver {
             }
             // No need for handling `Create` -- once it becomes leader, it would start by
             // `on_applied_current_term`.
-            _ => {}
+            RegionChangeEvent::Create => {}
+            // No need for handling `UpdateBuckets` -- for now, we record change via regions,
+            // and we probably cannot take good form traking changes per bucket.
+            RegionChangeEvent::UpdateBuckets(_) => {}
         }
     }
 }

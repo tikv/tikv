@@ -102,8 +102,8 @@ impl MetaKey {
     /// The key of next backup ts of some region in some store.
     pub fn next_backup_ts_of(name: &str, store_id: u64) -> Self {
         let base = Self::next_backup_ts(name);
-        let mut buf = bytes::BytesMut::from(base.0);
-        buf.put_u64_be(store_id);
+        let mut buf = bytes::BytesMut::from(base.0.as_slice());
+        buf.put_u64(store_id);
         Self(buf.to_vec())
     }
 

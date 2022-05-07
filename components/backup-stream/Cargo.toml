@@ -13,7 +13,7 @@ backup-stream-debug = []
 
 [dependencies]
 async-trait = { version = "0.1" }
-bytes = "0.4.12"
+bytes = "1"
 chrono = "0.4"
 concurrency_manager = { path = "../concurrency_manager" }
 crossbeam = "0.8"
@@ -25,7 +25,7 @@ error_code = { path = "../error_code" }
 etcd-client = { version = "0.7", features = ["pub-response-field"] }
 external_storage = { path = "../external_storage", default-features = false }
 external_storage_export = { path = "../external_storage/export", default-features = false }
-fail = "0.4"
+fail = "0.5"
 
 file_system = { path = "../file_system" }
 futures = "0.3"
@@ -58,7 +58,7 @@ uuid = "0.8"
 [dev-dependencies]
 async-trait = "0.1"
 engine_panic = { path = "../engine_panic" }
-grpcio = "0.10"
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 hex = "0.4"
 rand = "0.8.0"
 tempdir = "0.3"
