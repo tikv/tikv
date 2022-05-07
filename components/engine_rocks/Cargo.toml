@@ -41,6 +41,7 @@ prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+regex = "1"
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

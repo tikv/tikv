@@ -34,6 +34,7 @@ use engine_rocks::{
     raw::{Cache, Env},
     FlowInfo, RocksEngine,
 };
+use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
     RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -101,7 +102,7 @@ use tikv_util::{
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
-    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
 use tokio::runtime::Builder;
 
@@ -196,6 +197,7 @@ struct TiKvServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
 }
 
@@ -294,6 +296,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             background_worker,
             flow_info_sender: None,
             flow_info_receiver: None,
+            sst_worker: None,
             quota_limiter,
         }
     }
@@ -585,6 +588,16 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         let pd_worker = LazyWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
+
+        if let Some(sst_worker) = &mut self.sst_worker {
+            let sst_runner = RecoveryRunner::new(
+                engines.engines.kv.get_sync_db(),
+                engines.store_meta.clone(),
+                self.config.storage.background_error_recovery_window.into(),
+                DEFAULT_CHECK_INTERVAL,
+            );
+            sst_worker.start_with_timer(sst_runner);
+        }
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             Some(build_yatp_read_pool(
@@ -1225,6 +1238,22 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             })
     }
 
+    fn init_sst_recovery_sender(&mut self) -> Option<Scheduler<String>> {
+        if !self
+            .config
+            .storage
+            .background_error_recovery_window
+            .is_zero()
+        {
+            let sst_worker = Box::new(LazyWorker::new("sst-recovery"));
+            let scheduler = sst_worker.scheduler();
+            self.sst_worker = Some(sst_worker);
+            Some(scheduler)
+        } else {
+            None
+        }
+    }
+
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
         let server = self.servers.as_mut().unwrap();
         server
@@ -1275,6 +1304,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         self.region_info_accessor.stop();
 
         servers.lock_mgr.stop();
+
+        if let Some(sst_worker) = self.sst_worker {
+            sst_worker.stop_worker();
+        }
 
         self.to_stop.into_iter().for_each(|s| s.stop());
     }
@@ -1401,6 +1434,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
             .compaction_filter_router(self.router.clone())
             .region_info_accessor(self.region_info_accessor.clone())
+            .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);

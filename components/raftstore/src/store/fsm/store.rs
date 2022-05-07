@@ -22,7 +22,7 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
     HandlerBuilder, PollHandler, Priority,
 };
-use collections::HashMap;
+use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
 use engine_traits::{
@@ -143,6 +143,8 @@ pub struct StoreMeta {
     pub destroyed_region_for_snap: HashMap<u64, bool>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
+    /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
+    pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
 }
 
 impl StoreMeta {
@@ -159,6 +161,7 @@ impl StoreMeta {
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
+            damaged_ranges: HashMap::default(),
         }
     }
 
@@ -176,6 +179,67 @@ impl StoreMeta {
         }
         let reader = self.readers.get_mut(&region.get_id()).unwrap();
         peer.set_region(host, reader, region);
+    }
+
+    /// Update damaged ranges and return true if overlap exists.
+    ///
+    /// Condition:
+    /// end_key > file.smallestkey
+    /// start_key <= file.largestkey
+    pub fn update_overlap_damaged_ranges(&mut self, fname: &str, start: &[u8], end: &[u8]) -> bool {
+        // `region_ranges` is promised to have no overlap so just check the first region.
+        if let Some((_, id)) = self
+            .region_ranges
+            .range((Excluded(start.to_owned()), Unbounded::<Vec<u8>>))
+            .next()
+        {
+            let region = &self.regions[id];
+            if keys::enc_start_key(region).as_slice() <= end {
+                if let HashMapEntry::Vacant(v) = self.damaged_ranges.entry(fname.to_owned()) {
+                    v.insert((start.to_owned(), end.to_owned()));
+                }
+                return true;
+            }
+        }
+
+        // It's OK to remove the range here before deleting real file.
+        let _ = self.damaged_ranges.remove(fname);
+        false
+    }
+
+    /// Get all region ids overlapping damaged ranges.
+    pub fn get_all_damaged_region_ids(&self) -> HashSet<u64> {
+        let mut ids = HashSet::default();
+        for (_fname, (start, end)) in self.damaged_ranges.iter() {
+            for (_, id) in self
+                .region_ranges
+                .range((Excluded(start.clone()), Unbounded::<Vec<u8>>))
+            {
+                let region = &self.regions[id];
+                if &keys::enc_start_key(region) <= end {
+                    ids.insert(*id);
+                } else {
+                    // `region_ranges` is promised to have no overlap.
+                    break;
+                }
+            }
+        }
+        if !ids.is_empty() {
+            warn!(
+                "detected damaged regions overlapping damaged file ranges";
+                "id" => ?&ids,
+            );
+        }
+        ids
+    }
+
+    fn overlap_damaged_range(&self, start_key: &Vec<u8>, end_key: &Vec<u8>) -> bool {
+        for (_fname, (file_start, file_end)) in self.damaged_ranges.iter() {
+            if file_end >= start_key && file_start < end_key {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -1941,6 +2005,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             // because of the `StoreMeta` lock.
         }
 
+        if meta.overlap_damaged_range(
+            &data_key(msg.get_start_key()),
+            &data_end_key(msg.get_end_key()),
+        ) {
+            warn!(
+                "Damaged region overlapped and reject to create peer";
+                "peer_id" => ?target,
+                "region_id" => &region_id,
+            );
+            return Ok(false);
+        }
+
         let mut is_overlapped = false;
         let mut regions_to_destroy = vec![];
         for (_, id) in meta.region_ranges.range((
@@ -2181,6 +2257,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
+
+            if !meta.damaged_ranges.is_empty() {
+                let damaged_regions_id = meta.get_all_damaged_region_ids().into_iter().collect();
+                stats.set_damaged_regions_id(damaged_regions_id);
+            }
         }
 
         let snap_stats = self.ctx.snap_mgr.stats();

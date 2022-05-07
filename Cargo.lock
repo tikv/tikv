@@ -1400,6 +1400,7 @@ dependencies = [
  "protobuf",
  "raft",
  "rand 0.8.3",
+ "regex",
  "rocksdb",
  "serde",
  "serde_derive",
@@ -1412,6 +1413,27 @@ dependencies = [
  "time",
  "toml",
  "txn_types",
+]
+
+[[package]]
+name = "engine_rocks_helper"
+version = "0.1.0"
+dependencies = [
+ "engine_rocks",
+ "engine_test",
+ "fail",
+ "futures 0.3.15",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "pd_client",
+ "prometheus",
+ "protobuf",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv_util",
 ]
 
 [[package]]
@@ -4812,6 +4834,7 @@ dependencies = [
  "encryption",
  "encryption_export",
  "engine_rocks",
+ "engine_rocks_helper",
  "engine_traits",
  "error_code",
  "file_system",
@@ -5386,6 +5409,7 @@ dependencies = [
  "crossbeam",
  "encryption_export",
  "engine_rocks",
+ "engine_rocks_helper",
  "engine_test",
  "engine_traits",
  "fail",
@@ -5484,6 +5508,7 @@ dependencies = [
  "crossbeam",
  "encryption",
  "engine_rocks",
+ "engine_rocks_helper",
  "engine_traits",
  "error_code",
  "external_storage_export",
