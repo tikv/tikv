@@ -229,6 +229,7 @@ members = [
   "components/codec",
   "components/collections",
   "components/concurrency_manager",
+  "components/config_info",
   "components/coprocessor_plugin_api",
   "components/encryption",
   "components/encryption/export",

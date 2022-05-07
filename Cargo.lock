@@ -908,6 +908,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "config_info"
+version = "0.1.0"
+dependencies = [
+ "config_info_derive",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "tikv_util",
+ "toml",
+]
+
+[[package]]
+name = "config_info_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "syn",
+]
+
+[[package]]
 name = "coprocessor_plugin_api"
 version = "0.1.0"
 dependencies = [
