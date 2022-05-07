@@ -6,7 +6,6 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
