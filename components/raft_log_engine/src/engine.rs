@@ -19,7 +19,7 @@ use raft_engine::{
     env::{DefaultFileSystem, FileSystem, Handle, WriteExt},
     Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
-pub use raft_engine::{Config as RaftEngineConfig, RecoveryMode};
+pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
 use tikv_util::Either;
 
 #[derive(Clone)]
