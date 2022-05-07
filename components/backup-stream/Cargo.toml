@@ -26,7 +26,6 @@ etcd-client = { version = "0.7", features = ["pub-response-field"] }
 external_storage = { path = "../external_storage", default-features = false }
 external_storage_export = { path = "../external_storage/export", default-features = false }
 fail = "0.5"
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 file_system = { path = "../file_system" }
 futures = "0.3"
@@ -55,6 +54,7 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] } 
 txn_types = { path = "../txn_types", default-features = false }
 uuid = "0.8"
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 async-trait = "0.1"
