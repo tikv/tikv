@@ -174,7 +174,7 @@ impl StoreMeta {
     /// end_key > file.smallestkey
     /// start_key <= file.largestkey
     pub fn update_overlap_damaged_ranges(&mut self, fname: &str, start: &[u8], end: &[u8]) -> bool {
-        // `region_ranges` is promised to have no overlap so just check the first region.ƒ
+        // `region_ranges` is promised to have no overlap so just check the first region.
         if let Some((_, id)) = self
             .region_ranges
             .range((Excluded(start.to_owned()), Unbounded::<Vec<u8>>))
@@ -182,11 +182,8 @@ impl StoreMeta {
         {
             let region = &self.regions[id];
             if keys::enc_start_key(region).as_slice() <= end {
-                match self.damaged_ranges.entry(fname.to_owned()) {
-                    HashMapEntry::Occupied(_) => {}
-                    HashMapEntry::Vacant(v) => {
-                        v.insert((start.to_owned(), end.to_owned()));
-                    }
+                if let HashMapEntry::Vacant(v) = self.damaged_ranges.entry(fname.to_owned()) {
+                    v.insert((start.to_owned(), end.to_owned()));
                 }
                 return true;
             }
