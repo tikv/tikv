@@ -51,6 +51,7 @@ use tikv::server::Result as ServerResult;
 use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
+    worker::LazyWorker,
     HandyRwLock,
 };
 
@@ -165,7 +166,8 @@ pub struct Cluster<T: Simulator> {
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
     group_props: HashMap<u64, GroupProperties>,
-
+    pub sst_workers: Vec<LazyWorker<String>>,
+    pub sst_workers_map: HashMap<u64, usize>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
 }
@@ -198,6 +200,8 @@ impl<T: Simulator> Cluster<T> {
             group_props: HashMap::default(),
             sim,
             pd_client,
+            sst_workers: vec![],
+            sst_workers_map: HashMap::default(),
         }
     }
 
@@ -228,14 +232,16 @@ impl<T: Simulator> Cluster<T> {
         let key_mgr = self.key_managers[offset].clone();
         assert!(self.engines.insert(node_id, engines).is_none());
         assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
+        assert!(self.sst_workers_map.insert(node_id, offset).is_none());
     }
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
-        let (engines, key_manager, dir) =
+        let (engines, key_manager, dir, sst_worker) =
             create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
+        self.sst_workers.push(sst_worker);
     }
 
     pub fn create_engines(&mut self) {
@@ -283,6 +289,8 @@ impl<T: Simulator> Cluster<T> {
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
+            self.sst_workers_map
+                .insert(node_id, self.sst_workers.len() - 1);
         }
         Ok(())
     }
@@ -629,6 +637,7 @@ impl<T: Simulator> Cluster<T> {
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
+            self.sst_workers_map.insert(id, i);
         }
 
         let mut region = metapb::Region::default();
@@ -662,6 +671,7 @@ impl<T: Simulator> Cluster<T> {
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
+            self.sst_workers_map.insert(id, i);
         }
 
         for (&id, engines) in &self.engines {
@@ -716,6 +726,8 @@ impl<T: Simulator> Cluster<T> {
 
         let key_mgr = self.key_managers.last().unwrap().clone();
         self.key_managers_map.insert(node_id, key_mgr);
+        self.sst_workers_map
+            .insert(node_id, self.sst_workers.len() - 1);
 
         self.run_node(node_id).unwrap();
         node_id
@@ -765,6 +777,9 @@ impl<T: Simulator> Cluster<T> {
         }
         self.leaders.clear();
         self.store_metas.clear();
+        for sst_worker in self.sst_workers.drain(..) {
+            sst_worker.stop_worker();
+        }
         debug!("all nodes are shut down.");
     }
 

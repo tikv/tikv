@@ -677,6 +677,7 @@ fn test_serde_custom_tikv_config() {
             export_priority: IOPriority::High,
             other_priority: IOPriority::Low,
         },
+        background_error_recovery_window: ReadableDuration::hours(1),
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,

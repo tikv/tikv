@@ -234,6 +234,7 @@ members = [
   "components/coprocessor_plugin_api",
   "components/encryption",
   "components/encryption/export",
+  "components/engine_rocks_helper",
   "components/error_code",
   "components/external_storage",
   "components/external_storage/export",
