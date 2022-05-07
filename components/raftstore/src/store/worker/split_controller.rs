@@ -1,26 +1,30 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{min, Ordering};
-use std::collections::BinaryHeap;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::slice::{Iter, IterMut};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::{
+    cmp::{min, Ordering},
+    collections::{BinaryHeap, HashMap, HashSet},
+    slice::{Iter, IterMut},
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
-use rand::Rng;
-
-use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb::{self, Peer};
-use kvproto::pdpb::QueryKind;
+use kvproto::{
+    kvrpcpb::KeyRange,
+    metapb::{self, Peer},
+    pdpb::QueryKind,
+};
 use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
-use tikv_util::config::Tracker;
-use tikv_util::{debug, info, warn};
+use rand::Rng;
+use tikv_util::{config::Tracker, debug, info, warn};
 
-use crate::store::metrics::*;
-use crate::store::worker::query_stats::{is_read_query, QueryStats};
-use crate::store::worker::split_config::get_sample_num;
-use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
+use crate::store::{
+    metrics::*,
+    worker::{
+        query_stats::{is_read_query, QueryStats},
+        split_config::get_sample_num,
+        FlowStatistics, SplitConfig, SplitConfigManager,
+    },
+};
 
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
 pub const TOP_N: usize = 10;
@@ -653,11 +657,10 @@ impl AutoSplitController {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use txn_types::Key;
 
-    use crate::store::util::build_key_range;
-    use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
+    use super::*;
+    use crate::store::{util::build_key_range, worker::split_config::DEFAULT_SAMPLE_NUM};
 
     enum Position {
         Left,

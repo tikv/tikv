@@ -1,15 +1,17 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Formatter};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::{
+    fmt::{self, Debug, Formatter},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
-use crate::metric::*;
 use engine_rocks::raw::*;
 use fail::fail_point;
 use raftstore::store::fsm::StoreMeta;
-use tikv_util::warn;
-use tikv_util::{self, set_panic_mark, worker::*};
+use tikv_util::{self, set_panic_mark, warn, worker::*};
+
+use crate::metric::*;
 
 pub const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_DAMAGED_FILES_NUM: usize = 2;
@@ -202,12 +204,13 @@ impl RecoveryRunner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{collections::BTreeMap, sync::Arc};
+
     use engine_rocks::raw_util;
     use kvproto::metapb::{Peer, Region};
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
     use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_sst_recovery_runner_check_overlap() {

@@ -1,77 +1,81 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
-use std::{thread, usize};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex, RwLock},
+    thread,
+    time::Duration,
+    usize,
+};
 
-use futures::executor::block_on;
-use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
-use grpcio_health::HealthService;
-use kvproto::deadlock::create_deadlock;
-use kvproto::debugpb::{create_debug, DebugClient};
-use kvproto::import_sstpb::create_import_sst;
-use kvproto::kvrpcpb::{ApiVersion, Context};
-use kvproto::metapb;
-use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb;
-use kvproto::tikvpb::TikvClient;
-use tempfile::TempDir;
-use tikv::storage::kv::SnapContext;
-use tokio::runtime::Builder as TokioBuilder;
-
-use super::*;
-use crate::Config;
 use api_version::{dispatch_api_version, KvFormat};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt};
+use futures::executor::block_on;
+use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
+use grpcio_health::HealthService;
+use kvproto::{
+    deadlock::create_deadlock,
+    debugpb::{create_debug, DebugClient},
+    import_sstpb::create_import_sst,
+    kvrpcpb::{ApiVersion, Context},
+    metapb,
+    raft_cmdpb::*,
+    raft_serverpb,
+    tikvpb::TikvClient,
+};
 use pd_client::PdClient;
-use raftstore::errors::Error as RaftError;
-use raftstore::router::{
-    LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter,
-};
-use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::{
-    AutoSplitController, Callback, CheckLeaderRunner, LocalReader, SnapManagerBuilder,
-    SplitCheckRunner, SplitConfigManager,
-};
-use raftstore::store::{RegionSnapshot, SnapManager};
-use raftstore::Result;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
-    store::msg::RaftCmdExtraOpts,
+    errors::Error as RaftError,
+    router::{LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter},
+    store::{
+        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
+        msg::RaftCmdExtraOpts,
+        AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot, SnapManager,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+    },
+    Result,
 };
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
-use tikv::coprocessor;
-use tikv::coprocessor_v2;
-use tikv::import::{ImportSstService, SstImporter};
-use tikv::read_pool::ReadPool;
-use tikv::server::gc_worker::GcWorker;
-use tikv::server::load_statistics::ThreadLoadPool;
-use tikv::server::lock_manager::LockManager;
-use tikv::server::resolve::{self, StoreAddrResolver};
-use tikv::server::service::DebugService;
-use tikv::server::Result as ServerResult;
-use tikv::server::{
-    create_raft_storage, ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
-    Server, ServerTransport,
+use tempfile::TempDir;
+use tikv::{
+    config::ConfigController,
+    coprocessor, coprocessor_v2,
+    import::{ImportSstService, SstImporter},
+    read_pool::ReadPool,
+    server::{
+        create_raft_storage,
+        gc_worker::GcWorker,
+        load_statistics::ThreadLoadPool,
+        lock_manager::LockManager,
+        raftkv::ReplicaReadLockChecker,
+        resolve::{self, StoreAddrResolver},
+        service::DebugService,
+        ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
+        Result as ServerResult, Server, ServerTransport,
+    },
+    storage::{self, kv::SnapContext, txn::flow_controller::FlowController, Engine},
 };
-use tikv::storage::txn::flow_controller::FlowController;
-use tikv::storage::{self, Engine};
-use tikv::{config::ConfigController, server::raftkv::ReplicaReadLockChecker};
-use tikv_util::config::VersionTrack;
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::time::ThreadReadId;
-use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
-use tikv_util::HandyRwLock;
+use tikv_util::{
+    config::VersionTrack,
+    quota_limiter::QuotaLimiter,
+    time::ThreadReadId,
+    worker::{Builder as WorkerBuilder, LazyWorker},
+    HandyRwLock,
+};
+use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
+use super::*;
+use crate::Config;
+
+type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>;
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver, RocksEngine>>;
 
@@ -112,11 +116,11 @@ impl StoreAddrResolver for AddressMap {
 }
 
 struct ServerMeta {
-    node: Node<TestPdClient, RocksEngine, RocksEngine>,
+    node: Node<TestPdClient, RocksEngine, RaftTestEngine>,
     server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    raw_router: RaftRouter<RocksEngine, RocksEngine>,
+    raw_router: RaftRouter<RocksEngine, RaftTestEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
     rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
@@ -240,11 +244,11 @@ impl ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: Config,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        router: RaftRouter<RocksEngine, RaftTestEngine>,
+        system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = test_util::temp_dir("test_cluster", cfg.prefer_mem);
@@ -415,7 +419,6 @@ impl ServerCluster {
             &server_cfg.value().clone(),
             cop_read_pool.handle(),
             concurrency_manager.clone(),
-            PerfLevel::EnableCount,
             res_tag_factory,
             quota_limiter,
         );
@@ -576,11 +579,11 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         cfg: Config,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        router: RaftRouter<RocksEngine, RaftTestEngine>,
+        system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
@@ -696,7 +699,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }

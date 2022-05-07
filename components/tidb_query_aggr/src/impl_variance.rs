@@ -2,15 +2,14 @@
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::builder::FieldTypeBuilder;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
+use tidb_query_datatype::{
+    builder::FieldTypeBuilder, codec::data_type::*, expr::EvalContext, EvalType, FieldTypeFlag,
+    FieldTypeTp,
+};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
-use super::summable::Summable;
-use super::*;
+use super::{summable::Summable, *};
 
 /// A trait for VARIANCE aggregation functions
 pub trait VarianceType: Clone + std::fmt::Debug + Send + Sync + 'static {
@@ -73,6 +72,7 @@ impl<V: VarianceType> super::AggrDefinitionParser for AggrFnDefinitionParserVari
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         use std::convert::TryFrom;
+
         use tidb_query_datatype::FieldTypeAccessor;
 
         assert!(V::check_expr_type(root_expr.get_tp()));
@@ -451,14 +451,15 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        FieldTypeAccessor, FieldTypeTp,
+    };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
-    use crate::parser::AggrDefinitionParser;
-
     use super::*;
+    use crate::parser::AggrDefinitionParser;
 
     #[test]
     fn test_variance_enum() {

@@ -26,20 +26,22 @@
 //! count and sum. In this case we say that the result of `AVG(Int)` has a *cardinality* of 2.
 //!
 
-use std::convert::TryFrom;
-use std::sync::Arc;
+use std::{convert::TryFrom, sync::Arc};
 
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tidb_query_aggr::*;
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
+    expr::{EvalConfig, EvalContext},
+    EvalType, FieldTypeAccessor,
+};
+use tidb_query_expr::RpnExpression;
 use tipb::{Expr, FieldType};
 
 use crate::interface::*;
-use tidb_query_aggr::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_expr::RpnExpression;
 
 pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     /// Accepts entities without any group by columns and modifies them optionally.
@@ -330,17 +332,17 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
 /// Shared test facilities for different aggregation executors.
 #[cfg(test)]
 pub mod tests {
-    use tidb_query_codegen::AggrFunction;
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeTp};
-
-    use crate::interface::*;
-    use crate::util::mock_executor::MockExecutor;
     use tidb_query_aggr::*;
+    use tidb_query_codegen::AggrFunction;
     use tidb_query_common::Result;
-    use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-    use tidb_query_datatype::codec::data_type::*;
-    use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::{batch::LazyBatchColumnVec, data_type::*},
+        expr::{EvalContext, EvalWarnings},
+        Collation, FieldTypeTp,
+    };
+
+    use crate::{interface::*, util::mock_executor::MockExecutor};
 
     #[derive(Debug, AggrFunction)]
     #[aggr_function(state = AggrFnUnreachableState)]

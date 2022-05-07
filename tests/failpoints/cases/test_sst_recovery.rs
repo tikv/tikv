@@ -1,12 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Write;
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{io::Write, path::Path, sync::Arc, time::Duration};
 
-use engine_rocks::raw::{CompactionOptions, DB};
-use engine_rocks::util::get_cf_handle;
+use engine_rocks::{
+    raw::{CompactionOptions, DB},
+    util::get_cf_handle,
+};
 use engine_rocks_helper::sst_recovery::*;
 use engine_traits::CF_DEFAULT;
 use test_raftstore::*;

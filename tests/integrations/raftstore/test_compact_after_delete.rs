@@ -1,12 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::raw::Range;
-use engine_rocks::util::get_cf_handle;
+use std::{
+    sync::{mpsc, Mutex},
+    time::Duration,
+};
+
+use engine_rocks::{raw::Range, util::get_cf_handle};
 use engine_traits::{MiscExt, CF_WRITE};
 use keys::{data_key, DATA_MAX_KEY};
-use std::sync::mpsc;
-use std::sync::Mutex;
-use std::time::Duration;
 use test_raftstore::*;
 use tikv::storage::mvcc::{TimeStamp, Write, WriteType};
 use tikv_util::config::*;

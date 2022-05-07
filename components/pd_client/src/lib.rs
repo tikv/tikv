@@ -10,30 +10,25 @@ mod util;
 
 mod config;
 pub mod errors;
-pub use self::client::{DummyPdClient, RpcClient};
-pub use self::config::Config;
-pub use self::errors::{Error, Result};
-pub use self::feature_gate::{Feature, FeatureGate};
-pub use self::util::PdConnector;
-pub use self::util::REQUEST_RECONNECT_INTERVAL;
-pub use self::util::{merge_bucket_stats, new_bucket_stats};
-
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{cmp::Ordering, collections::HashMap, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
-use kvproto::metapb;
-use kvproto::pdpb;
-use kvproto::replication_modepb::{
-    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+use kvproto::{
+    metapb, pdpb,
+    replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
 use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
+
+pub use self::{
+    client::{DummyPdClient, RpcClient},
+    config::Config,
+    errors::{Error, Result},
+    feature_gate::{Feature, FeatureGate},
+    util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
+};
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<'static, Result<T>>;

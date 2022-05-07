@@ -1,10 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::lock_manager::waiter_manager;
-use crate::server::lock_manager::waiter_manager::Callback;
-use crate::storage::{txn::ProcessResult, types::StorageCallback};
 use std::time::Duration;
+
 use txn_types::TimeStamp;
+
+use crate::{
+    server::lock_manager::{waiter_manager, waiter_manager::Callback},
+    storage::{txn::ProcessResult, types::StorageCallback},
+};
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {

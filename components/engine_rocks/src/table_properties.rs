@@ -1,7 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{util, RangeProperties, RocksEngine};
 use engine_traits::{Error, Range, Result};
+
+use crate::{util, RangeProperties, RocksEngine};
 
 #[repr(transparent)]
 pub struct UserCollectedProperties(rocksdb::UserCollectedProperties);

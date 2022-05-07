@@ -1,15 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{future::Future, sync::Arc};
+
 use api_version::KvFormat;
 use coprocessor_plugin_api::*;
 use kvproto::kvrpcpb;
 use semver::VersionReq;
-use std::future::Future;
-use std::sync::Arc;
 
-use super::config::Config;
-use super::plugin_registry::PluginRegistry;
-use super::raw_storage_impl::RawStorageImpl;
+use super::{config::Config, plugin_registry::PluginRegistry, raw_storage_impl::RawStorageImpl};
 use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
 
 #[allow(clippy::large_enum_variant)]

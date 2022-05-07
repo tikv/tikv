@@ -1,18 +1,22 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
-use std::time::Duration;
-
-use super::config::{ReadableDuration, ReadableSize};
-use super::time::Limiter;
-use super::timer::GLOBAL_TIMER_HANDLE;
-use online_config::{ConfigChange, ConfigManager};
 
 use cpu_time::ThreadTime;
 use futures::compat::Future01CompatExt;
+use online_config::{ConfigChange, ConfigManager};
+
+use super::{
+    config::{ReadableDuration, ReadableSize},
+    time::Limiter,
+    timer::GLOBAL_TIMER_HANDLE,
+};
 
 // TODO: This value is fixed based on experience of AWS 4vCPU TPC-C bench test.
 // It's better to use a universal approach.
@@ -239,8 +243,9 @@ impl ConfigManager for QuotaLimitConfigManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use futures::executor::block_on;
+
+    use super::*;
 
     #[test]
     fn test_quota_limiter() {

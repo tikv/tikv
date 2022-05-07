@@ -6,22 +6,25 @@
 //! that controls how the former is created or metrics are collected.
 
 // #[PerformanceCriticalPath]
-use crate::config::Config;
-use crate::fsm::{Fsm, FsmScheduler, Priority};
-use crate::mailbox::BasicMailbox;
-use crate::router::Router;
+use std::{
+    borrow::Cow,
+    ops::{Deref, DerefMut},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
+    thread::{self, current, JoinHandle, ThreadId},
+    time::Duration,
+};
+
 use crossbeam::channel::{self, SendError};
 use fail::fail_point;
 use file_system::{set_io_type, IOType};
-use std::borrow::Cow;
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::AtomicUsize;
-use std::sync::{Arc, Mutex};
-use std::thread::{self, current, JoinHandle, ThreadId};
-use std::time::Duration;
-use tikv_util::mpsc;
-use tikv_util::time::Instant;
-use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
+use tikv_util::{debug, error, info, mpsc, safe_panic, thd_name, time::Instant, warn};
+
+use crate::{
+    config::Config,
+    fsm::{Fsm, FsmScheduler, Priority},
+    mailbox::BasicMailbox,
+    router::Router,
+};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 pub enum FsmTypes<N, C> {

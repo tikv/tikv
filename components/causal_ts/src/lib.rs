@@ -13,9 +13,9 @@ mod metrics;
 pub use metrics::*;
 mod observer;
 pub use observer::*;
+use txn_types::TimeStamp;
 
 use crate::errors::Result;
-use txn_types::TimeStamp;
 
 /// Trait of causal timestamp provider.
 pub trait CausalTsProvider: Send + Sync {
@@ -29,9 +29,12 @@ pub trait CausalTsProvider: Send + Sync {
 }
 
 pub mod tests {
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    };
+
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Arc;
 
     /// for TEST purpose.
     pub struct TestProvider {

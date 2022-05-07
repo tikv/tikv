@@ -53,8 +53,9 @@ impl Iterator for KvGenerator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use test::Bencher;
+
+    use super::*;
 
     #[bench]
     fn bench_kv_generator(b: &mut Bencher) {

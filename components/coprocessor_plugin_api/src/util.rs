@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::allocator::HostAllocatorPtr;
-use super::plugin_api::CoprocessorPlugin;
+use super::{allocator::HostAllocatorPtr, plugin_api::CoprocessorPlugin};
 
 /// Name of the exported constructor with signature [`PluginConstructorSignature`] for the plugin.
 pub static PLUGIN_CONSTRUCTOR_SYMBOL: &[u8] = b"_plugin_create";

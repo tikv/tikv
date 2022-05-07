@@ -1,51 +1,62 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::hash_map::Entry;
-use std::error::Error as StdError;
-use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::time::Duration;
-use std::{result, thread};
-
-use crossbeam::channel::TrySendError;
-use futures::executor::block_on;
-use kvproto::errorpb::Error as PbError;
-use kvproto::kvrpcpb::{ApiVersion, Context};
-use kvproto::metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel};
-use kvproto::pdpb;
-use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{
-    self, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
-    RegionLocalState,
+use std::{
+    collections::hash_map::Entry as MapEntry,
+    error::Error as StdError,
+    result,
+    sync::{mpsc, Arc, Mutex, RwLock},
+    thread,
+    time::Duration,
 };
-use raft::eraftpb::ConfChangeType;
-use tempfile::TempDir;
-use tikv_util::worker::LazyWorker;
 
-use crate::Config;
 use collections::{HashMap, HashSet};
+use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::raw::DB;
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{raw::DB, Compat, RocksEngine, RocksSnapshot};
+use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt,
-    CF_DEFAULT, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
+    WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
-use kvproto::pdpb::CheckPolicy;
+use futures::executor::block_on;
+use kvproto::{
+    errorpb::Error as PbError,
+    kvrpcpb::{ApiVersion, Context},
+    metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel},
+    pdpb,
+    pdpb::CheckPolicy,
+    raft_cmdpb::*,
+    raft_serverpb::{
+        PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+        RegionLocalState,
+    },
+};
 use pd_client::{BucketStat, PdClient};
-use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
-use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
-use raftstore::store::transport::CasualRouter;
-use raftstore::store::*;
-use raftstore::{Error, Result};
-use std::sync::mpsc::channel;
+use raft::eraftpb::ConfChangeType;
+use raftstore::{
+    store::{
+        fsm::{
+            create_raft_batch_system,
+            store::{StoreMeta, PENDING_MSG_CAP},
+            RaftBatchSystem, RaftRouter,
+        },
+        transport::CasualRouter,
+        *,
+    },
+    Error, Result,
+};
+use tempfile::TempDir;
 use tikv::server::Result as ServerResult;
-use tikv_util::thread_group::GroupProperties;
-use tikv_util::time::Instant;
-use tikv_util::HandyRwLock;
+use tikv_util::{
+    thread_group::GroupProperties,
+    time::{Instant, ThreadReadId},
+    worker::LazyWorker,
+    HandyRwLock,
+};
 
 use super::*;
-use tikv_util::time::ThreadReadId;
+use crate::Config;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -62,11 +73,11 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: Config,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        router: RaftRouter<RocksEngine, RaftTestEngine>,
+        system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -88,7 +99,7 @@ pub trait Simulator {
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_snap_mgr(&self, node_id: u64) -> &SnapManager;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -147,11 +158,11 @@ pub struct Cluster<T: Simulator> {
     pub count: usize,
 
     pub paths: Vec<TempDir>,
-    pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
+    pub dbs: Vec<Engines<RocksEngine, RaftTestEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IORateLimiter>>,
-    pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
+    pub engines: HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
     group_props: HashMap<u64, GroupProperties>,
@@ -224,7 +235,7 @@ impl<T: Simulator> Cluster<T> {
         assert!(self.sst_workers_map.insert(node_id, offset).is_none());
     }
 
-    fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RocksEngine>>) {
+    fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
         let (engines, key_manager, dir, sst_worker) =
             create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
@@ -329,12 +340,12 @@ impl<T: Simulator> Cluster<T> {
             cfg.server.labels = labels.to_owned();
         }
         let store_meta = match self.store_metas.entry(node_id) {
-            Entry::Occupied(o) => {
+            MapEntry::Occupied(o) => {
                 let mut meta = o.get().lock().unwrap();
                 *meta = StoreMeta::new(PENDING_MSG_CAP);
                 o.get().clone()
             }
-            Entry::Vacant(v) => v
+            MapEntry::Vacant(v) => v
                 .insert(Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))))
                 .clone(),
         };
@@ -365,11 +376,11 @@ impl<T: Simulator> Cluster<T> {
         Arc::clone(self.engines[&node_id].kv.as_inner())
     }
 
-    pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(self.engines[&node_id].raft.as_inner())
+    pub fn get_raft_engine(&self, node_id: u64) -> RaftTestEngine {
+        self.engines[&node_id].raft.clone()
     }
 
-    pub fn get_all_engines(&self, node_id: u64) -> Engines<RocksEngine, RocksEngine> {
+    pub fn get_all_engines(&self, node_id: u64) -> Engines<RocksEngine, RaftTestEngine> {
         self.engines[&node_id].clone()
     }
 
@@ -1175,10 +1186,9 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_raft_local_state(&self, region_id: u64, store_id: u64) -> Option<RaftLocalState> {
-        let key = keys::raft_state_key(region_id);
-        self.get_raft_engine(store_id)
-            .c()
-            .get_msg::<raft_serverpb::RaftLocalState>(&key)
+        self.engines[&store_id]
+            .raft
+            .get_raft_state(region_id)
             .unwrap()
     }
 
@@ -1279,27 +1289,6 @@ impl<T: Simulator> Cluster<T> {
         })
         .unwrap();
         kv_wb.write().unwrap();
-    }
-
-    pub fn restore_raft(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
-        let (raft_start, raft_end) = (
-            keys::region_raft_prefix(region_id),
-            keys::region_raft_prefix(region_id + 1),
-        );
-        let mut raft_wb = self.engines[&store_id].raft.write_batch();
-        self.engines[&store_id]
-            .raft
-            .scan(&raft_start, &raft_end, false, |k, _| {
-                raft_wb.delete(k).unwrap();
-                Ok(true)
-            })
-            .unwrap();
-        snap.scan(&raft_start, &raft_end, false, |k, v| {
-            raft_wb.put(k, v).unwrap();
-            Ok(true)
-        })
-        .unwrap();
-        raft_wb.write().unwrap();
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
@@ -1751,7 +1740,7 @@ impl<T: Simulator> Cluster<T> {
     ) -> u64 {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
-        let (tx, rx) = channel();
+        let (tx, rx) = mpsc::channel();
         let cb = Callback::Test {
             cb: Box::new(move |stat: PeerInternalStat| {
                 if let Some(expect_buckets) = expect_buckets {
@@ -1785,7 +1774,7 @@ impl<T: Simulator> Cluster<T> {
     ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
-        let (tx, rx) = channel();
+        let (tx, rx) = mpsc::channel();
         let cb = Callback::Test {
             cb: Box::new(move |stat: PeerInternalStat| {
                 assert_eq!(

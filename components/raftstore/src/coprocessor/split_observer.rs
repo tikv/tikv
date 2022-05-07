@@ -1,15 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use itertools::Itertools;
-
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-use tikv_util::codec::bytes;
-use tikv_util::{box_err, box_try, error, warn};
+use kvproto::{
+    metapb::Region,
+    raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
+};
+use tikv_util::{box_err, box_try, codec::bytes, error, warn};
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use crate::store::util;
-use crate::Error;
+use crate::{store::util, Error};
 
 fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     let mut slice = key.as_slice();
@@ -157,15 +156,19 @@ impl AdminObserver for SplitObserver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::coprocessor::AdminObserver;
-    use crate::coprocessor::ObserverContext;
     use byteorder::{BigEndian, WriteBytesExt};
-    use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-    use tidb_query_datatype::codec::{datum, table, Datum};
-    use tidb_query_datatype::expr::EvalContext;
+    use kvproto::{
+        metapb::Region,
+        raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
+    };
+    use tidb_query_datatype::{
+        codec::{datum, table, Datum},
+        expr::EvalContext,
+    };
     use tikv_util::codec::bytes::encode_bytes;
+
+    use super::*;
+    use crate::coprocessor::{AdminObserver, ObserverContext};
 
     fn new_split_request(key: Vec<u8>) -> AdminRequest {
         let mut req = AdminRequest::default();

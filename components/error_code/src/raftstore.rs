@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::ErrorCodeExt;
 use kvproto::errorpb;
+
+use super::ErrorCodeExt;
 
 define_error_codes!(
     "KV:Raftstore:",

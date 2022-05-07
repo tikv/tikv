@@ -4104,6 +4104,13 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-{{name}}",
               "refId": "A"
+            },
+            {
+              "expr": "raft_engine_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-raft-engine",
+              "refId": "B"
             }
           ],
           "thresholds": [],
@@ -29832,10 +29839,16 @@
             {
               "exemplar": true,
               "expr": "avg(raft_engine_log_file_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (type)",
-              "interval": "",
+              "intervalFactor": 1,
               "legendFormat": "{{type}}",
-              "queryType": "randomWalk",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "avg(raft_engine_swap_file_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"})",
+              "intervalFactor": 1,
+              "legendFormat": "swap",
+              "refId": "B"
             }
           ],
           "thresholds": [],

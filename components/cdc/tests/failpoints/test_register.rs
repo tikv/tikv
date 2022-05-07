@@ -1,18 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use std::thread;
-use std::time::Duration;
+use std::{thread, time::Duration};
 
-use crate::{new_event_feed, TestSuite};
-use futures::executor::block_on;
-use futures::sink::SinkExt;
+use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
-use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::*;
-use kvproto::metapb::RegionEpoch;
+use kvproto::{cdcpb::*, kvrpcpb::*, metapb::RegionEpoch};
 use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::coprocessor::{ObserverContext, RoleChange, RoleObserver};
 use test_raftstore::sleep_ms;
+
+use crate::{new_event_feed, TestSuite};
 
 #[test]
 fn test_failed_pending_batch() {

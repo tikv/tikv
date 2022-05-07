@@ -1,9 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    hash::Hash,
+    mem::MaybeUninit,
+    ptr::{self, NonNull},
+};
+
 use collections::{HashMap, HashMapEntry};
-use std::hash::Hash;
-use std::mem::MaybeUninit;
-use std::ptr::{self, NonNull};
 
 struct Record<K> {
     prev: NonNull<Record<K>>,

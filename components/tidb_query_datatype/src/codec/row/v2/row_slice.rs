@@ -1,10 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::codec::{Error, Result};
+use std::{
+    cmp::Ordering::{Equal, Greater, Less},
+    marker::PhantomData,
+};
+
 use codec::prelude::*;
 use num_traits::PrimInt;
-use std::cmp::Ordering::{Equal, Greater, Less};
-use std::marker::PhantomData;
+
+use crate::codec::{Error, Result};
 
 pub enum RowSlice<'a> {
     Small {
@@ -246,12 +250,15 @@ impl<'a, T: PrimInt> LEBytes<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::encoder_for_test::{Column, RowEncoder};
-    use super::{read_le_bytes, RowSlice};
-    use crate::codec::data_type::ScalarValue;
-    use crate::expr::EvalContext;
-    use codec::prelude::NumberEncoder;
     use std::u16;
+
+    use codec::prelude::NumberEncoder;
+
+    use super::{
+        super::encoder_for_test::{Column, RowEncoder},
+        read_le_bytes, RowSlice,
+    };
+    use crate::{codec::data_type::ScalarValue, expr::EvalContext};
 
     #[test]
     fn test_read_le_bytes() {
@@ -349,11 +356,13 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use super::super::encoder_for_test::{Column, RowEncoder};
-    use super::RowSlice;
-    use crate::codec::data_type::ScalarValue;
-    use crate::expr::EvalContext;
     use test::black_box;
+
+    use super::{
+        super::encoder_for_test::{Column, RowEncoder},
+        RowSlice,
+    };
+    use crate::{codec::data_type::ScalarValue, expr::EvalContext};
 
     fn encoded_data(len: usize) -> Vec<u8> {
         let mut cols = vec![];

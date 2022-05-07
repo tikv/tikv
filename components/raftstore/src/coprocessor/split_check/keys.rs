@@ -1,17 +1,23 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{CasualMessage, CasualRouter};
+use std::{
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+};
+
 use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
 use tikv_util::{box_try, debug, info, warn};
 
-use super::super::error::Result;
-use super::super::metrics::*;
-use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
-use super::Host;
+use super::{
+    super::{
+        error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
+        SplitChecker,
+    },
+    Host,
+};
+use crate::store::{CasualMessage, CasualRouter};
 
 pub struct Checker {
     max_keys_count: u64,
@@ -192,22 +198,23 @@ pub fn get_region_approximate_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::super::size::tests::must_split_at;
-    use crate::coprocessor::{Config, CoprocessorHost};
-    use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
+    use std::{cmp, sync::mpsc, u64};
+
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
-    use engine_traits::{KvEngine, MiscExt, SyncMutable};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
-    use kvproto::metapb::{Peer, Region};
-    use kvproto::pdpb::CheckPolicy;
-    use std::cmp;
-    use std::sync::mpsc;
-    use std::u64;
+    use engine_traits::{KvEngine, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use kvproto::{
+        metapb::{Peer, Region},
+        pdpb::CheckPolicy,
+    };
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::*;
+    use super::{super::size::tests::must_split_at, *};
+    use crate::{
+        coprocessor::{Config, CoprocessorHost},
+        store::{CasualMessage, SplitCheckRunner, SplitCheckTask},
+    };
 
     fn put_data(engine: &impl KvEngine, mut start_idx: u64, end_idx: u64, fill_short_value: bool) {
         let write_value = if fill_short_value {
@@ -244,7 +251,7 @@ mod tests {
     fn test_split_check() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let cf_opts = ColumnFamilyOptions::new();
         let cfs_opts = ALL_CFS
             .iter()
@@ -354,7 +361,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS
@@ -394,7 +401,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS
