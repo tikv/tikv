@@ -1178,7 +1178,7 @@ where
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
-                    if let Some(plan) = resp.recovery_plan.take() {
+                    if let Some(mut plan) = resp.recovery_plan.take() {
                         info!("Unsafe recovery, received a recovery plan");
                         if plan.has_force_leader() {
                             let mut failed_stores = HashSet::default();
@@ -1212,7 +1212,7 @@ where
                                 },
                                 router.clone(),
                             );
-                            for create in plan.take_creates() {
+                            for create in plan.take_creates().into_iter() {
                                 info!("Unsafe recovery, asked to create region"; "region" => ?create);
                                 if let Err(e) =
                                     router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
@@ -1223,7 +1223,7 @@ where
                                     error!("fail to send creat peer message for recovery"; "err" => ?e);
                                 }
                             }
-                            for delete in plan.take_tombstones() {
+                            for delete in plan.take_tombstones().into_iter() {
                                 info!("Unsafe recovery, asked to delete peer"; "peer" => delete);
                                 if let Err(e) = router.significant_send(
                                     delete,
@@ -1232,7 +1232,7 @@ where
                                     error!("fail to send delete peer message for recovery"; "err" => ?e);
                                 }
                             }
-                            for demote in plan.take_demotes() {
+                            for demote in plan.take_demotes().into_iter() {
                                 info!("Unsafe recovery, required to demote failed peers"; "demotion" => ?demote);
                                 if let Err(e) = router.significant_send(
                                     demote.get_region_id(),
