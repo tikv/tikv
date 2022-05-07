@@ -48,10 +48,8 @@ use raftstore::{
 use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use tikv::{
-    config::*, server::KvEngineFactoryBuilder, storage::point_key_range, worker::LazyWorker,
-};
-use tikv_util::{config::*, escape, time::ThreadReadId, HandyRwLock};
+use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
+use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
 use txn_types::Key;
 
 use crate::{Cluster, Config, ServerCluster, Simulator, TestPdClient};
