@@ -253,6 +253,67 @@ pub struct PeerStat {
     pub approximate_size: u64,
 }
 
+pub struct ReportBucket {
+    current_stat: BucketStat,
+    last_report_stat: Option<BucketStat>,
+    last_report_time: TiInstant,
+}
+
+impl Default for ReportBucket {
+    fn default() -> Self {
+        Self {
+            current_stat: BucketStat::default(),
+            last_report_stat: None,
+            last_report_time: TiInstant::now(),
+        }
+    }
+}
+
+impl ReportBucket {
+    fn new(current_stat: BucketStat) -> Self {
+        Self {
+            current_stat,
+            ..Default::default()
+        }
+    }
+
+    fn new_report(&mut self, report_time: TiInstant) -> BucketStat {
+        self.last_report_time = report_time;
+        match self.last_report_stat.replace(self.current_stat.clone()) {
+            Some(last) => {
+                let mut delta = BucketStat::new(
+                    self.current_stat.meta.clone(),
+                    pd_client::new_bucket_stats(&self.current_stat.meta),
+                );
+                // Recalculate last stats accroding to current meta.
+                merge_bucket_stats(
+                    &delta.meta.keys,
+                    &mut delta.stats,
+                    &last.meta.keys,
+                    &last.stats,
+                );
+                for i in 0..delta.meta.keys.len() - 1 {
+                    delta.stats.write_bytes[i] =
+                        self.current_stat.stats.write_bytes[i] - delta.stats.write_bytes[i];
+                    delta.stats.write_keys[i] =
+                        self.current_stat.stats.write_keys[i] - delta.stats.write_keys[i];
+                    delta.stats.write_qps[i] =
+                        self.current_stat.stats.write_qps[i] - delta.stats.write_qps[i];
+
+                    delta.stats.read_bytes[i] =
+                        self.current_stat.stats.read_bytes[i] - delta.stats.read_bytes[i];
+                    delta.stats.read_keys[i] =
+                        self.current_stat.stats.read_keys[i] - delta.stats.read_keys[i];
+                    delta.stats.read_qps[i] =
+                        self.current_stat.stats.read_qps[i] - delta.stats.read_qps[i];
+                }
+                delta
+            }
+            None => self.current_stat.clone(),
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 struct PeerCmpReadStat {
     pub region_id: u64,
@@ -774,7 +835,7 @@ where
     pd_client: Arc<T>,
     router: RaftRouter<EK, ER>,
     region_peers: HashMap<u64, PeerStat>,
-    region_buckets: HashMap<u64, BucketStat>,
+    region_buckets: HashMap<u64, ReportBucket>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
     // Records the boot time.
@@ -1648,19 +1709,18 @@ where
     fn handle_report_region_buckets(&mut self, region_buckets: BucketStat) {
         let region_id = region_buckets.meta.region_id;
         self.merge_buckets(region_buckets);
-        let buckets = self.region_buckets.get_mut(&region_id).unwrap();
+        let report_buckets = self.region_buckets.get_mut(&region_id).unwrap();
         let now = TiInstant::now();
-        let period = now.duration_since(buckets.last_report_time);
-        buckets.last_report_time = now;
-        let meta = buckets.meta.clone();
-        let resp = self.pd_client.report_region_buckets(buckets, period);
+        let period = now.duration_since(report_buckets.last_report_time);
+        let delta = report_buckets.new_report(now);
+        let resp = self.pd_client.report_region_buckets(&delta, period);
         let f = async move {
             if let Err(e) = resp.await {
                 debug!(
                     "failed to send buckets";
                     "region_id" => region_id,
-                    "version" => meta.version,
-                    "region_epoch" => ?meta.region_epoch,
+                    "version" => delta.meta.version,
+                    "region_epoch" => ?delta.meta.region_epoch,
                     "err" => ?e
                 );
             }
@@ -1674,7 +1734,8 @@ where
         let region_id = buckets.meta.region_id;
         self.region_buckets
             .entry(region_id)
-            .and_modify(|current| {
+            .and_modify(|report_bucket| {
+                let current = &mut report_bucket.current_stat;
                 if current.meta.cmp(&buckets.meta) == Ordering::Less {
                     mem::swap(current, &mut buckets);
                 }
@@ -1686,7 +1747,7 @@ where
                     &buckets.stats,
                 );
             })
-            .or_insert(buckets);
+            .or_insert_with(|| ReportBucket::new(buckets));
     }
 
     fn update_health_status(&mut self, status: ServingStatus) {

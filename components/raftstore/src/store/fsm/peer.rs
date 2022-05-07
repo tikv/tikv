@@ -5254,7 +5254,7 @@ where
                 (
                     &b.meta.keys,
                     &b.stats,
-                    region_buckets.last_report_time != b.last_report_time,
+                    region_buckets.create_time != b.create_time,
                 )
             })
             .unwrap_or((&empty_last_keys, &empty_last_stats, false));

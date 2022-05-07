@@ -126,13 +126,13 @@ impl BucketMeta {
 pub struct BucketStat {
     pub meta: Arc<BucketMeta>,
     pub stats: metapb::BucketStats,
-    pub last_report_time: Instant,
+    pub create_time: Instant,
 }
 
 impl Default for BucketStat {
     fn default() -> Self {
         Self {
-            last_report_time: Instant::now(),
+            create_time: Instant::now(),
             meta: Arc::default(),
             stats: metapb::BucketStats::default(),
         }
@@ -144,7 +144,7 @@ impl BucketStat {
         Self {
             meta,
             stats,
-            last_report_time: Instant::now(),
+            create_time: Instant::now(),
         }
     }
 

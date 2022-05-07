@@ -1697,14 +1697,28 @@ impl PdClient for TestPdClient {
         Box::pin(ok(()))
     }
 
-    fn report_region_buckets(&self, bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
+    fn report_region_buckets(&self, buckets: &BucketStat, _period: Duration) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
         }
+        let mut buckets = buckets.clone();
         self.cluster
             .wl()
             .buckets
-            .insert(bucket_stat.meta.region_id, bucket_stat.clone());
+            .entry(buckets.meta.region_id)
+            .and_modify(|current| {
+                if current.meta.cmp(&buckets.meta) == std::cmp::Ordering::Less {
+                    std::mem::swap(current, &mut buckets);
+                }
+
+                pd_client::merge_bucket_stats(
+                    &current.meta.keys,
+                    &mut current.stats,
+                    &buckets.meta.keys,
+                    &buckets.stats,
+                );
+            })
+            .or_insert(buckets);
         ready(Ok(())).boxed()
     }
 }
