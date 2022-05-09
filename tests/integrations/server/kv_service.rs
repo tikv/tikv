@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use api_version::{APIVersion, APIV1, APIV1TTL, APIV2};
+use api_version::{ApiVersion, ApiV1, ApiV1Ttl, ApiV2};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
 use engine_traits::{
