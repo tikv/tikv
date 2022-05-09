@@ -24,7 +24,7 @@ failpoints = [
   "fail/failpoints",
   "raftstore/failpoints",
   "tikv_util/failpoints",
-  "engine_rocks/failpoints"
+  "engine_rocks/failpoints",
 ]
 cloud-aws = [
   "encryption_export/cloud-aws",
@@ -218,6 +218,7 @@ members = [
   "cmd/tikv-server",
   "components/api_version",
   "components/backup",
+  "components/backup-stream",
   "components/batch-system",
   "components/case_macros",
   "components/causal_ts",
@@ -229,9 +230,11 @@ members = [
   "components/codec",
   "components/collections",
   "components/concurrency_manager",
+  "components/concurrency_manager",
   "components/coprocessor_plugin_api",
   "components/encryption",
   "components/encryption/export",
+  "components/engine_rocks_helper",
   "components/error_code",
   "components/external_storage",
   "components/external_storage/export",
@@ -246,6 +249,7 @@ members = [
   "components/raftstore",
   "components/resolved_ts",
   "components/resource_metering",
+  "components/server",
   "components/server",
   "components/sst_importer",
   "components/test_backup",

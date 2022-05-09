@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp,
     fmt::{self, Debug, Formatter},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -256,16 +255,39 @@ impl ObserveHandle {
 pub struct CmdObserveInfo {
     pub cdc_id: ObserveHandle,
     pub rts_id: ObserveHandle,
+    pub pitr_id: ObserveHandle,
 }
 
 impl CmdObserveInfo {
-    pub fn from_handle(cdc_id: ObserveHandle, rts_id: ObserveHandle) -> CmdObserveInfo {
-        CmdObserveInfo { cdc_id, rts_id }
+    pub fn from_handle(
+        cdc_id: ObserveHandle,
+        rts_id: ObserveHandle,
+        pitr_id: ObserveHandle,
+    ) -> CmdObserveInfo {
+        CmdObserveInfo {
+            cdc_id,
+            rts_id,
+            pitr_id,
+        }
     }
 
+    /// Get the max observe level of the observer info by the observers currently registered.
+    /// Currently, TiKV uses a static strategy for managing observers.
+    /// There are a fixed number type of observer being registered in each TiKV node,
+    /// and normally, observers are singleton.
+    /// The types are:
+    /// CDC: Observer supports the `ChangeData` service.
+    /// PiTR: Observer supports the `backup-log` function.
+    /// RTS: Observer supports the `resolved-ts` advancing (and follower read, etc.).
     fn observe_level(&self) -> ObserveLevel {
         let cdc = if self.cdc_id.is_observing() {
             // `cdc` observe all data
+            ObserveLevel::All
+        } else {
+            ObserveLevel::None
+        };
+        let pitr = if self.pitr_id.is_observing() {
+            // `pitr` observe all data.
             ObserveLevel::All
         } else {
             ObserveLevel::None
@@ -276,7 +298,7 @@ impl CmdObserveInfo {
         } else {
             ObserveLevel::None
         };
-        cmp::max(cdc, rts)
+        cdc.max(rts).max(pitr)
     }
 }
 
@@ -285,6 +307,7 @@ impl Debug for CmdObserveInfo {
         f.debug_struct("CmdObserveInfo")
             .field("cdc_id", &self.cdc_id.id)
             .field("rts_id", &self.rts_id.id)
+            .field("pitr_id", &self.pitr_id.id)
             .finish()
     }
 }
@@ -305,6 +328,7 @@ pub struct CmdBatch {
     pub level: ObserveLevel,
     pub cdc_id: ObserveID,
     pub rts_id: ObserveID,
+    pub pitr_id: ObserveID,
     pub region_id: u64,
     pub cmds: Vec<Cmd>,
 }
@@ -315,6 +339,7 @@ impl CmdBatch {
             level: observe_info.observe_level(),
             cdc_id: observe_info.cdc_id.id,
             rts_id: observe_info.rts_id.id,
+            pitr_id: observe_info.pitr_id.id,
             region_id,
             cmds: Vec::new(),
         }
@@ -324,6 +349,7 @@ impl CmdBatch {
         assert_eq!(region_id, self.region_id);
         assert_eq!(observe_info.cdc_id.id, self.cdc_id);
         assert_eq!(observe_info.rts_id.id, self.rts_id);
+        assert_eq!(observe_info.pitr_id.id, self.pitr_id);
         self.cmds.push(cmd)
     }
 
@@ -385,22 +411,47 @@ mod tests {
     #[test]
     fn test_observe_level() {
         // Both cdc and `resolved-ts` are observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
         assert_eq!(observe_info.observe_level(), ObserveLevel::All);
 
         // No observer
         observe_info.cdc_id.stop_observing();
         observe_info.rts_id.stop_observing();
+        observe_info.pitr_id.stop_observing();
         assert_eq!(observe_info.observe_level(), ObserveLevel::None);
 
         // Only cdc observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
         observe_info.rts_id.stop_observing();
+        observe_info.pitr_id.stop_observing();
         assert_eq!(observe_info.observe_level(), ObserveLevel::All);
 
         // Only `resolved-ts` observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
         observe_info.cdc_id.stop_observing();
+        observe_info.pitr_id.stop_observing();
         assert_eq!(observe_info.observe_level(), ObserveLevel::LockRelated);
+
+        // Only `backup-stream(pitr)` observing
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
+        observe_info.cdc_id.stop_observing();
+        observe_info.rts_id.stop_observing();
+        assert_eq!(observe_info.observe_level(), ObserveLevel::All);
     }
 }
