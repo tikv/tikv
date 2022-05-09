@@ -332,10 +332,7 @@ mod tests {
     fn test_key_split_ts() {
         let user_key = b"r\0aaaaaaaaaaa";
         let ts = 10;
-        let key = Key::from_raw(user_key)
-            .append_ts(ts.into())
-            .as_encoded()
-            .to_vec();
+        let key = Key::from_raw(user_key).append_ts(ts.into()).into_encoded();
 
         let encoded_key = ApiV2::encode_raw_key(user_key, None);
 

@@ -181,9 +181,8 @@ impl RawCompactionFilter {
             return Ok(CompactionFilterDecision::Keep);
         }
 
-        // If the key mode is not KeyMode::Raw or value is not targetValue, it's need be retained.
-        let current_key = keys::origin_key(key);
-        let key_mode = ApiV2::parse_key_mode(current_key);
+        // If the key mode is not KeyMode::Raw or value_type is not CompactionFilterValueType::Value, it's needed to be retained.
+        let key_mode = ApiV2::parse_key_mode(keys::origin_key(key));
         if key_mode != KeyMode::Raw || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
         }
@@ -205,7 +204,7 @@ impl RawCompactionFilter {
                     self.raw_gc_mvcc_deletions();
                 }
             }
-            // 1. If it's the latest version, and not deleted or expired ttl, it needs to be retained.
+            // 1. If it's the latest version, and it's neither deleted nor expired, it's needed to be retained.
             // 2. If it's the latest version, and it's deleted or expired, while we do async gctask to deleted or expired records, both put records and deleted/expired records are actually kept within the compaction filter.
             Ok(CompactionFilterDecision::Keep)
         } else {
@@ -254,6 +253,7 @@ impl RawCompactionFilter {
     }
 
     fn raw_handle_delete(&mut self) {
+        debug_assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
         self.mvcc_deletions.push(key);
     }
