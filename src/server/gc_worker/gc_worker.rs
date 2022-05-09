@@ -497,7 +497,13 @@ where
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
-            if let Err(e) = self.raw_gc_key(safe_point, key, &mut raw_modifies, &mut snapshot, &mut gc_info) {
+            if let Err(e) = self.raw_gc_key(
+                safe_point,
+                key,
+                &mut raw_modifies,
+                &mut snapshot,
+                &mut gc_info,
+            ) {
                 GC_KEY_FAILURES.inc();
                 error!(?e; "Raw GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
@@ -507,7 +513,7 @@ where
             if gc_info.is_completed {
                 next_gc_key = keys.next();
                 gc_info = GcInfo::default();
-            }else{
+            } else {
                 // Flush writeBatch to engine.
                 Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
                 // After flush, reset raw_modifies.
@@ -564,7 +570,7 @@ where
             cursor.next(&mut statistics);
         }
 
-        gc_info.is_completed=true;
+        gc_info.is_completed = true;
 
         self.stats.data.add(&statistics);
 
