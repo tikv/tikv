@@ -1,22 +1,18 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error as StdError;
-use std::io::Error as IoError;
-use std::num::ParseIntError;
-use std::path::PathBuf;
-use std::result;
+use std::{
+    error::Error as StdError, io::Error as IoError, num::ParseIntError, path::PathBuf, result,
+};
 
 use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
-use kvproto::import_sstpb;
-use kvproto::kvrpcpb::ApiVersion;
+use kvproto::{import_sstpb, kvrpcpb::ApiVersion};
 use tikv_util::codec::Error as CodecError;
 use uuid::Error as UuidError;
 
-use crate::metrics::*;
-use crate::sst_writer::SstWriterType;
+use crate::{metrics::*, sst_writer::SstWriterType};
 
 pub fn error_inc(type_: &str, err: &Error) {
     let label = match err {

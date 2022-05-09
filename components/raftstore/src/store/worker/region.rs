@@ -1,39 +1,51 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::collections::{BTreeMap, VecDeque};
-use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
-use std::time::Duration;
-use std::u64;
+use std::{
+    collections::{
+        BTreeMap,
+        Bound::{Excluded, Included, Unbounded},
+        VecDeque,
+    },
+    fmt::{self, Display, Formatter},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::SyncSender,
+        Arc,
+    },
+    time::Duration,
+    u64,
+};
 
-use engine_traits::{DeleteStrategy, Range, CF_LOCK, CF_RAFT};
-use engine_traits::{KvEngine, Mutable, WriteBatch};
+use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
 use fail::fail_point;
+use file_system::{IOType, WithIOType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use tikv_util::time::Instant;
-use tikv_util::{box_err, box_try, defer, error, info, thd_name, warn};
-
-use crate::coprocessor::CoprocessorHost;
-use crate::store::peer_storage::{
-    JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
-    JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
+use tikv_util::{
+    box_err, box_try, defer, error, info, thd_name,
+    time::Instant,
+    warn,
+    worker::{Runnable, RunnableWithTimer},
 };
-use crate::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
-use crate::store::transport::CasualRouter;
-use crate::store::{
-    self, check_abort, ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
+use yatp::{
+    pool::{Builder, ThreadPool},
+    task::future::TaskCell,
 };
-use yatp::pool::{Builder, ThreadPool};
-use yatp::task::future::TaskCell;
-
-use file_system::{IOType, WithIOType};
-use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
+use crate::{
+    coprocessor::CoprocessorHost,
+    store::{
+        self, check_abort,
+        peer_storage::{
+            JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
+            JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
+        },
+        snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
+        transport::CasualRouter,
+        ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
+    },
+};
 
 // used to periodically check whether we should delete a stale peer's range in region runner
 
@@ -750,32 +762,34 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::{mpsc, Arc};
-    use std::thread;
-    use std::time::Duration;
-
-    use crate::coprocessor::CoprocessorHost;
-    use crate::store::peer_storage::JOB_STATUS_PENDING;
-    use crate::store::snap::tests::get_test_db_for_regions;
-    use crate::store::worker::RegionRunner;
-    use crate::store::{CasualMessage, SnapKey, SnapManager};
-    use engine_test::ctor::CFOptions;
-    use engine_test::ctor::ColumnFamilyOptions;
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{
-        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable, SyncMutable,
-        WriteBatch, WriteBatchExt,
+    use std::{
+        io,
+        sync::{atomic::AtomicUsize, mpsc, Arc},
+        thread,
+        time::Duration,
     };
-    use engine_traits::{CF_DEFAULT, CF_RAFT};
+
+    use engine_test::{
+        ctor::{CFOptions, ColumnFamilyOptions},
+        kv::{KvTestEngine, KvTestSnapshot},
+    };
+    use engine_traits::{
+        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
+        RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT,
+    };
+    use keys::data_key;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
-    use raft::eraftpb::Entry;
     use tempfile::Builder;
     use tikv_util::worker::{LazyWorker, Worker};
 
     use super::*;
-    use keys::data_key;
+    use crate::{
+        coprocessor::CoprocessorHost,
+        store::{
+            peer_storage::JOB_STATUS_PENDING, snap::tests::get_test_db_for_regions,
+            worker::RegionRunner, CasualMessage, SnapKey, SnapManager,
+        },
+    };
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -859,7 +873,7 @@ mod tests {
     #[test]
     fn test_stale_peer() {
         let temp_dir = Builder::new().prefix("test_stale_peer").tempdir().unwrap();
-        let engine = get_test_db_for_regions(&temp_dir, None, None, None, None, &[1]).unwrap();
+        let engine = get_test_db_for_regions(&temp_dir, None, None, None, &[1]).unwrap();
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
@@ -932,11 +946,9 @@ mod tests {
             CFOptions::new("lock", cf_opts.clone()),
             CFOptions::new("raft", cf_opts.clone()),
         ];
-        let raft_cfs_opt = CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,
-            Some(raft_cfs_opt),
             None,
             Some(kv_cfs_opts),
             &[1, 2, 3, 4, 5, 6, 7],
@@ -992,11 +1004,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let idx = apply_state.get_applied_index();
-            let entry = engine
-                .raft
-                .get_msg::<Entry>(&keys::raft_log_key(id, idx))
-                .unwrap()
-                .unwrap();
+            let entry = engine.raft.get_entry(id, idx).unwrap().unwrap();
             sched
                 .schedule(Task::Gen {
                     region_id: id,

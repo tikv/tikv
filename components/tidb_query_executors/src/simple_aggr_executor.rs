@@ -5,19 +5,20 @@
 
 use std::sync::Arc;
 
-use tipb::Aggregation;
-use tipb::{Expr, FieldType};
-
-use crate::interface::*;
-use crate::util::aggr_executor::*;
 use tidb_query_aggr::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_datatype::match_template_evaltype;
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
+    expr::EvalConfig,
+    match_template_evaltype,
+};
 use tidb_query_expr::RpnStackNode;
+use tipb::{Aggregation, Expr, FieldType};
+
+use crate::{interface::*, util::aggr_executor::*};
 
 pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, SimpleAggregationImpl>,
@@ -230,15 +231,15 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use tidb_query_codegen::AggrFunction;
-    use tidb_query_datatype::FieldTypeTp;
-
-    use crate::util::aggr_executor::tests::*;
-    use crate::util::mock_executor::MockExecutor;
-    use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
+    use tidb_query_datatype::{
+        expr::{EvalContext, EvalWarnings},
+        FieldTypeTp,
+    };
     use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+
+    use super::*;
+    use crate::util::{aggr_executor::tests::*, mock_executor::MockExecutor};
 
     #[test]
     fn test_it_works_unit() {

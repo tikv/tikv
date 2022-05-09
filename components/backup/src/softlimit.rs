@@ -1,16 +1,18 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering as CmpOrder;
+use std::{
+    cmp::Ordering as CmpOrder,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use collections::HashMap;
+use tikv_util::{metrics::ThreadInfoStatistics, sys::SysQuota};
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use super::Result;
-use collections::HashMap;
-
-use tikv_util::metrics::ThreadInfoStatistics;
-use tikv_util::sys::SysQuota;
-use tokio::sync::{Semaphore, SemaphorePermit};
 
 /// SoftLimit is an simple "worker pool" just for
 /// restricting the number of workers can running concurrently.

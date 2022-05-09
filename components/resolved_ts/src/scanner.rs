@@ -1,27 +1,32 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::Region;
-use raftstore::coprocessor::{ObserveHandle, ObserveID};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::ChangeObserver;
-use raftstore::store::msg::{Callback, SignificantMsg};
-use raftstore::store::RegionSnapshot;
-use tikv::storage::kv::{ScanMode as MvccScanMode, Snapshot};
-use tikv::storage::mvcc::{DeltaScanner, MvccReader, ScannerBuilder};
-use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region};
+use raftstore::{
+    coprocessor::{ObserveHandle, ObserveID},
+    router::RaftStoreRouter,
+    store::{
+        fsm::ChangeObserver,
+        msg::{Callback, SignificantMsg},
+        RegionSnapshot,
+    },
+};
+use tikv::storage::{
+    kv::{ScanMode as MvccScanMode, Snapshot},
+    mvcc::{DeltaScanner, MvccReader, ScannerBuilder},
+    txn::{TxnEntry, TxnEntryScanner},
+};
 use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
-use crate::errors::{Error, Result};
-use crate::metrics::RTS_SCAN_DURATION_HISTOGRAM;
+use crate::{
+    errors::{Error, Result},
+    metrics::RTS_SCAN_DURATION_HISTOGRAM,
+};
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
 const GET_SNAPSHOT_RETRY_TIME: u32 = 3;

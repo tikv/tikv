@@ -1,25 +1,26 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use std::u64;
-use time::Duration as TimeDuration;
+use std::{collections::HashMap, sync::Arc, time::Duration, u64};
 
-use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
-use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
-use engine_traits::perf_level_serde;
-use engine_traits::PerfLevel;
+use engine_traits::{perf_level_serde, PerfLevel};
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
 use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
-use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::sys::SysQuota;
-use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, error, info, warn};
+use tikv_util::{
+    box_err,
+    config::{ReadableDuration, ReadableSize, VersionTrack},
+    error, info,
+    sys::SysQuota,
+    warn,
+    worker::Scheduler,
+};
+use time::Duration as TimeDuration;
+
+use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
+use crate::{coprocessor, Result};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(

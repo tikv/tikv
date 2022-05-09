@@ -1,16 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::peer_storage::{
-    write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+use engine_traits::{Engines, KvEngine, Mutable, RaftEngine, WriteBatch, CF_DEFAULT, CF_RAFT};
+use kvproto::{
+    metapb,
+    raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent},
 };
-use super::util::new_peer;
-use crate::Result;
-use engine_traits::{Engines, KvEngine, Mutable, RaftEngine, WriteBatch};
-use engine_traits::{CF_DEFAULT, CF_RAFT};
-
-use kvproto::metapb;
-use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent};
 use tikv_util::{box_err, box_try};
+
+use super::{
+    peer_storage::{
+        write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+    },
+    util::new_peer,
+};
+use crate::Result;
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
@@ -122,11 +125,12 @@ pub fn clear_prepare_bootstrap_key(
 
 #[cfg(test)]
 mod tests {
+    use engine_traits::{
+        Engines, Peekable, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, CF_DEFAULT,
+    };
     use tempfile::Builder;
 
     use super::*;
-    use engine_traits::Engines;
-    use engine_traits::{Peekable, CF_DEFAULT};
 
     #[test]
     fn test_bootstrap() {
@@ -139,9 +143,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let raft_engine =
-            engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, CF_DEFAULT, None)
-                .unwrap();
+        let raft_engine = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None).unwrap();
         let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
         let region = initial_region(1, 1, 1);
 
@@ -167,12 +169,7 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        assert!(
-            raft_engine
-                .get_value(&keys::raft_state_key(1))
-                .unwrap()
-                .is_some()
-        );
+        assert!(raft_engine.get_raft_state(1).unwrap().is_some());
 
         assert!(clear_prepare_bootstrap_key(&engines).is_ok());
         assert!(clear_prepare_bootstrap_cluster(&engines, 1).is_ok());
@@ -185,14 +182,6 @@ mod tests {
             )
             .unwrap()
         );
-        assert!(
-            is_range_empty(
-                &raft_engine,
-                CF_DEFAULT,
-                &keys::region_raft_prefix(1),
-                &keys::region_raft_prefix(2)
-            )
-            .unwrap()
-        );
+        assert!(RaftLogBatch::is_empty(&raft_engine.dump_all_data(1)));
     }
 }

@@ -1,8 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
-use super::{Bytes, BytesRef};
-use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
+use super::{bit_vec::BitVec, Bytes, BytesRef, ChunkRef, ChunkedVec, UnsafeRefInto};
 use crate::impl_chunked_vec_common;
 
 #[derive(Debug, PartialEq, Clone)]

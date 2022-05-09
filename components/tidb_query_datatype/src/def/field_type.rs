@@ -2,8 +2,7 @@
 
 use std::fmt;
 
-use tipb::ColumnInfo;
-use tipb::FieldType;
+use tipb::{ColumnInfo, FieldType};
 
 use crate::error::DataTypeError;
 
@@ -445,8 +444,9 @@ impl FieldTypeAccessor for ColumnInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::i32;
+
+    use super::*;
 
     fn field_types() -> Vec<FieldTypeTp> {
         vec![

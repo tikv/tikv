@@ -1,13 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::aggr_executor::*;
-use crate::interface::*;
 use tidb_query_aggr::{update, AggrFunctionState};
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::match_template_evaltype;
+use tidb_query_datatype::{
+    codec::{batch::LazyBatchColumnVec, data_type::*},
+    match_template_evaltype,
+};
 use tidb_query_expr::RpnStackNode;
+
+use super::aggr_executor::*;
+use crate::interface::*;
 
 pub struct HashAggregationHelper;
 

@@ -1,8 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::Result;
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::Error;
+use tikv_util::codec::{
+    number::{self, NumberEncoder},
+    Error,
+};
 
 use super::*;
 

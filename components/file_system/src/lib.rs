@@ -18,28 +18,30 @@ mod metrics;
 mod metrics_manager;
 mod rate_limiter;
 
-pub use file::{File, OpenOptions};
-pub use io_stats::{get_io_type, init as init_io_stats_collector, set_io_type};
-pub use metrics_manager::{BytesFetcher, MetricsManager};
-pub use rate_limiter::{
-    get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,
-    IORateLimiterStatistics,
-};
-
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
     remove_dir_all, remove_file, rename, set_permissions, symlink_metadata, DirBuilder, DirEntry,
     FileType, Metadata, Permissions, ReadDir,
 };
+use std::{
+    io::{self, ErrorKind, Read, Write},
+    path::Path,
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 
-use std::io::{self, ErrorKind, Read, Write};
-use std::path::Path;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-
+pub use file::{File, OpenOptions};
+pub use io_stats::{get_io_type, init as init_io_stats_collector, set_io_type};
+pub use metrics_manager::{BytesFetcher, MetricsManager};
 use online_config::ConfigValue;
-use openssl::error::ErrorStack;
-use openssl::hash::{self, Hasher, MessageDigest};
+use openssl::{
+    error::ErrorStack,
+    hash::{self, Hasher, MessageDigest},
+};
+pub use rate_limiter::{
+    get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,
+    IORateLimiterStatistics,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter};
 
@@ -439,10 +441,9 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
 
 #[cfg(test)]
 mod tests {
-    use rand::distributions::Alphanumeric;
-    use rand::{thread_rng, Rng};
-    use std::io::Write;
-    use std::iter;
+    use std::{io::Write, iter};
+
+    use rand::{distributions::Alphanumeric, thread_rng, Rng};
     use tempfile::{Builder, TempDir};
 
     use super::*;

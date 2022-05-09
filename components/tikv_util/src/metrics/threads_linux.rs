@@ -1,16 +1,23 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::{Error, ErrorKind, Result};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::{
+    io::{Error, ErrorKind, Result},
+    sync::Mutex,
+    time::Duration,
+};
 
 use collections::HashMap;
-use prometheus::core::{Collector, Desc};
-use prometheus::{self, proto, GaugeVec, IntGaugeVec, Opts};
-
-use crate::sys::thread::{self, Pid};
-use crate::time::Instant;
 use procinfo::pid;
+use prometheus::{
+    self,
+    core::{Collector, Desc},
+    proto, GaugeVec, IntGaugeVec, Opts,
+};
+
+use crate::{
+    sys::thread::{self, Pid},
+    time::Instant,
+};
 
 /// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
@@ -461,10 +468,7 @@ impl TidRetriever {
 
 #[cfg(test)]
 mod tests {
-    use std::env::temp_dir;
-    use std::io::Write;
-    use std::time::Duration;
-    use std::{fs, sync};
+    use std::{env::temp_dir, fs, io::Write, sync, time::Duration};
 
     use super::*;
 

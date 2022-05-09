@@ -1,32 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{
+    sync::{Arc, *},
+    thread,
+    time::Duration,
+};
 
-use api_version::test_kv_format_impl;
-use api_version::KvFormat;
-use futures::executor::block_on;
-use kvproto::kvrpcpb::*;
-use kvproto::pdpb::QueryKind;
-use kvproto::tikvpb_grpc::TikvClient;
+use api_version::{test_kv_format_impl, KvFormat};
+use futures::{executor::block_on, SinkExt, StreamExt};
+use grpcio::*;
+use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use raftstore::store::QueryStats;
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::*;
-
-use futures::{SinkExt, StreamExt};
-use grpcio::*;
-
-use kvproto::tikvpb::*;
-
 use txn_types::Key;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     let engine = cluster.get_engine(1);
-    let raft_engine = cluster.get_raft_engine(1);
 
     let stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(stats.get_region_count(), 2);
@@ -35,7 +27,6 @@ fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     for i in 0..1000 {
         let last_available = stats.get_available();
         cluster.must_put(format!("k{}", i).as_bytes(), &value);
-        raft_engine.flush(true).unwrap();
         engine.flush(true).unwrap();
         sleep_ms(20);
 
@@ -67,8 +58,6 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     let engine = cluster.get_engine(1);
-    let raft_engine = cluster.get_raft_engine(1);
-    raft_engine.flush(true).unwrap();
     engine.flush(true).unwrap();
     let last_stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(last_stats.get_region_count(), 1);
@@ -78,7 +67,6 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let region = pd_client.get_region(b"").unwrap();
     cluster.must_split(&region, b"k2");
-    raft_engine.flush(true).unwrap();
     engine.flush(true).unwrap();
 
     // wait report region count after split

@@ -1,15 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Display, Formatter};
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 
-use crate::server::metrics::*;
 use engine_traits::{KvEngine, CF_DEFAULT};
 use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::time::{Instant, UnixSecs};
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::{
+    time::{Instant, UnixSecs},
+    worker::{Runnable, RunnableWithTimer},
+};
+
+use crate::server::metrics::*;
 
 const COMPACT_FILES_SLEEP_TIME: u64 = 2; // 2s
 const WAIT_METRICS_PULLED_TIME: u64 = 40; // 40s

@@ -5,66 +5,73 @@
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
 
-use std::cmp;
-use std::collections::HashMap;
-use std::error::Error;
-use std::fs;
-use std::i32;
-use std::io::Write;
-use std::io::{Error as IoError, ErrorKind};
-use std::path::Path;
-use std::sync::{Arc, RwLock};
-use std::usize;
+use std::{
+    cmp,
+    collections::HashMap,
+    error::Error,
+    fs, i32,
+    io::{Error as IoError, ErrorKind, Write},
+    path::Path,
+    sync::{Arc, RwLock},
+    usize,
+};
 
 use api_version::{match_template_api_version, KvFormat};
 use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
-use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
-use engine_rocks::get_env;
-use engine_rocks::properties::MvccPropertiesCollectorFactory;
-use engine_rocks::raw::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
-    TitanDBOptions,
-};
-use engine_rocks::raw_util::CFOptions;
-use engine_rocks::util::{
-    FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
-};
 use engine_rocks::{
+    config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel},
+    get_env,
+    properties::MvccPropertiesCollectorFactory,
+    raw::{
+        BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+        DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
+        TitanDBOptions,
+    },
+    raw_util::CFOptions,
+    util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
     RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
     RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
-use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE,
+};
 use file_system::{IOPriority, IORateLimiter};
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
-use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
-use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
-use raftstore::store::Config as RaftstoreConfig;
-use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
+use raft_log_engine::{
+    RaftEngineConfig as RawRaftEngineConfig, ReadableSize as RaftEngineReadableSize,
+};
+use raftstore::{
+    coprocessor::{Config as CopConfig, RegionInfoAccessor},
+    store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
+};
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
-use tikv_util::config::{
-    self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
+use tikv_util::{
+    config::{
+        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
+    },
+    sys::SysQuota,
+    time::duration_to_sec,
+    yatp_pool,
 };
-use tikv_util::sys::SysQuota;
-use tikv_util::time::duration_to_sec;
-use tikv_util::yatp_pool;
 
-use crate::coprocessor_v2::Config as CoprocessorV2Config;
-use crate::import::Config as ImportConfig;
-use crate::server::gc_worker::GcConfig;
-use crate::server::gc_worker::WriteCompactionFilterFactory;
-use crate::server::lock_manager::Config as PessimisticTxnConfig;
-use crate::server::ttl::TtlCompactionFilterFactory;
-use crate::server::Config as ServerConfig;
-use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
+use crate::{
+    coprocessor_v2::Config as CoprocessorV2Config,
+    import::Config as ImportConfig,
+    server::{
+        gc_worker::{GcConfig, WriteCompactionFilterFactory},
+        lock_manager::Config as PessimisticTxnConfig,
+        ttl::TtlCompactionFilterFactory,
+        Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
+    },
+    storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR},
+};
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
@@ -72,6 +79,9 @@ pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
 pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
+/// Maximum of 15% of system memory can be used by Raft Engine. Normally its
+/// memory usage is much smaller than that.
+const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
@@ -1081,7 +1091,6 @@ impl DbConfig {
         let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
         opts.enable_pipelined_commit(enable_pipelined_commit);
         opts.enable_unordered_write(self.enable_unordered_write);
-        opts.add_event_listener(RocksEventListener::new("kv"));
         opts.set_info_log(RocksdbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
@@ -1359,7 +1368,7 @@ impl RaftDbConfig {
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
-        opts.add_event_listener(RocksEventListener::new("raft"));
+        opts.add_event_listener(RocksEventListener::new("raft", None));
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         // TODO maybe create a new env for raft engine
@@ -1410,6 +1419,11 @@ impl Default for RaftEngineConfig {
 impl RaftEngineConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.config.sanitize().map_err(Box::new)?;
+        if self.config.memory_limit.is_none() {
+            let total_mem = SysQuota::memory_limit_in_bytes() as f64;
+            let memory_limit = total_mem * RAFT_ENGINE_MEMORY_LIMIT_RATE;
+            self.config.memory_limit = Some(RaftEngineReadableSize(memory_limit as u64));
+        }
         Ok(())
     }
 
@@ -2307,6 +2321,40 @@ impl Default for BackupConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct BackupStreamConfig {
+    pub num_threads: usize,
+    #[online_config(skip)]
+    pub enable: bool,
+    pub temp_path: String,
+    pub temp_file_size_limit_per_task: ReadableSize,
+}
+
+impl BackupStreamConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.num_threads == 0 {
+            return Err("backup.num_threads cannot be 0".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for BackupStreamConfig {
+    fn default() -> Self {
+        let cpu_num = SysQuota::cpu_cores_quota();
+        Self {
+            // use at most 50% of vCPU by default
+            num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
+            enable: false,
+            // TODO: may be use raft store directory
+            temp_path: String::new(),
+            temp_file_size_limit_per_task: ReadableSize::mb(128),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub hibernate_regions_compatible: bool,
@@ -2602,6 +2650,12 @@ pub struct TiKvConfig {
     pub backup: BackupConfig,
 
     #[online_config(submodule)]
+    // The term "log-backup" and "backup-stream" points to the same object.
+    // But the product name is `log-backup`.
+    #[serde(rename = "log-backup")]
+    pub backup_stream: BackupStreamConfig,
+
+    #[online_config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
 
     #[online_config(submodule)]
@@ -2661,6 +2715,7 @@ impl Default for TiKvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
+            backup_stream: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
         }
     }
@@ -2775,6 +2830,11 @@ impl TiKvConfig {
             );
         }
 
+        if self.backup_stream.temp_path.is_empty() {
+            self.backup_stream.temp_path =
+                config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-tmp")?;
+        }
+
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
         self.raft_engine.validate()?;
@@ -2785,6 +2845,7 @@ impl TiKvConfig {
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
+        self.backup_stream.validate()?;
         self.cdc.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
@@ -3461,6 +3522,7 @@ pub enum Module {
     CDC,
     ResolvedTs,
     ResourceMetering,
+    BackupStream,
     Quota,
     Unknown(String),
 }
@@ -3482,6 +3544,7 @@ impl From<&str> for Module {
             "security" => Module::Security,
             "import" => Module::Import,
             "backup" => Module::Backup,
+            "backup_stream" => Module::BackupStream,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
             "cdc" => Module::CDC,
@@ -3606,28 +3669,32 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
-    use itertools::Itertools;
-    use tempfile::Builder;
+    use std::{sync::Arc, time::Duration};
 
-    use super::*;
-    use crate::server::ttl::TtlCheckerTask;
-    use crate::storage::config_manager::StorageConfigManger;
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::txn::flow_controller::FlowController;
-    use crate::storage::{Storage, TestStorageBuilder};
     use api_version::{ApiV1, KvFormat};
     use case_macros::*;
     use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
+    use futures::executor::block_on;
+    use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
-    use std::sync::Arc;
-    use std::time::Duration;
+    use tempfile::Builder;
     use tikv_kv::RocksEngine as RocksDBEngine;
-    use tikv_util::quota_limiter::{QuotaLimitConfigManager, QuotaLimiter};
-    use tikv_util::sys::SysQuota;
-    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use tikv_util::{
+        quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
+        sys::SysQuota,
+        worker::{dummy_scheduler, ReceiverWrapper},
+    };
+
+    use super::*;
+    use crate::{
+        server::ttl::TtlCheckerTask,
+        storage::{
+            config_manager::StorageConfigManger, lock_manager::DummyLockManager,
+            txn::flow_controller::FlowController, Storage, TestStorageBuilder,
+        },
+    };
 
     #[test]
     fn test_case_macro() {
@@ -4814,6 +4881,7 @@ mod tests {
         cfg.raftdb.max_sub_compactions = default_cfg.raftdb.max_sub_compactions;
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
+        cfg.backup_stream.num_threads = default_cfg.backup_stream.num_threads;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later on.
@@ -4825,6 +4893,7 @@ mod tests {
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
         cfg.storage.block_cache.capacity = None; // Either `None` and a value is computed or `Some(_)` fixed value.
         cfg.memory_usage_limit = None;
+        cfg.raft_engine.mut_config().memory_limit = None;
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
@@ -4918,6 +4987,7 @@ mod tests {
             ("security", Module::Security),
             ("import", Module::Import),
             ("backup", Module::Backup),
+            ("backup_stream", Module::BackupStream),
             ("pessimistic_txn", Module::PessimisticTxn),
             ("gc", Module::Gc),
             ("cdc", Module::CDC),

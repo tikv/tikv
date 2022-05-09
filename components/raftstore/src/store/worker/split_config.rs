@@ -1,12 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tikv_util::config::VersionTrack;
-use tikv_util::info;
+use tikv_util::{config::VersionTrack, info};
 
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: u64 = 100;
@@ -137,11 +137,15 @@ impl std::ops::Deref for SplitConfigManager {
 
 #[cfg(test)]
 mod tests {
-    use crate::store::worker::split_config::{get_sample_num, DEFAULT_SAMPLE_NUM};
-    use crate::store::{SplitConfig, SplitConfigManager};
-    use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use std::sync::Arc;
+
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use tikv_util::config::VersionTrack;
+
+    use crate::store::{
+        worker::split_config::{get_sample_num, DEFAULT_SAMPLE_NUM},
+        SplitConfig, SplitConfigManager,
+    };
 
     #[test]
     fn test_static_var_after_config_change() {

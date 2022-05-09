@@ -8,10 +8,11 @@ use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
-use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
-use crate::storage::mvcc::ErrorInner::WriteConflict;
-use crate::storage::mvcc::{Error, NewerTsCheckState, Result};
-use crate::storage::need_check_locks;
+use crate::storage::{
+    kv::{Cursor, Snapshot, Statistics, SEEK_BOUND},
+    mvcc::{Error, ErrorInner::WriteConflict, NewerTsCheckState, Result},
+    need_check_locks,
+};
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -483,18 +484,22 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::prepare_test_data_for_check_gc_fence;
-    use super::super::ScannerBuilder;
-    use super::*;
-    use crate::storage::kv::{Engine, Modify, TestEngineBuilder};
-    use crate::storage::mvcc::tests::write;
-    use crate::storage::txn::tests::{
-        must_acquire_pessimistic_lock, must_commit, must_gc, must_prewrite_delete,
-        must_prewrite_lock, must_prewrite_put, must_rollback,
-    };
-    use crate::storage::Scanner;
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::Context;
+
+    use super::{
+        super::{test_util::prepare_test_data_for_check_gc_fence, ScannerBuilder},
+        *,
+    };
+    use crate::storage::{
+        kv::{Engine, Modify, TestEngineBuilder},
+        mvcc::tests::write,
+        txn::tests::{
+            must_acquire_pessimistic_lock, must_commit, must_gc, must_prewrite_delete,
+            must_prewrite_lock, must_prewrite_put, must_rollback,
+        },
+        Scanner,
+    };
 
     #[test]
     fn test_basic() {

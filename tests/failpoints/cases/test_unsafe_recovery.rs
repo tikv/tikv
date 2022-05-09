@@ -1,8 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::FromIterator;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use futures::executor::block_on;
 use pd_client::PdClient;

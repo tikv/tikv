@@ -2,15 +2,16 @@
 
 //! Tests for `SstExt`
 
-use panic_hook::recover_safe;
 use std::fs;
 
-use super::tempdir;
 use engine_test::kv::KvTestEngine;
-use engine_traits::Iterator;
-use engine_traits::SeekKey;
-use engine_traits::{Error, Result};
-use engine_traits::{ExternalSstFileInfo, SstExt, SstReader, SstWriter, SstWriterBuilder};
+use engine_traits::{
+    Error, ExternalSstFileInfo, Iterator, Result, SeekKey, SstExt, SstReader, SstWriter,
+    SstWriterBuilder,
+};
+use panic_hook::recover_safe;
+
+use super::tempdir;
 
 #[test]
 fn empty() -> Result<()> {
