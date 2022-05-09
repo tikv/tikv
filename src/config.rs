@@ -2321,6 +2321,40 @@ impl Default for BackupConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct BackupStreamConfig {
+    pub num_threads: usize,
+    #[online_config(skip)]
+    pub enable: bool,
+    pub temp_path: String,
+    pub temp_file_size_limit_per_task: ReadableSize,
+}
+
+impl BackupStreamConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.num_threads == 0 {
+            return Err("backup.num_threads cannot be 0".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for BackupStreamConfig {
+    fn default() -> Self {
+        let cpu_num = SysQuota::cpu_cores_quota();
+        Self {
+            // use at most 50% of vCPU by default
+            num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
+            enable: false,
+            // TODO: may be use raft store directory
+            temp_path: String::new(),
+            temp_file_size_limit_per_task: ReadableSize::mb(128),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub hibernate_regions_compatible: bool,
@@ -2616,6 +2650,12 @@ pub struct TiKvConfig {
     pub backup: BackupConfig,
 
     #[online_config(submodule)]
+    // The term "log-backup" and "backup-stream" points to the same object.
+    // But the product name is `log-backup`.
+    #[serde(rename = "log-backup")]
+    pub backup_stream: BackupStreamConfig,
+
+    #[online_config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
 
     #[online_config(submodule)]
@@ -2675,6 +2715,7 @@ impl Default for TiKvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
+            backup_stream: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
         }
     }
@@ -2789,6 +2830,11 @@ impl TiKvConfig {
             );
         }
 
+        if self.backup_stream.temp_path.is_empty() {
+            self.backup_stream.temp_path =
+                config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-tmp")?;
+        }
+
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
         self.raft_engine.validate()?;
@@ -2799,6 +2845,7 @@ impl TiKvConfig {
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
+        self.backup_stream.validate()?;
         self.cdc.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
@@ -3475,6 +3522,7 @@ pub enum Module {
     CDC,
     ResolvedTs,
     ResourceMetering,
+    BackupStream,
     Quota,
     Unknown(String),
 }
@@ -3496,6 +3544,7 @@ impl From<&str> for Module {
             "security" => Module::Security,
             "import" => Module::Import,
             "backup" => Module::Backup,
+            "backup_stream" => Module::BackupStream,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
             "cdc" => Module::CDC,
@@ -4832,6 +4881,7 @@ mod tests {
         cfg.raftdb.max_sub_compactions = default_cfg.raftdb.max_sub_compactions;
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
+        cfg.backup_stream.num_threads = default_cfg.backup_stream.num_threads;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later on.
@@ -4937,6 +4987,7 @@ mod tests {
             ("security", Module::Security),
             ("import", Module::Import),
             ("backup", Module::Backup),
+            ("backup_stream", Module::BackupStream),
             ("pessimistic_txn", Module::PessimisticTxn),
             ("gc", Module::Gc),
             ("cdc", Module::CDC),

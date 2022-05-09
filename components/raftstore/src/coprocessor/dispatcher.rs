@@ -738,7 +738,11 @@ mod tests {
         host.post_apply_sst_from_snapshot(&region, "default", "");
         assert_all!([&ob.called], &[55]);
 
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);

@@ -1105,6 +1105,15 @@
 ## in order to reduce impact on the cluster's performance during back up.
 # enable-auto-tune = true 
 
+[log-backup] 
+## Number of threads to perform backup stream tasks.
+## The default value is set to min(CPU_NUM * 0.5, 8).
+# num-threads = 8
+
+## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
+## The default value is false.
+# enable = false 
+
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.
 ## Equivalent to the $HADOOP_HOME enviroment variable.

@@ -1685,6 +1685,15 @@ impl PdClient for TestPdClient {
         Box::pin(ok(TimeStamp::new(tso + count as u64)))
     }
 
+    fn update_service_safe_point(
+        &self,
+        _name: String,
+        _safepoint: TimeStamp,
+        _ttl: Duration,
+    ) -> PdFuture<()> {
+        Box::pin(ok(()))
+    }
+
     fn feature_gate(&self) -> &FeatureGate {
         &self.feature_gate
     }

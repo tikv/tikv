@@ -207,7 +207,11 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         let mut cb = CmdBatch::new(&observe_info, 0);
@@ -228,6 +232,7 @@ mod tests {
 
         // Stop observing cmd
         observe_info.cdc_id.stop_observing();
+        observe_info.pitr_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
@@ -238,7 +243,7 @@ mod tests {
         );
         match rx.recv_timeout(Duration::from_millis(10)) {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            _ => panic!("unexpected result"),
+            any => panic!("unexpected result: {:?}", any),
         };
 
         // Does not send unsubscribed region events.
