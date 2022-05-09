@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use api_version::{ApiVersion, ApiV1, ApiV1Ttl, ApiV2};
+use api_version::{KvFormat, ApiV1, ApiV1Ttl, ApiV2};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
 use engine_traits::{
@@ -610,16 +610,16 @@ fn test_coprocessor() {
 
 #[test]
 fn test_split_region() {
-    test_split_region_impl::<APIV1>(false);
-    test_split_region_impl::<APIV2>(false);
-    test_split_region_impl::<APIV1>(true);
-    test_split_region_impl::<APIV1TTL>(true); // APIV1TTL for RawKV only.
-    test_split_region_impl::<APIV2>(true);
+    test_split_region_impl::<ApiV1>(false);
+    test_split_region_impl::<ApiV2>(false);
+    test_split_region_impl::<ApiV1>(true);
+    test_split_region_impl::<ApiV1Ttl>(true); // APIV1TTL for RawKV only.
+    test_split_region_impl::<ApiV2>(true);
 }
 
-fn test_split_region_impl<Api: APIVersion>(is_raw_kv: bool) {
+fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
     let encode_key = |k: &[u8]| -> Vec<u8> {
-        if !is_raw_kv || Api::TAG == ApiVersion::V2 {
+        if !is_raw_kv || F::TAG == ApiVersion::V2 {
             Key::from_raw(k).into_encoded()
         } else {
             k.to_vec()
@@ -627,12 +627,12 @@ fn test_split_region_impl<Api: APIVersion>(is_raw_kv: bool) {
     };
 
     let (mut cluster, leader, mut ctx) =
-        must_new_and_configure_cluster(|cluster| cluster.cfg.storage.set_api_version(Api::TAG));
+        must_new_and_configure_cluster(|cluster| cluster.cfg.storage.set_api_version(F::TAG));
     let env = Arc::new(Environment::new(1));
     let channel =
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = TikvClient::new(channel);
-    ctx.set_api_version(Api::CLIENT_TAG);
+    ctx.set_api_version(F::CLIENT_TAG);
 
     // Split region commands
     let key = b"b";
