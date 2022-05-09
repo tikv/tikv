@@ -1707,7 +1707,7 @@ impl PdClient for TestPdClient {
             .buckets
             .entry(buckets.meta.region_id)
             .and_modify(|current| {
-                if current.meta.cmp(&buckets.meta) == std::cmp::Ordering::Less {
+                if current.meta < buckets.meta {
                     std::mem::swap(current, &mut buckets);
                 }
 
