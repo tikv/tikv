@@ -5,6 +5,9 @@
 [build]
 rustflags = ["-Cforce-frame-pointers=yes"]
 
+[unstable]
+build-std = true
+
 [profile.release]
 opt-level = 3
 debug = true
