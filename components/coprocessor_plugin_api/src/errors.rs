@@ -1,8 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::any::Any;
-use std::fmt;
-use std::time::Duration;
+use std::{any::Any, fmt, time::Duration};
 
 use crate::Key;
 

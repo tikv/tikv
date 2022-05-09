@@ -1,90 +1,106 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::borrow::Cow;
-use std::cell::Cell;
-use std::collections::Bound::{Excluded, Unbounded};
-use std::collections::VecDeque;
-use std::iter::Iterator;
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-use std::time::Instant;
-use std::{cmp, mem, u64};
+use std::{
+    borrow::Cow,
+    cell::Cell,
+    cmp,
+    collections::{
+        Bound::{Excluded, Unbounded},
+        VecDeque,
+    },
+    iter::Iterator,
+    mem,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Instant,
+    u64,
+};
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
 use engine_traits::{
-    Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatch, WriteBatchExt, WriteOptions,
+    Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatch, WriteBatchExt, WriteOptions, CF_LOCK,
+    CF_RAFT,
 };
-use engine_traits::{CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use keys::{self, enc_end_key, enc_start_key};
-use kvproto::errorpb;
-use kvproto::import_sstpb::SwitchMode;
-use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
-    StatusCmdType, StatusResponse,
+use kvproto::{
+    errorpb,
+    import_sstpb::SwitchMode,
+    kvrpcpb::DiskFullOpt,
+    metapb::{self, Region, RegionEpoch},
+    pdpb::CheckPolicy,
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
+        StatusCmdType, StatusResponse,
+    },
+    raft_serverpb::{
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
+        RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+    },
+    replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
-use kvproto::raft_serverpb::{
-    ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-    RaftSnapshotData, RaftTruncatedState, RegionLocalState,
-};
-use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
 use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
-use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{
-    self, GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX,
-    NO_LIMIT,
+    self,
+    eraftpb::{self, ConfChangeType, MessageType},
+    GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::disk::DiskUsage;
-use tikv_util::sys::memory_usage_reaches_high_water;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant};
-use tikv_util::worker::{ScheduleError, Scheduler};
-use tikv_util::{box_err, debug, defer, error, info, trace, warn};
-use tikv_util::{escape, is_zero_duration, Either};
+use tikv_util::{
+    box_err, debug, defer, error, escape, info, is_zero_duration,
+    mpsc::{self, LooseBoundedSender, Receiver},
+    sys::{disk::DiskUsage, memory_usage_reaches_high_water},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    trace, warn,
+    worker::{ScheduleError, Scheduler},
+    Either,
+};
 use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
-use crate::coprocessor::RegionChangeEvent;
-use crate::store::cmd_resp::{bind_term, new_error};
-use crate::store::fsm::store::{PollContext, StoreMeta};
-use crate::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
-    ExecResult,
-};
-use crate::store::hibernate_state::{GroupState, HibernateState};
-use crate::store::local_metrics::RaftMetrics;
-use crate::store::memory::*;
-use crate::store::metrics::*;
-use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
-use crate::store::peer::{
-    ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-    UnsafeRecoveryState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
-};
-use crate::store::peer_storage::write_peer_state;
-use crate::store::transport::Transport;
-use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
-use crate::store::worker::{
-    Bucket, BucketRange, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate,
-    ReadProgress, RegionTask, SplitCheckTask,
-};
-use crate::store::PdTask;
 #[cfg(any(test, feature = "testexport"))]
 use crate::store::PeerInternalStat;
-use crate::store::RaftlogFetchResult;
-use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
-    RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
+use crate::{
+    coprocessor::RegionChangeEvent,
+    store::{
+        cmd_resp::{bind_term, new_error},
+        fsm::{
+            apply,
+            store::{PollContext, StoreMeta},
+            ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
+            ExecResult,
+        },
+        hibernate_state::{GroupState, HibernateState},
+        local_metrics::RaftMetrics,
+        memory::*,
+        metrics::*,
+        msg::{Callback, ExtCallback, InspectedRaftMessage},
+        peer::{
+            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
+            UnsafeRecoveryState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+        },
+        peer_storage::write_peer_state,
+        transport::Transport,
+        util,
+        util::{is_learner, KeysInfoFormatter, LeaseState},
+        worker::{
+            Bucket, BucketRange, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask,
+            ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
+        },
+        AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
+        PeerTick, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, SignificantMsg, SnapKey,
+        StoreMsg,
+    },
+    Error, Result,
 };
-use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DelayDestroy {
@@ -1251,30 +1267,69 @@ where
                 // already is a force leader, do nothing
                 return;
             }
+            Some(ForceLeaderState::WaitTicks { .. }) => {
+                self.fsm.peer.force_leader = None;
+            }
             None => {}
         }
 
-        if self.fsm.peer.is_leader() {
-            warn!(
-                "reject pre force leader due to already being leader";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            return;
-        }
-
+        let ticks = if self.fsm.peer.is_leader() {
+            if self.fsm.hibernate_state.group_state() == GroupState::Ordered {
+                warn!(
+                    "reject pre force leader due to already being leader";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                return;
+            }
+            // wait two rounds of election timeout to trigger check quorum to step down the leader
+            // note: check quorum is triggered every `election_timeout` instead of `randomized_election_timeout`
+            Some(
+                self.fsm.peer.raft_group.raft.election_timeout() * 2
+                    - self.fsm.peer.raft_group.raft.election_elapsed,
+            )
         // When election timeout is triggered, leader_id is set to INVALID_ID.
         // But learner(not promotable) is a exception here as it wouldn't tick
         // election.
-        if self.fsm.peer.raft_group.raft.promotable()
-            && self.fsm.hibernate_state.group_state() != GroupState::Idle
+        } else if self.fsm.peer.raft_group.raft.promotable()
             && self.fsm.peer.leader_id() != raft::INVALID_ID
         {
-            warn!(
-                "reject pre force leader due to leader lease may not expired";
+            if self.fsm.hibernate_state.group_state() == GroupState::Ordered
+                || self.fsm.hibernate_state.group_state() == GroupState::Chaos
+            {
+                warn!(
+                    "reject pre force leader due to leader lease may not expired";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                return;
+            }
+            // wait one round of election timeout to make sure leader_id is invalid
+            Some(
+                self.fsm.peer.raft_group.raft.randomized_election_timeout()
+                    - self.fsm.peer.raft_group.raft.election_elapsed,
+            )
+        } else {
+            None
+        };
+
+        if let Some(ticks) = ticks {
+            info!(
+                "enter wait ticks";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "ticks" => ticks,
             );
+            self.fsm.peer.force_leader = Some(ForceLeaderState::WaitTicks {
+                failed_stores,
+                ticks,
+            });
+            self.reset_raft_tick(if self.fsm.peer.is_leader() {
+                GroupState::Ordered
+            } else {
+                GroupState::Chaos
+            });
+            self.fsm.has_ready = true;
             return;
         }
 
@@ -1397,7 +1452,7 @@ where
         );
         self.fsm.peer.force_leader = None;
         // make sure it's not hibernated
-        self.reset_raft_tick(GroupState::Ordered);
+        assert_eq!(self.fsm.hibernate_state.group_state(), GroupState::Ordered);
         // leader lease shouldn't be renewed in force leader state.
         assert_eq!(
             self.fsm.peer.leader_lease().inspect(None),
@@ -1439,6 +1494,20 @@ where
 
     #[inline]
     fn check_force_leader(&mut self) {
+        if let Some(ForceLeaderState::WaitTicks {
+            failed_stores,
+            ticks,
+        }) = &mut self.fsm.peer.force_leader
+        {
+            if *ticks == 0 {
+                let s = mem::take(failed_stores);
+                self.on_enter_pre_force_leader(s);
+            } else {
+                *ticks -= 1;
+            }
+            return;
+        };
+
         let failed_stores = match &self.fsm.peer.force_leader {
             None => return,
             Some(ForceLeaderState::ForceLeader { .. }) => {
@@ -1448,6 +1517,7 @@ where
                 return;
             }
             Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
+            Some(ForceLeaderState::WaitTicks { .. }) => unreachable!(),
         };
 
         if self.fsm.peer.raft_group.raft.election_elapsed + 1
@@ -1770,14 +1840,14 @@ where
                 // follower may tick more than an election timeout in chaos state.
                 // Before stopping tick, `missing_tick` should be `raft_election_timeout_ticks` - 2
                 // - `raft_heartbeat_ticks` (default 10 - 2 - 2 = 6)
-                // and the follwer's `election_elapsed` in raft-rs is 1.
+                // and the follower's `election_elapsed` in raft-rs is 1.
                 // After the group state becomes Chaos, the next tick will call `raft_group.tick`
                 // `missing_tick` + 1 times(default 7).
                 // Then the follower's `election_elapsed` will be 1 + `missing_tick` + 1
                 // (default 1 + 6 + 1 = 8) which is less than the min election timeout.
                 // The reason is that we don't want let all followers become (pre)candidate if one
                 // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
-                // to others. As long as the leader can wake up and broadcast hearbeats in one `raft_heartbeat_ticks`
+                // to others. As long as the leader can wake up and broadcast heartbeats in one `raft_heartbeat_ticks`
                 // time(default 2s), no more followers will wake up and sends vote msg again.
                 if self.fsm.missing_ticks + 1 /* for the next tick after the peer isn't Idle */
                     + self.fsm.peer.raft_group.raft.election_elapsed
@@ -3062,6 +3132,7 @@ where
             &self.ctx.engines,
             &mut self.ctx.perf_context,
             merged_by_target,
+            &self.ctx.pending_create_peers,
         ) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
@@ -3086,21 +3157,6 @@ where
         }
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
-        }
-
-        if self.fsm.peer.local_first_replicate {
-            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-            if is_initialized {
-                assert!(pending_create_peers.get(&region_id).is_none());
-            } else {
-                // If this region's data in `pending_create_peers` is not equal to `(peer_id, false)`,
-                // it means this peer will be replaced by the split one.
-                if let Some(status) = pending_create_peers.get(&region_id) {
-                    if *status == (self.fsm.peer_id(), false) {
-                        pending_create_peers.remove(&region_id);
-                    }
-                }
-            }
         }
 
         // Clear merge related structures.
@@ -3138,6 +3194,8 @@ where
                 }
             }
         }
+
+        fail_point!("raft_store_finish_destroy_peer");
 
         true
     }
@@ -5522,7 +5580,7 @@ where
         self.propose_raft_command_internal(req, Callback::None, DiskFullOpt::NotAllowedOnFull);
     }
 
-    fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {
+    fn on_ingest_sst_result(&mut self, ssts: Vec<SstMetaInfo>) {
         let mut size = 0;
         let mut keys = 0;
         for sst in &ssts {
@@ -5807,8 +5865,9 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
 }
 
 mod memtrace {
-    use super::*;
     use memory_trace_macros::MemoryTraceHelper;
+
+    use super::*;
 
     /// Heap size for Raft internal `ReadOnly`.
     #[derive(MemoryTraceHelper, Default, Debug)]
@@ -5849,11 +5908,10 @@ mod memtrace {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    use crate::store::local_metrics::RaftMetrics;
-    use crate::store::msg::{Callback, ExtCallback, RaftCommand};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     use engine_test::kv::KvTestEngine;
     use kvproto::raft_cmdpb::{
@@ -5864,6 +5922,10 @@ mod tests {
     use tikv_util::config::ReadableSize;
 
     use super::*;
+    use crate::store::{
+        local_metrics::RaftMetrics,
+        msg::{Callback, ExtCallback, RaftCommand},
+    };
 
     #[test]
     fn test_batch_raft_cmd_request_builder() {

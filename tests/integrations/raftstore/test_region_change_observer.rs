@@ -1,15 +1,23 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    mem,
+    sync::{
+        mpsc::{channel, sync_channel, Receiver, SyncSender},
+        Arc,
+    },
+    time::Duration,
+};
+
 use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::coprocessor::{
-    BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
+use raftstore::{
+    coprocessor::{
+        BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent,
+        RegionChangeObserver,
+    },
+    store::util::{find_peer, new_peer},
 };
-use raftstore::store::util::{find_peer, new_peer};
-use std::mem;
-use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
-use std::sync::Arc;
-use std::time::Duration;
 use test_raftstore::{new_node_cluster, Cluster, NodeCluster};
 use tikv_util::HandyRwLock;
 

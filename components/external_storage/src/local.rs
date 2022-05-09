@@ -1,23 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::io::AllowStdIo;
-use std::fs::File as StdFile;
-use std::io;
-use std::marker::Unpin;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::fs::{self, File};
-use tokio_util::compat::FuturesAsyncReadCompatExt;
+use std::{
+    fs::File as StdFile,
+    io,
+    marker::Unpin,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
+use async_trait::async_trait;
+use futures::io::AllowStdIo;
 use futures_io::AsyncRead;
 use futures_util::stream::TryStreamExt;
 use rand::Rng;
-
-use crate::UnpinReader;
+use tikv_util::stream::error_stream;
+use tokio::fs::{self, File};
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 use super::ExternalStorage;
-use async_trait::async_trait;
-use tikv_util::stream::error_stream;
+use crate::UnpinReader;
 
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
 
@@ -66,16 +67,38 @@ impl ExternalStorage for LocalStorage {
     }
 
     async fn write(&self, name: &str, reader: UnpinReader, _content_length: u64) -> io::Result<()> {
-        // Storage does not support dir,
-        // "a/a.sst", "/" and "" will return an error.
-        if Path::new(name)
-            .parent()
-            .map_or(true, |p| p.parent().is_some())
-        {
+        let p = Path::new(name);
+        if p.is_absolute() {
             return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("[{}] parent is not allowed in storage", name),
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "the file name (it is {}) should never be absolute path",
+                    p.display()
+                ),
             ));
+        }
+        if name.is_empty() || p.file_name().map(|s| s.is_empty()).unwrap_or(true) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("the file name (it is {}) should not be empty", p.display()),
+            ));
+        }
+        // create the parent dir if there isn't one.
+        // note: we may write to arbitrary directory here if the path contains things like '../'
+        // but internally the file name should be fully controlled by TiKV, so maybe it is OK?
+        if let Some(parent) = Path::new(name).parent() {
+            fs::create_dir_all(self.base.join(parent))
+                .await
+                // According to the man page mkdir(2), it returns EEXIST if there is already the dir.
+                // (However in practice, it doesn't fail in both Linux(CentOS 7) and macOS(12.2).)
+                // Ignore the `AlreadyExists` anyway for safety.
+                .or_else(|e| {
+                    if e.kind() == io::ErrorKind::AlreadyExists {
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
+                })?;
         }
         // Sanitize check, do not save file if it is already exist.
         if fs::metadata(self.base.join(name)).await.is_ok() {
@@ -109,9 +132,12 @@ impl ExternalStorage for LocalStorage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
+    use futures::AsyncReadExt;
     use tempfile::Builder;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_local_storage() {
@@ -151,8 +177,24 @@ mod tests {
             content_length,
         )
         .await
-        .unwrap_err();
-        // Empty name is not allowed.
+        .unwrap();
+        let mut r = ls.read("a/a.log");
+        let mut s = String::new();
+        r.read_to_string(&mut s).await.unwrap();
+        assert_eq!(magic_contents, s.as_bytes());
+
+        ls.write(
+            "a/b.log",
+            UnpinReader(Box::new(magic_contents)),
+            content_length,
+        )
+        .await
+        .unwrap();
+        let mut r = ls.read("a/b.log");
+        let mut s = String::new();
+        r.read_to_string(&mut s).await.unwrap();
+        assert_eq!(magic_contents, s.as_bytes()); // Empty name is not allowed.
+
         ls.write("", UnpinReader(Box::new(magic_contents)), content_length)
             .await
             .unwrap_err();
@@ -160,6 +202,13 @@ mod tests {
         ls.write("/", UnpinReader(Box::new(magic_contents)), content_length)
             .await
             .unwrap_err();
+        ls.write(
+            "/dir/but/nothing/",
+            UnpinReader(Box::new(magic_contents)),
+            content_length,
+        )
+        .await
+        .unwrap_err();
     }
 
     #[test]

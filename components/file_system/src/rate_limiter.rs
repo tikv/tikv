@@ -1,21 +1,25 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::io_stats;
-use super::metrics::{tls_collect_rate_limiter_request_wait, RATE_LIMITER_MAX_BYTES_PER_SEC};
-use super::{IOOp, IOPriority, IOType};
-
-use std::str::FromStr;
-use std::sync::{
-    atomic::{AtomicI64, AtomicU32, AtomicUsize, Ordering},
-    Arc,
+use std::{
+    str::FromStr,
+    sync::{
+        atomic::{AtomicI64, AtomicU32, AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
-use std::time::Duration;
 
 use crossbeam_utils::CachePadded;
 use parking_lot::Mutex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::EnumCount;
 use tikv_util::time::Instant;
+
+use super::{
+    io_stats,
+    metrics::{tls_collect_rate_limiter_request_wait, RATE_LIMITER_MAX_BYTES_PER_SEC},
+    IOOp, IOPriority, IOType,
+};
 
 /// Theoretically a smaller refill period increases CPU overhead while reduces
 /// busty IOs. In practice the value of this parameter is of little importance.
@@ -464,8 +468,9 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Barrier;
+
+    use super::*;
 
     macro_rules! approximate_eq {
         ($left:expr, $right:expr) => {

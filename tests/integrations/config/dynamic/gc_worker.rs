@@ -1,15 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{sync::mpsc::channel, time::Duration};
+
 use raftstore::router::RaftStoreBlackHole;
-use std::sync::mpsc::channel;
-use std::time::Duration;
-use tikv::config::{ConfigController, Module, TiKvConfig};
-use tikv::server::gc_worker::GcConfig;
-use tikv::server::gc_worker::{GcTask, GcWorker};
-use tikv::storage::kv::TestEngineBuilder;
-use tikv_util::config::ReadableSize;
-use tikv_util::time::Limiter;
-use tikv_util::worker::Scheduler;
+use tikv::{
+    config::{ConfigController, Module, TiKvConfig},
+    server::gc_worker::{GcConfig, GcTask, GcWorker},
+    storage::kv::TestEngineBuilder,
+};
+use tikv_util::{config::ReadableSize, time::Limiter, worker::Scheduler};
 
 #[test]
 fn test_gc_config_validate() {

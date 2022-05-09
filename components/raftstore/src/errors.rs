@@ -1,20 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error as StdError;
-use std::io;
-use std::net;
-use std::result;
+use std::{error::Error as StdError, io, net, result};
 
 use crossbeam::channel::TrySendError;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use protobuf::ProtobufError;
 use thiserror::Error;
-
-use error_code::{self, ErrorCode, ErrorCodeExt};
 use tikv_util::{codec, deadline::DeadlineError};
 
-use super::coprocessor::Error as CopError;
-use super::store::SnapError;
+use super::{coprocessor::Error as CopError, store::SnapError};
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 

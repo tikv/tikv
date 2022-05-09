@@ -5,8 +5,10 @@ use std::marker::PhantomData;
 use engine_traits::{KvEngine, Snapshot, CF_RAFT};
 use kvproto::metapb::Region;
 
-use crate::coprocessor::{ConsistencyCheckMethod, Coprocessor};
-use crate::Result;
+use crate::{
+    coprocessor::{ConsistencyCheckMethod, Coprocessor},
+    Result,
+};
 
 pub trait ConsistencyCheckObserver<E: KvEngine>: Coprocessor {
     /// Update context. Return `true` if later observers should be skiped.
@@ -84,8 +86,9 @@ fn compute_hash_on_raw<S: Snapshot>(region: &Region, snap: &S) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use engine_test::kv::KvTestEngine;
+
+    use super::*;
 
     #[test]
     fn test_update_context() {

@@ -1,23 +1,27 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc::channel;
-use std::sync::Arc;
-use std::time::Duration;
-
-use grpcio::EnvBuilder;
-
-use raftstore::store::fsm::*;
-use raftstore::store::SnapManager;
-use tikv::server::config::{Config as ServerConfig, ServerConfigManager};
-use tikv::server::snap::{Runner as SnapHandler, Task as SnapTask};
-
-use tikv::config::{ConfigController, TiKvConfig};
+use std::{
+    sync::{mpsc::channel, Arc},
+    time::Duration,
+};
 
 use engine_rocks::RocksEngine;
+use grpcio::EnvBuilder;
+use raft_log_engine::RaftLogEngine;
+use raftstore::store::{fsm::create_raft_batch_system, SnapManager};
 use security::SecurityManager;
 use tempfile::TempDir;
-use tikv_util::config::{ReadableSize, VersionTrack};
-use tikv_util::worker::{LazyWorker, Scheduler, Worker};
+use tikv::{
+    config::{ConfigController, TiKvConfig},
+    server::{
+        config::{Config as ServerConfig, ServerConfigManager},
+        snap::{Runner as SnapHandler, Task as SnapTask},
+    },
+};
+use tikv_util::{
+    config::{ReadableSize, VersionTrack},
+    worker::{LazyWorker, Scheduler, Worker},
+};
 
 fn start_server(
     cfg: TiKvConfig,
@@ -40,7 +44,7 @@ fn start_server(
             .name_prefix(thd_name!("test-server"))
             .build(),
     );
-    let (raft_router, _) = create_raft_batch_system::<RocksEngine, RocksEngine>(&cfg.raft_store);
+    let (raft_router, _) = create_raft_batch_system::<RocksEngine, RaftLogEngine>(&cfg.raft_store);
     let mut snap_worker = Worker::new("snap-handler").lazy_build("snap-handler");
     let snap_worker_scheduler = snap_worker.scheduler();
     let server_config = Arc::new(VersionTrack::new(cfg.server.clone()));

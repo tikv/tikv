@@ -1,10 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::rpn_fn;
-
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::Error;
+use tidb_query_datatype::codec::{data_type::*, Error};
 
 #[rpn_fn(nullable)]
 #[inline]
@@ -263,13 +261,14 @@ fn right_shift(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder, codec::mysql::TimeType, expr::EvalContext, FieldTypeFlag,
+        FieldTypeTp,
+    };
     use tipb::ScalarFuncSig;
 
     use super::*;
     use crate::test_util::RpnFnScalarEvaluator;
-    use tidb_query_datatype::codec::mysql::TimeType;
-    use tidb_query_datatype::expr::EvalContext;
 
     #[test]
     fn test_logical_and() {

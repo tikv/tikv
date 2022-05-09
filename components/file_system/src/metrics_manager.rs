@@ -1,15 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::io_stats::fetch_io_bytes;
-use crate::metrics::{tls_flush, IO_BYTES_VEC};
-use crate::IOBytes;
-use crate::IORateLimiterStatistics;
-use crate::{IOOp, IOType};
-
 use std::sync::Arc;
 
 use strum::{EnumCount, IntoEnumIterator};
 use tikv_util::time::Instant;
+
+use crate::{
+    io_stats::fetch_io_bytes,
+    metrics::{tls_flush, IO_BYTES_VEC},
+    IOBytes, IOOp, IORateLimiterStatistics, IOType,
+};
 
 pub enum BytesFetcher {
     /// Fetch IO statistics from IO rate limiter, which records passed-through IOs in atomic counters.

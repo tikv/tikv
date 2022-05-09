@@ -2,23 +2,23 @@
 
 use std::str::FromStr;
 
-use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
-use rand_xorshift::XorShiftRng;
-
 use criterion::measurement::Measurement;
-
+use rand::{seq::SliceRandom, Rng, SeedableRng};
+use rand_xorshift::XorShiftRng;
 use test_coprocessor::*;
-use tidb_query_datatype::FieldTypeTp;
-use tipb::FieldType;
-
 use tidb_query_common::storage::IntervalRange;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::data_type::Decimal;
-use tidb_query_datatype::codec::datum::{Datum, DatumEncoder};
-use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::Decimal,
+        datum::{Datum, DatumEncoder},
+    },
+    expr::{EvalContext, EvalWarnings},
+    FieldTypeTp,
+};
 use tidb_query_executors::interface::*;
 use tikv::storage::{RocksEngine, Statistics};
+use tipb::FieldType;
 
 use crate::util::bencher::Bencher;
 

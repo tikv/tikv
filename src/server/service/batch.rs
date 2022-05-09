@@ -1,23 +1,23 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::server::metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC};
-use crate::server::service::kv::{
-    batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse,
-};
-use crate::storage::kv::{PerfStatisticsDelta, Statistics};
-use crate::storage::{
-    errors::{extract_key_error, extract_region_error},
-    kv::Engine,
-    lock_manager::LockManager,
-    Storage,
-};
-use crate::storage::{ResponseBatchConsumer, Result};
-use api_version::APIVersion;
+use api_version::KvFormat;
+use engine_rocks::ReadPerfContext;
 use kvproto::kvrpcpb::*;
-use tikv_util::future::poll_future_notify;
-use tikv_util::mpsc::batch::Sender;
-use tikv_util::time::Instant;
+use tikv_util::{future::poll_future_notify, mpsc::batch::Sender, time::Instant};
+
+use crate::{
+    server::{
+        metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC},
+        service::kv::{batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse},
+    },
+    storage::{
+        errors::{extract_key_error, extract_region_error},
+        kv::{Engine, Statistics},
+        lock_manager::LockManager,
+        ResponseBatchConsumer, Result, Storage,
+    },
+};
 
 pub const MAX_BATCH_GET_REQUEST_COUNT: usize = 10;
 pub const MIN_BATCH_GET_REQUEST_COUNT: usize = 4;
@@ -63,9 +63,9 @@ impl ReqBatcher {
         self.raw_get_ids.push(id);
     }
 
-    pub fn maybe_commit<E: Engine, L: LockManager, Api: APIVersion>(
+    pub fn maybe_commit<E: Engine, L: LockManager, F: KvFormat>(
         &mut self,
-        storage: &Storage<E, L, Api>,
+        storage: &Storage<E, L, F>,
         tx: &Sender<MeasuredSingleResponse>,
     ) {
         if self.gets.len() >= self.batch_size {
@@ -81,9 +81,9 @@ impl ReqBatcher {
         }
     }
 
-    pub fn commit<E: Engine, L: LockManager, Api: APIVersion>(
+    pub fn commit<E: Engine, L: LockManager, F: KvFormat>(
         self,
-        storage: &Storage<E, L, Api>,
+        storage: &Storage<E, L, F>,
         tx: &Sender<MeasuredSingleResponse>,
     ) {
         if !self.gets.is_empty() {
@@ -141,13 +141,13 @@ pub struct GetCommandResponseConsumer {
     tx: Sender<MeasuredSingleResponse>,
 }
 
-impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
+impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, ReadPerfContext)>
     for GetCommandResponseConsumer
 {
     fn consume(
         &self,
         id: u64,
-        res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+        res: Result<(Option<Vec<u8>>, Statistics, ReadPerfContext)>,
         begin: Instant,
     ) {
         let mut resp = GetResponse::default();
@@ -155,10 +155,10 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
             resp.set_region_error(err);
         } else {
             match res {
-                Ok((val, statistics, perf_statistics_delta)) => {
+                Ok((val, statistics, perf_statistics)) => {
                     let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
                     statistics.write_scan_detail(scan_detail_v2);
-                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
+                    perf_statistics.write_scan_detail(scan_detail_v2);
                     match val {
                         Some(val) => resp.set_value(val),
                         None => resp.set_not_found(true),
@@ -204,8 +204,8 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
     }
 }
 
-fn future_batch_get_command<E: Engine, L: LockManager, Api: APIVersion>(
-    storage: &Storage<E, L, Api>,
+fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
     requests: Vec<u64>,
     gets: Vec<GetRequest>,
     tx: Sender<MeasuredSingleResponse>,
@@ -244,8 +244,8 @@ fn future_batch_get_command<E: Engine, L: LockManager, Api: APIVersion>(
     poll_future_notify(f);
 }
 
-fn future_batch_raw_get_command<E: Engine, L: LockManager, Api: APIVersion>(
-    storage: &Storage<E, L, Api>,
+fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
     requests: Vec<u64>,
     gets: Vec<RawGetRequest>,
     tx: Sender<MeasuredSingleResponse>,

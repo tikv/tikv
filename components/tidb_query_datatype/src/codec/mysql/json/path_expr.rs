@@ -23,10 +23,12 @@
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[*]') -> [1, "2"]
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1, "2"]]
 
+use std::ops::Index;
+
+use regex::Regex;
+
 use super::json_unquote::unquote_string;
 use crate::codec::Result;
-use regex::Regex;
-use std::ops::Index;
 
 pub const PATH_EXPR_ASTERISK: &str = "*";
 

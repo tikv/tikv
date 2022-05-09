@@ -1,13 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::AtomicBool, mpsc, Arc};
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{atomic::AtomicBool, mpsc, Arc},
+    thread,
+    time::Duration,
+};
 
 use raft::eraftpb::MessageType;
-use tikv_util::HandyRwLock;
-
 use test_raftstore::*;
+use tikv_util::HandyRwLock;
 
 enum FailureType<'a> {
     Partition(&'a [u64], &'a [u64]),
