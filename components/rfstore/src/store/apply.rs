@@ -1,38 +1,48 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
-use crate::errors::*;
-use crate::store::cmd_resp::{bind_term, err_resp};
-use crate::{mvcc, RaftRouter, UserMeta};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt::{self, Debug, Formatter},
+    sync::{atomic::AtomicU64, Arc, Mutex},
+    vec::Drain,
+};
+
 use bytes::Buf;
 use fail::fail_point;
-use kvengine::ChangeSet;
-use kvengine::SnapAccess;
-use kvproto::metapb;
-use kvproto::metapb::{PeerRole, Region};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, BatchSplitRequest, BatchSplitResponse,
-    ChangePeerRequest, RaftCmdRequest, RaftCmdResponse, RaftResponseHeader,
+use kvengine::{ChangeSet, SnapAccess};
+use kvproto::{
+    metapb,
+    metapb::{PeerRole, Region},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, AdminResponse, BatchSplitRequest, BatchSplitResponse,
+        ChangePeerRequest, RaftCmdRequest, RaftCmdResponse, RaftResponseHeader,
+    },
 };
 use prometheus::local::LocalHistogram;
 use protobuf::RepeatedField;
-use raft::eraftpb::{ConfChange, ConfChangeType, ConfChangeV2, EntryType};
-use raft::StateRole;
+use raft::{
+    eraftpb::{ConfChange, ConfChangeType, ConfChangeV2, EntryType},
+    StateRole,
+};
 use raft_proto::eraftpb;
-use raftstore::store::fsm::metrics::*;
-use raftstore::store::metrics::*;
-use raftstore::store::util;
-use raftstore::store::util::{ChangePeerI, ConfChangeKind};
-use raftstore::store::QueryStats;
-use std::collections::{HashMap, VecDeque};
-use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Mutex};
-use std::vec::Drain;
-use tikv_util::time::Instant;
-use tikv_util::{box_err, error, info, warn};
+use raftstore::store::{
+    fsm::metrics::*,
+    metrics::*,
+    util,
+    util::{ChangePeerI, ConfChangeKind},
+    QueryStats,
+};
+use tikv_util::{box_err, error, info, time::Instant, warn};
 use time::Timespec;
 use txn_types::LockType;
+
+use super::*;
+use crate::{
+    errors::*,
+    mvcc,
+    store::cmd_resp::{bind_term, err_resp},
+    RaftRouter, UserMeta,
+};
 
 pub(crate) struct PendingCmd {
     pub(crate) index: u64,

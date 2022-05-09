@@ -1,16 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Deref;
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use moka::sync::SegmentedCache;
 
-use crate::{dfs, table::Value, NUM_CFS};
-
 use super::*;
-use crate::table::table::Result;
+use crate::{
+    dfs,
+    table::{table::Result, Value},
+    NUM_CFS,
+};
 
 const L0_FOOTER_SIZE: usize = std::mem::size_of::<L0Footer>();
 

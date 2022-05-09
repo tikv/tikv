@@ -1,16 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::table::memtable::CFTable;
-use crate::table::sstable::L0Builder;
-use crate::table::{memtable, sstable};
-use crate::*;
+use std::{collections::HashMap, time::Duration};
+
 use bytes::BytesMut;
 use kvenginepb as pb;
 use slog_global::info;
-use std::collections::HashMap;
-use std::time::Duration;
-use tikv_util::mpsc;
-use tikv_util::time::Instant;
+use tikv_util::{mpsc, time::Instant};
+
+use crate::{
+    table::{memtable, memtable::CFTable, sstable, sstable::L0Builder},
+    *,
+};
 
 pub(crate) struct FlushTask {
     pub(crate) shard_id: u64,

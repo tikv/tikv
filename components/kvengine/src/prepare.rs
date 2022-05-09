@@ -1,14 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::apply::ChangeSet;
-use crate::table::sstable::{L0Table, SSTable};
-use crate::EngineCore;
-use crate::*;
+use std::{collections::HashMap, io::Write, path::PathBuf};
+
 use bytes::{Buf, Bytes};
 use file_system::{IOOp, IOType};
-use std::collections::HashMap;
-use std::io::Write;
-use std::path::PathBuf;
+
+use crate::{
+    apply::ChangeSet,
+    table::sstable::{L0Table, SSTable},
+    EngineCore, *,
+};
 
 impl EngineCore {
     pub fn prepare_change_set(

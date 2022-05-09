@@ -1,15 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc;
-use crate::storage::mvcc::NewerTsCheckState;
-use crate::storage::txn::Result;
+use std::{borrow::Cow, marker::PhantomData};
+
 use bytes::{Buf, Bytes};
 use kvengine::Item;
 use kvproto::kvrpcpb::IsolationLevel;
-use std::borrow::Cow;
-use std::marker::PhantomData;
 use tikv_kv::{Snapshot, Statistics};
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value};
+
+use crate::storage::{mvcc, mvcc::NewerTsCheckState, txn::Result};
 
 pub struct CloudStore<S: Snapshot> {
     marker: PhantomData<S>,

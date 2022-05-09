@@ -1,41 +1,46 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
-use std::cmp::Ordering as CmpOrdering;
-use std::collections::HashMap;
-use std::fmt::{self, Display, Formatter};
-use std::sync::{atomic::Ordering, Arc};
-use std::time::{Duration, Instant};
-
-use crate::store::{Callback, CasualMessage, PeerMsg, StoreInfo};
-use crate::{RaftRouter, RaftStoreRouter};
-
-#[cfg(feature = "failpoints")]
-use fail::fail_point;
+use std::{
+    cmp,
+    cmp::Ordering as CmpOrdering,
+    collections::HashMap,
+    fmt::{self, Display, Formatter},
+    sync::{atomic::Ordering, Arc},
+    time::{Duration, Instant},
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::MiscExt;
-use futures::compat::Future01CompatExt;
-use futures::FutureExt;
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
-    SplitRequest,
+#[cfg(feature = "failpoints")]
+use fail::fail_point;
+use futures::{compat::Future01CompatExt, FutureExt};
+use kvproto::{
+    metapb, pdpb,
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
+        SplitRequest,
+    },
+    raft_serverpb::RaftMessage,
+    replication_modepb::RegionReplicationStatus,
 };
-use kvproto::raft_serverpb::RaftMessage;
-use kvproto::replication_modepb::RegionReplicationStatus;
-use kvproto::{metapb, pdpb};
-use pd_client::metrics::*;
-use pd_client::{PdClient, RegionStat};
+use pd_client::{metrics::*, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
-use raftstore::store::util::ConfChangeKind;
-use raftstore::store::{util, QueryStats, ReadStats, TxnExt, WriteStats};
-use tikv_util::time::UnixSecs;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::topn::TopN;
-use tikv_util::worker::{Runnable, Scheduler};
-use tikv_util::{debug, error, info, warn};
+use raftstore::store::{util, util::ConfChangeKind, QueryStats, ReadStats, TxnExt, WriteStats};
+use tikv_util::{
+    debug, error, info,
+    time::UnixSecs,
+    timer::GLOBAL_TIMER_HANDLE,
+    topn::TopN,
+    warn,
+    worker::{Runnable, Scheduler},
+};
 use yatp::Remote;
+
+use crate::{
+    store::{Callback, CasualMessage, PeerMsg, StoreInfo},
+    RaftRouter, RaftStoreRouter,
+};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 

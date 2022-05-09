@@ -1,10 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{path::PathBuf, sync::Arc};
+
 use clap::{App, Arg};
 use hyper::service::{make_service_fn, service_fn};
 use slog_global::{error, info};
-use std::path::PathBuf;
-use std::sync::Arc;
 
 fn main() {
     init_logger();

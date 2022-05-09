@@ -2,9 +2,9 @@
 
 //! Testing iterator and snapshot behavior in the presence of intermixed writes
 
+use engine_traits::{Iterable, Iterator, KvEngine, Peekable, SyncMutable};
+
 use super::default_engine;
-use engine_traits::{Iterable, Iterator};
-use engine_traits::{KvEngine, Peekable, SyncMutable};
 
 #[test]
 fn snapshot_with_writes() {

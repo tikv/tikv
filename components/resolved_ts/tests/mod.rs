@@ -1,24 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::*;
-use std::time::Duration;
+use std::{sync::*, time::Duration};
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use grpcio::ClientUnaryReceiver;
-use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::TikvClient;
+use grpcio::{ChannelBuilder, ClientUnaryReceiver, Environment};
+use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use online_config::ConfigValue;
 use raftstore::coprocessor::CoprocessorHost;
+use resolved_ts::{Observer, Task};
 use test_raftstore::*;
 use tikv::config::ResolvedTsConfig;
-use tikv_util::worker::LazyWorker;
-use tikv_util::HandyRwLock;
+use tikv_util::{worker::LazyWorker, HandyRwLock};
 use txn_types::TimeStamp;
-
-use resolved_ts::{Observer, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {

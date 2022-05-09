@@ -1,22 +1,23 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::dfs;
-use crate::table::*;
+use std::{
+    cmp::Ordering,
+    ops::Deref,
+    path::{Path, PathBuf},
+    slice,
+    sync::Arc,
+};
 
-use super::builder::*;
-use super::iterator::TableIterator;
-use crate::table::table::Result;
-use byteorder::ByteOrder;
-use byteorder::LittleEndian;
-use bytes::BytesMut;
-use bytes::{Buf, Bytes};
+use byteorder::{ByteOrder, LittleEndian};
+use bytes::{Buf, Bytes, BytesMut};
 use moka::sync::SegmentedCache;
-use std::cmp::Ordering;
-use std::ops::Deref;
-use std::path::{Path, PathBuf};
-use std::slice;
-use std::sync::Arc;
 use xorf::{BinaryFuse8, Filter};
+
+use super::{builder::*, iterator::TableIterator};
+use crate::{
+    dfs,
+    table::{table::Result, *},
+};
 
 #[derive(Clone)]
 pub struct SSTable {
@@ -544,14 +545,13 @@ pub(crate) fn test_key(prefix: &str, i: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::{iter::Iterator as StdIterator, sync::atomic::Ordering};
+
     use bytes::BytesMut;
     use rand::Rng;
-    use std::iter::Iterator as StdIterator;
-
-    use crate::Iterator;
 
     use super::*;
-    use std::sync::atomic::Ordering;
+    use crate::Iterator;
 
     fn build_multi_vesion_table(
         mut key_vals: Vec<(String, String)>,

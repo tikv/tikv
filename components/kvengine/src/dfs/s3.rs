@@ -1,19 +1,24 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::dfs::{new_filename, File, Options, DFS};
+use std::{
+    ops::Deref,
+    os::unix::fs::{FileExt, MetadataExt},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use rusoto_core::{Region, RusotoError};
-use rusoto_s3::util::{AddressingStyle, S3Config};
-use rusoto_s3::S3;
-use std::ops::Deref;
-use std::os::unix::fs::{FileExt, MetadataExt};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use rusoto_s3::{
+    util::{AddressingStyle, S3Config},
+    S3,
+};
 use tikv_util::time::Instant;
-use tokio::io::AsyncReadExt;
-use tokio::runtime::Runtime;
+use tokio::{io::AsyncReadExt, runtime::Runtime};
+
+use crate::dfs::{new_filename, File, Options, DFS};
 
 const MAX_RETRY_COUNT: u32 = 5;
 
@@ -304,13 +309,11 @@ impl File for LocalFile {
 
 #[cfg(test)]
 mod tests {
-    use crate::dfs::s3::S3FS;
-    use crate::dfs::{Options, DFS};
+    use std::{fs, io::Write, path::PathBuf, str::FromStr};
+
     use bytes::Buf;
-    use std::fs;
-    use std::io::Write;
-    use std::path::PathBuf;
-    use std::str::FromStr;
+
+    use crate::dfs::{s3::S3FS, Options, DFS};
 
     #[test]
     fn test_s3() {

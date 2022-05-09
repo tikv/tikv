@@ -1,14 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::PeerMsg;
+use std::{error::Error as StdError, io, net};
+
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use protobuf::ProtobufError;
 use raftstore::coprocessor::Error as CopError;
-use std::error::Error as StdError;
-use std::{io, net};
 use thiserror::Error;
 use tikv_util::codec;
+
+use crate::store::PeerMsg;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 

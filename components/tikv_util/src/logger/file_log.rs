@@ -1,14 +1,18 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Display, Formatter};
-use std::fs::{self, DirEntry, File, OpenOptions};
-use std::io::{self, Error, ErrorKind, Write};
-use std::path::{Path, PathBuf};
+use std::{
+    fmt::{self, Display, Formatter},
+    fs::{self, DirEntry, File, OpenOptions},
+    io::{self, Error, ErrorKind, Write},
+    path::{Path, PathBuf},
+};
 
 use chrono::{DateTime, Duration, Local};
 
-use crate::config::{ReadableDuration, ReadableSize};
-use crate::worker::{LazyWorker, Runnable};
+use crate::{
+    config::{ReadableDuration, ReadableSize},
+    worker::{LazyWorker, Runnable},
+};
 
 /// Opens log file with append mode. Creates a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
@@ -293,12 +297,11 @@ impl Runnable for Runner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{ffi::OsStr, ops::Add, time::Duration};
 
-    use std::ffi::OsStr;
-    use std::ops::Add;
-    use std::time::Duration;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn file_exists(file: impl AsRef<Path>) -> bool {
         let path = file.as_ref();

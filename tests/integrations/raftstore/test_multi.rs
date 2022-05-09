@@ -1,28 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::*;
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
-
-use rand::Rng;
-
-use kvproto::raft_cmdpb::RaftCmdResponse;
-use raft::eraftpb::MessageType;
+use std::{
+    sync::{atomic::*, *},
+    thread,
+    time::Duration,
+};
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::*;
-use raftstore::Result;
-use rand::RngCore;
+use kvproto::raft_cmdpb::RaftCmdResponse;
+use raft::eraftpb::MessageType;
+use raftstore::{router::RaftStoreRouter, store::*, Result};
+use rand::{Rng, RngCore};
 use test_raftstore::*;
-use tikv::storage::kv::SnapshotExt;
-use tikv::storage::Snapshot;
-use tikv_util::config::*;
-use tikv_util::HandyRwLock;
-use txn_types::Key;
-use txn_types::PessimisticLock;
+use tikv::storage::{kv::SnapshotExt, Snapshot};
+use tikv_util::{config::*, HandyRwLock};
+use txn_types::{Key, PessimisticLock};
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();

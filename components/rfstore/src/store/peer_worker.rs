@@ -1,23 +1,29 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    mem,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
+use crossbeam::channel::RecvTimeoutError;
+use kvproto::{errorpb, raft_cmdpb::RaftCmdResponse};
+use raftstore::store::{
+    metrics::{
+        STORE_WRITE_RAFTDB_DURATION_HISTOGRAM, STORE_WRITE_SEND_DURATION_HISTOGRAM,
+        STORE_WRITE_TRIGGER_SIZE_HISTOGRAM,
+    },
+    util,
+};
+use tikv_util::{
+    debug, error,
+    mpsc::{Receiver, Sender},
+    time::{duration_to_sec, InstantExt},
+};
+
 use super::*;
 use crate::RaftRouter;
-use crossbeam::channel::RecvTimeoutError;
-use kvproto::errorpb;
-use kvproto::raft_cmdpb::RaftCmdResponse;
-use raftstore::store::metrics::{
-    STORE_WRITE_RAFTDB_DURATION_HISTOGRAM, STORE_WRITE_SEND_DURATION_HISTOGRAM,
-    STORE_WRITE_TRIGGER_SIZE_HISTOGRAM,
-};
-use raftstore::store::util;
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::mem;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tikv_util::mpsc::{Receiver, Sender};
-use tikv_util::time::{duration_to_sec, InstantExt};
-use tikv_util::{debug, error};
 
 #[derive(Clone)]
 pub(crate) struct PeerStates {

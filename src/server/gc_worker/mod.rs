@@ -7,7 +7,8 @@ mod gc_manager;
 mod gc_worker;
 
 // TODO: Use separated error type for GCWorker instead.
-pub use crate::storage::{Callback, Error, ErrorInner, Result};
+#[cfg(any(test, feature = "failpoints"))]
+pub use compaction_filter::test_utils::{gc_by_compact, TestGCRunner};
 pub use compaction_filter::WriteCompactionFilterFactory;
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 use engine_traits::MvccProperties;
@@ -15,8 +16,7 @@ pub use gc_manager::AutoGcConfig;
 pub use gc_worker::{sync_gc, GcSafePointProvider, GcTask, GcWorker, GC_MAX_EXECUTING_TASKS};
 use txn_types::TimeStamp;
 
-#[cfg(any(test, feature = "failpoints"))]
-pub use compaction_filter::test_utils::{gc_by_compact, TestGCRunner};
+pub use crate::storage::{Callback, Error, ErrorInner, Result};
 
 // Returns true if it needs gc.
 // This is for optimization purpose, does not mean to be accurate.
@@ -48,12 +48,14 @@ fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccProper
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::mvcc::reader_tests::{make_region, open_db, RegionEngine};
+    use std::sync::Arc;
+
     use engine_rocks::{raw::DB, Compat};
     use engine_traits::{MvccPropertiesExt, CF_WRITE};
     use kvproto::metapb::Region;
-    use std::sync::Arc;
+
+    use super::*;
+    use crate::storage::mvcc::reader_tests::{make_region, open_db, RegionEngine};
 
     fn get_mvcc_properties_and_check_gc(
         db: Arc<DB>,

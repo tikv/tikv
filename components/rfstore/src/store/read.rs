@@ -1,27 +1,38 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
-use crate::store::{
-    cf_name_to_num, cmd_resp, util, Callback, Peer, PeerMsg, RaftCommand, ReadResponse,
-    RegionSnapshot, RequestInspector, RequestPolicy,
-};
-use crate::{Error, RaftRouter, Result};
 use fail::fail_point;
-use kvproto::errorpb;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb;
-use kvproto::raft_cmdpb::{
-    CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
+use kvproto::{
+    errorpb,
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb,
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
-use raftstore::store::util::{LeaseState, RemoteLease};
-use raftstore::store::worker_metrics::*;
-use tikv_util::lru::LruCache;
-use tikv_util::time::{monotonic_raw_now, Instant, ThreadReadId};
-use tikv_util::{debug, error};
+use raftstore::store::{
+    util::{LeaseState, RemoteLease},
+    worker_metrics::*,
+};
+use tikv_util::{
+    debug, error,
+    lru::LruCache,
+    time::{monotonic_raw_now, Instant, ThreadReadId},
+};
 use time::Timespec;
+
+use crate::{
+    store::{
+        cf_name_to_num, cmd_resp, util, Callback, Peer, PeerMsg, RaftCommand, ReadResponse,
+        RegionSnapshot, RequestInspector, RequestPolicy,
+    },
+    Error, RaftRouter, Result,
+};
 
 #[derive(Debug)]
 pub enum ReadProgress {

@@ -1,33 +1,39 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::AtomicBool, Arc};
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{atomic::AtomicBool, Arc},
+    thread,
+    time::Duration,
+};
 
-use super::server::Result;
-use super::RaftKv;
 use api_version::KvFormat;
 use concurrency_manager::ConcurrencyManager;
-use kvproto::metapb;
-use kvproto::raft_serverpb::RegionLocalState;
-use kvproto::replication_modepb::ReplicationStatus;
+use kvproto::{metapb, raft_serverpb::RegionLocalState, replication_modepb::ReplicationStatus};
 use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
 use protobuf::Message;
-use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::store::{initial_region, FlowStatsReporter};
+use raftstore::{
+    coprocessor::dispatcher::CoprocessorHost,
+    store::{initial_region, FlowStatsReporter},
+};
 use resource_metering::ResourceTagFactory;
-use rfstore::store::store_fsm::StoreMeta;
-use rfstore::store::{self, Config as StoreConfig, Engines};
-use rfstore::store::{PdTask, RaftBatchSystem, Transport};
-use tikv::read_pool::ReadPoolHandle;
-use tikv::server::lock_manager::LockManager;
-use tikv::server::Config as ServerConfig;
-use tikv::storage::txn::flow_controller::FlowController;
-use tikv::storage::DynamicConfigs as StorageDynamicConfigs;
-use tikv::storage::{config::Config as StorageConfig, Storage};
-use tikv_util::config::VersionTrack;
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::worker::{LazyWorker, Worker};
+use rfstore::store::{
+    self, store_fsm::StoreMeta, Config as StoreConfig, Engines, PdTask, RaftBatchSystem, Transport,
+};
+use tikv::{
+    read_pool::ReadPoolHandle,
+    server::{lock_manager::LockManager, Config as ServerConfig},
+    storage::{
+        config::Config as StorageConfig, txn::flow_controller::FlowController,
+        DynamicConfigs as StorageDynamicConfigs, Storage,
+    },
+};
+use tikv_util::{
+    config::VersionTrack,
+    quota_limiter::QuotaLimiter,
+    worker::{LazyWorker, Worker},
+};
+
+use super::{server::Result, RaftKv};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;

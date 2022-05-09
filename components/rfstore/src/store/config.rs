@@ -1,9 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Duration;
+
 use online_config::OnlineConfig;
 use raftstore::coprocessor;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use time::Duration as TimeDuration;
 

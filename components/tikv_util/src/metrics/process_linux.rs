@@ -5,9 +5,12 @@
 
 use std::io::{Error, ErrorKind, Result};
 
+use prometheus::{
+    core::{Collector, Desc},
+    proto, IntCounter, IntGauge, Opts,
+};
+
 use crate::sys::thread;
-use prometheus::core::{Collector, Desc};
-use prometheus::{proto, IntCounter, IntGauge, Opts};
 
 /// Monitors current process.
 pub fn monitor_process() -> Result<()> {

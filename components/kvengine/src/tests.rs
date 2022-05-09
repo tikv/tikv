@@ -1,18 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{dfs::InMemFS, *};
-use bytes::Buf;
-use file_system::IORateLimiter;
-use kvenginepb as pb;
-use std::path::PathBuf;
 use std::{
     ops::Deref,
+    path::PathBuf,
     sync::{atomic::AtomicU64, Arc},
     thread,
     time::Duration,
     vec,
 };
+
+use bytes::Buf;
+use file_system::IORateLimiter;
+use kvenginepb as pb;
 use tikv_util::mpsc;
+
+use crate::{dfs::InMemFS, *};
 
 macro_rules! unwrap_or_return {
     ( $e:expr, $m:expr ) => {

@@ -1,38 +1,42 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    cmp,
+    collections::VecDeque,
+    ops::{Deref, DerefMut},
+    sync::{atomic::AtomicU64, Arc},
+    u64,
+};
+
 use fail::fail_point;
 use kvengine::ShardMeta;
-use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::raft_cmdpb::{
-    CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, StatusCmdType,
-    StatusResponse,
+use kvproto::{
+    metapb::{self, Region, RegionEpoch},
+    raft_cmdpb::{
+        CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, StatusCmdType,
+        StatusResponse,
+    },
+    raft_serverpb::RaftMessage,
 };
-use kvproto::raft_serverpb::RaftMessage;
-use raft;
-use raft::eraftpb::MessageType;
+use raft::{self, eraftpb::MessageType};
 use raft_proto::eraftpb;
-use rand::{thread_rng, Rng};
-use std::collections::VecDeque;
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
-use std::{cmp, u64};
-use tikv_util::{box_err, debug, error, info, trace, warn};
-
-use crate::store::cmd_resp::{bind_term, new_error};
-use crate::store::msg::Callback;
-use crate::store::peer::Peer;
-use crate::store::{notify_req_region_removed, CustomBuilder, PdTask, PersistReady, StoreMsg};
-use crate::store::{util as _util, CasualMessage, Config, PeerMsg, SignificantMsg};
-use crate::store::{
-    ApplyMsg, Engines, MsgApplyResult, RaftContext, Ticker, PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT,
-    PEER_TICK_SPLIT_CHECK,
-};
-use crate::store::{ExecResult, SnapState};
-use crate::{Error, Result};
 use raftstore::store::util;
-use tikv_util::time::duration_to_sec;
+use rand::{thread_rng, Rng};
+use tikv_util::{box_err, debug, error, info, time::duration_to_sec, trace, warn};
 use txn_types::{Key, WriteBatchFlags};
+
+use crate::{
+    store::{
+        cmd_resp::{bind_term, new_error},
+        msg::Callback,
+        notify_req_region_removed,
+        peer::Peer,
+        util as _util, ApplyMsg, CasualMessage, Config, CustomBuilder, Engines, ExecResult,
+        MsgApplyResult, PdTask, PeerMsg, PersistReady, RaftContext, SignificantMsg, SnapState,
+        StoreMsg, Ticker, PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_SPLIT_CHECK,
+    },
+    Error, Result,
+};
 
 /// Limits the maximum number of regions returned by error.
 ///

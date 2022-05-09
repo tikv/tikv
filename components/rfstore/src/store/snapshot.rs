@@ -1,13 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    num::NonZeroU64,
+    sync::{atomic::AtomicU64, Arc},
+};
+
 use kvengine::SnapAccess;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::Region;
-use std::num::NonZeroU64;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
-use tikv_util::metrics::CRITICAL_ERROR;
-use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region};
+use tikv_util::{metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark};
 
 /// Snapshot of a region.
 ///

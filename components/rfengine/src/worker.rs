@@ -1,14 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::Instant;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs, mem,
-    path::Path,
-    path::PathBuf,
-    sync::mpsc::Receiver,
+    path::{Path, PathBuf},
+    sync::{mpsc::Receiver, Arc},
+    time::Instant,
 };
 
 use bytes::{Buf, BufMut, Bytes};

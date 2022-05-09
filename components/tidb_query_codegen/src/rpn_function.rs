@@ -187,8 +187,7 @@
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
-use syn::punctuated::Punctuated;
-use syn::*;
+use syn::{punctuated::Punctuated, *};
 
 /// Entry point for the `rpn_fn` attribute.
 pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream> {
@@ -1716,9 +1715,9 @@ impl NormalRpnFn {
 
 #[cfg(test)]
 mod tests_normal {
-    use super::*;
-
     use proc_macro2::TokenTree;
+
+    use super::*;
 
     /// Compare TokenStream with all white chars trimmed.
     fn assert_token_stream_equal(l: TokenStream, r: TokenStream) {

@@ -4,10 +4,10 @@ use concurrency_manager::ConcurrencyManager;
 use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::{AssertionLevel, Context};
 use test_util::KvGenerator;
-use tikv::storage::kv::{Engine, WriteData};
-use tikv::storage::mvcc::{self, MvccReader, MvccTxn, SnapshotReader};
-use tikv::storage::txn::{
-    cleanup, commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
+use tikv::storage::{
+    kv::{Engine, WriteData},
+    mvcc::{self, MvccReader, MvccTxn, SnapshotReader},
+    txn::{cleanup, commit, prewrite, CommitKind, TransactionKind, TransactionProperties},
 };
 use txn_types::{Key, Mutation, TimeStamp};
 

@@ -1,12 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::raft_serverpb::RaftMessage;
+use rfstore::{router::RaftStoreRouter, store::Transport, Result as RaftStoreResult};
+use tikv::server::resolve::StoreAddrResolver;
 
 use crate::raft_client::RaftClient;
-use rfstore::router::RaftStoreRouter;
-use rfstore::store::Transport;
-use rfstore::Result as RaftStoreResult;
-use tikv::server::resolve::StoreAddrResolver;
 
 pub struct ServerTransport<T, S>
 where

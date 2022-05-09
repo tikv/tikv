@@ -1,14 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::marker::PhantomData;
+use std::{collections::HashMap, marker::PhantomData};
 
-use crate::decode_properties::DecodeProperties;
-use crate::{RocksEngine, UserProperties};
 use api_version::{KeyMode, KvFormat, RawValue};
 use engine_traits::{Range, Result, TtlProperties, TtlPropertiesExt};
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 use tikv_util::error;
+
+use crate::{decode_properties::DecodeProperties, RocksEngine, UserProperties};
 
 const PROP_MAX_EXPIRE_TS: &str = "tikv.max_expire_ts";
 const PROP_MIN_EXPIRE_TS: &str = "tikv.min_expire_ts";
@@ -127,10 +126,11 @@ impl<F: KvFormat> TablePropertiesCollectorFactory<TtlPropertiesCollector<F>>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use api_version::test_kv_format_impl;
     use kvproto::kvrpcpb::ApiVersion;
     use tikv_util::time::UnixSecs;
+
+    use super::*;
 
     #[test]
     fn test_ttl_properties() {

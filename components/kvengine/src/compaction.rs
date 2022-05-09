@@ -1,23 +1,29 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::Iterator as StdIterator;
-use std::sync::atomic::AtomicU64;
-use std::sync::{atomic::Ordering, Arc};
-use std::time::Duration;
+use std::{
+    iter::Iterator as StdIterator,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
+use kvenginepb as pb;
 use protobuf::{Message, RepeatedField};
 use slog_global::error;
 
-use crate::dfs;
-use crate::table::{
-    search,
-    sstable::{self, SSTable},
+use crate::{
+    dfs,
+    table::{
+        search,
+        sstable::{self, SSTable},
+    },
+    Error::RemoteCompaction,
+    *,
 };
-use crate::Error::RemoteCompaction;
-use crate::*;
-use kvenginepb as pb;
 
 #[derive(Clone)]
 pub(crate) struct CompactionClient {

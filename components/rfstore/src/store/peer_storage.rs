@@ -1,29 +1,33 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::errors::*;
-use byteorder::{ByteOrder, LittleEndian};
-use kvproto::*;
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use super::keys::raft_state_key;
-use crate::store::{
-    get_preprocess_cmd, region_state_key, Engines, RaftApplyState, RaftContext, RaftState,
-    RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY, TERM_KEY,
+use std::{
+    sync::{atomic::AtomicUsize, Arc},
+    time::{Duration, Instant},
 };
+
+use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use engine_traits::RaftEngineReadOnly;
 use kvengine::ShardMeta;
-use kvproto::raft_serverpb::PeerState;
+use kvproto::{raft_serverpb::PeerState, *};
 use protobuf::Message;
 use raft::{GetEntriesContext, StorageError};
-use raft_proto::eraftpb;
-use raft_proto::eraftpb::{ConfState, HardState};
-use raftstore::store::util;
-use raftstore::store::util::conf_state_from_region;
+use raft_proto::{
+    eraftpb,
+    eraftpb::{ConfState, HardState},
+};
+use raftstore::store::{util, util::conf_state_from_region};
 use rfengine;
 use tikv_util::{box_err, debug, info};
+
+use super::keys::raft_state_key;
+use crate::{
+    errors::*,
+    store::{
+        get_preprocess_cmd, region_state_key, Engines, RaftApplyState, RaftContext, RaftState,
+        RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY, TERM_KEY,
+    },
+};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.

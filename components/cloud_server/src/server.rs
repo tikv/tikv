@@ -1,57 +1,61 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::channel::oneshot::Canceled;
-use std::error::Error as StdError;
-use std::io::Error as IoError;
-use std::net::AddrParseError;
-use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::{i32, result};
+use std::{
+    error::Error as StdError,
+    i32,
+    io::Error as IoError,
+    net::{AddrParseError, IpAddr, SocketAddr},
+    result,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 use api_version::KvFormat;
-use futures::compat::Stream01CompatExt;
-use futures::stream::StreamExt;
-use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
-use grpcio_health::{create_health, HealthService, ServingStatus};
-use kvproto::tikvpb::*;
-use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
-use tokio_timer::timer::Handle;
-
-use rfstore::router::RaftStoreRouter;
-use security::SecurityManager;
-use tikv::coprocessor::Endpoint;
-use tikv::coprocessor_v2;
-use tikv::server::{Config, Proxy};
-use tikv::storage::lock_manager::LockManager;
-use tikv::storage::Storage;
-use tikv_util::config::VersionTrack;
-use tikv_util::sys::{get_global_memory_usage, record_global_memory_usage};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::Either;
-
-use super::raft_client::{ConnectionBuilder, RaftClient};
-use tikv::server::load_statistics::*;
-use tikv::server::metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC};
-
-use super::transport::ServerTransport;
-use crate::service::KvService;
-use crate::RaftKv;
-use tikv::read_pool::ReadPool;
-use tikv::server::resolve::StoreAddrResolver;
-
 use engine_traits::Error as EngineTraitError;
-use grpcio::Error as GrpcError;
+use futures::{channel::oneshot::Canceled, compat::Stream01CompatExt, stream::StreamExt};
+use grpcio::{
+    ChannelBuilder, Environment, Error as GrpcError, ResourceQuota, Server as GrpcServer,
+    ServerBuilder,
+};
+use grpcio_health::{create_health, HealthService, ServingStatus};
 use hyper::Error as HttpError;
+use kvproto::tikvpb::*;
 use openssl::error::ErrorStack as OpenSSLError;
 use pd_client::Error as PdError;
 use protobuf::ProtobufError;
-use rfstore::Error as RaftServerError;
+use rfstore::{router::RaftStoreRouter, Error as RaftServerError};
+use security::SecurityManager;
 use thiserror::Error;
-use tikv::storage::kv::Error as EngineError;
-use tikv::storage::Error as StorageError;
-use tikv_util::codec::Error as CodecError;
+use tikv::{
+    coprocessor::Endpoint,
+    coprocessor_v2,
+    read_pool::ReadPool,
+    server::{
+        load_statistics::*,
+        metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC},
+        resolve::StoreAddrResolver,
+        Config, Proxy,
+    },
+    storage::{
+        kv::Error as EngineError, lock_manager::LockManager, Error as StorageError, Storage,
+    },
+};
+use tikv_util::{
+    codec::Error as CodecError,
+    config::VersionTrack,
+    sys::{get_global_memory_usage, record_global_memory_usage},
+    timer::GLOBAL_TIMER_HANDLE,
+    Either,
+};
+use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
+use tokio_timer::timer::Handle;
+
+use super::{
+    raft_client::{ConnectionBuilder, RaftClient},
+    transport::ServerTransport,
+};
+use crate::{service::KvService, RaftKv};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
@@ -353,11 +357,10 @@ impl<T: RaftStoreRouter + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
 pub mod test_router {
     use std::sync::mpsc::*;
 
-    use super::*;
-
+    use kvproto::raft_serverpb::RaftMessage;
     use rfstore::store::*;
 
-    use kvproto::raft_serverpb::RaftMessage;
+    use super::*;
 
     #[derive(Clone)]
     pub struct TestRaftStoreRouter {

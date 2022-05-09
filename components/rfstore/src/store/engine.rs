@@ -1,16 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::{path::PathBuf, sync::Mutex};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
-use crate::store::StoreMsg;
 use kvengine::Engine;
 use kvenginepb::ChangeSet;
 use rfengine::RFEngine;
-use tikv_util::mpsc;
-use tikv_util::mpsc::{Receiver, Sender};
+use tikv_util::{
+    mpsc,
+    mpsc::{Receiver, Sender},
+};
+
+use crate::store::StoreMsg;
 
 #[derive(Clone)]
 pub struct Engines {

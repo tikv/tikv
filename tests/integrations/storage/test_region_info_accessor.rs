@@ -1,8 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc::channel;
-use std::thread;
-use std::time::Duration;
+use std::{sync::mpsc::channel, thread, time::Duration};
 
 use collections::HashMap;
 use kvproto::metapb::Region;

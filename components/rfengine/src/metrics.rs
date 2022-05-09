@@ -1,9 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Instant;
+
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
-use std::time::Instant;
 
 make_static_metric! {
     pub label_enum LogQueueKind {

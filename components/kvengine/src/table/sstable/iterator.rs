@@ -1,11 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::table::{search, table, LocalAddr};
+use std::slice;
+
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
 
 use super::{builder::META_HAS_OLD, SSTable};
-use std::slice;
+use crate::table::{search, table, LocalAddr};
 
 pub struct BlockIterator {
     b: Bytes,

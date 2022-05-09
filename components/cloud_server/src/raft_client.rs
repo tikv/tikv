@@ -1,34 +1,41 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    cmp,
+    collections::VecDeque,
+    ffi::CString,
+    marker::Unpin,
+    mem,
+    pin::Pin,
+    result,
+    sync::{
+        atomic::{AtomicBool, AtomicI32, Ordering},
+        Arc, Mutex,
+    },
+    time::Instant,
+};
+
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
-use futures::channel::oneshot;
-use futures::compat::Future01CompatExt;
-use futures::task::{Context, Poll, Waker};
-use futures::{Future, Sink};
+use futures::{
+    channel::oneshot,
+    compat::Future01CompatExt,
+    task::{Context, Poll, Waker},
+    Future, Sink,
+};
 use grpcio::{
     ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
     WriteFlags,
 };
-use kvproto::raft_serverpb::{Done, RaftMessage};
-use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
-use rfstore::errors::DiscardReason;
-use rfstore::router::RaftStoreRouter;
+use kvproto::{
+    raft_serverpb::{Done, RaftMessage},
+    tikvpb::{BatchRaftMessage, TikvClient},
+};
+use rfstore::{errors::DiscardReason, router::RaftStoreRouter};
 use security::SecurityManager;
-use std::collections::VecDeque;
-use std::ffi::CString;
-use std::marker::Unpin;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use std::{cmp, mem, result};
-use tikv::server::metrics::*;
-use tikv::server::{self, Config, StoreAddrResolver};
-use tikv_util::lru::LruCache;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use yatp::task::future::TaskCell;
-use yatp::ThreadPool;
+use tikv::server::{self, metrics::*, Config, StoreAddrResolver};
+use tikv_util::{lru::LruCache, timer::GLOBAL_TIMER_HANDLE};
+use yatp::{task::future::TaskCell, ThreadPool};
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 

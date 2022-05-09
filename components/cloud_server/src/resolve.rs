@@ -1,17 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
-use std::time::Instant;
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::Arc,
+    time::Instant,
+};
 
 use collections::HashMap;
 use pd_client::{take_peer_address, PdClient};
 use rfstore::router::RaftStoreRouter;
-use tikv::server::resolve::Callback;
+use tikv::server::{metrics::*, resolve::Callback, Result};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
-
-use tikv::server::metrics::*;
-use tikv::server::Result;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
@@ -172,18 +171,21 @@ impl tikv::server::StoreAddrResolver for PdStoreAddrResolver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::net::SocketAddr;
-    use std::ops::Sub;
-    use std::str::FromStr;
-    use std::sync::Arc;
-    use std::thread;
-    use std::time::{Duration, Instant};
+    use std::{
+        net::SocketAddr,
+        ops::Sub,
+        str::FromStr,
+        sync::Arc,
+        thread,
+        time::{Duration, Instant},
+    };
 
     use collections::HashMap;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use rfstore::router::RaftStoreBlackHole;
+
+    use super::*;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

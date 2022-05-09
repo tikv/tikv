@@ -1,17 +1,24 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::metrics::{elapsed_secs, ENGINE_ARENA_GROW_DURATION_HISTOGRAM};
+use std::{
+    fmt::Display,
+    mem, ptr, slice,
+    sync::{
+        atomic::{AtomicPtr, AtomicU32, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
+
 use byteorder::{ByteOrder, LittleEndian};
 use rand::Rng;
-use std::fmt::Display;
-use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
-use std::{mem, ptr, slice};
 
-use super::super::table::Value;
-use super::skl::{deref, Node, MAX_HEIGHT};
-use super::WriteBatchEntry;
+use super::{
+    super::table::Value,
+    skl::{deref, Node, MAX_HEIGHT},
+    WriteBatchEntry,
+};
+use crate::metrics::{elapsed_secs, ENGINE_ARENA_GROW_DURATION_HISTOGRAM};
 
 pub const NULL_ARENA_ADDR: u64 = 0;
 

@@ -1,20 +1,21 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{
-    parse_region_state_key, raft_state_key, rlog, Applier, ApplyContext, RaftApplyState, RaftState,
-    RegionIDVer, KV_ENGINE_META_KEY, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
-};
+use std::sync::Arc;
+
 use bytes::Buf;
 use engine_traits::RaftEngineReadOnly;
 use kvengine::{Engine, Shard, ShardMeta};
 use kvenginepb::ChangeSet;
-use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::{metapb, raft_serverpb};
+use kvproto::{metapb, raft_cmdpb::RaftCmdRequest, raft_serverpb};
 use protobuf::Message;
 use raft_proto::eraftpb;
 use slog_global::info;
-use std::sync::Arc;
 use tikv_util::{debug, warn};
+
+use crate::store::{
+    parse_region_state_key, raft_state_key, rlog, Applier, ApplyContext, RaftApplyState, RaftState,
+    RegionIDVer, KV_ENGINE_META_KEY, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
+};
 
 #[derive(Clone)]
 pub struct RecoverHandler {

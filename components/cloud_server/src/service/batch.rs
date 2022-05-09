@@ -1,20 +1,21 @@
 // Copyright 20211 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::KvFormat;
+use engine_rocks::ReadPerfContext;
 use kvproto::kvrpcpb::*;
-use tikv::server::metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC};
-use tikv::server::service::{batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse};
-use tikv::storage::kv::{PerfStatisticsDelta, Statistics};
-use tikv::storage::{
-    errors::{extract_key_error, extract_region_error},
-    kv::Engine,
-    lock_manager::LockManager,
-    Storage,
+use tikv::{
+    server::{
+        metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC},
+        service::{batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse},
+    },
+    storage::{
+        errors::{extract_key_error, extract_region_error},
+        kv::{Engine, Statistics},
+        lock_manager::LockManager,
+        ResponseBatchConsumer, Result, Storage,
+    },
 };
-use tikv::storage::{ResponseBatchConsumer, Result};
-use tikv_util::future::poll_future_notify;
-use tikv_util::mpsc::batch::Sender;
-use tikv_util::time::Instant;
+use tikv_util::{future::poll_future_notify, mpsc::batch::Sender, time::Instant};
 
 pub const MAX_BATCH_GET_REQUEST_COUNT: usize = 10;
 pub const MIN_BATCH_GET_REQUEST_COUNT: usize = 4;
@@ -138,13 +139,13 @@ pub struct GetCommandResponseConsumer {
     tx: Sender<MeasuredSingleResponse>,
 }
 
-impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
+impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, ReadPerfContext)>
     for GetCommandResponseConsumer
 {
     fn consume(
         &self,
         id: u64,
-        res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+        res: Result<(Option<Vec<u8>>, Statistics, ReadPerfContext)>,
         begin: Instant,
     ) {
         let mut resp = GetResponse::default();

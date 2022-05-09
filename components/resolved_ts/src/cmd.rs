@@ -2,8 +2,10 @@
 
 use collections::HashMap;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::errorpb;
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
+use kvproto::{
+    errorpb,
+    raft_cmdpb::{AdminCmdType, CmdType, Request},
+};
 use raftstore::coprocessor::{Cmd, CmdBatch, ObserveLevel};
 use txn_types::{
     Key, Lock, LockType, TimeStamp, Value, Write, WriteBatchFlags, WriteRef, WriteType,
@@ -282,13 +284,16 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
 mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::AssertionLevel;
-    use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
-    use tikv::storage::lock_manager::DummyLockManager;
-    use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader};
-    use tikv::storage::txn::commands::one_pc_commit_ts;
-    use tikv::storage::txn::tests::*;
-    use tikv::storage::txn::{prewrite, CommitKind, TransactionKind, TransactionProperties};
-    use tikv::storage::Engine;
+    use tikv::storage::{
+        kv::{MockEngineBuilder, TestEngineBuilder},
+        lock_manager::DummyLockManager,
+        mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader},
+        txn::{
+            commands::one_pc_commit_ts, prewrite, tests::*, CommitKind, TransactionKind,
+            TransactionProperties,
+        },
+        Engine,
+    };
     use tikv_kv::Modify;
     use txn_types::{Key, LockType, WriteType};
 

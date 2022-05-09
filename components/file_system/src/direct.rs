@@ -1,11 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    fs::{File, OpenOptions},
+    io, mem,
+    os::unix::fs::{FileExt, OpenOptionsExt},
+    path::PathBuf,
+    sync::Arc,
+};
+
 use crate::{IOOp, IORateLimiter, IOType};
-use std::fs::{File, OpenOptions};
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::{io, mem};
 
 const WRITE_BATCH_SIZE: usize = 256 * 1024;
 const ALIGN_SIZE: usize = 4096;

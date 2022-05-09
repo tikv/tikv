@@ -4,10 +4,10 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use kvenginepb as pb;
-
-use super::*;
 use protobuf::Message;
 use slog_global::*;
+
+use super::*;
 
 #[derive(Default, Clone)]
 pub struct ShardMeta {

@@ -2,10 +2,10 @@
 
 use std::any::Any;
 
+use tidb_query_datatype::codec::data_type::ScalarValue;
 use tipb::FieldType;
 
 use super::super::function::RpnFnMeta;
-use tidb_query_datatype::codec::data_type::ScalarValue;
 
 /// A type for each node in the RPN expression list.
 #[derive(Debug)]

@@ -1,12 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use online_config::ConfigValue;
-use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
-use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use rocksdb::{CompactionPriority, DBCompactionStyle, DBRateLimiterMode, DBRecoveryMode};
-
+use online_config::ConfigValue;
+use rocksdb::{
+    CompactionPriority, DBCompactionStyle, DBCompressionType, DBInfoLogLevel, DBRateLimiterMode,
+    DBRecoveryMode, DBTitanDBBlobRunMode,
+};
+use serde::{Deserialize, Serialize};
 use tikv_util::numeric_enum_serializing_mod;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,11 +63,12 @@ impl From<CompressionType> for DBCompressionType {
 pub mod compression_type_level_serde {
     use std::fmt;
 
-    use serde::de::{Error, SeqAccess, Unexpected, Visitor};
-    use serde::ser::SerializeSeq;
-    use serde::{Deserializer, Serializer};
-
     use rocksdb::DBCompressionType;
+    use serde::{
+        de::{Error, SeqAccess, Unexpected, Visitor},
+        ser::SerializeSeq,
+        Deserializer, Serializer,
+    };
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -148,10 +150,11 @@ pub mod compression_type_level_serde {
 pub mod compression_type_serde {
     use std::fmt;
 
-    use serde::de::{Error, Unexpected, Visitor};
-    use serde::{Deserializer, Serializer};
-
     use rocksdb::DBCompressionType;
+    use serde::{
+        de::{Error, Unexpected, Visitor},
+        Deserializer, Serializer,
+    };
 
     pub fn serialize<S>(t: &DBCompressionType, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -295,8 +298,9 @@ numeric_enum_serializing_mod! {recovery_mode_serde DBRecoveryMode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rocksdb::DBCompressionType;
+
+    use super::*;
 
     #[test]
     fn test_parse_compression_type() {

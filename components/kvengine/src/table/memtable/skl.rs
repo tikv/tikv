@@ -1,23 +1,26 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::Ordering::*,
+    iter::Iterator as StdIterator,
     ops::Deref,
     ptr,
     sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering::*},
+        atomic::{AtomicU32, AtomicU64, Ordering, Ordering::*},
         Arc, Mutex,
     },
 };
 
-use crate::table::table::{Iterator, Value};
 use bytes::{Buf, BytesMut};
 
 use super::arena::*;
-use crate::table::is_deleted;
-use crate::SnapAccess;
-use std::cmp::Ordering::*;
-use std::iter::Iterator as StdIterator;
-use std::sync::atomic::Ordering;
+use crate::{
+    table::{
+        is_deleted,
+        table::{Iterator, Value},
+    },
+    SnapAccess,
+};
 
 pub const MAX_HEIGHT: usize = 14;
 const HEIGHT_INCREASE: u32 = u32::MAX / 4;
@@ -838,9 +841,8 @@ mod tests {
     use byteorder::{ByteOrder, LittleEndian};
     use rand::Rng;
 
-    use crate::table::memtable::WriteBatch;
-
     use super::*;
+    use crate::table::memtable::WriteBatch;
 
     const ARENA_SIZE: usize = 1 << 20;
 

@@ -1,8 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::table::sstable::{SSTable, TableIterator};
-use crate::table::{search, Iterator, Value};
-use crate::LevelHandler;
+use crate::{
+    table::{
+        search,
+        sstable::{SSTable, TableIterator},
+        Iterator, Value,
+    },
+    LevelHandler,
+};
 
 // ConcatIterator concatenates the sequences defined by several iterators.  (It only works with
 // TableIterators, probably just because it's faster to not be so generic.)
@@ -150,11 +155,15 @@ impl Iterator for ConcatIterator {
 
 #[cfg(test)]
 mod tests {
-    use crate::concat_iterator::ConcatIterator;
-    use crate::table::sstable::{
-        build_test_table_with_kvs, build_test_table_with_prefix, new_test_cache, SSTable,
+    use crate::{
+        concat_iterator::ConcatIterator,
+        table::{
+            sstable::{
+                build_test_table_with_kvs, build_test_table_with_prefix, new_test_cache, SSTable,
+            },
+            Iterator,
+        },
     };
-    use crate::table::Iterator;
 
     #[test]
     fn test_concat_iterator_one_table() {

@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{cmp::Ordering::*, mem};
+
 use crate::table::*;
-use std::cmp::Ordering::*;
-use std::mem;
 
 pub struct MergeIterator<'a> {
     smaller: Box<MergeIteratorChild<'a>>,

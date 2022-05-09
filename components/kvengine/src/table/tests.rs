@@ -1,10 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Ordering::*;
+
 use bytes::{Buf, Bytes};
+use rand::Rng;
 
 use super::table::*;
-use rand::Rng;
-use std::cmp::Ordering::*;
 
 #[derive(Debug)]
 struct SimpleIterator {

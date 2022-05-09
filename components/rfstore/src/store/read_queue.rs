@@ -1,22 +1,29 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::{HashMap, VecDeque};
-use std::{cmp, mem, u64, usize};
+use std::{
+    cmp,
+    collections::{HashMap, VecDeque},
+    mem, u64, usize,
+};
 
-use crate::store::Callback;
-use crate::Result;
-use raftstore::store::metrics::*;
-
-use kvproto::kvrpcpb::LockInfo;
-use kvproto::raft_cmdpb::{self, RaftCmdRequest};
+use kvproto::{
+    kvrpcpb::LockInfo,
+    raft_cmdpb::{self, RaftCmdRequest},
+};
 use protobuf::Message;
-use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
-use tikv_util::memory::HeapSize;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now};
-use tikv_util::MustConsumeVec;
-use tikv_util::{box_err, debug};
+use raftstore::store::metrics::*;
+use tikv_util::{
+    box_err,
+    codec::number::{NumberEncoder, MAX_VAR_U64_LEN},
+    debug,
+    memory::HeapSize,
+    time::{duration_to_sec, monotonic_raw_now},
+    MustConsumeVec,
+};
 use time::Timespec;
 use uuid::Uuid;
+
+use crate::{store::Callback, Result};
 
 const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
@@ -372,8 +379,9 @@ impl ReadIndexContext {
 }
 
 mod memtrace {
-    use super::*;
     use tikv_util::memory::HeapSize;
+
+    use super::*;
 
     impl HeapSize for ReadIndexRequest {
         fn heap_size(&self) -> usize {

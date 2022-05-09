@@ -1,29 +1,33 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::{Debug, Formatter},
+    iter::Iterator,
+    ops::Deref,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
+
 use bytes::Bytes;
-use dashmap::mapref::entry::Entry;
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use file_system::IORateLimiter;
 use fslock;
 use moka::sync::SegmentedCache;
 use slog_global::info;
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Formatter};
-use std::iter::Iterator;
-use std::ops::Deref;
-use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 use tikv_util::mpsc;
 
-use crate::apply::ChangeSet;
-use crate::meta::ShardMeta;
-use crate::table::memtable::CFTable;
-use crate::table::sstable::BlockCacheKey;
-use crate::*;
+use crate::{
+    apply::ChangeSet,
+    meta::ShardMeta,
+    table::{memtable::CFTable, sstable::BlockCacheKey},
+    *,
+};
 
 #[derive(Clone)]
 pub struct Engine {

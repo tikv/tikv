@@ -1,20 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
-use std::collections::VecDeque;
-use std::fmt;
-use std::fmt::Debug;
+use std::{borrow::Cow, collections::VecDeque, fmt, fmt::Debug};
 
-use crate::store::{ApplyMetrics, ChangePeer, ExecResult, Proposal, RegionSnapshot};
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use kvproto::raft_serverpb::RaftMessage;
-use kvproto::{metapb, pdpb, raft_serverpb as rspb};
+use kvproto::{
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb, pdpb,
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    raft_serverpb as rspb,
+    raft_serverpb::RaftMessage,
+};
 use raft_proto::eraftpb;
 use raftstore::store::util::KeysInfoFormatter;
 use tikv_util::time::Instant;
 
 use super::{Peer, RaftApplyState};
+use crate::store::{ApplyMetrics, ChangePeer, ExecResult, Proposal, RegionSnapshot};
 
 #[derive(Debug)]
 pub enum PeerMsg {

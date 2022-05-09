@@ -10,26 +10,20 @@
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
 //! We keep these components in the `TiKVServer` struct.
 
-use std::sync::atomic::AtomicU64;
 use std::{
     convert::TryFrom,
     env, fmt,
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{atomic::AtomicU64, Arc},
     u64,
 };
 
-use crate::server::Server;
-use crate::setup::{initial_logger, initial_metric, validate_and_persist_config};
-use crate::status_server::StatusServer;
-use crate::{node::*, raftkv::*, resolve, signal_handler};
 use api_version::{ApiV1, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::raw::DBCompressionType;
-use engine_rocks::PerfLevel;
+use engine_rocks::{raw::DBCompressionType, PerfLevel};
 use error_code::ErrorCodeExt;
 use file_system::{
     BytesFetcher, IORateLimitMode, IORateLimiter, MetricsManager as IOMetricsManager,
@@ -39,39 +33,52 @@ use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use kvproto::deadlock::create_deadlock;
 use pd_client::{PdClient, RpcClient};
-use raftstore::coprocessor::{
-    BoxConsistencyCheckObserver, ConsistencyCheckMethod, CoprocessorHost,
-    RawConsistencyCheckObserver,
+use raftstore::{
+    coprocessor::{
+        BoxConsistencyCheckObserver, ConsistencyCheckMethod, CoprocessorHost,
+        RawConsistencyCheckObserver,
+    },
+    RegionInfoAccessor,
 };
-use raftstore::RegionInfoAccessor;
 use resource_metering::ResourceTagFactory;
 use rfengine::RFEngine;
-use rfstore::store::PENDING_MSG_CAP;
-use rfstore::store::{Engines, LocalReader, MetaChangeListener, RaftBatchSystem, StoreMeta};
-use rfstore::{RaftRouter, ServerRaftStoreRouter};
+use rfstore::{
+    store::{
+        Engines, LocalReader, MetaChangeListener, RaftBatchSystem, StoreMeta, PENDING_MSG_CAP,
+    },
+    RaftRouter, ServerRaftStoreRouter,
+};
 use security::SecurityManager;
-use tikv::storage::txn::flow_controller::FlowController;
 use tikv::{
     config::{ConfigController, TiKvConfig},
     coprocessor, coprocessor_v2,
     read_pool::{build_yatp_read_pool, ReadPool},
-    server::raftkv::ReplicaReadLockChecker,
     server::{
-        config::Config as ServerConfig, lock_manager::LockManager, CPU_CORES_QUOTA_GAUGE,
-        DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
+        config::Config as ServerConfig, lock_manager::LockManager, raftkv::ReplicaReadLockChecker,
+        CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{self, mvcc::MvccConsistencyCheckObserver},
+    storage::{self, mvcc::MvccConsistencyCheckObserver, txn::flow_controller::FlowController},
 };
-use tikv_util::quota_limiter::{QuotaLimitConfigManager, QuotaLimiter};
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
+    quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Duration, Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
+
+use crate::{
+    node::*,
+    raftkv::*,
+    resolve,
+    server::Server,
+    setup::{initial_logger, initial_metric, validate_and_persist_config},
+    signal_handler,
+    status_server::StatusServer,
+};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -561,7 +568,6 @@ impl TiKVServer {
                 &server_config.value(),
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
-                PerfLevel::EnableCount,
                 resource_tag_factory,
                 Arc::new(QuotaLimiter::default()),
             ),

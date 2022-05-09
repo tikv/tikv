@@ -1,14 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc;
-use std::sync::Arc;
-use std::thread::sleep;
-use std::time::Duration;
+use std::{
+    sync::{mpsc, Arc},
+    thread::sleep,
+    time::Duration,
+};
 
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::time::{Instant, UnixSecs as PdInstant};
-use tikv_util::HandyRwLock;
+use tikv_util::{
+    config::*,
+    time::{Instant, UnixSecs as PdInstant},
+    HandyRwLock,
+};
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
     let mut peers = cluster.get_down_peers();

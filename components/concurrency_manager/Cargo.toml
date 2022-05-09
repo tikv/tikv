@@ -5,12 +5,12 @@ publish = false
 version = "0.0.1"
 
 [dependencies]
-parking_lot = "0.12"
-tokio = { version = "1.5", features = ["macros", "sync", "time"] }
-txn_types = { path = "../txn_types", default-features = false }
-tikv_util = { path = "../tikv_util", default-features = false }
 fail = "0.5"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+parking_lot = "0.12"
+tikv_util = { path = "../tikv_util", default-features = false }
+tokio = { version = "1.5", features = ["macros", "sync", "time"] }
+txn_types = { path = "../txn_types", default-features = false }
 
 # FIXME: switch to the crates.io version after crossbeam-skiplist is released
 [dependencies.crossbeam-skiplist]
@@ -19,9 +19,9 @@ branch = "tikv-5.0"
 package = "crossbeam-skiplist" 
 
 [dev-dependencies]
-rand = "0.8.3"
-futures = "0.3"
 criterion = "0.3"
+futures = "0.3"
+rand = "0.8.3"
 tikv_alloc = { path = "../tikv_alloc", features = ["jemalloc"] }
 
 [[bench]]

@@ -6,9 +6,10 @@ use std::{
     path::PathBuf,
 };
 
-use crate::*;
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BytesMut};
+
+use crate::*;
 
 pub(crate) struct WALIterator {
     dir: PathBuf,

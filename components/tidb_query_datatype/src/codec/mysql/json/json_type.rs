@@ -32,8 +32,7 @@ impl<'a> JsonRef<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::Json;
-    use super::*;
+    use super::{super::Json, *};
 
     #[test]
     fn test_type() {

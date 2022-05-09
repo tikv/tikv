@@ -1,15 +1,18 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
-use std::ops::Deref;
-use std::sync::{Arc, Mutex};
+use std::{
+    fmt::{Debug, Formatter},
+    marker::PhantomData,
+    ops::Deref,
+    sync::{Arc, Mutex},
+};
 
 use bytes::{Buf, Bytes, BytesMut};
 
-use crate::table::memtable::Hint;
-use crate::table::table;
-use crate::*;
+use crate::{
+    table::{memtable::Hint, table},
+    *,
+};
 
 pub struct Item<'a> {
     val: table::Value,

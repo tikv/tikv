@@ -1,17 +1,18 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::*;
-use std::time::Instant;
 use std::{
     fs,
     fs::File,
     mem,
     os::unix::prelude::FileExt,
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use bytes::BufMut;
 use file_system::open_direct_file;
+
+use crate::*;
 
 pub const BATCH_HEADER_SIZE: usize = 12;
 pub(crate) const ALIGN_SIZE: usize = 4096;

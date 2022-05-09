@@ -2,12 +2,17 @@
 
 mod s3;
 
+use std::{
+    fmt::Debug,
+    io,
+    path::{Path, PathBuf},
+    result,
+    sync::Arc,
+};
+
 use async_trait::async_trait;
 use bytes::Bytes;
 pub use s3::S3FS;
-use std::fmt::Debug;
-use std::path::{Path, PathBuf};
-use std::{io, result, sync::Arc};
 use thiserror::Error;
 use tokio::runtime::Runtime;
 

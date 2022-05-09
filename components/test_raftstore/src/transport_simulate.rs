@@ -1,27 +1,28 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
-use std::sync::atomic::*;
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
-use std::{mem, thread, time, usize};
+use std::{
+    marker::PhantomData,
+    mem,
+    sync::{atomic::*, mpsc::Sender, Arc, Mutex, RwLock},
+    thread, time,
+    time::Duration,
+    usize,
+};
 
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::eraftpb::MessageType;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter};
-use raftstore::store::{
-    Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand, SignificantMsg,
-    SignificantRouter, StoreMsg, StoreRouter, Transport,
+use raftstore::{
+    router::{LocalReadRouter, RaftStoreRouter},
+    store::{
+        Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
+        SignificantMsg, SignificantRouter, StoreMsg, StoreRouter, Transport,
+    },
+    DiscardReason, Error, Result as RaftStoreResult, Result,
 };
-use raftstore::Result as RaftStoreResult;
-use raftstore::{DiscardReason, Error, Result};
-use tikv_util::time::ThreadReadId;
-use tikv_util::{Either, HandyRwLock};
+use tikv_util::{time::ThreadReadId, Either, HandyRwLock};
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {

@@ -1,47 +1,66 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
-use crate::errors::*;
+use std::{
+    cell::RefCell,
+    cmp,
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+
 use bitflags::bitflags;
 use collections::{HashMap, HashSet};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use kvproto::disk_usage::DiskUsage;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::PeerRole;
-use kvproto::pdpb::PeerStats;
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType, CustomRequest,
-    RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
+use kvproto::{
+    disk_usage::DiskUsage,
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb::PeerRole,
+    pdpb::PeerStats,
+    raft_cmdpb::{
+        AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType, CustomRequest,
+        RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
+    },
+    raft_serverpb::RaftMessage,
+    *,
 };
-use kvproto::raft_serverpb::RaftMessage;
-use kvproto::*;
 use protobuf::Message;
-use raft;
 use raft::{
-    Changer, LightReady, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, StateRole,
-    Storage, INVALID_ID,
+    self, Changer, LightReady, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus,
+    StateRole, Storage, INVALID_ID,
 };
-use raft_proto::eraftpb::{ConfChangeType, Entry, MessageType};
-use raft_proto::*;
-use raftstore::coprocessor;
-use raftstore::coprocessor::RoleChange;
-use raftstore::store::util::{
-    admin_cmd_epoch_lookup, is_initial_msg, is_region_initialized, AdminCmdEpochState, ChangePeerI,
-    ConfChangeKind, Lease, LeaseState,
+use raft_proto::{
+    eraftpb::{ConfChangeType, Entry, MessageType},
+    *,
 };
-use raftstore::store::{local_metrics::*, metrics::*, QueryStats, TxnExt};
-use std::cell::RefCell;
-use std::cmp;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tikv_util::time::{duration_to_sec, monotonic_raw_now, InstantExt};
-use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, debug, error, info, warn, Either};
+use raftstore::{
+    coprocessor,
+    coprocessor::RoleChange,
+    store::{
+        local_metrics::*,
+        metrics::*,
+        util::{
+            admin_cmd_epoch_lookup, is_initial_msg, is_region_initialized, AdminCmdEpochState,
+            ChangePeerI, ConfChangeKind, Lease, LeaseState,
+        },
+        QueryStats, TxnExt,
+    },
+};
+use tikv_util::{
+    box_err, debug, error, info,
+    time::{duration_to_sec, monotonic_raw_now, InstantExt},
+    warn,
+    worker::Scheduler,
+    Either,
+};
 use time::Timespec;
 use uuid::Uuid;
+
+use super::*;
+use crate::errors::*;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;

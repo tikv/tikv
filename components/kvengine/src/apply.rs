@@ -1,11 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::meta::is_move_down;
-use crate::table::sstable::{L0Table, SSTable};
-use crate::*;
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::ops::Deref;
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Formatter},
+    ops::Deref,
+};
+
+use crate::{
+    meta::is_move_down,
+    table::sstable::{L0Table, SSTable},
+    *,
+};
 
 pub struct ChangeSet {
     pub change_set: kvenginepb::ChangeSet,

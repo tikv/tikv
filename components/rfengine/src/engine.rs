@@ -1,31 +1,26 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    cmp::Ordering,
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet, VecDeque},
+    fs,
+    num::ParseIntError,
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+    sync::{mpsc::SyncSender, Arc, Mutex, RwLock},
+    thread::{self, JoinHandle},
+    time::Instant,
+};
+
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes};
-use dashmap::mapref::one::Ref;
-use dashmap::DashMap;
+use dashmap::{mapref::one::Ref, DashMap};
 use protobuf::ProtobufEnum;
 use raft_proto::eraftpb;
 use slog_global::info;
-use std::collections::hash_map::Entry;
-use std::collections::HashSet;
-use std::os::unix::fs::MetadataExt;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Instant;
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, HashMap, VecDeque},
-    fs,
-    num::ParseIntError,
-    path::Path,
-    path::PathBuf,
-    sync::mpsc::SyncSender,
-    thread::{self, JoinHandle},
-};
 use thiserror::Error as ThisError;
 
-use crate::metrics::*;
-use crate::*;
+use crate::{metrics::*, *};
 
 #[derive(Clone)]
 pub struct RFEngine {

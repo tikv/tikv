@@ -1,19 +1,25 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::peer_storage::{write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
-use super::PREPARE_BOOTSTRAP_KEY;
-use crate::Result;
 use bytes::{Buf, BufMut};
-
-use crate::store::{
-    raft_state_key, region_state_key, Engines, EMPTY_KEY, KV_ENGINE_META_KEY, RAFT_INIT_LOG_INDEX,
-    RAFT_INIT_LOG_TERM, STORE_IDENT_KEY, TERM_KEY,
+use kvproto::{
+    metapb,
+    raft_serverpb::{RegionLocalState, StoreIdent},
 };
-use kvproto::metapb;
-use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 use protobuf::{Message, RepeatedField};
 use raftstore::store::util;
 use tikv_util::box_err;
+
+use super::{
+    peer_storage::{write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER},
+    PREPARE_BOOTSTRAP_KEY,
+};
+use crate::{
+    store::{
+        raft_state_key, region_state_key, Engines, EMPTY_KEY, KV_ENGINE_META_KEY,
+        RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM, STORE_IDENT_KEY, TERM_KEY,
+    },
+    Result,
+};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();

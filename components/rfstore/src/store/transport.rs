@@ -1,10 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, StoreMsg};
-use crate::{RaftRouter, Result};
+use std::sync::mpsc;
+
 use dyn_clone::DynClone;
 use kvproto::raft_serverpb::RaftMessage;
-use std::sync::mpsc;
+
+use crate::{
+    store::{CasualMessage, PeerMsg, RaftCommand, StoreMsg},
+    RaftRouter, Result,
+};
 
 /// Transports messages between different Raft peers.
 pub trait Transport: Send + DynClone {

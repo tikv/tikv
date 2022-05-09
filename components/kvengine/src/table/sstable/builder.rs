@@ -1,14 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
-use std::{mem, slice};
+use std::{convert::TryFrom, mem, slice};
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, BytesMut};
-
-use super::super::table::Value;
 use farmhash;
 use xorf::BinaryFuse8;
+
+use super::super::table::Value;
 
 pub const CRC32_IEEE: u8 = 1;
 pub const PROP_KEY_SMALLEST: &str = "smallest";

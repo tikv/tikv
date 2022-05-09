@@ -1,16 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{
-    Callback, CasualMessage, CasualRouter, LocalReader, PeerMsg, ProposalRouter, RaftCommand,
-    SignificantMsg, StoreMsg, StoreRouter,
-};
-use crate::Result as RaftStoreResult;
-use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::RaftMessage;
 use std::cell::RefCell;
-use tikv_util::deadline::Deadline;
-use tikv_util::mpsc::Sender;
-use tikv_util::time::ThreadReadId;
+
+use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
+use tikv_util::{deadline::Deadline, mpsc::Sender, time::ThreadReadId};
+
+use crate::{
+    store::{
+        Callback, CasualMessage, CasualRouter, LocalReader, PeerMsg, ProposalRouter, RaftCommand,
+        SignificantMsg, StoreMsg, StoreRouter,
+    },
+    Result as RaftStoreResult,
+};
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter: StoreRouter + ProposalRouter + CasualRouter + Send + Clone {

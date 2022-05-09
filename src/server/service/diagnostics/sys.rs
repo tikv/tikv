@@ -1,13 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::string::ToString;
+use std::{collections::HashMap, string::ToString};
+
+use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
+use tikv_util::{
+    config::KIB,
+    sys::{cpu_time::LiunxStyleCpuTime, SysQuota, *},
+};
+use walkdir::WalkDir;
 
 use crate::server::service::diagnostics::{ioload, SYS_INFO};
-use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-use tikv_util::config::KIB;
-use tikv_util::sys::{cpu_time::LiunxStyleCpuTime, SysQuota, *};
-use walkdir::WalkDir;
 
 type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
 

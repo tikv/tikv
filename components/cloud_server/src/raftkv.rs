@@ -1,45 +1,54 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::num::NonZeroU64;
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
     io::Error as IoError,
-    mem, result,
+    mem,
+    num::NonZeroU64,
+    result,
     sync::Arc,
     time::Duration,
 };
 
-use raft::eraftpb::{self, MessageType};
-use thiserror::Error;
-
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::raft_cmdpb::CustomRequest;
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
     metapb,
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
+    raft_cmdpb::{
+        CmdType, CustomRequest, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request,
+        Response,
+    },
 };
-use raft::StateRole;
+use raft::{
+    eraftpb::{self, MessageType},
+    StateRole,
+};
 use raftstore::coprocessor::{
     dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
 };
-use rfstore::store::{
-    rlog, Callback as StoreCallback, CustomBuilder, ReadIndexContext, ReadResponse, RegionSnapshot,
-    WriteResponse,
+use rfstore::{
+    store::{
+        rlog, Callback as StoreCallback, CustomBuilder, ReadIndexContext, ReadResponse,
+        RegionSnapshot, WriteResponse,
+    },
+    Error as RaftServerError, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter,
 };
-use rfstore::{Error as RaftServerError, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter};
-use tikv::server::metrics::*;
-use tikv::storage::kv::{
-    self, write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    ExtCallback, Modify, SnapContext, WriteData,
+use thiserror::Error;
+use tikv::{
+    server::metrics::*,
+    storage::{
+        kv::{
+            self, write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner,
+            ExtCallback, Modify, SnapContext, WriteData,
+        },
+        {self},
+    },
 };
-use tikv::storage::{self};
-use tikv_util::codec::number::NumberEncoder;
-use tikv_util::time::Instant;
+use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{
     Key, Lock, LockType, TimeStamp, TxnExtraScheduler, WriteBatchFlags, WriteRef, WriteType,
 };
@@ -756,8 +765,9 @@ fn is_same_key_del_lock(modifies: &[Modify], next_idx: usize, key: &Key) -> bool
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use uuid::Uuid;
+
+    use super::*;
 
     // This test ensures `ReplicaReadLockChecker` won't change UUID context of read index.
     #[test]

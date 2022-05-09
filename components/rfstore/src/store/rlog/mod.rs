@@ -1,10 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::mem;
+
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::BufMut;
 use kvproto::raft_cmdpb::{CustomRequest, RaftCmdRequest};
 use protobuf::Message;
-use std::mem;
 
 pub(crate) fn get_custom_log(req: &RaftCmdRequest) -> Option<CustomRaftLog<'_>> {
     if !req.has_custom_request() {

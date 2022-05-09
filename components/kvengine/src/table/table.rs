@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{io, ptr, result, slice};
+
 use byteorder::{ByteOrder, LittleEndian};
-use std::{io, result};
-use std::{ptr, slice};
 use thiserror::Error;
 
 use crate::dfs;

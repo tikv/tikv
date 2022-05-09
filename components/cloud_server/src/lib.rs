@@ -34,8 +34,9 @@ pub use tikv_server::run_tikv;
 
 #[cfg(test)]
 mod tests {
-    use crate::tikv_server::run_tikv;
     use tikv::config::TiKvConfig;
+
+    use crate::tikv_server::run_tikv;
 
     #[test]
     fn test_run() {

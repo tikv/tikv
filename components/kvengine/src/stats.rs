@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{load_bool, NUM_CFS};
 use bytes::Buf;
+
+use crate::{load_bool, NUM_CFS};
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 #[serde(default)]

@@ -1,11 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use dyn_clone::DynClone;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
-use crate::table::sstable;
-use crate::*;
+use dyn_clone::DynClone;
+
+use crate::{table::sstable, *};
 
 // Options are params for creating Engine object.
 //

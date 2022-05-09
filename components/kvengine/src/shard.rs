@@ -1,30 +1,31 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Buf, Bytes};
-use dashmap::DashMap;
-use std::iter::Iterator;
-use std::ops::Deref;
-use std::sync::RwLock;
 use std::{
+    iter::Iterator,
+    ops::Deref,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering::*, *},
-        Arc,
+        Arc, RwLock,
     },
     time::Instant,
 };
 
-use crate::table::{
-    self,
-    memtable::{self, CFTable},
-    search,
-    sstable::L0Table,
-    sstable::SSTable,
-};
-use crate::*;
+use byteorder::{ByteOrder, LittleEndian};
+use bytes::{Buf, Bytes};
+use dashmap::DashMap;
 use kvenginepb as pb;
 use slog_global::*;
 use tikv_util::time::InstantExt;
+
+use crate::{
+    table::{
+        self,
+        memtable::{self, CFTable},
+        search,
+        sstable::{L0Table, SSTable},
+    },
+    *,
+};
 
 pub struct Shard {
     pub id: u64,

@@ -6,8 +6,10 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BytesMut};
 use slog_global::info;
 
-use crate::table::{self, memtable};
-use crate::*;
+use crate::{
+    table::{self, memtable},
+    *,
+};
 
 pub struct WriteBatch {
     shard_id: u64,

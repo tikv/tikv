@@ -2,14 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::EvalType;
-
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::json::*;
-
 use serde::de::IgnoredAny;
+use tidb_query_codegen::rpn_fn;
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    codec::{data_type::*, mysql::json::*},
+    EvalType,
+};
 
 #[rpn_fn]
 #[inline]
@@ -329,10 +328,9 @@ fn parse_json_path(path: Option<BytesRef>) -> Result<Option<PathExpression>> {
 mod tests {
     use std::str::FromStr;
 
-    use super::*;
-
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
 
     #[test]

@@ -8,46 +8,46 @@ publish = false
 
 [dependencies]
 bitflags = "1.0.1"
-bytes = "1.0"
 byteorder = "1.2"
+bytes = "1.0"
+collections = { path = "../collections" }
+concurrency_manager = { path = "../concurrency_manager", default-features = false }
 crossbeam = "0.8"
 dashmap = "4.0"
 dyn-clone = "1.0"
-concurrency_manager = {path = "../concurrency_manager", default-features = false}
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
+fail = "0.4"
 fs2 = "0.4"
+futures = "0.3"
+futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+kvengine = { path = "../kvengine" }
+kvenginepb = { path = "../kvenginepb", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
+online_config = { path = "../online_config" }
+pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2.8"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-raftstore = { path = "../raftstore"}
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft-proto = { version = "0.7.0", default-features = false }
-online_config = { path = "../online_config" }
-fail = "0.4"
-futures = "0.3"
-futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
+raftstore = { path = "../raftstore" }
+rand = "0.8"
+rfengine = { path = "../rfengine" }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 slog-term = "2.4"
 thiserror = "1.0"
-kvenginepb = { path = "../kvenginepb", default-features = false }
-kvengine = { path = "../kvengine"}
-rfengine = { path = "../rfengine"}
-rand = "0.8"
-tokio = { version = "1.5", features = ["full"] }
-grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
-pd_client = { path = "../pd_client", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
-collections = { path = "../collections" }
 time = "0.1"
+tokio = { version = "1.5", features = ["full"] }
 txn_types = { path = "../txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }

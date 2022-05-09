@@ -2,13 +2,15 @@
 
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::metrics::*;
-use crate::{RFEngine, WriteBatch};
-use engine_traits::Error::EntriesUnavailable;
-use engine_traits::{RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
+use std::time::Instant;
+
+use engine_traits::{
+    Error::EntriesUnavailable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result,
+};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
-use std::time::Instant;
+
+use crate::{metrics::*, RFEngine, WriteBatch};
 
 impl RaftEngineReadOnly for RFEngine {
     fn get_raft_state(&self, _raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -155,7 +157,7 @@ impl RaftLogBatch for WriteBatch {
         panic!()
     }
 
-    fn merge(&mut self, _: Self) {
+    fn merge(&mut self, _: Self) -> Result<()> {
         panic!()
     }
 }

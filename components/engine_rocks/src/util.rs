@@ -1,21 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cf_options::RocksColumnFamilyOptions;
-use crate::db_options::RocksDBOptions;
-use crate::engine::RocksEngine;
-use crate::raw_util::new_engine as new_engine_raw;
-use crate::raw_util::new_engine_opt as new_engine_opt_raw;
-use crate::raw_util::CFOptions;
-use crate::rocks_metrics_defs::*;
-use engine_traits::Engines;
-use engine_traits::Range;
-use engine_traits::CF_DEFAULT;
-use engine_traits::{Error, Result};
-use rocksdb::Range as RocksRange;
-use rocksdb::{CFHandle, SliceTransform, DB};
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
+
+use engine_traits::{Engines, Error, Range, Result, CF_DEFAULT};
+use rocksdb::{CFHandle, Range as RocksRange, SliceTransform, DB};
 use tikv_util::box_err;
+
+use crate::{
+    cf_options::RocksColumnFamilyOptions,
+    db_options::RocksDBOptions,
+    engine::RocksEngine,
+    raw_util::{new_engine as new_engine_raw, new_engine_opt as new_engine_opt_raw, CFOptions},
+    rocks_metrics_defs::*,
+};
 
 pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
     let raft_path = path.path().join(std::path::Path::new("raft"));

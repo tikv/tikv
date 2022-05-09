@@ -1,14 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{Error, Result};
-use kvproto::metapb;
-use kvproto::raft_cmdpb::RaftCmdRequest;
+use std::{
+    fmt,
+    fmt::{Debug, Display, Formatter},
+};
+
+use kvproto::{metapb, raft_cmdpb::RaftCmdRequest};
 use protobuf::Message;
 use slog::{Key, Record, Serializer};
-use std::fmt;
-use std::fmt::{Debug, Display, Formatter};
-use tikv_util::box_err;
-use tikv_util::debug;
+use tikv_util::{box_err, debug};
+
+use crate::{Error, Result};
 
 /// WARNING: `NORMAL_REQ_CHECK_VER` and `NORMAL_REQ_CHECK_CONF_VER` **MUST NOT** be changed.
 /// The reason is the same as `admin_cmd_epoch_lookup`.

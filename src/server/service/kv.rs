@@ -2,59 +2,67 @@
 
 // #[PerformanceCriticalPath]: Tikv gRPC APIs implementation
 use std::sync::Arc;
-use tikv_util::time::{duration_to_ms, duration_to_sec, Instant};
 
-use super::batch::{BatcherBuilder, ReqBatcher};
-use crate::coprocessor::Endpoint;
-use crate::server::gc_worker::GcWorker;
-use crate::server::load_statistics::ThreadLoadPool;
-use crate::server::metrics::*;
-use crate::server::snap::Task as SnapTask;
-use crate::server::Error;
-use crate::server::Proxy;
-use crate::server::Result as ServerResult;
-use crate::storage::{
-    errors::{
-        extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_region_error, map_kv_pairs,
-    },
-    kv::Engine,
-    lock_manager::LockManager,
-    SecondaryLocksStatus, Storage, TxnStatus,
-};
-use crate::{coprocessor_v2, log_net_error};
-use crate::{forward_duplex, forward_unary};
 use api_version::KvFormat;
 use fail::fail_point;
-use futures::compat::Future01CompatExt;
-use futures::future::{self, Future, FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::{
+    compat::Future01CompatExt,
+    future::{self, Future, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::{StreamExt, TryStreamExt},
+};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use kvproto::coprocessor::*;
-use kvproto::errorpb::{Error as RegionError, *};
-use kvproto::kvrpcpb::*;
-use kvproto::mpp::*;
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
-use kvproto::raft_serverpb::*;
-use kvproto::tikvpb::*;
+use kvproto::{
+    coprocessor::*,
+    errorpb::{Error as RegionError, *},
+    kvrpcpb::*,
+    mpp::*,
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest},
+    raft_serverpb::*,
+    tikvpb::*,
+};
 use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
-use raftstore::store::metrics::RAFT_ENTRIES_CACHES_GAUGE;
-use raftstore::store::CheckLeaderTask;
-use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
-use raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
+use raftstore::{
+    router::RaftStoreRouter,
+    store::{
+        memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
+        metrics::RAFT_ENTRIES_CACHES_GAUGE,
+        Callback, CasualMessage, CheckLeaderTask, RaftCmdExtraOpts,
+    },
+    DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
+};
 use tikv_alloc::trace::MemoryTraceGuard;
-use tikv_util::future::{paired_future_callback, poll_future_notify};
-use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
-use tikv_util::sys::memory_usage_reaches_high_water;
-use tikv_util::worker::Scheduler;
+use tikv_util::{
+    future::{paired_future_callback, poll_future_notify},
+    mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender},
+    sys::memory_usage_reaches_high_water,
+    time::{duration_to_ms, duration_to_sec, Instant},
+    worker::Scheduler,
+};
 use txn_types::{self, Key};
+
+use super::batch::{BatcherBuilder, ReqBatcher};
+use crate::{
+    coprocessor::Endpoint,
+    coprocessor_v2, forward_duplex, forward_unary, log_net_error,
+    server::{
+        gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
+        Error, Proxy, Result as ServerResult,
+    },
+    storage::{
+        errors::{
+            extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
+            extract_region_error, map_kv_pairs,
+        },
+        kv::Engine,
+        lock_manager::LockManager,
+        SecondaryLocksStatus, Storage, TxnStatus,
+    },
+};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
@@ -2137,10 +2145,11 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::channel::oneshot;
-    use futures::executor::block_on;
     use std::thread;
+
+    use futures::{channel::oneshot, executor::block_on};
+
+    use super::*;
 
     #[test]
     fn test_poll_future_notify_with_slow_source() {

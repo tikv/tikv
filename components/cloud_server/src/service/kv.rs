@@ -1,46 +1,53 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use tikv_util::time::{duration_to_ms, duration_to_sec, Instant};
 
-use super::batch::{BatcherBuilder, ReqBatcher};
-use crate::server::Error;
-use crate::server::Result as ServerResult;
 use api_version::KvFormat;
-use futures::compat::Future01CompatExt;
-use futures::future::{self, Future, FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::{
+    compat::Future01CompatExt,
+    future::{self, Future, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::{StreamExt, TryStreamExt},
+};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use kvproto::coprocessor::*;
-use kvproto::kvrpcpb::*;
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
-use kvproto::raft_serverpb::*;
-use kvproto::tikvpb::*;
-use rfstore::router::RaftStoreRouter;
-use rfstore::store::{Callback, CasualMessage};
-use rfstore::Error as RaftStoreError;
-use tikv::coprocessor::Endpoint;
-use tikv::coprocessor_v2;
-use tikv::server::load_statistics::ThreadLoadPool;
-use tikv::server::metrics::*;
-use tikv::server::Proxy;
-use tikv::storage::{
-    errors::{
-        extract_committed, extract_key_error, extract_key_errors, extract_region_error,
-        map_kv_pairs,
-    },
-    kv::Engine,
-    lock_manager::LockManager,
-    SecondaryLocksStatus, Storage, TxnStatus,
+use kvproto::{
+    coprocessor::*,
+    kvrpcpb::*,
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest},
+    raft_serverpb::*,
+    tikvpb::*,
 };
-use tikv::{forward_duplex, forward_unary};
-use tikv_util::future::{paired_future_callback, poll_future_notify};
-use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
+use rfstore::{
+    router::RaftStoreRouter,
+    store::{Callback, CasualMessage},
+    Error as RaftStoreError,
+};
+use tikv::{
+    coprocessor::Endpoint,
+    coprocessor_v2, forward_duplex, forward_unary,
+    server::{load_statistics::ThreadLoadPool, metrics::*, Proxy},
+    storage::{
+        errors::{
+            extract_committed, extract_key_error, extract_key_errors, extract_region_error,
+            map_kv_pairs,
+        },
+        kv::Engine,
+        lock_manager::LockManager,
+        SecondaryLocksStatus, Storage, TxnStatus,
+    },
+};
+use tikv_util::{
+    future::{paired_future_callback, poll_future_notify},
+    mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender},
+    time::{duration_to_ms, duration_to_sec, Instant},
+};
 use txn_types::{self, Key};
+
+use super::batch::{BatcherBuilder, ReqBatcher};
+use crate::server::{Error, Result as ServerResult};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
@@ -1451,10 +1458,11 @@ pub mod batch_commands_request {
     }
 }
 
-use crate::RaftKv;
 use protobuf::RepeatedField;
 use tikv::server::service::{GrpcRequestDuration, MeasuredBatchResponse, MeasuredSingleResponse};
 use tikv_alloc::MemoryTraceGuard;
+
+use crate::RaftKv;
 
 struct BatchRespCollector;
 impl BatchCollector<MeasuredBatchResponse, MeasuredSingleResponse> for BatchRespCollector {
@@ -1472,10 +1480,11 @@ impl BatchCollector<MeasuredBatchResponse, MeasuredSingleResponse> for BatchResp
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::channel::oneshot;
-    use futures::executor::block_on;
     use std::thread;
+
+    use futures::{channel::oneshot, executor::block_on};
+
+    use super::*;
 
     #[test]
     fn test_poll_future_notify_with_slow_source() {

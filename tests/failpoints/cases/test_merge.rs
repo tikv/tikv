@@ -1,26 +1,28 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
-
-use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::*;
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use kvproto::tikvpb::TikvClient;
-use raft::eraftpb::MessageType;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        *,
+    },
+    thread,
+    time::Duration,
+};
 
 use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::{
+    kvrpcpb::*,
+    raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
+    tikvpb::TikvClient,
+};
 use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use test_raftstore::*;
-use tikv::storage::kv::SnapshotExt;
-use tikv::storage::Snapshot;
-use tikv_util::config::*;
-use tikv_util::time::Instant;
-use tikv_util::HandyRwLock;
+use tikv::storage::{kv::SnapshotExt, Snapshot};
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 use txn_types::{Key, PessimisticLock};
 
 /// Test if merge is rollback as expected.
@@ -1507,11 +1509,11 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     let req2 = req.clone();
     let client2 = client.clone();
     let resp = thread::spawn(move || client2.kv_prewrite(&req2).unwrap());
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(Duration::from_millis(500));
 
     // Then, start merging. PrepareMerge should wait until prewrite is done.
     cluster.merge_region(left.id, right.id, Callback::None);
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(Duration::from_millis(500));
     assert!(txn_ext.pessimistic_locks.read().is_writable());
 
     // But a later prewrite request should fail because we have already banned all later proposals.
@@ -1645,7 +1647,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
     fail::cfg("raft_propose", "pause").unwrap();
 
     cluster.merge_region(left.id, right.id, Callback::None);
-    thread::sleep(Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(500));
     assert_eq!(
         txn_ext.pessimistic_locks.read().status,
         LocksStatus::MergingRegion
@@ -1656,7 +1658,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
 
     // But after that, the pessimistic locks status should remain unchanged.
     for _ in 0..5 {
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(500));
         if txn_ext.pessimistic_locks.read().status == LocksStatus::Normal {
             return;
         }

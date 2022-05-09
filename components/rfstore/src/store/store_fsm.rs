@@ -1,35 +1,46 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Config;
-use crate::{RaftRouter, RaftStoreRouter};
+use std::{
+    collections::{BTreeMap, HashMap},
+    ops::{Deref, DerefMut},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use bytes::Bytes;
 use concurrency_manager::ConcurrencyManager;
 use fail::fail_point;
-use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb;
-use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
+use kvproto::{
+    metapb::{self, Region, RegionEpoch},
+    pdpb,
+    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
+};
 use pd_client::PdClient;
 use protobuf::Message;
-use raft::eraftpb::ConfChangeType;
-use raft::StateRole;
-use raftstore::coprocessor::split_observer::SplitObserver;
-use raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
-use raftstore::store::local_metrics::RaftMetrics;
-use raftstore::store::util;
-use raftstore::store::util::{is_initial_msg, is_region_initialized};
-use std::collections::{BTreeMap, HashMap};
-use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tikv_util::config::VersionTrack;
-use tikv_util::mpsc::Receiver;
-use tikv_util::worker::{LazyWorker, Scheduler};
-use tikv_util::{box_err, debug, error, info, warn, RingQueue};
+use raft::{eraftpb::ConfChangeType, StateRole};
+use raftstore::{
+    coprocessor::{
+        split_observer::SplitObserver, BoxAdminObserver, CoprocessorHost, RegionChangeEvent,
+    },
+    store::{
+        local_metrics::RaftMetrics,
+        util,
+        util::{is_initial_msg, is_region_initialized},
+    },
+};
+use tikv_util::{
+    box_err,
+    config::VersionTrack,
+    debug, error, info,
+    mpsc::Receiver,
+    warn,
+    worker::{LazyWorker, Scheduler},
+    RingQueue,
+};
 use time::Timespec;
 
-use super::*;
-use crate::store::peer_worker::ApplyWorker;
-use crate::Result;
+use super::{Config, *};
+use crate::{store::peer_worker::ApplyWorker, RaftRouter, RaftStoreRouter, Result};
 
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);

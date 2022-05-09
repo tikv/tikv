@@ -1,27 +1,31 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::resource_metering::test_suite::TestSuite;
-
-use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::{
+    future::Future,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::PerfLevel;
-use futures::executor::block_on;
-use futures::StreamExt;
+use futures::{executor::block_on, StreamExt};
 use kvproto::kvrpcpb::Context;
-use std::time::{Duration, Instant};
 use test_coprocessor::{DAGSelect, Insert, ProductTable, Store};
 use tidb_query_datatype::codec::Datum;
-use tikv::config::CoprReadPoolConfig;
-use tikv::coprocessor::{readpool_impl, Endpoint};
-use tikv::read_pool::ReadPool;
-use tikv::storage::RocksEngine;
-use tikv_util::config::ReadableDuration;
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::thread_group::GroupProperties;
+use tikv::{
+    config::CoprReadPoolConfig,
+    coprocessor::{readpool_impl, Endpoint},
+    read_pool::ReadPool,
+    storage::RocksEngine,
+};
+use tikv_util::{
+    config::ReadableDuration, quota_limiter::QuotaLimiter, thread_group::GroupProperties,
+};
 use txn_types::{Key, TimeStamp};
+
+use crate::resource_metering::test_suite::TestSuite;
 
 #[test]
 pub fn test_prewrite() {
@@ -223,7 +227,6 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         &Default::default(),
         pool.handle(),
         cm,
-        PerfLevel::EnableCount,
         test_suite.get_tag_factory(),
         Arc::new(QuotaLimiter::default()),
     );

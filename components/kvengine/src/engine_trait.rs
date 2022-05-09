@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::*;
+use std::{collections::BTreeMap, ops::Deref, path::PathBuf};
+
 use engine_traits::{
     CFNamesExt, CFOptionsExt, ColumnFamilyOptions, CompactExt, CompactedEvent, DBOptions,
     DBOptionsExt, DBVector, DeleteStrategy, ExternalSstFileInfo, FlowControlFactorsExt, ImportExt,
@@ -10,9 +11,8 @@ use engine_traits::{
     SstPartitionerFactory, SstReader, SstWriter, SstWriterBuilder, SyncMutable, TablePropertiesExt,
     TitanDBOptions, TtlProperties, TtlPropertiesExt, WriteBatchExt, WriteOptions,
 };
-use std::collections::BTreeMap;
-use std::ops::Deref;
-use std::path::PathBuf;
+
+use crate::*;
 
 type TraitsResult<T> = std::result::Result<T, engine_traits::Error>;
 
@@ -848,7 +848,7 @@ impl engine_traits::WriteBatch for EngineWriteBatch {
     fn rollback_to_save_point(&mut self) -> TraitsResult<()> {
         panic!()
     }
-    fn merge(&mut self, _src: Self) {
+    fn merge(&mut self, _src: Self) -> TraitsResult<()> {
         panic!()
     }
 }
