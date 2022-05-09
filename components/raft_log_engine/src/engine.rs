@@ -81,9 +81,6 @@ impl Seek for ManagedWriter {
 
 impl Write for ManagedWriter {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-        // Indiscriminately increase the priority because Raft Engine merges
-        // write batches with different IO types.
-        let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
             size = limiter.request(IOOp::Write, size);
@@ -339,7 +336,11 @@ impl RaftEngine for RaftLogEngine {
         self.0.sync().map_err(transfer_error)
     }
 
+    #[inline]
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
+        // Indiscriminately increase the priority because Raft Engine merges
+        // write batches with different IO types.
+        let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         self.0.write(&mut batch.0, sync).map_err(transfer_error)
     }
 
@@ -350,7 +351,7 @@ impl RaftEngine for RaftLogEngine {
         _: usize,
         _: usize,
     ) -> Result<usize> {
-        self.0.write(&mut batch.0, sync).map_err(transfer_error)
+        self.consume(batch, sync)
     }
 
     fn clean(
@@ -370,7 +371,7 @@ impl RaftEngine for RaftLogEngine {
             .0
             .add_entries::<MessageExtTyped>(raft_group_id, &entries)
             .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)
+        self.consume(&mut batch, false)
     }
 
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
@@ -379,7 +380,7 @@ impl RaftEngine for RaftLogEngine {
             .0
             .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        self.consume(&mut batch, false)?;
         Ok(())
     }
 
@@ -401,7 +402,7 @@ impl RaftEngine for RaftLogEngine {
             old_first_index.push(self.0.first_index(task.raft_group_id));
         }
 
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        self.consume(&mut batch, false)?;
 
         let mut total = 0;
         for (old_first_index, task) in old_first_index.iter().zip(tasks) {
@@ -414,6 +415,7 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn purge_expired_files(&self) -> Result<Vec<u64>> {
+        let _io_type_guard = WithIOType::new(IOType::Compaction);
         self.0.purge_expired_files().map_err(transfer_error)
     }
 
