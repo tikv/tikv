@@ -1,43 +1,49 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::FromIterator;
-use std::path::Path;
-use std::sync::Arc;
-use std::thread::{Builder as ThreadBuilder, JoinHandle};
-use std::{error::Error as StdError, result};
-
-use kvproto::debugpb::{self, Db as DBType};
-use kvproto::metapb::{PeerRole, Region};
-use kvproto::raft_serverpb::*;
-use protobuf::Message;
-use raft::eraftpb::Entry;
-use raft::{self, RawNode};
-use thiserror::Error;
+use std::{
+    error::Error as StdError,
+    iter::FromIterator,
+    path::Path,
+    result,
+    sync::Arc,
+    thread::{Builder as ThreadBuilder, JoinHandle},
+};
 
 use collections::HashSet;
-use engine_rocks::raw::{CompactOptions, DBBottommostLevelCompaction, DB};
-use engine_rocks::util::get_cf_handle;
-use engine_rocks::RocksMvccProperties;
-use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
-use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
-    RangePropertiesExt, SeekKey, SyncMutable, WriteBatch, WriteOptions,
+use engine_rocks::{
+    raw::{CompactOptions, DBBottommostLevelCompaction, DB},
+    util::get_cf_handle,
+    Compat, RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksWriteBatch,
 };
-use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use raftstore::coprocessor::get_region_approximate_middle;
-use raftstore::store::util as raftstore_util;
-use raftstore::store::PeerStorage;
-use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
-use tikv_util::config::ReadableSize;
-use tikv_util::keybuilder::KeyBuilder;
-use tikv_util::worker::Worker;
+use engine_traits::{
+    Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, MvccProperties, Peekable,
+    RaftEngine, Range, RangePropertiesExt, SeekKey, SyncMutable, WriteBatch, WriteBatchExt,
+    WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+};
+use kvproto::{
+    debugpb::{self, Db as DBType},
+    metapb::{PeerRole, Region},
+    raft_serverpb::*,
+};
+use protobuf::Message;
+use raft::{self, eraftpb::Entry, RawNode};
+use raftstore::{
+    coprocessor::get_region_approximate_middle,
+    store::{
+        util as raftstore_util, write_initial_apply_state, write_initial_raft_state,
+        write_peer_state, PeerStorage,
+    },
+};
+use thiserror::Error;
+use tikv_util::{config::ReadableSize, keybuilder::KeyBuilder, worker::Worker};
 use txn_types::Key;
 
-use crate::config::ConfigController;
-use crate::server::reset_to_version::ResetToVersionManager;
-use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-
 pub use crate::storage::mvcc::MvccInfoIterator;
+use crate::{
+    config::ConfigController,
+    server::reset_to_version::ResetToVersionManager,
+    storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType},
+};
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -1383,18 +1389,21 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
 mod tests {
     use std::sync::Arc;
 
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-    use kvproto::kvrpcpb::ApiVersion;
-    use kvproto::metapb::{Peer, PeerRole, Region};
+    use engine_rocks::{
+        raw::{ColumnFamilyOptions, DBOptions},
+        raw_util::{new_engine_opt, CFOptions},
+        RocksEngine,
+    };
+    use engine_traits::{Mutable, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use kvproto::{
+        kvrpcpb::ApiVersion,
+        metapb::{Peer, PeerRole, Region},
+    };
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
 
     use super::*;
     use crate::storage::mvcc::{Lock, LockType};
-    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
-    use engine_rocks::RocksEngine;
-    use engine_traits::{Mutable, SyncMutable};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     fn init_region_state(
         engine: &Arc<DB>,

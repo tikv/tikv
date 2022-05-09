@@ -1,42 +1,45 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-use std::mem;
-use std::sync::Arc;
+use std::{cmp::Reverse, collections::BinaryHeap, mem, sync::Arc};
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use rand::rngs::StdRng;
-use rand::Rng;
-use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query_common::storage::Range;
-use tidb_query_datatype::codec::datum::{
-    encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
+use rand::{rngs::StdRng, Rng};
+use tidb_query_common::storage::{
+    scanner::{RangesScanner, RangesScannerOptions},
+    Range,
 };
-use tidb_query_datatype::codec::table;
-use tidb_query_datatype::def::Collation;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::FieldTypeAccessor;
+use tidb_query_datatype::{
+    codec::{
+        datum::{
+            encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG,
+            UINT_FLAG,
+        },
+        table,
+    },
+    def::Collation,
+    expr::{EvalConfig, EvalContext},
+    FieldTypeAccessor,
+};
 use tidb_query_executors::{
     interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
-use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::time::Instant;
+use tikv_util::{
+    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
+    quota_limiter::QuotaLimiter,
+    time::Instant,
+};
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
 
-use super::cmsketch::CmSketch;
-use super::fmsketch::FmSketch;
-use super::histogram::Histogram;
-use crate::coprocessor::dag::TiKVStorage;
-use crate::coprocessor::MEMTRACE_ANALYZE;
-use crate::coprocessor::*;
-use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
+use crate::{
+    coprocessor::{dag::TiKvStorage, MEMTRACE_ANALYZE, *},
+    storage::{Snapshot, SnapshotStore, Statistics},
+};
 
 const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;
@@ -44,7 +47,7 @@ const ANALYZE_VERSION_V2: i32 = 2;
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
-    storage: Option<TiKVStorage<SnapshotStore<S>>>,
+    storage: Option<TiKvStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
     quota_limiter: Arc<QuotaLimiter>,
@@ -70,7 +73,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         );
         Ok(Self {
             req,
-            storage: Some(TiKVStorage::new(store, false)),
+            storage: Some(TiKvStorage::new(store, false)),
             ranges,
             storage_stats: Statistics::default(),
             quota_limiter,
@@ -119,7 +122,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     async fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut RangesScanner<TiKVStorage<SnapshotStore<S>>>,
+        scanner: &mut RangesScanner<TiKvStorage<SnapshotStore<S>>>,
         is_common_handle: bool,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
@@ -303,7 +306,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct RowSampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+    data: BatchTableScanExecutor<TiKvStorage<SnapshotStore<S>>>,
 
     max_sample_size: usize,
     max_fm_sketch_size: usize,
@@ -316,7 +319,7 @@ struct RowSampleBuilder<S: Snapshot> {
 impl<S: Snapshot> RowSampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        storage: TiKVStorage<SnapshotStore<S>>,
+        storage: TiKvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
@@ -768,7 +771,7 @@ impl Drop for BaseRowSampleCollector {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+    data: BatchTableScanExecutor<TiKvStorage<SnapshotStore<S>>>,
 
     max_bucket_size: usize,
     max_sample_size: usize,
@@ -789,7 +792,7 @@ impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
         common_handle_req: Option<tipb::AnalyzeIndexReq>,
-        storage: TiKVStorage<SnapshotStore<S>>,
+        storage: TiKvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
@@ -838,8 +841,7 @@ impl<S: Snapshot> SampleBuilder<S> {
     async fn collect_columns_stats(
         &mut self,
     ) -> Result<(AnalyzeColumnsResult, Option<AnalyzeIndexResult>)> {
-        use tidb_query_datatype::codec::collation::Collator;
-        use tidb_query_datatype::match_template_collator;
+        use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
         let columns_without_handle_len =
             self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
 
@@ -1183,11 +1185,10 @@ impl AnalyzeMixedResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use ::std::collections::HashMap;
-    use tidb_query_datatype::codec::datum;
-    use tidb_query_datatype::codec::datum::Datum;
+    use tidb_query_datatype::codec::{datum, datum::Datum};
+
+    use super::*;
 
     #[test]
     fn test_sample_collector() {

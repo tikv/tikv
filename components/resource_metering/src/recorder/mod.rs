@@ -1,30 +1,34 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use self::collector_reg::CollectorReg;
-use self::sub_recorder::SubRecorder;
-use crate::collector::Collector;
-use crate::{Config, RawRecords, ResourceTagFactory};
-
-use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::Arc,
+    time::Duration,
+};
 
 use collections::{HashMap, HashSet};
-use tikv_util::sys::thread::{self, Pid};
-use tikv_util::time::Instant;
-use tikv_util::warn;
-use tikv_util::worker::{
-    Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler,
+use tikv_util::{
+    sys::thread::{self, Pid},
+    time::Instant,
+    warn,
+    worker::{Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler},
 };
+
+use self::{collector_reg::CollectorReg, sub_recorder::SubRecorder};
+use crate::{collector::Collector, Config, RawRecords, ResourceTagFactory};
 
 mod collector_reg;
 mod localstorage;
 mod sub_recorder;
 
-pub use self::collector_reg::{CollectorGuard, CollectorId, CollectorRegHandle};
-pub use self::localstorage::{LocalStorage, LocalStorageRef, STORAGE};
-pub use self::sub_recorder::cpu::CpuRecorder;
-pub use self::sub_recorder::summary::{record_read_keys, record_write_keys, SummaryRecorder};
+pub use self::{
+    collector_reg::{CollectorGuard, CollectorId, CollectorRegHandle},
+    localstorage::{LocalStorage, LocalStorageRef, STORAGE},
+    sub_recorder::{
+        cpu::CpuRecorder,
+        summary::{record_read_keys, record_write_keys, SummaryRecorder},
+    },
+};
 
 const RECORD_FREQUENCY: f64 = 99.0;
 const RECORD_INTERVAL: Duration =
@@ -321,15 +325,21 @@ pub fn init_recorder(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::recorder::localstorage::{LocalStorage, LocalStorageRef};
-    use crate::TagInfos;
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering::SeqCst},
+            Mutex,
+        },
+        thread::sleep,
+    };
 
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering::SeqCst;
-    use std::sync::Mutex;
-    use std::thread::sleep;
     use tikv_util::sys::thread::Pid;
+
+    use super::*;
+    use crate::{
+        recorder::localstorage::{LocalStorage, LocalStorageRef},
+        TagInfos,
+    };
 
     #[derive(Clone, Default)]
     struct MockSubRecorder {

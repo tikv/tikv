@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::KvFormat;
 use kvproto::kvrpcpb::Context;
-
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateEngine};
 use tikv_util::HandyRwLock;
 
@@ -25,12 +25,12 @@ pub fn new_raft_engine(
     (cluster, engine, ctx)
 }
 
-pub fn new_raft_storage_with_store_count(
+pub fn new_raft_storage_with_store_count<F: KvFormat>(
     count: usize,
     key: &str,
 ) -> (
     Cluster<ServerCluster>,
-    SyncTestStorage<SimulateEngine>,
+    SyncTestStorage<SimulateEngine, F>,
     Context,
 ) {
     let (cluster, engine, ctx) = new_raft_engine(count, key);

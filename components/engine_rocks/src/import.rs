@@ -1,13 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::RocksEngine;
-use crate::util;
-use engine_traits::ImportExt;
-use engine_traits::IngestExternalFileOptions;
-use engine_traits::Result;
-use rocksdb::set_external_sst_file_global_seq_no;
-use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
 use std::fs::File;
+
+use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
+use rocksdb::{
+    set_external_sst_file_global_seq_no, IngestExternalFileOptions as RawIngestExternalFileOptions,
+};
+
+use crate::{engine::RocksEngine, util};
 
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
@@ -61,19 +61,21 @@ impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::Builder;
-
-    use crate::engine::RocksEngine;
-    use crate::raw::{ColumnFamilyOptions, DBOptions};
-    use crate::raw_util::{new_engine_opt, CFOptions};
     use std::sync::Arc;
 
-    use super::*;
-    use crate::RocksSstWriterBuilder;
     use engine_traits::{
-        FlowControlFactorsExt, Mutable, SstWriter, SstWriterBuilder, WriteBatchExt,
+        FlowControlFactorsExt, MiscExt, Mutable, SstWriter, SstWriterBuilder, WriteBatch,
+        WriteBatchExt, ALL_CFS, CF_DEFAULT,
     };
-    use engine_traits::{MiscExt, WriteBatch, ALL_CFS, CF_DEFAULT};
+    use tempfile::Builder;
+
+    use super::*;
+    use crate::{
+        engine::RocksEngine,
+        raw::{ColumnFamilyOptions, DBOptions},
+        raw_util::{new_engine_opt, CFOptions},
+        RocksSstWriterBuilder,
+    };
 
     #[test]
     fn test_ingest_multiple_file() {

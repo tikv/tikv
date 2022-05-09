@@ -4,8 +4,10 @@ use std::intrinsics::{likely, unlikely};
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
-use crate::buffer::{BufferReader, BufferWriter};
-use crate::{ErrorInner, Result};
+use crate::{
+    buffer::{BufferReader, BufferWriter},
+    ErrorInner, Result,
+};
 
 pub const MAX_VARINT64_LENGTH: usize = 10;
 pub const U64_SIZE: usize = std::mem::size_of::<u64>();
@@ -1812,9 +1814,9 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::ErrorInner;
-
     use protobuf::CodedOutputStream;
+
+    use crate::ErrorInner;
 
     /// Encode u64 little endian using `NumberCodec` and store position in extra variable.
     #[bench]

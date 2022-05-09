@@ -1,10 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{mpsc::Sender, Arc, Mutex};
+
 use collections::hash_set_with_capacity;
 use rocksdb::{CompactionJobInfo, EventListener, FlushJobInfo, IngestionInfo};
-
-use std::sync::mpsc::Sender;
-use std::sync::Mutex;
 
 pub enum FlowInfo {
     L0(String, u64),
@@ -15,14 +14,15 @@ pub enum FlowInfo {
     AfterUnsafeDestroyRange,
 }
 
+#[derive(Clone)]
 pub struct FlowListener {
-    flow_info_sender: Mutex<Sender<FlowInfo>>,
+    flow_info_sender: Arc<Mutex<Sender<FlowInfo>>>,
 }
 
 impl FlowListener {
     pub fn new(flow_info_sender: Sender<FlowInfo>) -> Self {
         Self {
-            flow_info_sender: Mutex::new(flow_info_sender),
+            flow_info_sender: Arc::new(Mutex::new(flow_info_sender)),
         }
     }
 }

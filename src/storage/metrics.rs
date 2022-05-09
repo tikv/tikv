@@ -2,27 +2,25 @@
 
 //! Prometheus metrics for storage functionality.
 
+use std::{cell::RefCell, mem, sync::Arc};
+
+use collections::HashMap;
+use engine_rocks::ReadPerfContext;
+use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
+use pd_client::BucketMeta;
 use prometheus::*;
 use prometheus_static_metric::*;
+use raftstore::store::{util::build_key_range, ReadStats};
 
-use std::cell::RefCell;
-use std::mem;
-use std::sync::Arc;
-
-use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
-use crate::storage::kv::{FlowStatsReporter, PerfStatisticsDelta, Statistics};
-use collections::HashMap;
-use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb;
-use kvproto::pdpb::QueryKind;
-use pd_client::BucketMeta;
-use raftstore::store::util::build_key_range;
-use raftstore::store::ReadStats;
+use crate::{
+    server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail},
+    storage::kv::{FlowStatsReporter, Statistics},
+};
 
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,
     local_read_stats: ReadStats,
-    local_perf_stats: HashMap<CommandKind, PerfStatisticsDelta>,
+    local_perf_stats: HashMap<CommandKind, ReadPerfContext>,
 }
 
 thread_local! {
@@ -40,7 +38,7 @@ macro_rules! tls_flush_perf_stats {
         STORAGE_ROCKSDB_PERF_COUNTER_STATIC
             .get($tag)
             .$stat
-            .inc_by($local_stats.0.$stat as u64);
+            .inc_by($local_stats.$stat as u64);
     };
 }
 
@@ -179,7 +177,7 @@ pub fn tls_collect_query_batch(
     });
 }
 
-pub fn tls_collect_perf_stats(cmd: CommandKind, perf_stats: &PerfStatisticsDelta) {
+pub fn tls_collect_perf_stats(cmd: CommandKind, perf_stats: &ReadPerfContext) {
     TLS_STORAGE_METRICS.with(|m| {
         *(m.borrow_mut()
             .local_perf_stats
@@ -271,7 +269,7 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
-        ttl_tombstone,
+        raw_value_tombstone,
     }
 
     pub label_enum CheckMemLockResult {
@@ -421,7 +419,7 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
             ServerGcKeysDetail::prev_tombstone => GcKeysDetail::prev_tombstone,
             ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
             ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
-            ServerGcKeysDetail::ttl_tombstone => GcKeysDetail::ttl_tombstone,
+            ServerGcKeysDetail::raw_value_tombstone => GcKeysDetail::raw_value_tombstone,
         }
     }
 }

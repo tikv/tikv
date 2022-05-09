@@ -1,14 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::recorder::ConfigChangeNotifier as RecorderConfigChangeNotifier;
-use crate::reporter::ConfigChangeNotifier as ReporterConfigChangeNotifier;
-use crate::AddressChangeNotifier;
-
 use std::error::Error;
 
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
+
+use crate::{
+    recorder::ConfigChangeNotifier as RecorderConfigChangeNotifier,
+    reporter::ConfigChangeNotifier as ReporterConfigChangeNotifier, AddressChangeNotifier,
+};
 
 const MIN_PRECISION: ReadableDuration = ReadableDuration::millis(100);
 const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
@@ -125,8 +126,9 @@ impl online_config::ConfigManager for ConfigManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tikv_util::config::ReadableDuration;
+
+    use super::*;
 
     #[test]
     fn test_config_validate() {

@@ -1,10 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::encryptionpb::EncryptedContent;
+use tikv_util::box_err;
 
 use crate::{Error, Result};
-
-use tikv_util::box_err;
 
 /// Provide API to encrypt/decrypt key dictionary content.
 ///
@@ -71,11 +70,12 @@ impl Backend for PlaintextBackend {
 
 #[cfg(test)]
 pub mod tests {
+    use std::{collections::HashMap, sync::Mutex};
+
+    use lazy_static::lazy_static;
+
     use super::*;
     use crate::*;
-    use lazy_static::lazy_static;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
 
     #[derive(Debug)]
     pub struct MockBackend {

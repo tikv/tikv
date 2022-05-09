@@ -1,32 +1,33 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    fmt::{self, Debug, Display, Formatter},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 
-use engine_rocks::get_env;
-use engine_rocks::raw::DBOptions;
-use engine_rocks::raw_util::CFOptions;
-use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
-use engine_traits::CfName;
+pub use engine_rocks::RocksSnapshot;
+use engine_rocks::{
+    get_env, raw::DBOptions, raw_util::CFOptions, RocksEngine as BaseRocksEngine,
+    RocksEngineIterator,
+};
 use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
+    CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
 };
 use file_system::IORateLimiter;
-use kvproto::kvrpcpb::Context;
+use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
-use txn_types::{Key, Value};
-
 use tikv_util::worker::{Runnable, Scheduler, Worker};
+use txn_types::{Key, Value};
 
 use super::{
     write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
     Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
-
-pub use engine_rocks::RocksSnapshot;
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
@@ -152,8 +153,33 @@ impl RocksEngine {
         core.worker.stop();
     }
 
-    pub fn mut_coprocessor(&mut self) -> &mut CoprocessorHost<BaseRocksEngine> {
-        &mut self.coprocessor
+    pub fn register_observer(&mut self, f: impl FnOnce(&mut CoprocessorHost<BaseRocksEngine>)) {
+        f(&mut self.coprocessor);
+    }
+
+    /// `pre_propose` is called before propose.
+    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by now.
+    fn pre_propose(&self, mut batch: WriteData) -> Result<WriteData> {
+        let requests = batch
+            .modifies
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        let mut cmd_req = raft_cmdpb::RaftCmdRequest::default();
+        cmd_req.set_requests(requests.into());
+
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        self.coprocessor
+            .pre_propose(&region, &mut cmd_req)
+            .map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;
+
+        batch.modifies = cmd_req
+            .take_requests()
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        Ok(batch)
     }
 }
 
@@ -196,7 +222,7 @@ impl Engine for RocksEngine {
     fn async_write_ext(
         &self,
         _: &Context,
-        mut batch: WriteData,
+        batch: WriteData,
         cb: Callback<()>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
@@ -207,26 +233,7 @@ impl Engine for RocksEngine {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
 
-        // Trigger "pre_propose_query" observers for RawKV API V2.
-        use kvproto::{metapb, raft_cmdpb};
-        let requests = batch
-            .modifies
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<_>>();
-        let mut cmd_req = raft_cmdpb::RaftCmdRequest::default();
-        cmd_req.set_requests(requests.into());
-        let mut region = metapb::Region::default();
-        region.set_id(1);
-        // TODO: uncomment after finish modification of Storage.
-        // self.coprocessor
-        //     .pre_propose(&region, &mut cmd_req)
-        //     .map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;
-        batch.modifies = cmd_req
-            .take_requests()
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<_>>();
+        let batch = self.pre_propose(batch)?;
 
         if let Some(cb) = proposed_cb {
             cb();

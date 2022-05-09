@@ -1,19 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
+use std::{sync::mpsc, thread, time::Duration};
 
 use cdc::{recv_timeout, OldValueCache, Task, Validate};
-use futures::executor::block_on;
-use futures::sink::SinkExt;
+use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
-use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::*;
+use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv_util::debug;
-use tikv_util::worker::Scheduler;
+use tikv_util::{debug, worker::Scheduler};
 
 use crate::{new_event_feed, ClientReceiver, TestSuite, TestSuiteBuilder};
 
@@ -247,6 +242,12 @@ fn test_cdc_scan_continues_after_region_split() {
 // if the downstream hasn't been initialized.
 #[test]
 fn test_no_resolved_ts_before_downstream_initialized() {
+    for version in &["4.0.7", "4.0.8"] {
+        do_test_no_resolved_ts_before_downstream_initialized(version);
+    }
+}
+
+fn do_test_no_resolved_ts_before_downstream_initialized(version: &str) {
     let cluster = new_server_cluster(0, 1);
     cluster.pd_client.disable_default_operator();
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
@@ -257,9 +258,16 @@ fn test_no_resolved_ts_before_downstream_initialized() {
         let timeout = Duration::from_secs(1);
         for _ in 0..10 {
             if let Ok(Some(event)) = recv_timeout(&mut rx, timeout) {
-                if event.unwrap().has_resolved_ts() {
+                let event = event.unwrap();
+                if event.has_resolved_ts() {
                     event_feed.replace(Some(rx));
                     return;
+                }
+                for e in event.get_events() {
+                    if let Some(Event_oneof_event::ResolvedTs(_)) = e.event {
+                        event_feed.replace(Some(rx));
+                        return;
+                    }
                 }
             }
         }
@@ -276,7 +284,8 @@ fn test_no_resolved_ts_before_downstream_initialized() {
             fail::cfg("cdc_incremental_scan_start", "pause").unwrap();
         }
         let (mut req_tx, event_feed, _) = new_event_feed(suite.get_region_cdc_client(region.id));
-        let req = suite.new_changedata_request(region.id);
+        let mut req = suite.new_changedata_request(region.id);
+        req.mut_header().set_ticdc_version(version.to_owned());
         block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
         req_txs.push(req_tx);
         event_feeds.push(event_feed);

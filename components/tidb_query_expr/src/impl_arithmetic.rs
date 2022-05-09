@@ -2,11 +2,11 @@
 
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
-
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::{self, div_i64, div_i64_with_u64, div_u64_with_i64, Error};
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{
+    codec::{self, data_type::*, div_i64, div_i64_with_u64, div_u64_with_i64, Error},
+    expr::EvalContext,
+};
 
 #[rpn_fn]
 #[inline]
@@ -511,17 +511,18 @@ impl ArithmeticOpWithCtx for RealDivide {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::str::FromStr;
 
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::error::ERR_DIVISION_BY_ZERO,
+        expr::{EvalConfig, Flag, SqlMode},
+        FieldTypeFlag, FieldTypeTp,
+    };
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::test_util::RpnFnScalarEvaluator;
-    use tidb_query_datatype::codec::error::ERR_DIVISION_BY_ZERO;
-    use tidb_query_datatype::expr::{EvalConfig, Flag, SqlMode};
 
     #[test]
     fn test_plus_int() {

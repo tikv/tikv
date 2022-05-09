@@ -1,13 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::Write;
-use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use kvproto::import_sstpb::{DuplicateDetectResponse, KvPair};
 use sst_importer::{Error, Result};
 use tikv_kv::{Iterator as kvIterator, Snapshot};
 use tikv_util::keybuilder::KeyBuilder;
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+
+use crate::storage::mvcc::Write;
 
 #[cfg(test)]
 const MAX_SCAN_BATCH_COUNT: usize = 256;
@@ -232,17 +232,22 @@ fn from_txn_types_error(e: txn_types::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::lock_manager::{DummyLockManager, LockManager};
-    use crate::storage::txn::commands;
-    use crate::storage::{Storage, TestStorageBuilder};
-    use kvproto::kvrpcpb::{ApiVersion, Context};
     use std::sync::mpsc::channel;
+
+    use api_version::KvFormat;
+    use kvproto::kvrpcpb::Context;
     use tikv_kv::Engine;
     use txn_types::Mutation;
 
-    fn prewrite_data<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    use super::*;
+    use crate::storage::{
+        lock_manager::{DummyLockManager, LockManager},
+        txn::commands,
+        Storage, TestStorageBuilderApiV1,
+    };
+
+    fn prewrite_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         primary: Vec<u8>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         start_ts: u64,
@@ -273,8 +278,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn rollback_data<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    fn rollback_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         data: Vec<Vec<u8>>,
         start_ts: u64,
     ) {
@@ -296,8 +301,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn write_data<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    fn write_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         ts: u64,
     ) {
@@ -347,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detect() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let mut data = vec![];
@@ -403,7 +408,7 @@ mod tests {
     // with (108,10).
     #[test]
     fn test_duplicate_detect_incremental() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         for &start in &[100, 104, 108, 112] {
@@ -464,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detect_rollback_and_delete() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let data = vec![

@@ -7,8 +7,10 @@ mod util;
 use std::io::Cursor;
 
 use anyhow::Result;
-use tidb_query_datatype::codec::datum_codec::DatumFlagAndPayloadEncoder;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+use tidb_query_datatype::{
+    codec::datum_codec::DatumFlagAndPayloadEncoder,
+    expr::{EvalConfig, EvalContext},
+};
 
 use self::util::ReadLiteralExt;
 
@@ -106,8 +108,7 @@ impl<T: ReadLiteralExt> ReadAsDecimalRoundMode for T {}
 
 #[inline(always)]
 pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<()> {
-    use tidb_query_datatype::codec::convert::ConvertTo;
-    use tidb_query_datatype::codec::data_type::Decimal;
+    use tidb_query_datatype::codec::{convert::ConvertTo, data_type::Decimal};
 
     fn fuzz(lhs: &Decimal, rhs: &Decimal, cursor: &mut Cursor<&[u8]>) -> Result<()> {
         let _ = lhs.abs();
@@ -149,10 +150,12 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<()> {
 
 #[inline(always)]
 pub fn fuzz_hash_decimal(data: &[u8]) -> Result<()> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use tidb_query_datatype::codec::data_type::Decimal;
-    use tidb_query_datatype::codec::mysql::DecimalDecoder;
+    use std::{
+        collections::hash_map::DefaultHasher,
+        hash::{Hash, Hasher},
+    };
+
+    use tidb_query_datatype::codec::{data_type::Decimal, mysql::DecimalDecoder};
 
     fn fuzz_eq_then_hash(lhs: &Decimal, rhs: &Decimal) -> Result<()> {
         if lhs == rhs {
@@ -189,9 +192,11 @@ trait ReadAsTimeType: ReadLiteralExt {
 impl<T: ReadLiteralExt> ReadAsTimeType for T {}
 
 fn fuzz_time(t: tidb_query_datatype::codec::mysql::Time, mut cursor: Cursor<&[u8]>) -> Result<()> {
-    use tidb_query_datatype::codec::convert::ConvertTo;
-    use tidb_query_datatype::codec::data_type::{Decimal, Duration};
-    use tidb_query_datatype::codec::mysql::TimeEncoder;
+    use tidb_query_datatype::codec::{
+        convert::ConvertTo,
+        data_type::{Decimal, Duration},
+        mysql::TimeEncoder,
+    };
 
     let mut ctx = EvalContext::default();
     let _ = t.clone().set_time_type(cursor.read_as_time_type()?);
@@ -216,6 +221,7 @@ fn fuzz_time(t: tidb_query_datatype::codec::mysql::Time, mut cursor: Cursor<&[u8
 
 pub fn fuzz_coprocessor_codec_time_from_parse(data: &[u8]) -> Result<()> {
     use std::io::Read;
+
     use tidb_query_datatype::codec::mysql::{Time, Tz};
 
     let mut cursor = Cursor::new(data);
@@ -252,8 +258,7 @@ fn fuzz_duration(
     t: tidb_query_datatype::codec::mysql::Duration,
     mut cursor: Cursor<&[u8]>,
 ) -> Result<()> {
-    use tidb_query_datatype::codec::convert::ConvertTo;
-    use tidb_query_datatype::codec::mysql::decimal::Decimal;
+    use tidb_query_datatype::codec::{convert::ConvertTo, mysql::decimal::Decimal};
 
     let _ = t.fsp();
     let u = t;
@@ -287,6 +292,7 @@ pub fn fuzz_coprocessor_codec_duration_from_nanos(data: &[u8]) -> Result<()> {
 
 pub fn fuzz_coprocessor_codec_duration_from_parse(data: &[u8]) -> Result<()> {
     use std::io::Read;
+
     use tidb_query_datatype::codec::mysql::Duration;
 
     let mut cursor = Cursor::new(data);

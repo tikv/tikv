@@ -1,20 +1,24 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::request::{
-    anyhow_to_io_log_error, file_name_for_write, restore_sender, write_sender, DropPath,
+use std::{
+    io::{self, ErrorKind},
+    sync::Arc,
 };
-use crate::ExternalStorage;
 
 use anyhow::Context;
 use futures_io::AsyncRead;
+pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 use protobuf::{self, Message};
 use slog_global::info;
-use std::io::{self, ErrorKind};
-use std::sync::Arc;
 use tikv_util::time::Limiter;
 use tokio::runtime::{Builder, Runtime};
 
-pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
+use crate::{
+    request::{
+        anyhow_to_io_log_error, file_name_for_write, restore_sender, write_sender, DropPath,
+    },
+    ExternalStorage,
+};
 
 struct ExternalStorageClient {
     backend: Backend,

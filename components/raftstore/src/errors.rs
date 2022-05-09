@@ -1,20 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error as StdError;
-use std::io;
-use std::net;
-use std::result;
+use std::{error::Error as StdError, io, net, result};
 
 use crossbeam::channel::TrySendError;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use protobuf::ProtobufError;
 use thiserror::Error;
-
-use error_code::{self, ErrorCode, ErrorCodeExt};
 use tikv_util::{codec, deadline::DeadlineError};
 
-use super::coprocessor::Error as CopError;
-use super::store::SnapError;
+use super::{coprocessor::Error as CopError, store::SnapError};
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
@@ -59,6 +54,9 @@ pub enum Error {
 
     #[error("store ids {0:?}, errmsg {1}")]
     DiskFull(Vec<u64>, String),
+
+    #[error("region {0} is in the recovery progress")]
+    RecoveryInProgress(u64),
 
     #[error(
         "key {} is not in region key range [{}, {}) for region {}",
@@ -238,6 +236,11 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_region_not_initialized(e);
             }
+            Error::RecoveryInProgress(region_id) => {
+                let mut e = errorpb::RecoveryInProgress::default();
+                e.set_region_id(region_id);
+                errorpb.set_recovery_in_progress(e);
+            }
             _ => {}
         };
 
@@ -271,6 +274,7 @@ impl ErrorCodeExt for Error {
             Error::RegionNotFound(_) => error_code::raftstore::REGION_NOT_FOUND,
             Error::NotLeader(..) => error_code::raftstore::NOT_LEADER,
             Error::DiskFull(..) => error_code::raftstore::DISK_FULL,
+            Error::RecoveryInProgress(..) => error_code::raftstore::RECOVERY_IN_PROGRESS,
             Error::StaleCommand => error_code::raftstore::STALE_COMMAND,
             Error::RegionNotInitialized(_) => error_code::raftstore::REGION_NOT_INITIALIZED,
             Error::KeyNotInRegion(..) => error_code::raftstore::KEY_NOT_IN_REGION,

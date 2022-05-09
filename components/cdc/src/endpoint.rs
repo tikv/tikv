@@ -1,11 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Reverse;
-use std::cmp::{Ord, Ordering as CmpOrdering, PartialOrd};
-use std::collections::BinaryHeap;
-use std::fmt;
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::{
+    cmp::{Ord, Ordering as CmpOrdering, PartialOrd, Reverse},
+    collections::BinaryHeap,
+    fmt,
+    sync::{Arc, Mutex as StdMutex},
+    time::Duration,
+};
 
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
@@ -14,40 +15,51 @@ use engine_traits::KvEngine;
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use grpcio::Environment;
-use kvproto::cdcpb::{
-    ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
-    DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, Event_oneof_event,
-    ResolvedTs,
+use kvproto::{
+    cdcpb::{
+        ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
+        DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, Event_oneof_event,
+        ResolvedTs,
+    },
+    metapb::Region,
+    tikvpb::TikvClient,
 };
-use kvproto::metapb::Region;
-use kvproto::tikvpb::TikvClient;
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{Feature, PdClient};
-use raftstore::coprocessor::CmdBatch;
-use raftstore::coprocessor::ObserveID;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ChangeObserver, StoreMeta};
-use raftstore::store::msg::{Callback, SignificantMsg};
-use raftstore::store::RegionReadProgressRegistry;
+use raftstore::{
+    coprocessor::{CmdBatch, ObserveID},
+    router::RaftStoreRouter,
+    store::{
+        fsm::{ChangeObserver, StoreMeta},
+        msg::{Callback, SignificantMsg},
+        RegionReadProgressRegistry,
+    },
+};
 use resolved_ts::Resolver;
 use security::SecurityManager;
-use tikv::config::CdcConfig;
-use tikv::storage::Statistics;
-use tikv_util::time::Limiter;
-use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
-use tikv_util::{debug, error, impl_display_as_debug, info, warn};
-use tokio::runtime::{Builder, Runtime};
-use tokio::sync::{Mutex, Semaphore};
+use tikv::{config::CdcConfig, storage::Statistics};
+use tikv_util::{
+    debug, error, impl_display_as_debug, info,
+    time::Limiter,
+    timer::SteadyTimer,
+    warn,
+    worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
+};
+use tokio::{
+    runtime::{Builder, Runtime},
+    sync::{Mutex, Semaphore},
+};
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
-use crate::channel::{CdcEvent, MemoryQuota, SendError};
-use crate::delegate::{on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState};
-use crate::initializer::Initializer;
-use crate::metrics::*;
-use crate::old_value::{OldValueCache, OldValueCallback};
-use crate::service::{Conn, ConnID, FeatureGate};
-use crate::{CdcObserver, Error};
+use crate::{
+    channel::{CdcEvent, MemoryQuota, SendError},
+    delegate::{on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState},
+    initializer::Initializer,
+    metrics::*,
+    old_value::{OldValueCache, OldValueCallback},
+    service::{Conn, ConnID, FeatureGate},
+    CdcObserver, Error,
+};
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
@@ -928,6 +940,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 return;
             }
         };
+        if !downstream.get_state().load().ready_for_advancing_ts() {
+            // Only send resolved timestamp if the downstream is ready.
+            return;
+        }
         let resolved_ts_event = Event {
             region_id,
             event: Some(Event_oneof_event::ResolvedTs(resolved_ts)),
@@ -1204,17 +1220,20 @@ mod tests {
     use std::ops::{Deref, DerefMut};
 
     use engine_rocks::RocksEngine;
-    use kvproto::cdcpb::Header;
-    use kvproto::errorpb::Error as ErrorHeader;
-    use raftstore::errors::{DiscardReason, Error as RaftStoreError};
-    use raftstore::store::msg::CasualMessage;
-    use raftstore::store::{PeerMsg, ReadDelegate};
+    use kvproto::{cdcpb::Header, errorpb::Error as ErrorHeader};
+    use raftstore::{
+        errors::{DiscardReason, Error as RaftStoreError},
+        store::{msg::CasualMessage, PeerMsg, ReadDelegate},
+    };
     use test_raftstore::{MockRaftStoreRouter, TestPdClient};
-    use tikv::server::DEFAULT_CLUSTER_ID;
-    use tikv::storage::kv::Engine;
-    use tikv::storage::TestEngineBuilder;
-    use tikv_util::config::{ReadableDuration, ReadableSize};
-    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use tikv::{
+        server::DEFAULT_CLUSTER_ID,
+        storage::{kv::Engine, TestEngineBuilder},
+    };
+    use tikv_util::{
+        config::{ReadableDuration, ReadableSize},
+        worker::{dummy_scheduler, ReceiverWrapper},
+    };
 
     use super::*;
     use crate::{channel, recv_timeout};

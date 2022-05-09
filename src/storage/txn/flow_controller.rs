@@ -1,15 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::cmp::PartialOrd;
-use std::collections::VecDeque;
-use std::ops::{Add, AddAssign, Sub, SubAssign};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
-use std::sync::Arc;
-use std::thread::{Builder, JoinHandle};
-use std::time::Duration;
-use std::u64;
+use std::{
+    cmp::PartialOrd,
+    collections::VecDeque,
+    ops::{Add, AddAssign, Sub, SubAssign},
+    sync::{
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
+        Arc,
+    },
+    thread::{Builder, JoinHandle},
+    time::Duration,
+    u64,
+};
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
@@ -18,8 +22,7 @@ use num_traits::cast::{AsPrimitive, FromPrimitive};
 use rand::Rng;
 use tikv_util::time::{Instant, Limiter};
 
-use crate::storage::config::FlowControlConfig;
-use crate::storage::metrics::*;
+use crate::storage::{config::FlowControlConfig, metrics::*};
 
 const TICK_DURATION: Duration = Duration::from_millis(1000);
 
@@ -954,9 +957,11 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use engine_traits::Result;
     use std::sync::atomic::AtomicU64;
+
+    use engine_traits::Result;
+
+    use super::*;
 
     #[derive(Clone)]
     struct EngineStub(Arc<EngineStubInner>);

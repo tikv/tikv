@@ -1,11 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use bytes::Bytes;
-use futures::stream::{self, Stream};
-use futures_util::io::AsyncRead;
-use http::status::StatusCode;
-use rand::{thread_rng, Rng};
-use rusoto_core::{request::HttpDispatchError, RusotoError};
 use std::{
     future::Future,
     io, iter,
@@ -15,6 +9,13 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
+
+use bytes::Bytes;
+use futures::stream::{self, Stream};
+use futures_util::io::AsyncRead;
+use http::status::StatusCode;
+use rand::{thread_rng, Rng};
+use rusoto_core::{request::HttpDispatchError, RusotoError};
 use tokio::{runtime::Builder, time::sleep};
 
 /// Wrapper of an `AsyncRead` instance, exposed as a `Sync` `Stream` of `Bytes`.

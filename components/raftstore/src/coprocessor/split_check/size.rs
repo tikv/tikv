@@ -1,20 +1,23 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::{
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+};
 
 use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
+use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::{box_try, debug, info, warn};
 
+use super::{
+    super::{
+        error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
+        SplitChecker,
+    },
+    Host,
+};
 use crate::store::{CasualMessage, CasualRouter};
-
-use super::super::error::Result;
-use super::super::metrics::*;
-use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
-use super::Host;
 
 pub struct Checker {
     max_size: u64,
@@ -237,26 +240,29 @@ fn get_approximate_split_keys(
 
 #[cfg(test)]
 pub mod tests {
-    use super::Checker;
-    use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use crate::store::{BucketRange, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
+    use std::{iter, sync::mpsc, u64};
+
     use collections::HashSet;
-    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
-    use engine_test::kv::KvTestEngine;
-    use engine_traits::CF_LOCK;
-    use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
-    use engine_traits::{MiscExt, SyncMutable};
-    use kvproto::metapb::Peer;
-    use kvproto::metapb::Region;
-    use kvproto::pdpb::CheckPolicy;
-    use std::sync::mpsc;
-    use std::{iter, u64};
+    use engine_test::{
+        ctor::{CFOptions, ColumnFamilyOptions, DBOptions},
+        kv::KvTestEngine,
+    };
+    use engine_traits::{
+        CfName, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
+    };
+    use kvproto::{
+        metapb::{Peer, Region},
+        pdpb::CheckPolicy,
+    };
     use tempfile::Builder;
-    use tikv_util::config::ReadableSize;
-    use tikv_util::worker::Runnable;
+    use tikv_util::{config::ReadableSize, worker::Runnable};
     use txn_types::Key;
 
-    use super::*;
+    use super::{Checker, *};
+    use crate::{
+        coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker},
+        store::{BucketRange, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask},
+    };
 
     fn must_split_at_impl(
         rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
@@ -377,7 +383,7 @@ pub mod tests {
     fn test_split_check_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let cfs_with_range_prop: HashSet<_> = cfs_with_range_prop.iter().cloned().collect();
         let mut cf_opt = ColumnFamilyOptions::new();
         cf_opt.set_no_range_properties(true);
@@ -502,7 +508,7 @@ pub mod tests {
     fn test_generate_bucket_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let cfs_with_range_prop: HashSet<_> = cfs_with_range_prop.iter().cloned().collect();
         let mut cf_opt = ColumnFamilyOptions::new();
         cf_opt.set_no_range_properties(true);
@@ -607,7 +613,7 @@ pub mod tests {
     fn test_cf_lock_without_range_prop() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opt = ColumnFamilyOptions::new();
         cf_opt.set_no_range_properties(true);
 
@@ -677,7 +683,8 @@ pub mod tests {
                 CFOptions::new(cf, cf_opts)
             })
             .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
+        let engine =
+            engine_test::kv::new_engine_opt(path_str, DBOptions::default(), cfs_opts).unwrap();
 
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
@@ -750,7 +757,7 @@ pub mod tests {
             .unwrap();
         let path = tmp.path().to_str().unwrap();
 
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         cf_opts.set_no_range_properties(true);
@@ -788,7 +795,7 @@ pub mod tests {
             .unwrap();
         let path = tmp.path().to_str().unwrap();
 
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS
@@ -903,7 +910,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS
@@ -936,7 +943,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
         let cfs_opts = LARGE_CFS
@@ -974,7 +981,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
         let cfs_opts = LARGE_CFS

@@ -1,12 +1,16 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Mutex,
+};
 
+use collections::HashMap;
 use fail::fail_point;
-use kvproto::metapb::{Peer, Region, Store, StoreState};
-use kvproto::pdpb::*;
+use kvproto::{
+    metapb::{Peer, Region, Store, StoreState},
+    pdpb::*,
+};
 
 use super::*;
 

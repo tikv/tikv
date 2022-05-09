@@ -1,33 +1,30 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::resource_metering::test_suite::MockReceiverServer;
-
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
-use engine_rocks::PerfLevel;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::coprocessor;
-use kvproto::kvrpcpb::*;
-use kvproto::resource_usage_agent::ResourceUsageRecord;
-use kvproto::tikvpb::*;
+use kvproto::{coprocessor, kvrpcpb::*, resource_usage_agent::ResourceUsageRecord, tikvpb::*};
 use protobuf::Message;
 use resource_metering::ResourceTagFactory;
 use test_coprocessor::{DAGSelect, ProductTable, Store};
 use test_raftstore::*;
 use test_util::alloc_port;
 use tidb_query_datatype::codec::Datum;
-use tikv::config::CoprReadPoolConfig;
-use tikv::coprocessor::{readpool_impl, Endpoint};
-use tikv::read_pool::ReadPool;
-use tikv::storage::{Engine, RocksEngine};
-use tikv_util::config::ReadableDuration;
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::thread_group::GroupProperties;
-use tikv_util::HandyRwLock;
+use tikv::{
+    config::CoprReadPoolConfig,
+    coprocessor::{readpool_impl, Endpoint},
+    read_pool::ReadPool,
+    storage::{Engine, RocksEngine},
+};
+use tikv_util::{
+    config::ReadableDuration, quota_limiter::QuotaLimiter, thread_group::GroupProperties,
+    HandyRwLock,
+};
 use tipb::SelectResponse;
+
+use crate::resource_metering::test_suite::MockReceiverServer;
 
 #[test]
 #[ignore = "the case is unstable, ref #11765"]
@@ -254,7 +251,6 @@ fn init_coprocessor_with_data(
         &tikv::server::Config::default(),
         pool.handle(),
         cm,
-        PerfLevel::EnableCount,
         tag_factory,
         Arc::new(QuotaLimiter::default()),
     )

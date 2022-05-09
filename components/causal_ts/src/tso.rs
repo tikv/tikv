@@ -1,21 +1,24 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::executor::block_on;
-use parking_lot::RwLock;
-use pd_client::PdClient;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
+
+use futures::executor::block_on;
+use parking_lot::RwLock;
+use pd_client::PdClient;
 use tikv_util::{
     time::{Duration, Instant},
     worker::{Builder as WorkerBuilder, Worker},
 };
 use txn_types::TimeStamp;
 
-use crate::errors::{Error, Result};
-use crate::metrics::*;
-use crate::CausalTsProvider;
+use crate::{
+    errors::{Error, Result},
+    metrics::*,
+    CausalTsProvider,
+};
 
 // Renew on every 100ms, to adjust batch size rapidly enough.
 pub(crate) const TSO_BATCH_RENEW_INTERVAL_DEFAULT: u64 = 100;
@@ -304,8 +307,9 @@ impl CausalTsProvider for SimpleTsoProvider {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
     use test_raftstore::TestPdClient;
+
+    use super::*;
 
     #[test]
     fn test_tso_batch() {
