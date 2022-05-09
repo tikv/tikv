@@ -253,20 +253,11 @@ pub struct PeerStat {
     pub approximate_size: u64,
 }
 
+#[derive(Default)]
 pub struct ReportBucket {
     current_stat: BucketStat,
     last_report_stat: Option<BucketStat>,
-    last_report_time: TiInstant,
-}
-
-impl Default for ReportBucket {
-    fn default() -> Self {
-        Self {
-            current_stat: BucketStat::default(),
-            last_report_stat: None,
-            last_report_time: TiInstant::now(),
-        }
-    }
+    last_report_ts: UnixSecs,
 }
 
 impl ReportBucket {
@@ -277,8 +268,8 @@ impl ReportBucket {
         }
     }
 
-    fn new_report(&mut self, report_time: TiInstant) -> BucketStat {
-        self.last_report_time = report_time;
+    fn new_report(&mut self, report_ts: UnixSecs) -> BucketStat {
+        self.last_report_ts = report_ts;
         match self.last_report_stat.replace(self.current_stat.clone()) {
             Some(last) => {
                 let mut delta = BucketStat::new(
@@ -1710,10 +1701,17 @@ where
         let region_id = region_buckets.meta.region_id;
         self.merge_buckets(region_buckets);
         let report_buckets = self.region_buckets.get_mut(&region_id).unwrap();
-        let now = TiInstant::now();
-        let period = now.duration_since(report_buckets.last_report_time);
+        let last_report_ts = if report_buckets.last_report_ts.is_zero() {
+            self.start_ts
+        } else {
+            report_buckets.last_report_ts
+        };
+        let now = UnixSecs::now();
+        let interval_second = now.into_inner() - last_report_ts.into_inner();
         let delta = report_buckets.new_report(now);
-        let resp = self.pd_client.report_region_buckets(&delta, period);
+        let resp = self
+            .pd_client
+            .report_region_buckets(&delta, Duration::from_secs(interval_second));
         let f = async move {
             if let Err(e) = resp.await {
                 debug!(
@@ -1729,14 +1727,12 @@ where
     }
 
     fn merge_buckets(&mut self, mut buckets: BucketStat) {
-        use std::cmp::Ordering;
-
         let region_id = buckets.meta.region_id;
         self.region_buckets
             .entry(region_id)
             .and_modify(|report_bucket| {
                 let current = &mut report_bucket.current_stat;
-                if current.meta.cmp(&buckets.meta) == Ordering::Less {
+                if current.meta < buckets.meta {
                     mem::swap(current, &mut buckets);
                 }
 
