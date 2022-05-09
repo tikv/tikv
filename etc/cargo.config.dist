@@ -6,7 +6,7 @@
 rustflags = ["-Cforce-frame-pointers=yes"]
 
 [unstable]
-build-std = true
+build-std = ["core", "std", "alloc", "proc_macro"]
 
 [profile.release]
 opt-level = 3
