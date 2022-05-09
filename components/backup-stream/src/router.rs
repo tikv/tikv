@@ -122,7 +122,11 @@ impl ApplyEvents {
                                 utils::redact(&value)
                             )
                         }) {
-                            Ok(lock) => resolver.track_lock(lock.ts, key),
+                            Ok(lock) => {
+                                if utils::should_track_lock(&lock) {
+                                    resolver.track_lock(lock.ts, key)
+                                }
+                            }
                             Err(err) => err.report(format!("region id = {}", region_id)),
                         }
                     }
