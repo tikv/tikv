@@ -680,7 +680,7 @@ where
             let begin = Instant::now_coarse();
             match init.do_initial_scan(&region, last_checkpoint, snap) {
                 Ok(stat) => {
-                    info!("initial scanning of leader transforming finished!"; "cost" => ?begin.saturating_elapsed(), "region" => %region.get_id(), "from_ts" => %last_checkpoint);
+                    info!("initial scanning of leader transforming finished!"; "takes" => ?begin.saturating_elapsed(), "region" => %region.get_id(), "from_ts" => %last_checkpoint);
                     utils::record_cf_stat("lock", &stat.lock);
                     utils::record_cf_stat("write", &stat.write);
                     utils::record_cf_stat("default", &stat.data);

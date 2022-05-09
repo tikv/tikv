@@ -57,7 +57,7 @@ impl PendingMemoryQuota {
         PendingMemory(
             tokio::runtime::Handle::current()
                 .block_on(self.0.clone().acquire_many_owned(size as _))
-                .expect("BUG: the semaphore is closed unexpectlly."),
+                .expect("BUG: the semaphore is closed unexpectedly."),
         )
     }
 }
