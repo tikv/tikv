@@ -34,6 +34,17 @@
 SHELL := bash
 ENABLE_FEATURES ?=
 
+# Extract the target triple for the current platform from `rustc -Vv`.
+# e.g. x86_64-unknown-linux-gnu, aarch64-apple-darwin etc.
+TIKV_RUST_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }')
+
+# Rust & C/C++ compiler flags
+#
+# Enable frame pointers for stable CPU Profiling.
+export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
+export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+
 # Pick an allocator
 ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
@@ -151,7 +162,8 @@ dev: format clippy
 
 build: export TIKV_PROFILE=debug
 build:
-	cargo build --no-default-features --features "${ENABLE_FEATURES}"
+	rustup component add rust-src
+	cargo build --no-default-features --features "${ENABLE_FEATURES}" -Z build-std --target "${TIKV_RUST_TARGET}"
 
 ## Release builds (optimized dev builds)
 ## ----------------------------
@@ -165,7 +177,8 @@ build:
 # enabled (the "sse" option)
 release: export TIKV_PROFILE=release
 release:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
+	rustup component add rust-src
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" -Z build-std --target "${TIKV_RUST_TARGET}"
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
