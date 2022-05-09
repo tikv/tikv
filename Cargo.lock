@@ -3783,7 +3783,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.8.0"
-source = "git+https://github.com/YangKeao/pprof-rs.git?branch=frame-pointer#c40885482ded07ca576a93a554e6eaf41d0315c5"
+source = "git+https://github.com/YangKeao/pprof-rs.git?branch=frame-pointer#3214fc1c0e199cbec5450511eea39faee0bf014d"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
