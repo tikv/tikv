@@ -34,10 +34,6 @@
 SHELL := bash
 ENABLE_FEATURES ?=
 
-# Extract the target triple for the current platform from `rustc -Vv`.
-# e.g. x86_64-unknown-linux-gnu, aarch64-apple-darwin etc.
-TIKV_RUST_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }')
-
 # Rust & C/C++ compiler flags
 #
 # Enable frame pointers for stable CPU Profiling.
@@ -121,6 +117,7 @@ BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export TIKV_BUILD_RUSTC_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }')
 export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
@@ -163,7 +160,11 @@ dev: format clippy
 build: export TIKV_PROFILE=debug
 build:
 	rustup component add rust-src
-	cargo build --no-default-features --features "${ENABLE_FEATURES}" -Z build-std --target "${TIKV_RUST_TARGET}"
+	cargo build --no-default-features --features "${ENABLE_FEATURES}" \
+		-Z build-std=core,std,alloc,proc_macro,test \
+		-Z unstable-options \
+		--target "${TIKV_BUILD_RUSTC_TARGET}" \
+		--out-dir "${CARGO_TARGET_DIR}/debug"
 
 ## Release builds (optimized dev builds)
 ## ----------------------------
@@ -178,7 +179,11 @@ build:
 release: export TIKV_PROFILE=release
 release:
 	rustup component add rust-src
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" -Z build-std --target "${TIKV_RUST_TARGET}"
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" \
+		-Z build-std=core,std,alloc,proc_macro,test \
+		-Z unstable-options \
+		--target "${TIKV_BUILD_RUSTC_TARGET}" \
+		--out-dir "${CARGO_TARGET_DIR}/release"
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
