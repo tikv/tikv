@@ -8,6 +8,7 @@ use std::{
 use engine_rocks::{
     raw::{Cache, Env},
     CompactionListener, FlowListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine,
+    RocksEventListener,
 };
 use engine_traits::{CompactionJobInfo, RaftEngine, Result, TabletFactory, CF_DEFAULT, CF_WRITE};
 use kvproto::kvrpcpb::ApiVersion;
@@ -15,6 +16,7 @@ use raftstore::{
     store::{RaftRouter, StoreMsg},
     RegionInfoAccessor,
 };
+use tikv_util::worker::Scheduler;
 
 use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
@@ -26,6 +28,7 @@ struct FactoryInner {
     store_path: PathBuf,
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
+    sst_recovery_sender: Option<Scheduler<String>>,
 }
 
 pub struct KvEngineFactoryBuilder<ER: RaftEngine> {
@@ -44,6 +47,7 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
                 store_path: store_path.into(),
                 api_version: config.storage.api_version(),
                 flow_listener: None,
+                sst_recovery_sender: None,
             },
             router: None,
         }
@@ -61,6 +65,11 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
 
     pub fn flow_listener(mut self, listener: FlowListener) -> Self {
         self.inner.flow_listener = Some(listener);
+        self
+    }
+
+    pub fn sst_recovery_sender(mut self, sender: Option<Scheduler<String>>) -> Self {
+        self.inner.sst_recovery_sender = sender;
         self
     }
 
@@ -121,6 +130,10 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
         kv_db_opts.set_env(self.inner.env.clone());
+        kv_db_opts.add_event_listener(RocksEventListener::new(
+            "kv",
+            self.inner.sst_recovery_sender.clone(),
+        ));
         if let Some(filter) = self.create_raftstore_compaction_listener() {
             kv_db_opts.add_event_listener(filter);
         }

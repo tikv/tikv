@@ -5,7 +5,13 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+test-engine-kv-rocksdb = [
+  "test_storage/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "test_storage/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = [
   "test_storage/test-engines-rocksdb",
 ]
