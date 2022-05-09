@@ -17,7 +17,7 @@ use kvproto::{
         ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
         EventRowOpType, Event_oneof_event,
     },
-    kvrpcpb::{ApiVersion, ExtraOp as TxnExtraOp},
+    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
@@ -244,17 +244,12 @@ pub struct Delegate {
     pending: Option<Pending>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
-    api_version: ApiVersion,
     has_resolver: bool,
 }
 
 impl Delegate {
     /// Create a Delegate the given region.
-    pub fn new(
-        region_id: u64,
-        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-        api_version: ApiVersion,
-    ) -> Delegate {
+    pub fn new(region_id: u64, txn_extra_op: Arc<AtomicCell<TxnExtraOp>>) -> Delegate {
         Delegate {
             region_id,
             handle: ObserveHandle::new(),
@@ -264,7 +259,6 @@ impl Delegate {
             pending: Some(Pending::default()),
             txn_extra_op,
             failed: false,
-            api_version,
             has_resolver: false,
         }
     }
@@ -687,7 +681,7 @@ impl Delegate {
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
         let key_mode = ApiV2::parse_key_mode(put.get_key());
-        if self.api_version == ApiVersion::V2 && key_mode == KeyMode::Raw {
+        if key_mode == KeyMode::Raw {
             self.sink_raw_put(put, raw_rows)
         } else {
             self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
@@ -1042,7 +1036,7 @@ mod tests {
             ChangeDataRequestKvApi::TiDb,
         );
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id, Default::default(), ApiVersion::V2);
+        let mut delegate = Delegate::new(region_id, Default::default());
         delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
         let resolver = Resolver::new(region_id);
@@ -1162,7 +1156,7 @@ mod tests {
 
         // Create a new delegate.
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, txn_extra_op.clone(), ApiVersion::V2);
+        let mut delegate = Delegate::new(1, txn_extra_op.clone());
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(delegate.handle.is_observing());
 
