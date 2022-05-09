@@ -276,7 +276,7 @@ impl ReportBucket {
                     self.current_stat.meta.clone(),
                     pd_client::new_bucket_stats(&self.current_stat.meta),
                 );
-                // Recalculate last stats according to current meta.
+                // Buckets may be changed, recalculate last stats according to current meta.
                 merge_bucket_stats(
                     &delta.meta.keys,
                     &mut delta.stats,
