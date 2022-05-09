@@ -756,6 +756,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "bitflags",
  "collections",
  "concurrency_manager",

@@ -1,4 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -7,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use api_version::{test_kv_format_impl, KvFormat};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*, raft_serverpb::RaftMessage};
@@ -19,7 +21,11 @@ use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_observe_duplicate_cmd() {
-    let mut suite = TestSuite::new(3);
+    test_kv_format_impl!(test_observe_duplicate_cmd_impl<ApiV1 ApiV2>);
+}
+
+fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(3, F::TAG);
 
     let region = suite.cluster.get_region(&[]);
     let req = suite.new_changedata_request(region.get_id());
@@ -38,7 +44,8 @@ fn test_observe_duplicate_cmd() {
         other => panic!("unknown event {:?}", other),
     }
 
-    let (k, v) = ("key1".to_owned(), "value".to_owned());
+    // If tikv enable ApiV2, txn key needs to start with 'x';
+    let (k, v) = ("xkey1".to_owned(), "value".to_owned());
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
