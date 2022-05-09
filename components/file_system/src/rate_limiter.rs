@@ -338,6 +338,10 @@ impl IORateLimiter {
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_op: IOOp, bytes: usize) -> usize {
         let mut ctx = io_stats::get_io_context();
+        if ctx.defer_mode {
+            // Bypass all limits in defer mode.
+            return bytes;
+        }
         if self.mode.contains(io_op) {
             let priority = IOPriority::unsafe_from_u32(
                 self.priority_map[ctx.io_type as usize].load(Ordering::Relaxed),
