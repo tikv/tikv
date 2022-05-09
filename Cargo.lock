@@ -756,6 +756,7 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "bitflags",
  "collections",
  "concurrency_manager",
@@ -4051,7 +4052,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine.git#ac6cb4b0c9978356174ad9aa4d62711f745bb057"
+source = "git+https://github.com/tikv/raft-engine.git#0e066f8626b43b2a8a0a6bc9c7f0502b6fdc3d05"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4082,9 +4083,10 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine.git#ac6cb4b0c9978356174ad9aa4d62711f745bb057"
+source = "git+https://github.com/tikv/raft-engine.git#0e066f8626b43b2a8a0a6bc9c7f0502b6fdc3d05"
 dependencies = [
  "clap 3.1.6",
+ "env_logger",
  "raft-engine",
 ]
 
