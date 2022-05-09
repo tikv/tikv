@@ -12,11 +12,12 @@ use std::{
     vec::IntoIter,
 };
 
+use api_version::{ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
-    DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range, WriteBatch, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
+    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
@@ -537,12 +538,11 @@ where
     ) -> Result<()> {
         let start_key = key.clone().append_ts(safe_point.prev());
         let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT).build()?;
-
         let mut statistics = CfStatistics::default();
-
         cursor.seek(&start_key, &mut statistics)?;
 
-        let mut is_latest_version = true;
+        let mut remove_older = false;
+        let mut latest_version_key: Vec<u8> = vec![];
 
         while cursor.valid()? {
             let engine_slice = cursor.key(&mut statistics);
@@ -550,22 +550,22 @@ where
                 break;
             }
 
-            // Skip the latest version before the safe point
-            if is_latest_version {
-                is_latest_version = false;
-                cursor.next(&mut statistics);
-                continue;
-            }
-
             if raw_modifies.write_size >= MAX_RAW_WRITE_SIZE {
                 return Ok(());
             }
 
-            let engine_key = Key::from_encoded_slice(engine_slice);
-            let write = Modify::Delete(CF_DEFAULT, engine_key);
+            if remove_older {
+                self.delete_raw_write(engine_slice.to_vec(), raw_modifies);
+            } else {
+                remove_older = true;
 
-            raw_modifies.write_size += write.size();
-            raw_modifies.modifies.push(write);
+                let value = ApiV2::decode_raw_value(cursor.value(&mut statistics))?;
+                let current_ts = ttl_current_ts();
+                // It's deleted or expired.
+                if !value.is_valid(current_ts) {
+                    latest_version_key = engine_slice.to_vec();
+                }
+            }
 
             cursor.next(&mut statistics);
         }
@@ -574,7 +574,18 @@ where
 
         self.stats.data.add(&statistics);
 
+        if !latest_version_key.is_empty() {
+            self.delete_raw_write(latest_version_key, raw_modifies);
+        }
+
         Ok(())
+    }
+
+    fn delete_raw_write(&mut self, engine_slice: Vec<u8>, raw_modifies: &mut MvccRaw) {
+        let engine_key = Key::from_encoded_slice(engine_slice.as_slice());
+        let write = Modify::Delete(CF_DEFAULT, engine_key);
+        raw_modifies.write_size += write.size();
+        raw_modifies.modifies.push(write);
     }
 
     fn flush_raw_gc(raw_modifies: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
@@ -1828,11 +1839,11 @@ mod tests {
         let test_raws = vec![
             (key_a, 130, true, true), // ts(130) > safepoint
             (key_a, 120, true, true), // ts(120) = safepoint
-            (key_a, 100, true, true),
+            (key_a, 100, true, false),
             (key_a, 50, false, false),
             (key_a, 10, false, false),
             (key_a, 5, false, false),
-            (key_b, 50, true, true),
+            (key_b, 50, true, false),
             (key_b, 20, false, false),
             (key_b, 10, false, false),
         ];
