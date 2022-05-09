@@ -494,19 +494,28 @@ where
         let mut raw_modifies = MvccRaw::new();
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
+        let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
-            if let Err(e) = self.raw_gc_key(safe_point, key, &mut raw_modifies, &mut snapshot) {
+            if let Err(e) = self.raw_gc_key(safe_point, key, &mut raw_modifies, &mut snapshot, &mut gc_info) {
                 GC_KEY_FAILURES.inc();
                 error!(?e; "Raw GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
+                gc_info.is_completed = true;
             }
-            // Flush writeBatch to engine.
-            Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
-            // After flush, reset raw_modifies.
-            raw_modifies = MvccRaw::new();
-            next_gc_key = keys.next();
+
+            if gc_info.is_completed {
+                next_gc_key = keys.next();
+                gc_info = GcInfo::default();
+            }else{
+                // Flush writeBatch to engine.
+                Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+                // After flush, reset raw_modifies.
+                raw_modifies = MvccRaw::new();
+            }
         }
+
+        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
 
         // TODO: To implement the metrics.
         Ok((0, 0))
@@ -518,6 +527,7 @@ where
         key: &Key,
         raw_modifies: &mut MvccRaw,
         kv_snapshot: &mut <E as Engine>::Snap,
+        gc_info: &mut GcInfo,
     ) -> Result<()> {
         let start_key = key.clone().append_ts(safe_point.prev());
         let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT).build()?;
@@ -553,6 +563,8 @@ where
 
             cursor.next(&mut statistics);
         }
+
+        gc_info.is_completed=true;
 
         self.stats.data.add(&statistics);
 
