@@ -7,7 +7,10 @@ pub const WRITE_CF: usize = 0;
 pub const LOCK_CF: usize = 1;
 pub const EXTRA_CF: usize = 2;
 
-const USER_META_SIZE: usize = std::mem::size_of::<UserMeta>();
+pub const USER_META_FORMAT_V1: u8 = 1;
+
+// format(1) + start_ts(8) + commit_ts(8)
+const USER_META_SIZE: usize = 1 + std::mem::size_of::<UserMeta>();
 
 #[derive(Clone, Copy)]
 pub struct UserMeta {
@@ -17,9 +20,10 @@ pub struct UserMeta {
 
 impl UserMeta {
     pub fn from_slice(buf: &[u8]) -> Self {
+        assert_eq!(buf[0], USER_META_FORMAT_V1);
         Self {
-            start_ts: LittleEndian::read_u64(buf),
-            commit_ts: LittleEndian::read_u64(&buf[8..]),
+            start_ts: LittleEndian::read_u64(&buf[1..]),
+            commit_ts: LittleEndian::read_u64(&buf[9..]),
         }
     }
 
@@ -31,7 +35,11 @@ impl UserMeta {
     }
 
     pub fn to_array(&self) -> [u8; USER_META_SIZE] {
-        unsafe { std::mem::transmute(*self) }
+        let mut array = [0u8; USER_META_SIZE];
+        array[0] = USER_META_FORMAT_V1;
+        LittleEndian::write_u64(&mut array[1..], self.start_ts);
+        LittleEndian::write_u64(&mut array[9..], self.commit_ts);
+        array
     }
 }
 
