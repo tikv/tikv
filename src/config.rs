@@ -2971,7 +2971,7 @@ impl TiKvConfig {
         }
         if self.raft_store.raft_log_gc_count_limit < self.coprocessor.region_split_keys * 3 / 4 {
             warn!(
-                "raft_log_gc_count_limit:{:?} < 75% * region_split_keys:{:?}, adjust raft_log_gc_count_limit automatically",
+                "raft_log_gc_count_limit:{} < 75% * region_split_keys:{}, adjust raft_log_gc_count_limit automatically",
                 self.raft_store.raft_log_gc_count_limit, self.coprocessor.region_split_keys,
             );
             self.raft_store.raft_log_gc_count_limit = self.coprocessor.region_split_keys * 3 / 4;
