@@ -89,6 +89,7 @@ set +e
 
 # Print commands
 set -x
+rustup component add rust-src
 cargo $args $packages --features="$features" $X_CARGO_ARGS
 
 # Store the exit code
