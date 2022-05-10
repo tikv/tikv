@@ -4725,11 +4725,10 @@ where
     }
 
     pub fn is_force_leader(&self) -> bool {
-        if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
-            true
-        } else {
-            false
-        }
+        matches!(
+            self.force_leader,
+            Some(ForceLeaderState::ForceLeader { .. })
+        )
     }
 
     pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
