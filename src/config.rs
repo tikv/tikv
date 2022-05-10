@@ -2751,7 +2751,6 @@ impl TiKvConfig {
         config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
     }
 
-    // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.log.validate()?;
         self.readpool.validate()?;
@@ -2960,6 +2959,22 @@ impl TiKvConfig {
                 "memory_usage_limit:{:?} > recommanded:{:?}, maybe page cache isn't enough",
                 limit, default,
             );
+        }
+
+        // Raft log gc limit must be 75% region size at least;
+        if self.raft_store.raft_log_gc_size_limit < self.coprocessor.region_split_size * 3 / 4 {
+            warn!(
+                "raft_log_gc_size_limit:{:?} < 75% * region_split_size:{:?}, adjust raft_log_gc_size_limit automatically",
+                self.raft_store.raft_log_gc_size_limit, self.coprocessor.region_split_size,
+            );
+            self.raft_store.raft_log_gc_size_limit = self.coprocessor.region_split_size * 3 / 4;
+        }
+        if self.raft_store.raft_log_gc_count_limit < self.coprocessor.region_split_keys * 3 / 4 {
+            warn!(
+                "raft_log_gc_count_limit:{:?} < 75% * region_split_keys:{:?}, adjust raft_log_gc_count_limit automatically",
+                self.raft_store.raft_log_gc_count_limit, self.coprocessor.region_split_keys,
+            );
+            self.raft_store.raft_log_gc_count_limit = self.coprocessor.region_split_keys * 3 / 4;
         }
 
         Ok(())
