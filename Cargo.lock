@@ -3783,7 +3783,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.8.0"
-source = "git+https://github.com/YangKeao/pprof-rs.git?branch=frame-pointer#3214fc1c0e199cbec5450511eea39faee0bf014d"
+source = "git+https://github.com/tikv/pprof-rs.git?rev=63d3ff6780c49c2b0e14b399803a77a4c5145308#63d3ff6780c49c2b0e14b399803a77a4c5145308"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
@@ -3791,7 +3791,7 @@ dependencies = [
  "inferno",
  "libc 0.2.125",
  "log",
- "nix 0.23.0",
+ "nix 0.24.1",
  "once_cell",
  "parking_lot 0.12.0",
  "protobuf",
