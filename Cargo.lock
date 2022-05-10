@@ -3782,8 +3782,9 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.8.0"
-source = "git+https://github.com/tikv/pprof-rs.git?rev=63d3ff6780c49c2b0e14b399803a77a4c5145308#63d3ff6780c49c2b0e14b399803a77a4c5145308"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f9307de92566887d485ac6f20df17b0fe1704fffdbad0bdbc05a3864d3082f6"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
