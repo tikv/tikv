@@ -2,7 +2,7 @@
 
 use std::sync::mpsc::channel;
 
-use api_version::{test_kv_format_impl, KvFormat, RawValue};
+use api_version::{test_kv_format_impl, ApiV1Ttl, KvFormat, RawValue};
 use engine_rocks::{raw::CompactOptions, util::get_cf_handle};
 use engine_traits::{IterOptions, MiscExt, Peekable, SyncMutable, CF_DEFAULT};
 use futures::executor::block_on;
@@ -22,7 +22,7 @@ use txn_types::Key;
 
 #[test]
 fn test_ttl_checker() {
-    test_kv_format_impl!(test_ttl_checker_impl<ApiV1Ttl ApiV2>);
+    test_ttl_checker_impl::<ApiV1Ttl>();
 }
 
 fn test_ttl_checker_impl<F: KvFormat>() {
@@ -104,7 +104,7 @@ fn test_ttl_checker_impl<F: KvFormat>() {
 
 #[test]
 fn test_ttl_compaction_filter() {
-    test_kv_format_impl!(test_ttl_compaction_filter_impl<ApiV1Ttl ApiV2>);
+    test_ttl_compaction_filter_impl::<ApiV1Ttl>();
 }
 
 fn test_ttl_compaction_filter_impl<F: KvFormat>() {
