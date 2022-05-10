@@ -542,11 +542,12 @@ where
         cursor.seek(&start_key, &mut statistics)?;
 
         let mut remove_older = false;
-        let mut latest_version_key: Vec<u8> = vec![];
+        let mut latest_version_key = None;
+        let current_ts = ttl_current_ts();
 
         while cursor.valid()? {
-            let engine_slice = cursor.key(&mut statistics);
-            if !Key::is_user_key_eq(engine_slice, key.clone().as_encoded()) {
+            let current_key = cursor.key(&mut statistics);
+            if !Key::is_user_key_eq(current_key, key.as_encoded()) {
                 break;
             }
 
@@ -555,18 +556,16 @@ where
             }
 
             if remove_older {
-                self.delete_raw_write(engine_slice.to_vec(), raw_modifies);
+                self.delete_raws(Key::from_encoded_slice(current_key), raw_modifies);
             } else {
                 remove_older = true;
 
                 let value = ApiV2::decode_raw_value(cursor.value(&mut statistics))?;
-                let current_ts = ttl_current_ts();
                 // It's deleted or expired.
                 if !value.is_valid(current_ts) {
-                    latest_version_key = engine_slice.to_vec();
+                    latest_version_key = Some(Key::from_encoded_slice(current_key));
                 }
             }
-
             cursor.next(&mut statistics);
         }
 
@@ -574,16 +573,15 @@ where
 
         self.stats.data.add(&statistics);
 
-        if !latest_version_key.is_empty() {
-            self.delete_raw_write(latest_version_key, raw_modifies);
+        if let Some(to_del_key) = latest_version_key {
+            self.delete_raws(to_del_key, raw_modifies);
         }
 
         Ok(())
     }
 
-    fn delete_raw_write(&mut self, engine_slice: Vec<u8>, raw_modifies: &mut MvccRaw) {
-        let engine_key = Key::from_encoded_slice(engine_slice.as_slice());
-        let write = Modify::Delete(CF_DEFAULT, engine_key);
+    fn delete_raws(&mut self, key: Key, raw_modifies: &mut MvccRaw) {
+        let write = Modify::Delete(CF_DEFAULT, key);
         raw_modifies.write_size += write.size();
         raw_modifies.modifies.push(write);
     }
