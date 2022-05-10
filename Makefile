@@ -34,12 +34,31 @@
 SHELL := bash
 ENABLE_FEATURES ?=
 
-# Rust & C/C++ compiler flags
+# Frame pointer is enabled by default.
 #
+# If you want to disable frame-pointer, please manually set the environment
+# variable `TIKV_FRAME_POINTER=0 make` (this will cause CPU Profiling to get only
+# the top function and not the full call stack).
+ifndef TIKV_FRAME_POINTER
+export TIKV_FRAME_POINTER=1
+endif
+
+# The Rust standard library is recompiled by default. (The purpose is to enable
+# frame pointers in std)
+#
+# If you want to avoid recompiling the Rust standard library, please manually
+# set the environment variable `TIKV_BUILD_STD=0 make` (this will lose CPU Profiling
+# samples related to Rust std functions).
+ifndef TIKV_BUILD_STD
+export TIKV_BUILD_STD=1
+endif
+
+ifeq ($(TIKV_FRAME_POINTER),1)
 # Enable frame pointers for stable CPU Profiling.
 export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
 export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
 export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+endif
 
 # Pick an allocator
 ifeq ($(TCMALLOC),1)
@@ -158,6 +177,7 @@ dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build: export TIKV_PROFILE=debug
+ifeq ($(TIKV_BUILD_STD),1)
 build:
 	rustup component add rust-src
 	cargo build --no-default-features --features "${ENABLE_FEATURES}" \
@@ -165,6 +185,10 @@ build:
 		-Z unstable-options \
 		--target "${TIKV_BUILD_RUSTC_TARGET}" \
 		--out-dir "${CARGO_TARGET_DIR}/debug"
+else
+build:
+	cargo build --no-default-features --features "${ENABLE_FEATURES}"
+endif
 
 ## Release builds (optimized dev builds)
 ## ----------------------------
@@ -177,6 +201,7 @@ build:
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release: export TIKV_PROFILE=release
+ifeq ($(TIKV_BUILD_STD),1)
 release:
 	rustup component add rust-src
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" \
@@ -184,6 +209,10 @@ release:
 		-Z unstable-options \
 		--target "${TIKV_BUILD_RUSTC_TARGET}" \
 		--out-dir "${CARGO_TARGET_DIR}/release"
+else
+release:
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
+endif
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
@@ -378,7 +407,7 @@ x-build-dist: export X_CARGO_CMD=build
 x-build-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-dist: export X_CARGO_RELEASE=1
 x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
-x-build-dist: export X_CARGO_TARGET=${TIKV_BUILD_RUSTC_TARGET}
+x-build-dist: export X_CARGO_TARGET_DIR=${CARGO_TARGET_DIR}
 x-build-dist: export X_PACKAGE=tikv-server tikv-ctl
 x-build-dist:
 	bash scripts/run-cargo.sh

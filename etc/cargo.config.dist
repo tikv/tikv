@@ -2,12 +2,6 @@
 # _literally_ for packaging and releasing; and cases where we _must_
 # benchmark against a fully-optimized build.
 
-[build]
-rustflags = ["-Cforce-frame-pointers=yes"]
-
-[unstable]
-build-std = ["core", "std", "alloc", "proc_macro", "test"]
-
 [profile.release]
 opt-level = 3
 debug = true
