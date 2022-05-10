@@ -650,7 +650,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             cb.execute(pr);
         }
 
-        self.release_latches(&tctx.lock, cid, None);
+        self.release_latches(&tctx.lock, cid, None, None);
     }
 
     /// Event handler for the success of read.
@@ -664,12 +664,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb.unwrap());
+            self.schedule_command(cmd, tctx.cb.unwrap(), None);
         } else {
             tctx.cb.unwrap().execute(pr);
         }
 
-        self.release_latches(&tctx.lock, cid, None);
+        self.release_latches(&tctx.lock, cid, None, None);
     }
 
     /// Event handler for the success of write.
@@ -724,7 +724,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                self.schedule_command(cmd, cb);
+                self.schedule_command(cmd, cb, None);
             } else {
                 cb.execute(pr);
             }
@@ -1333,8 +1333,25 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             _ => unreachable!(),
         };
         assert_eq!(results.len(), cbs.len());
-        let result_iter = results.iter();
-        // cbs.retain(|_| matches!(*result_iter.next().unwrap(), PessimisticLockKeyResult::Waiting))
+
+        let mut finished_results = Vec::with_capacity(results.len() - lock_info.len());
+        let mut finished_cbs = Vec::with_capacity(results.len() - lock_info.len());
+        let mut lock_info_iter = lock_info.iter_mut();
+        std::mem::take(results)
+            .into_iter()
+            .zip(std::mem::take(cbs))
+            .for_each(|(result, cb)| {
+                if matches!(&result, PessimisticLockKeyResult::Waiting) {
+                    lock_info_iter.next().unwrap().key_cb = Some(cb);
+                } else {
+                    finished_results.push(result);
+                    finished_cbs.push(cb);
+                }
+            });
+        // The items in `lock_info` must match the waiting items in `results`.
+        assert!(lock_info_iter.next().is_none());
+        *results = finished_results;
+        *cbs = finished_cbs;
     }
 }
 

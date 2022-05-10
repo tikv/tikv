@@ -192,7 +192,7 @@ impl AcquirePessimisticLock {
         // } else {
         //     Ok(PessimisticLockRes::Empty)
         // };
-        let mut res = PessimisticLockResults::with_capacity(keys.len());
+        let mut res = PessimisticLockResults::with_capacity(items.len());
         let mut encountered_locks = vec![];
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
@@ -224,7 +224,7 @@ impl AcquirePessimisticLock {
             match acquire_pessimistic_lock(
                 txn,
                 reader,
-                k.clone(),
+                key.clone(),
                 &params.primary,
                 should_not_exist,
                 params.lock_ttl,
@@ -339,7 +339,7 @@ impl AcquirePessimisticLock {
         min_commit_ts: TimeStamp,
         _old_values: OldValues, // TODO: Remove it
         check_existence: bool,
-        ctx: Context,
+        ctx: kvproto::kvrpcpb::Context,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
         let params = PessimisticLockParameters {
             pb_ctx: ctx.clone(),
