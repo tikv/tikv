@@ -1,8 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
+use std::{
+    error, result,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    thread,
 };
 
 use futures::executor::block_on;
@@ -11,6 +15,11 @@ use pd_client::PdClient;
 use tikv_util::{
     time::{Duration, Instant},
     worker::{Builder as WorkerBuilder, Worker},
+};
+use tokio::sync::{
+    mpsc,
+    mpsc::{Receiver, Sender},
+    oneshot,
 };
 use txn_types::TimeStamp;
 
@@ -62,15 +71,23 @@ impl TsoBatch {
     }
 
     // `last_ts` is the last timestamp of the new batch.
-    pub fn renew(&mut self, batch_size: u32, last_ts: TimeStamp) {
+    pub fn renew(&mut self, batch_size: u32, last_ts: TimeStamp) -> Result<()> {
         let (physical, logical) = (last_ts.physical(), last_ts.logical() + 1);
+        let logical_start = logical.checked_sub(batch_size as u64).unwrap();
+
+        if physical < self.physical
+            || (physical == self.physical && logical_start < self.logical_end)
+        {
+            error!("timestamp fall back"; "last_ts" => ?last_ts, "batch" => ?self,
+                "physical" => physical, "logical" => logical, "logical_start" => logical_start);
+            return Err(Error::Other(box_err!("timestamp fall back")));
+        }
+
         self.size = batch_size;
         self.physical = physical;
         self.logical_end = logical;
-        self.logical_start.store(
-            logical.checked_sub(batch_size as u64).unwrap(),
-            Ordering::Relaxed,
-        );
+        self.logical_start.store(logical_start, Ordering::Relaxed);
+        Ok(())
     }
 
     // Note: batch is "used up" in flush, and batch size will be enlarged in next renew.
@@ -98,12 +115,25 @@ impl TsoBatch {
     }
 }
 
+/// MAX_RENEW_BATCH_SIZE is the batch size of TSO renew. It is an empirical value.
+const MAX_RENEW_BATCH_SIZE: usize = 64;
+
+// type RenewError = dyn error::Error + Sync + Send;
+type RenewError = String;
+type RenewResult = result::Result<(), Arc<RenewError>>;
+
+struct RenewRequest {
+    need_flush: bool,
+    sender: oneshot::Sender<RenewResult>,
+}
+
 pub struct BatchTsoProvider<C: PdClient> {
     pd_client: Arc<C>,
     batch: Arc<RwLock<TsoBatch>>,
     batch_min_size: u32,
-    renew_worker: Worker,
+    periodical_renew_worker: Worker,
     renew_interval: Duration,
+    renew_request_tx: mpsc::Sender<RenewRequest>,
 }
 
 impl<C: PdClient + 'static> BatchTsoProvider<C> {
@@ -121,29 +151,65 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         renew_interval: Duration,
         batch_min_size: u32,
     ) -> Result<Self> {
+        let (renew_request_tx, renew_request_rx) = mpsc::channel(MAX_RENEW_BATCH_SIZE);
+        let tso_batch = Arc::new(RwLock::new(TsoBatch::default()));
         let s = Self {
             pd_client: pd_client.clone(),
-            batch: Arc::new(RwLock::new(TsoBatch::default())),
+            batch: tso_batch.clone(),
             batch_min_size,
-            renew_worker: WorkerBuilder::new("causal_ts_batch_tso_worker").create(),
+            periodical_renew_worker: WorkerBuilder::new("causal-ts-periodical-worker").create(),
             renew_interval,
+            renew_request_tx,
         };
+
+        thread::Builder::new()
+            .name("causal-ts-renew-worker".into())
+            .spawn(move || {
+                block_on(Self::renew_thread(
+                    pd_client.clone(),
+                    tso_batch,
+                    batch_min_size,
+                    renew_request_rx,
+                ))
+            })
+            .expect("unable to create causal_ts renew thread");
+
         s.init().await?;
         Ok(s)
     }
 
     async fn renew_tso_batch(&self, need_flush: bool, reason: &str) -> Result<()> {
-        Self::renew_tso_batch_internal(
-            self.pd_client.clone(),
-            self.batch.clone(),
-            self.batch_min_size,
-            need_flush,
-            reason,
-        )
-        .await
+        // Self::renew_tso_batch_impl(
+        //     self.pd_client.clone(),
+        //     self.batch.clone(),
+        //     self.batch_min_size,
+        //     need_flush,
+        //     reason,
+        // )
+        // .await
+        let request_tx = self.renew_request_tx.clone();
+        Self::renew_tso_batch_internal(request_tx, need_flush).await
     }
 
     async fn renew_tso_batch_internal(
+        renew_request_tx: Sender<RenewRequest>,
+        need_flush: bool,
+    ) -> Result<()> {
+        let (request, response) = oneshot::channel();
+        renew_request_tx
+            .send(RenewRequest {
+                need_flush,
+                sender: request,
+            })
+            .await
+            .map_err(|_| -> Error { box_err!("Renew request channel is closed") })?;
+        response
+            .await
+            .map_err(|_| box_err!("Renew response channel is dropped"))
+            .and_then(|r| r.map_err(|err| Error::BatchRenew(err)))
+    }
+
+    async fn renew_tso_batch_impl(
         pd_client: Arc<C>,
         tso_batch: Arc<RwLock<TsoBatch>>,
         batch_min_size: u32,
@@ -162,30 +228,83 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
             }
         };
 
-        match pd_client.batch_get_tso(new_batch_size).await {
-            Err(err) => {
-                warn!("BatchTsoProvider::renew_tso_batch, pd_client.batch_get_tso error"; "error" => ?err, "need_flash" => need_flush);
-                if need_flush {
-                    let batch = tso_batch.write();
-                    batch.flush();
+        'outer: loop {
+            match pd_client.batch_get_tso(new_batch_size).await {
+                Err(err) => {
+                    warn!("BatchTsoProvider::renew_tso_batch, pd_client.batch_get_tso error"; "error" => ?err, "need_flash" => need_flush);
+                    if need_flush {
+                        let batch = tso_batch.write();
+                        batch.flush();
+                    }
+                    TS_PROVIDER_TSO_BATCH_RENEW_DURATION
+                        .with_label_values(&["err", reason])
+                        .observe(start.saturating_elapsed_secs());
+                    return Err(err.into());
                 }
-                TS_PROVIDER_TSO_BATCH_RENEW_DURATION
-                    .with_label_values(&["err", reason])
-                    .observe(start.saturating_elapsed_secs());
-                Err(err.into())
-            }
-            Ok(ts) => {
-                {
-                    let mut batch = tso_batch.write();
-                    batch.renew(new_batch_size, ts);
-                    debug!("BatchTsoProvider::renew_tso_batch"; "batch renew" => ?batch, "ts" => ?ts);
+                Ok(ts) => {
+                    {
+                        let mut batch = tso_batch.write();
+                        if batch.renew(new_batch_size, ts).is_err() {
+                            continue 'outer;
+                        }
+                        debug!("BatchTsoProvider::renew_tso_batch"; "batch renew" => ?batch, "ts" => ?ts);
+                    }
+                    TS_PROVIDER_TSO_BATCH_SIZE.set(new_batch_size as i64);
+                    TS_PROVIDER_TSO_BATCH_RENEW_DURATION
+                        .with_label_values(&["ok", reason])
+                        .observe(start.saturating_elapsed_secs());
+                    return Ok(());
                 }
-                TS_PROVIDER_TSO_BATCH_SIZE.set(new_batch_size as i64);
-                TS_PROVIDER_TSO_BATCH_RENEW_DURATION
-                    .with_label_values(&["ok", reason])
-                    .observe(start.saturating_elapsed_secs());
-                Ok(())
             }
+        }
+    }
+
+    async fn renew_thread(
+        pd_client: Arc<C>,
+        tso_batch: Arc<RwLock<TsoBatch>>,
+        batch_min_size: u32,
+        mut rx: Receiver<RenewRequest>,
+    ) {
+        loop {
+            let mut requests = Vec::with_capacity(MAX_RENEW_BATCH_SIZE);
+            let mut need_flush = false;
+
+            if let Some(req) = rx.recv().await {
+                if req.need_flush {
+                    need_flush = true;
+                }
+                requests.push(req);
+            } else {
+                return;
+            }
+            while requests.len() < MAX_RENEW_BATCH_SIZE {
+                if let Ok(req) = rx.try_recv() {
+                    if req.need_flush {
+                        need_flush = true;
+                    }
+                    requests.push(req);
+                } else {
+                    break;
+                }
+            }
+
+            let res = Self::renew_tso_batch_impl(
+                pd_client.clone(),
+                tso_batch.clone(),
+                batch_min_size,
+                need_flush,
+                "renew_thread",
+            )
+            .await;
+
+            for req in requests {
+                req.sender.send(
+                    res.as_ref()
+                        .map(|_| ())
+                        .map_err(|err| -> Arc<RenewError> { Arc::new(format!("{}", err)) }),
+                );
+            }
+            // requests.clear();
         }
     }
 
@@ -208,24 +327,27 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         let pd_client = self.pd_client.clone();
         let tso_batch = self.batch.clone();
         let batch_min_size = self.batch_min_size;
+        let request_tx = self.renew_request_tx.clone();
         let task = move || {
             let pd_client = pd_client.clone();
             let tso_batch = tso_batch.clone();
+            let request_tx = request_tx.clone();
             async move {
-                let _ = Self::renew_tso_batch_internal(
-                    pd_client,
-                    tso_batch,
-                    batch_min_size,
-                    false,
-                    TSO_BATCH_RENEW_BY_BACKGROUND,
-                )
-                .await;
+                // let _ = Self::renew_tso_batch_impl(
+                //     pd_client,
+                //     tso_batch,
+                //     batch_min_size,
+                //     false,
+                //     TSO_BATCH_RENEW_BY_BACKGROUND,
+                // )
+                // .await;
+                let _ = Self::renew_tso_batch_internal(request_tx, false).await;
             }
         };
 
         // Duration::ZERO means never renew automatically. For test purpose ONLY.
         if self.renew_interval > Duration::ZERO {
-            self.renew_worker
+            self.periodical_renew_worker
                 .spawn_interval_async_task(self.renew_interval, task);
         }
         Ok(())

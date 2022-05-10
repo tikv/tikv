@@ -740,6 +740,7 @@ dependencies = [
  "thiserror",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
  "txn_types",
 ]
 
