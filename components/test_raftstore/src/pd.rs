@@ -1297,10 +1297,6 @@ impl TestPdClient {
         self.trigger_leader_info_loss.store(true, Ordering::SeqCst);
     }
 
-    pub fn stop_leader_info_loss(&self) {
-        self.trigger_leader_info_loss.store(false, Ordering::SeqCst);
-    }
-
     pub fn shutdown_store(&self, store_id: u64) {
         match self.cluster.write() {
             Ok(mut c) => {
