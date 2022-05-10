@@ -55,6 +55,8 @@ pub struct Config {
     pub api_version: u8,
     #[online_config(skip)]
     pub enable_ttl: bool,
+    #[online_config(skip)]
+    pub background_error_recovery_window: ReadableDuration,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
     #[online_config(submodule)]
@@ -87,6 +89,7 @@ impl Default for Config {
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IORateLimitConfig::default(),
+            background_error_recovery_window: ReadableDuration::hours(1),
         }
     }
 }

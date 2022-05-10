@@ -576,6 +576,7 @@ purge-threshold = "1GB"
 recovery-mode = "tolerate-tail-corruption"
 recovery-read-block-size = "1KB"
 recovery-threads = 2
+memory-limit = "1GB"
 
 [security]
 ca-path = "invalid path"

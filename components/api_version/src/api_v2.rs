@@ -7,6 +7,7 @@ use tikv_util::codec::{
     number::{self, NumberEncoder},
     Error,
 };
+use txn_types::{Key, TimeStamp};
 
 use super::*;
 
@@ -221,6 +222,19 @@ impl ApiV2 {
         MemComparableByteCodec::encoded_len(src_len) + number::U64_SIZE
     }
 
+    pub fn get_rawkv_range() -> (u8, u8) {
+        (RAW_KEY_PREFIX, RAW_KEY_PREFIX_END)
+    }
+
+    pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp> {
+        let ts = Key::decode_ts_from(key)?;
+        Ok(ts)
+    }
+
+    pub fn split_ts(key: &[u8]) -> Result<(&[u8], TimeStamp)> {
+        Ok(Key::split_on_ts_for(key)?)
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
@@ -325,6 +339,20 @@ mod tests {
     }
 
     #[test]
+    fn test_key_split_ts() {
+        let user_key = b"r\0aaaaaaaaaaa";
+        let ts = 10;
+        let key = Key::from_raw(user_key).append_ts(ts.into()).into_encoded();
+
+        let encoded_key = ApiV2::encode_raw_key(user_key, None);
+
+        let (split_key, split_ts) = ApiV2::split_ts(key.as_slice()).unwrap();
+
+        assert_eq!(encoded_key.into_encoded(), split_key.to_vec());
+        assert_eq!(ts, split_ts.into_inner());
+    }
+
+    #[test]
     fn test_append_ts_on_encoded_bytes() {
         let cases = vec![
             (true, vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb], 10),
@@ -371,6 +399,26 @@ mod tests {
         {
             let v = ApiV2::decode_raw_value(&ApiV2::ENCODED_LOGICAL_DELETE).unwrap();
             assert!(v.is_delete);
+        }
+    }
+
+    #[test]
+    fn test_decode_ts_from() {
+        let test_cases: Vec<(Vec<u8>, TimeStamp)> = vec![
+            (b"rkey1".to_vec(), 1.into()),
+            (b"rkey2".to_vec(), 2.into()),
+            (b"rkey3".to_vec(), 3.into()),
+            (b"rkey4".to_vec(), 4.into()),
+        ];
+        for (idx, (key, ts)) in test_cases.into_iter().enumerate() {
+            let key_with_ts = ApiV2::encode_raw_key(&key, Some(ts)).into_encoded();
+            let (decoded_key, decoded_ts1) =
+                ApiV2::decode_raw_key_owned(Key::from_encoded(key_with_ts.clone()), true).unwrap();
+            let decoded_ts2 = ApiV2::decode_ts_from(&key_with_ts).unwrap();
+
+            assert_eq!(key, decoded_key, "case {}", idx);
+            assert_eq!(ts, decoded_ts1.unwrap(), "case {}", idx);
+            assert_eq!(ts, decoded_ts2, "case {}", idx);
         }
     }
 }

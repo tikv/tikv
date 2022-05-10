@@ -2067,7 +2067,8 @@ mod tests {
         raft::RaftTestEngine,
     };
     use engine_traits::{
-        Engines, Iterable, SyncMutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT,
+        Engines, Iterable, RaftEngineDebug, RaftEngineReadOnly, SyncMutable, WriteBatch,
+        WriteBatchExt, ALL_CFS,
     };
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{
@@ -2112,9 +2113,7 @@ mod tests {
         let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
             .unwrap();
         let raft_path = path.path().join(Path::new("raft"));
-        let raft_db =
-            engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, CF_DEFAULT, None)
-                .unwrap();
+        let raft_db = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None).unwrap();
         let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
@@ -2176,10 +2175,12 @@ mod tests {
     fn validate_cache(store: &PeerStorage<KvTestEngine, RaftTestEngine>, exp_ents: &[Entry]) {
         assert_eq!(store.cache.cache, exp_ents);
         for e in exp_ents {
-            let key = keys::raft_log_key(store.get_region_id(), e.get_index());
-            let bytes = store.engines.raft.get_value(&key).unwrap().unwrap();
-            let mut entry = Entry::default();
-            entry.merge_from_bytes(&bytes).unwrap();
+            let entry = store
+                .engines
+                .raft
+                .get_entry(store.get_region_id(), e.get_index())
+                .unwrap()
+                .unwrap();
             assert_eq!(entry, *e);
         }
     }
@@ -2250,11 +2251,21 @@ mod tests {
         store
             .engines
             .raft
-            .scan(&raft_start, &raft_end, false, |_, _| {
+            .scan_entries(region_id, |_| {
                 count += 1;
                 Ok(true)
             })
             .unwrap();
+
+        if store
+            .engines
+            .raft
+            .get_raft_state(region_id)
+            .unwrap()
+            .is_some()
+        {
+            count += 1;
+        }
 
         count
     }
@@ -2262,7 +2273,7 @@ mod tests {
     #[test]
     fn test_storage_clear_meta() {
         let worker = Worker::new("snap-manager").lazy_build("snap-manager");
-        let cases = vec![(0, 0), (5, 1)];
+        let cases = vec![(0, 0), (3, 0)];
         for (first_index, left) in cases {
             let td = Builder::new().prefix("tikv-store").tempdir().unwrap();
             let sched = worker.scheduler();
@@ -2278,12 +2289,16 @@ mod tests {
             assert_eq!(6, get_meta_key_count(&store));
 
             let mut kv_wb = store.engines.kv.write_batch();
-            let mut raft_wb = store.engines.raft.write_batch();
+            let mut raft_wb = store.engines.raft.log_batch(0);
             store
                 .clear_meta(first_index, &mut kv_wb, &mut raft_wb)
                 .unwrap();
             kv_wb.write().unwrap();
-            raft_wb.write().unwrap();
+            store
+                .engines
+                .raft
+                .consume(&mut raft_wb, false /*sync*/)
+                .unwrap();
 
             assert_eq!(left, get_meta_key_count(&store));
         }
@@ -2716,7 +2731,7 @@ mod tests {
         let idx = apply_state.get_applied_index();
         let entry = engines
             .raft
-            .get_msg::<Entry>(&keys::raft_log_key(gen_task.region_id, idx))
+            .get_entry(gen_task.region_id, idx)
             .unwrap()
             .unwrap();
         gen_task.generate_and_schedule_snapshot::<KvTestEngine>(
@@ -2870,26 +2885,12 @@ mod tests {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let mut tests = vec![
             (
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
-                vec![new_entry(4, 4), new_entry(5, 5)],
-            ),
-            (
-                vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
+                vec![new_entry(4, 6), new_entry(5, 6)],
                 vec![new_entry(4, 6), new_entry(5, 6)],
             ),
             (
-                vec![
-                    new_entry(3, 3),
-                    new_entry(4, 4),
-                    new_entry(5, 5),
-                    new_entry(6, 5),
-                ],
                 vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
-            ),
-            // truncate incoming entries, truncate the existing entries and append
-            (
-                vec![new_entry(2, 3), new_entry(3, 3), new_entry(4, 5)],
-                vec![new_entry(4, 5)],
+                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
             ),
             // truncate the existing entries and append
             (vec![new_entry(4, 5)], vec![new_entry(4, 5)]),
@@ -3302,9 +3303,7 @@ mod tests {
         let kv_db =
             engine_test::kv::new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
-        let raft_db =
-            engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, CF_DEFAULT, None)
-                .unwrap();
+        let raft_db = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None).unwrap();
         let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
@@ -3329,35 +3328,31 @@ mod tests {
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
 
         // last_index < commit_index is invalid.
-        let raft_state_key = keys::raft_state_key(1);
         raft_state.set_last_index(11);
-        let log_key = keys::raft_log_key(1, 11);
         engines
             .raft
-            .put_msg(&log_key, &new_entry(11, RAFT_INIT_LOG_TERM))
+            .append(1, vec![new_entry(11, RAFT_INIT_LOG_TERM)])
             .unwrap();
         raft_state.mut_hard_state().set_commit(12);
-        engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
+        engines.raft.put_raft_state(1, &raft_state).unwrap();
         assert!(build_storage().is_err());
 
-        let log_key = keys::raft_log_key(1, 20);
-        engines
-            .raft
-            .put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM))
-            .unwrap();
         raft_state.set_last_index(20);
-        engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
+        let entries = (12..=20)
+            .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
+            .collect();
+        engines.raft.append(1, entries).unwrap();
+        engines.raft.put_raft_state(1, &raft_state).unwrap();
         s = build_storage().unwrap();
         let initial_state = s.initial_state().unwrap();
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
 
         // Missing last log is invalid.
-        engines.raft.delete(&log_key).unwrap();
+        raft_state.set_last_index(21);
+        engines.raft.put_raft_state(1, &raft_state).unwrap();
         assert!(build_storage().is_err());
-        engines
-            .raft
-            .put_msg(&log_key, &new_entry(20, RAFT_INIT_LOG_TERM))
-            .unwrap();
+        raft_state.set_last_index(20);
+        engines.raft.put_raft_state(1, &raft_state).unwrap();
 
         // applied_index > commit_index is invalid.
         let mut apply_state = RaftApplyState::default();
@@ -3374,6 +3369,7 @@ mod tests {
         assert!(build_storage().is_err());
 
         // It should not recover if corresponding log doesn't exist.
+        engines.raft.gc(1, 14, 15).unwrap();
         apply_state.set_commit_index(14);
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
         engines
@@ -3382,41 +3378,42 @@ mod tests {
             .unwrap();
         assert!(build_storage().is_err());
 
-        let log_key = keys::raft_log_key(1, 14);
-        engines
-            .raft
-            .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM))
-            .unwrap();
+        let entries = (14..=20)
+            .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
+            .collect();
+        engines.raft.gc(1, 0, 21).unwrap();
+        engines.raft.append(1, entries).unwrap();
         raft_state.mut_hard_state().set_commit(14);
         s = build_storage().unwrap();
         let initial_state = s.initial_state().unwrap();
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
 
-        // log term miss match is invalid.
-        engines
-            .raft
-            .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM - 1))
-            .unwrap();
+        // log term mismatch is invalid.
+        let mut entries: Vec<_> = (14..=20)
+            .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
+            .collect();
+        entries[0].set_term(RAFT_INIT_LOG_TERM - 1);
+        engines.raft.append(1, entries).unwrap();
         assert!(build_storage().is_err());
 
         // hard state term miss match is invalid.
-        engines
-            .raft
-            .put_msg(&log_key, &new_entry(14, RAFT_INIT_LOG_TERM))
-            .unwrap();
+        let entries = (14..=20)
+            .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
+            .collect();
+        engines.raft.append(1, entries).unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM - 1);
-        engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
+        engines.raft.put_raft_state(1, &raft_state).unwrap();
         assert!(build_storage().is_err());
 
         // last index < recorded_commit_index is invalid.
+        engines.raft.gc(1, 0, 21).unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.set_last_index(13);
-        let log_key = keys::raft_log_key(1, 13);
         engines
             .raft
-            .put_msg(&log_key, &new_entry(13, RAFT_INIT_LOG_TERM))
+            .append(1, vec![new_entry(13, RAFT_INIT_LOG_TERM)])
             .unwrap();
-        engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
+        engines.raft.put_raft_state(1, &raft_state).unwrap();
         assert!(build_storage().is_err());
     }
 

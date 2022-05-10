@@ -13,6 +13,7 @@ use std::{
         hash_map::Entry,
         vec_deque::{Iter, VecDeque},
     },
+    convert::AsRef,
     env,
     fs::File,
     ops::{Deref, DerefMut},
@@ -336,6 +337,20 @@ impl<L, R> Either<L, R> {
         match self {
             Either::Right(r) => Some(r),
             _ => None,
+        }
+    }
+}
+
+impl<L, R, T> AsRef<T> for Either<L, R>
+where
+    T: ?Sized,
+    L: AsRef<T>,
+    R: AsRef<T>,
+{
+    fn as_ref(&self) -> &T {
+        match self {
+            Self::Left(l) => l.as_ref(),
+            Self::Right(r) => r.as_ref(),
         }
     }
 }

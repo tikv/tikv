@@ -17,10 +17,11 @@ use futures::compat::Future01CompatExt;
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
-        ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
-        DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, Event_oneof_event,
-        ResolvedTs,
+        ChangeDataRequest, ChangeDataRequestKvApi, ClusterIdMismatch as ErrorClusterIdMismatch,
+        Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
+        Error as EventError, Event, Event_oneof_event, ResolvedTs,
     },
+    kvrpcpb::ApiVersion,
     metapb::Region,
     tikvpb::TikvClient,
 };
@@ -325,6 +326,7 @@ pub struct Endpoint<T, E> {
     concurrency_manager: ConcurrencyManager,
 
     config: CdcConfig,
+    api_version: ApiVersion,
 
     // Incremental scan
     workers: Runtime,
@@ -356,6 +358,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
+        api_version: ApiVersion,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         raft_router: T,
@@ -410,6 +413,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             max_scan_batch_bytes,
             max_scan_batch_size,
             config: config.clone(),
+            api_version,
             workers,
             scan_concurrency_semaphore,
             raft_router,
@@ -587,6 +591,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         version: semver::Version,
     ) {
         let region_id = request.region_id;
+        let kv_api = request.get_kv_api();
+        let api_version = self.api_version;
         let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
 
@@ -602,6 +608,17 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             err.set_current(self.cluster_id);
             err.set_request(request_cluster_id);
             err_event.set_cluster_id_mismatch(err);
+
+            let _ = downstream.sink_error_event(region_id, err_event);
+            return;
+        }
+
+        if !FeatureGate::validate_kv_api(kv_api, api_version) {
+            error!("cdc RawKv is supported by api-version 2 only. TxnKv is not supported now.");
+            let mut err_event = EventError::default();
+            let mut err = ErrorCompatibility::default();
+            err.set_required_version("6.2.0".to_string());
+            err_event.set_compatibility(err);
 
             let _ = downstream.sink_error_event(region_id, err_event);
             return;
@@ -660,6 +677,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
 
+        // Now resolver is only used by tidb downstream.
+        // Resolver is created when the first tidb cdc request arrive.
+        let is_build_resolver = kv_api == ChangeDataRequestKvApi::TiDb && !delegate.has_resolver();
+
         let downstream_ = downstream.clone();
         if let Err(err) = delegate.subscribe(downstream) {
             let error_event = err.into_error_event(region_id);
@@ -682,6 +703,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 observe_id
             );
         };
+
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
 
         let region_epoch = request.take_region_epoch();
@@ -700,8 +722,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
             checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: is_new_delegate,
+            build_resolver: is_build_resolver,
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
+            kv_api,
         };
 
         let raft_router = self.raft_router.clone();
@@ -1220,7 +1243,10 @@ mod tests {
     use std::ops::{Deref, DerefMut};
 
     use engine_rocks::RocksEngine;
-    use kvproto::{cdcpb::Header, errorpb::Error as ErrorHeader};
+    use kvproto::{
+        cdcpb::{ChangeDataRequestKvApi, Header},
+        errorpb::Error as ErrorHeader,
+    };
     use raftstore::{
         errors::{DiscardReason, Error as RaftStoreError},
         store::{msg::CasualMessage, PeerMsg, ReadDelegate},
@@ -1292,12 +1318,17 @@ mod tests {
         }
     }
 
-    fn mock_endpoint(cfg: &CdcConfig, engine: Option<RocksEngine>) -> TestEndpointSuite {
+    fn mock_endpoint(
+        cfg: &CdcConfig,
+        engine: Option<RocksEngine>,
+        api_version: ApiVersion,
+    ) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let ep = Endpoint::new(
             DEFAULT_CLUSTER_ID,
             cfg,
+            api_version,
             Arc::new(TestPdClient::new(0, true)),
             task_sched.clone(),
             raft_router.clone(),
@@ -1324,9 +1355,136 @@ mod tests {
     }
 
     #[test]
+    fn test_api_version_check() {
+        let cfg = CdcConfig::default();
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (tx, mut rx) = channel::channel(1, quota);
+        let mut rx = rx.drain();
+
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        let mut req_header = Header::default();
+        req_header.set_cluster_id(0);
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        req.set_kv_api(ChangeDataRequestKvApi::TiDb);
+        let region_epoch = req.get_region_epoch().clone();
+        let version = FeatureGate::batch_resolved_ts();
+
+        // Compatibility error.
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::RawKv,
+        );
+        req.set_kv_api(ChangeDataRequestKvApi::RawKv);
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: version.clone(),
+        });
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
+        if let CdcEvent::Event(mut e) = cdc_event.0 {
+            assert_eq!(e.region_id, 1);
+            let event = e.event.take().unwrap();
+            match event {
+                Event_oneof_event::Error(err) => {
+                    assert!(err.has_compatibility());
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
+        }
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+
+        // Compatibility error.
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            2,
+            conn_id,
+            ChangeDataRequestKvApi::TxnKv,
+        );
+        req.set_kv_api(ChangeDataRequestKvApi::TxnKv);
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: version.clone(),
+        });
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
+        if let CdcEvent::Event(mut e) = cdc_event.0 {
+            assert_eq!(e.region_id, 1);
+            let event = e.event.take().unwrap();
+            match event {
+                Event_oneof_event::Error(err) => {
+                    assert!(err.has_compatibility());
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
+        }
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+
+        suite.api_version = ApiVersion::V2;
+        // Compatibility error.
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch,
+            3,
+            conn_id,
+            ChangeDataRequestKvApi::TxnKv,
+        );
+        req.set_kv_api(ChangeDataRequestKvApi::TxnKv);
+        suite.run(Task::Register {
+            request: req,
+            downstream,
+            conn_id,
+            version,
+        });
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
+        if let CdcEvent::Event(mut e) = cdc_event.0 {
+            assert_eq!(e.region_id, 1);
+            let event = e.event.take().unwrap();
+            match event {
+                Event_oneof_event::Error(err) => {
+                    assert!(err.has_compatibility());
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
+        }
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+    }
+
+    #[test]
     fn test_change_endpoint_cfg() {
         let cfg = CdcConfig::default();
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V2);
         let ep = &mut suite.endpoint;
 
         // Modify min_ts_interval and hibernate_regions_compatible.
@@ -1451,7 +1609,7 @@ mod tests {
     fn test_raftstore_is_busy() {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, _rx) = channel::channel(1, quota);
-        let mut suite = mock_endpoint(&CdcConfig::default(), None);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
 
         // Fill the channel.
         suite.add_region(1 /* region id */, 1 /* cap */);
@@ -1465,7 +1623,13 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch,
+            0,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         suite.run(Task::Register {
             request: req,
             downstream,
@@ -1491,7 +1655,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1505,7 +1669,13 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
         suite.run(Task::Register {
@@ -1521,7 +1691,13 @@ mod tests {
             .unwrap_err();
 
         // duplicate request error.
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 2, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            2,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1551,7 +1727,13 @@ mod tests {
             .unwrap_err();
 
         // Compatibility error.
-        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch,
+            3,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         suite.run(Task::Register {
             request: req,
             downstream,
@@ -1589,7 +1771,13 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(100);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         suite.add_local_reader(100);
         suite.run(Task::Register {
             request: req.clone(),
@@ -1614,7 +1802,13 @@ mod tests {
         // Test errors on CaptureChange message.
         req.set_region_id(101);
         suite.add_region(101, 100);
-        let downstream = Downstream::new("".to_string(), region_epoch, 1, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch,
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         suite.run(Task::Register {
             request: req,
             downstream,
@@ -1641,7 +1835,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
 
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
@@ -1657,7 +1851,13 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            0,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         downstream.get_state().store(DownstreamState::Normal);
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
@@ -1686,7 +1886,13 @@ mod tests {
 
         // Register region 2 to the conn.
         req.set_region_id(2);
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            0,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         downstream.get_state().store(DownstreamState::Normal);
         suite.add_region(2, 100);
         suite.run(Task::Register {
@@ -1724,7 +1930,13 @@ mod tests {
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
         req.set_region_id(3);
-        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch,
+            3,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         downstream.get_state().store(DownstreamState::Normal);
         suite.add_region(3, 100);
         suite.run(Task::Register {
@@ -1773,7 +1985,7 @@ mod tests {
 
     #[test]
     fn test_deregister() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1787,7 +1999,13 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            0,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         let downstream_id = downstream.get_id();
         suite.run(Task::Register {
             request: req.clone(),
@@ -1823,7 +2041,13 @@ mod tests {
         }
         assert_eq!(suite.endpoint.capture_regions.len(), 0);
 
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            0,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         let new_downstream_id = downstream.get_id();
         suite.run(Task::Register {
             request: req.clone(),
@@ -1868,7 +2092,13 @@ mod tests {
         assert_eq!(suite.endpoint.capture_regions.len(), 0);
 
         // Stale deregister should be filtered.
-        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch,
+            0,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+        );
         suite.run(Task::Register {
             request: req,
             downstream,
@@ -1896,7 +2126,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
 
         // Open two connections a and b, registers region 1, 2 to conn a and
         // region 3 to conn b.
@@ -1916,7 +2146,13 @@ mod tests {
                 let mut req = ChangeDataRequest::default();
                 req.set_region_id(region_id);
                 let region_epoch = req.get_region_epoch().clone();
-                let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+                let downstream = Downstream::new(
+                    "".to_string(),
+                    region_epoch.clone(),
+                    0,
+                    conn_id,
+                    ChangeDataRequestKvApi::TiDb,
+                );
                 downstream.get_state().store(DownstreamState::Normal);
                 suite.run(Task::Register {
                     request: req.clone(),
@@ -1999,7 +2235,7 @@ mod tests {
     // too, because epoch not match.
     #[test]
     fn test_deregister_conn_then_delegate() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
 
@@ -2023,7 +2259,13 @@ mod tests {
         req.set_region_id(1);
         req.mut_region_epoch().set_version(2);
         let region_epoch_2 = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch_2.clone(), 0, conn_id_a);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch_2.clone(),
+            0,
+            conn_id_a,
+            ChangeDataRequestKvApi::TiDb,
+        );
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -2040,7 +2282,13 @@ mod tests {
         req.set_region_id(1);
         req.mut_region_epoch().set_version(1);
         let region_epoch_1 = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch_1, 0, conn_id_b);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch_1,
+            0,
+            conn_id_b,
+            ChangeDataRequestKvApi::TiDb,
+        );
         suite.run(Task::Register {
             request: req.clone(),
             downstream,

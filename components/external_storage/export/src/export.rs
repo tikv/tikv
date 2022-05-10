@@ -328,6 +328,7 @@ impl ExternalStorage for EncryptedExternalStorage {
         storage_name: &str,
         restore_name: std::path::PathBuf,
         expected_length: u64,
+        expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
@@ -342,6 +343,7 @@ impl ExternalStorage for EncryptedExternalStorage {
             file_writer,
             speed_limiter,
             expected_length,
+            expected_sha256,
             min_read_speed,
         ))
     }

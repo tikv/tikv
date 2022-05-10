@@ -493,7 +493,7 @@ mod tests {
         let path = tmp.path().to_str().unwrap();
         let engine = engine_test::kv::new_engine_opt(
             path,
-            DBOptions::new(),
+            DBOptions::default(),
             vec![
                 CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
                 CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),

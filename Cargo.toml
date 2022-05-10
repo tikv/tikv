@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -24,7 +24,7 @@ failpoints = [
   "fail/failpoints",
   "raftstore/failpoints",
   "tikv_util/failpoints",
-  "engine_rocks/failpoints"
+  "engine_rocks/failpoints",
 ]
 cloud-aws = [
   "encryption_export/cloud-aws",
@@ -39,6 +39,12 @@ cloud-azure = [
   "sst_importer/cloud-azure",
 ]
 testexport = ["raftstore/testexport", "api_version/testexport"]
+test-engine-kv-rocksdb = [
+  "engine_test/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "engine_test/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
 ]
@@ -212,6 +218,7 @@ members = [
   "cmd/tikv-server",
   "components/api_version",
   "components/backup",
+  "components/backup-stream",
   "components/batch-system",
   "components/case_macros",
   "components/causal_ts",
@@ -223,9 +230,11 @@ members = [
   "components/codec",
   "components/collections",
   "components/concurrency_manager",
+  "components/concurrency_manager",
   "components/coprocessor_plugin_api",
   "components/encryption",
   "components/encryption/export",
+  "components/engine_rocks_helper",
   "components/error_code",
   "components/external_storage",
   "components/external_storage/export",
@@ -240,6 +249,7 @@ members = [
   "components/raftstore",
   "components/resolved_ts",
   "components/resource_metering",
+  "components/server",
   "components/server",
   "components/sst_importer",
   "components/test_backup",

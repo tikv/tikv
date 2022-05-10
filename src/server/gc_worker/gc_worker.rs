@@ -12,11 +12,12 @@ use std::{
     vec::IntoIter,
 };
 
+use api_version::{ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
-    DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range, WriteBatch, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
+    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
@@ -30,6 +31,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{msg::StoreMsg, util::find_peer},
 };
+use tikv_kv::{CfStatistics, CursorBuilder, Modify};
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
@@ -99,6 +101,12 @@ where
         store_id: u64,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     },
+    RawGcKeys {
+        keys: Vec<Key>,
+        safe_point: TimeStamp,
+        store_id: u64,
+        region_info_provider: Arc<dyn RegionInfoProvider>,
+    },
     UnsafeDestroyRange {
         ctx: Context,
         start_key: Key,
@@ -135,6 +143,7 @@ where
         match self {
             GcTask::Gc { .. } => GcCommandKind::gc,
             GcTask::GcKeys { .. } => GcCommandKind::gc_keys,
+            GcTask::RawGcKeys { .. } => GcCommandKind::raw_gc_keys,
             GcTask::UnsafeDestroyRange { .. } => GcCommandKind::unsafe_destroy_range,
             GcTask::PhysicalScanLock { .. } => GcCommandKind::physical_scan_lock,
             GcTask::OrphanVersions { .. } => GcCommandKind::orphan_versions,
@@ -162,6 +171,7 @@ where
                 .field("safe_point", safe_point)
                 .finish(),
             GcTask::GcKeys { .. } => f.debug_struct("GcKeys").finish(),
+            GcTask::RawGcKeys { .. } => f.debug_struct("RawGcKeys").finish(),
             GcTask::UnsafeDestroyRange {
                 start_key, end_key, ..
             } => f
@@ -202,6 +212,71 @@ where
     cfg_tracker: Tracker<GcConfig>,
 
     stats: Statistics,
+}
+
+pub const MAX_RAW_WRITE_SIZE: usize = 32 * 1024;
+
+pub struct MvccRaw {
+    pub(crate) write_size: usize,
+    pub(crate) modifies: Vec<Modify>,
+}
+
+impl MvccRaw {
+    pub fn new() -> MvccRaw {
+        MvccRaw {
+            write_size: 0,
+            modifies: vec![],
+        }
+    }
+    pub fn write_size(&self) -> usize {
+        self.write_size
+    }
+
+    pub fn into_modifies(self) -> Vec<Modify> {
+        self.modifies
+    }
+}
+
+struct KeysInRegions<R: Iterator<Item = Region>> {
+    keys: Peekable<IntoIter<Key>>,
+    regions: Peekable<R>,
+}
+
+impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
+    type Item = Key;
+    fn next(&mut self) -> Option<Key> {
+        loop {
+            let region = self.regions.peek()?;
+            let key = self.keys.peek()?.as_encoded().as_slice();
+            if key < region.get_start_key() {
+                self.keys.next();
+            } else if region.get_end_key().is_empty() || key < region.get_end_key() {
+                return self.keys.next();
+            } else {
+                self.regions.next();
+            }
+        }
+    }
+}
+
+fn get_keys_in_regions(
+    keys: Vec<Key>,
+    regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
+) -> Result<Box<dyn Iterator<Item = Key>>> {
+    if keys.len() >= 2 {
+        if let Some((store_id, region_info_provider)) = regions_provider {
+            let start = keys.first().unwrap().as_encoded();
+            let end = keys.last().unwrap().as_encoded();
+            let regions = box_try!(region_info_provider.get_regions_in_range(start, end))
+                .into_iter()
+                .filter(move |r| find_peer(r, store_id).is_some())
+                .peekable();
+
+            let keys = keys.into_iter().peekable();
+            return Ok(Box::new(KeysInRegions { keys, regions }));
+        }
+    }
+    Ok(Box::new(keys.into_iter()))
 }
 
 impl<E, RR> GcRunner<E, RR>
@@ -323,47 +398,6 @@ where
         safe_point: TimeStamp,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     ) -> Result<(usize, usize)> {
-        struct KeysInRegions<R: Iterator<Item = Region>> {
-            keys: Peekable<IntoIter<Key>>,
-            regions: Peekable<R>,
-        }
-        impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
-            type Item = Key;
-            fn next(&mut self) -> Option<Key> {
-                loop {
-                    let region = self.regions.peek()?;
-                    let key = self.keys.peek()?.as_encoded().as_slice();
-                    if key < region.get_start_key() {
-                        self.keys.next();
-                    } else if region.get_end_key().is_empty() || key < region.get_end_key() {
-                        return self.keys.next();
-                    } else {
-                        self.regions.next();
-                    }
-                }
-            }
-        }
-
-        fn get_keys_in_regions(
-            keys: Vec<Key>,
-            regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
-        ) -> Result<Box<dyn Iterator<Item = Key>>> {
-            if keys.len() >= 2 {
-                if let Some((store_id, region_info_provider)) = regions_provider {
-                    let start = keys.first().unwrap().as_encoded();
-                    let end = keys.last().unwrap().as_encoded();
-                    let regions = box_try!(region_info_provider.get_regions_in_range(start, end))
-                        .into_iter()
-                        .filter(move |r| find_peer(r, store_id).is_some())
-                        .peekable();
-
-                    let keys = keys.into_iter().peekable();
-                    return Ok(Box::new(KeysInRegions { keys, regions }));
-                }
-            }
-            Ok(Box::new(keys.into_iter()))
-        }
-
         let count = keys.len();
         let range_start_key = keys.first().unwrap().clone().into_encoded();
         let range_end_key = {
@@ -375,6 +409,7 @@ where
             k.push(0);
             Key::from_raw(&k).into_encoded()
         };
+
         let snapshot = self
             .engine
             .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
@@ -434,6 +469,133 @@ where
         }
         Self::flush_txn(txn, &self.limiter, &self.engine)?;
         Ok((handled_keys, wasted_keys))
+    }
+
+    fn raw_gc_keys(
+        &mut self,
+        keys: Vec<Key>,
+        safe_point: TimeStamp,
+        regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
+    ) -> Result<(usize, usize)> {
+        let range_start_key = keys.first().unwrap().clone().into_encoded();
+        let range_end_key = {
+            let mut k = keys
+                .last()
+                .unwrap()
+                .to_raw()
+                .map_err(|e| EngineError::Codec(e))?;
+            k.push(0);
+            Key::from_raw(&k).into_encoded()
+        };
+
+        let mut snapshot = self
+            .engine
+            .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
+
+        let mut raw_modifies = MvccRaw::new();
+        let mut keys = get_keys_in_regions(keys, regions_provider)?;
+
+        let mut gc_info = GcInfo::default();
+        let mut next_gc_key = keys.next();
+        while let Some(ref key) = next_gc_key {
+            if let Err(e) = self.raw_gc_key(
+                safe_point,
+                key,
+                &mut raw_modifies,
+                &mut snapshot,
+                &mut gc_info,
+            ) {
+                GC_KEY_FAILURES.inc();
+                error!(?e; "Raw GC meets failure"; "key" => %key,);
+                // Switch to the next key if meets failure.
+                gc_info.is_completed = true;
+            }
+
+            if gc_info.is_completed {
+                next_gc_key = keys.next();
+                gc_info = GcInfo::default();
+            } else {
+                // Flush writeBatch to engine.
+                Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+                // After flush, reset raw_modifies.
+                raw_modifies = MvccRaw::new();
+            }
+        }
+
+        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+
+        // TODO: To implement the metrics.
+        Ok((0, 0))
+    }
+
+    fn raw_gc_key(
+        &mut self,
+        safe_point: TimeStamp,
+        key: &Key,
+        raw_modifies: &mut MvccRaw,
+        kv_snapshot: &mut <E as Engine>::Snap,
+        gc_info: &mut GcInfo,
+    ) -> Result<()> {
+        let start_key = key.clone().append_ts(safe_point.prev());
+        let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT).build()?;
+        let mut statistics = CfStatistics::default();
+        cursor.seek(&start_key, &mut statistics)?;
+
+        let mut remove_older = false;
+        let mut latest_version_key = None;
+        let current_ts = ttl_current_ts();
+
+        while cursor.valid()? {
+            let current_key = cursor.key(&mut statistics);
+            if !Key::is_user_key_eq(current_key, key.as_encoded()) {
+                break;
+            }
+
+            if raw_modifies.write_size >= MAX_RAW_WRITE_SIZE {
+                self.stats.data.add(&statistics);
+                return Ok(());
+            }
+
+            if remove_older {
+                self.delete_raws(Key::from_encoded_slice(current_key), raw_modifies);
+            } else {
+                remove_older = true;
+
+                let value = ApiV2::decode_raw_value(cursor.value(&mut statistics))?;
+                // It's deleted or expired.
+                if !value.is_valid(current_ts) {
+                    latest_version_key = Some(Key::from_encoded_slice(current_key));
+                }
+            }
+            cursor.next(&mut statistics);
+        }
+
+        gc_info.is_completed = true;
+
+        self.stats.data.add(&statistics);
+
+        if let Some(to_del_key) = latest_version_key {
+            self.delete_raws(to_del_key, raw_modifies);
+        }
+
+        Ok(())
+    }
+
+    fn delete_raws(&mut self, key: Key, raw_modifies: &mut MvccRaw) {
+        let write = Modify::Delete(CF_DEFAULT, key);
+        raw_modifies.write_size += write.size();
+        raw_modifies.modifies.push(write);
+    }
+
+    fn flush_raw_gc(raw_modifies: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
+        let write_size = raw_modifies.write_size();
+        let modifies = raw_modifies.into_modifies();
+        if !modifies.is_empty() {
+            // rate limiter
+            limiter.blocking_consume(write_size);
+            engine.modify_on_kv_engine(modifies)?;
+        }
+        Ok(())
     }
 
     fn unsafe_destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
@@ -649,6 +811,25 @@ where
                 slow_log!(T timer, "GC keys, seek_tombstone {}", seek_tombstone);
                 self.update_statistics_metrics();
             }
+            GcTask::RawGcKeys {
+                keys,
+                safe_point,
+                store_id,
+                region_info_provider,
+            } => {
+                match self.raw_gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
+                    Ok((handled, wasted)) => {
+                        GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
+                        GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
+                        update_metrics(false);
+                    }
+                    Err(e) => {
+                        warn!("Raw GcKeys fail"; "err" => ?e);
+                        update_metrics(true);
+                    }
+                }
+                self.update_statistics_metrics();
+            }
             GcTask::UnsafeDestroyRange {
                 ctx,
                 start_key,
@@ -718,7 +899,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
             callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
         }
         // Attention: If you are adding a new GcTask, do not forget to call the callback if it has a callback.
-        GcTask::GcKeys { .. } | GcTask::OrphanVersions { .. } => {}
+        GcTask::GcKeys { .. } | GcTask::RawGcKeys { .. } | GcTask::OrphanVersions { .. } => {}
         #[cfg(any(test, feature = "testexport"))]
         GcTask::Validate(_) => {}
     }
@@ -1042,6 +1223,7 @@ where
 
 #[cfg(test)]
 mod tests {
+
     use std::{
         collections::BTreeMap,
         sync::mpsc::{self, channel},
@@ -1049,33 +1231,42 @@ mod tests {
         time::Duration,
     };
 
-    use api_version::KvFormat;
+    use api_version::{ApiV2, KvFormat, RawValue};
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
-    use kvproto::{kvrpcpb::Op, metapb::Peer};
+    use kvproto::{
+        kvrpcpb::{ApiVersion, Op},
+        metapb::Peer,
+    };
     use raft::StateRole;
     use raftstore::{
         coprocessor::{region_info_accessor::RegionInfoAccessor, RegionChangeEvent},
         router::RaftStoreBlackHole,
         store::RegionSnapshot,
     };
+    use tikv_kv::Snapshot;
     use tikv_util::{codec::number::NumberEncoder, future::paired_future_callback};
     use txn_types::Mutation;
 
     use super::*;
-    use crate::storage::{
-        kv::{
-            self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
-            SnapContext, TestEngineBuilder, WriteData,
+    use crate::{
+        config::DbConfig,
+        storage::{
+            kv::{
+                self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
+                SnapContext, TestEngineBuilder, WriteData,
+            },
+            lock_manager::DummyLockManager,
+            mvcc::{tests::must_get_none, MAX_TXN_WRITE_SIZE},
+            txn::{
+                commands,
+                tests::{
+                    must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
+                },
+            },
+            Engine, Storage, TestStorageBuilderApiV1,
         },
-        lock_manager::DummyLockManager,
-        mvcc::{tests::must_get_none, MAX_TXN_WRITE_SIZE},
-        txn::{
-            commands,
-            tests::{must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback},
-        },
-        Engine, Storage, TestStorageBuilderApiV1,
     };
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
@@ -1601,6 +1792,110 @@ mod tests {
             .unwrap();
         assert_eq!(runner.stats.write.seek, 1);
         assert_eq!(runner.stats.write.next, 100 * 2);
+    }
+
+    #[test]
+    fn test_raw_gc_keys() {
+        // init engine and gc runner
+        let mut cfg = DbConfig::default();
+        cfg.defaultcf.disable_auto_compactions = true;
+        cfg.defaultcf.dynamic_level_bytes = false;
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path());
+        let engine = builder.build_with_cfg(&cfg).unwrap();
+        let prefixed_engine = PrefixedEngine(engine);
+
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let mut runner = GcRunner::new(
+            prefixed_engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+
+        let mut r1 = Region::default();
+        r1.set_id(1);
+        r1.mut_region_epoch().set_version(1);
+        r1.set_start_key(b"".to_vec());
+        r1.set_end_key(b"".to_vec());
+        r1.mut_peers().push(Peer::default());
+        r1.mut_peers()[0].set_store_id(1);
+
+        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
+        host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
+        // Init env end...
+
+        // Prepare data
+        let key_a = b"raaaaaaaaaaa";
+        let key_b = b"rbbbbbbbbbbb";
+
+        // All data in engine. (key,expir_ts,is_delete,expect_exist)
+        let test_raws = vec![
+            (key_a, 130, true, true), // ts(130) > safepoint
+            (key_a, 120, true, true), // ts(120) = safepoint
+            (key_a, 100, true, false),
+            (key_a, 50, false, false),
+            (key_a, 10, false, false),
+            (key_a, 5, false, false),
+            (key_b, 50, true, false),
+            (key_b, 20, false, false),
+            (key_b, 10, false, false),
+        ];
+
+        let modifies = test_raws
+            .clone()
+            .into_iter()
+            .map(|(key, ts, is_delete, _expect_exist)| {
+                (
+                    ApiV2::encode_raw_key(key, Some(ts.into())),
+                    ApiV2::encode_raw_value(RawValue {
+                        user_value: &[0; 10][..],
+                        expire_ts: Some(10),
+                        is_delete,
+                    }),
+                )
+            })
+            .map(|(k, v)| Modify::Put(CF_DEFAULT, k, v))
+            .collect();
+
+        let ctx = Context {
+            api_version: ApiVersion::V2,
+            ..Default::default()
+        };
+        let batch = WriteData::from_modifies(modifies);
+
+        prefixed_engine.write(&ctx, batch).unwrap();
+
+        // Simulate the keys passed in from the compaction filter
+        let test_keys = vec![key_a, key_b];
+
+        let to_gc_keys: Vec<Key> = test_keys
+            .into_iter()
+            .map(|key| ApiV2::encode_raw_key(key, None))
+            .collect();
+
+        runner
+            .raw_gc_keys(to_gc_keys, TimeStamp::new(120), Some((1, ri_provider)))
+            .unwrap();
+
+        assert_eq!(7, runner.stats.data.next);
+        assert_eq!(2, runner.stats.data.seek);
+
+        let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
+
+        test_raws
+            .clone()
+            .into_iter()
+            .for_each(|(key, ts, _is_delete, expect_exist)| {
+                let engine_key = ApiV2::encode_raw_key(key, Some(ts.into()));
+                let entry = snapshot.get(&Key::from_encoded(engine_key.into_encoded()));
+                assert_eq!(entry.unwrap().is_some(), expect_exist);
+            });
     }
 
     #[test]

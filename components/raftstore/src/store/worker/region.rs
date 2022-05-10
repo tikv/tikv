@@ -774,12 +774,11 @@ mod tests {
         kv::{KvTestEngine, KvTestSnapshot},
     };
     use engine_traits::{
-        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable, SyncMutable,
-        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
+        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
+        RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT,
     };
     use keys::data_key;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
-    use raft::eraftpb::Entry;
     use tempfile::Builder;
     use tikv_util::worker::{LazyWorker, Worker};
 
@@ -874,7 +873,7 @@ mod tests {
     #[test]
     fn test_stale_peer() {
         let temp_dir = Builder::new().prefix("test_stale_peer").tempdir().unwrap();
-        let engine = get_test_db_for_regions(&temp_dir, None, None, None, None, &[1]).unwrap();
+        let engine = get_test_db_for_regions(&temp_dir, None, None, None, &[1]).unwrap();
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
@@ -947,11 +946,9 @@ mod tests {
             CFOptions::new("lock", cf_opts.clone()),
             CFOptions::new("raft", cf_opts.clone()),
         ];
-        let raft_cfs_opt = CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,
-            Some(raft_cfs_opt),
             None,
             Some(kv_cfs_opts),
             &[1, 2, 3, 4, 5, 6, 7],
@@ -1007,11 +1004,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let idx = apply_state.get_applied_index();
-            let entry = engine
-                .raft
-                .get_msg::<Entry>(&keys::raft_log_key(id, idx))
-                .unwrap()
-                .unwrap();
+            let entry = engine.raft.get_entry(id, idx).unwrap().unwrap();
             sched
                 .schedule(Task::Gen {
                     region_id: id,
