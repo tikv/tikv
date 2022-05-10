@@ -51,10 +51,7 @@ use yatp::Remote;
 use crate::store::{
     cmd_resp::new_error,
     metrics::*,
-    peer::{
-        UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryForceLeaderSharedState,
-        UnsafeRecoveryReportContext,
-    },
+    peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
     transport::SignificantRouter,
     util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
     worker::{
@@ -1185,11 +1182,8 @@ where
                             for failed_store in plan.get_force_leader().get_failed_stores() {
                                 failed_stores.insert(*failed_store);
                             }
-                            let shared_state = UnsafeRecoveryForceLeaderSharedState::new(
-                                UnsafeRecoveryReportContext {
-                                    id: plan.get_step(),
-                                    exit_force_leader_after_reporting: false,
-                                },
+                            let shared_state = UnsafeRecoveryForceLeaderSyncer::new(
+                                plan.get_step(),
                                 router.clone(),
                             );
                             for region in plan.get_force_leader().get_enter_force_leaders() {
@@ -1205,11 +1199,8 @@ where
                                 }
                             }
                         } else {
-                            let shared_state = UnsafeRecoveryExecutePlanSharedState::new(
-                                UnsafeRecoveryReportContext {
-                                    id: plan.get_step(),
-                                    exit_force_leader_after_reporting: true,
-                                },
+                            let shared_state = UnsafeRecoveryExecutePlanSyncer::new(
+                                plan.get_step(),
                                 router.clone(),
                             );
                             for create in plan.take_creates().into_iter() {

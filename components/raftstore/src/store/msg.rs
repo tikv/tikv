@@ -26,8 +26,8 @@ use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     peer::{
-        UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryFillOutReportSharedState,
-        UnsafeRecoveryForceLeaderSharedState, UnsafeRecoveryWaitApplySharedState,
+        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
@@ -341,17 +341,17 @@ where
         res: Box<RaftlogFetchResult>,
     },
     EnterForceLeaderState {
-        shared_state: UnsafeRecoveryForceLeaderSharedState,
+        shared_state: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
     },
     ExitForceLeaderState,
     UnsafeRecoveryDemoteFailedVoters {
-        shared_state: UnsafeRecoveryExecutePlanSharedState,
+        shared_state: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     },
-    UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSharedState),
-    UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySharedState),
-    UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSharedState),
+    UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
+    UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
+    UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
 }
 
 /// Message that will be sent to a peer.
@@ -655,7 +655,7 @@ where
 
     UnsafeRecoveryReport(pdpb::StoreReport),
     UnsafeRecoveryCreatePeer {
-        shared_state: UnsafeRecoveryExecutePlanSharedState,
+        shared_state: UnsafeRecoveryExecutePlanSyncer,
         create: metapb::Region,
     },
 }

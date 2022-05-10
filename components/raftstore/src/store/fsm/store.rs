@@ -26,8 +26,8 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
 use engine_traits::{
-    CompactedEvent, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine, RaftLogBatch,
-    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
+    RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
@@ -2664,50 +2664,29 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_unsafe_recovery_create_peer(&self, region: Region) {
         info!("Unsafe recovery, creating a peer"; "peer" => ?region);
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        if let Some((_, id)) = meta
+            .region_ranges
+            .range((
+                Excluded(data_key(region.get_start_key())),
+                Unbounded::<Vec<u8>>,
+            ))
+            .next()
         {
-            let meta = self.ctx.store_meta.lock().unwrap();
-            if let Some((_, id)) = meta
-                .region_ranges
-                .range((
-                    Excluded(data_key(region.get_start_key())),
-                    Unbounded::<Vec<u8>>,
-                ))
-                .next()
-            {
-                let exist_region = &meta.regions[id];
-                if enc_start_key(exist_region) < data_end_key(region.get_end_key()) {
-                    if exist_region.get_id() == region.get_id() {
-                        warn!("Unsafe recovery, region has already been created."; "region"=>?region);
-                        return;
-                    } else {
-                        error!(
-                            "Unsafe recovery, region to be created overlaps with an existing region";
-                            "region" => ?region,
-                            "exist_region" => ?exist_region,
-                        );
-                        return;
-                    }
+            let exist_region = &meta.regions[id];
+            if enc_start_key(exist_region) < data_end_key(region.get_end_key()) {
+                if exist_region.get_id() == region.get_id() {
+                    warn!("Unsafe recovery, region has already been created."; "region"=>?region);
+                    return;
+                } else {
+                    error!(
+                        "Unsafe recovery, region to be created overlaps with an existing region";
+                        "region" => ?region,
+                        "exist_region" => ?exist_region,
+                    );
+                    return;
                 }
             }
-        }
-        let mut kv_wb = self.ctx.engines.kv.write_batch();
-        if let Err(e) = peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None)
-        {
-            error!(
-                "Unsafe recovery, fail to add peer state into write batch";
-                "region" => ?region,
-                "err" => ?e,
-            );
-            return;
-        }
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        if let Err(e) = kv_wb.write_opt(&write_opts) {
-            error!("Unsafe recoverym fail to write while creating peer.";
-                "region" => ?region,
-                "err" => ?e,
-            );
-            return;
         }
         let (sender, mut peer) = match PeerFsm::create(
             self.ctx.store.get_id(),
@@ -2727,36 +2706,66 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 return;
             }
         };
-        {
-            let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-            peer.peer.init_replication_mode(&mut *replication_state);
-        }
+        let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
+        peer.peer.init_replication_mode(&mut *replication_state);
+        drop(replication_state);
         peer.peer.activate(self.ctx);
-        {
-            let mut meta = self.ctx.store_meta.lock().unwrap();
-            if meta
-                .regions
-                .insert(region.get_id(), region.clone())
+
+        let start_key = keys::enc_start_key(&region);
+        let end_key = keys::enc_end_key(&region);
+        if meta
+            .regions
+            .insert(region.get_id(), region.clone())
+            .is_some()
+            || meta
+                .region_ranges
+                .insert(end_key.clone(), region.get_id())
                 .is_some()
-                || meta
-                    .region_ranges
-                    .insert(enc_end_key(&region), region.get_id())
-                    .is_some()
-                || meta
-                    .readers
-                    .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer()))
-                    .is_some()
-                || meta
-                    .region_read_progress
-                    .insert(region.get_id(), peer.peer.read_progress.clone())
-                    .is_some()
-            {
-                error!(
-                    "Unsafe recovery, key conflicts while inserting region into store meta";
-                    "region" => ?region,
-                );
-                return;
-            }
+            || meta
+                .readers
+                .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer()))
+                .is_some()
+            || meta
+                .region_read_progress
+                .insert(region.get_id(), peer.peer.read_progress.clone())
+                .is_some()
+        {
+            error!(
+                "Unsafe recovery, key conflicts while inserting region into store meta";
+                "region" => ?region,
+            );
+            return;
+        }
+        drop(meta);
+        if let Err(e) = self.ctx.engines.kv.delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &[Range::new(&start_key, &end_key)],
+        ) {
+            error!(
+                "unsafe recovery, fail to clean up stale data while creating the new region";
+                "region" => ?region,
+                "err" => ?e,
+            );
+        }
+        let mut kv_wb = self.ctx.engines.kv.write_batch();
+
+        if let Err(e) = peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None)
+        {
+            error!(
+                "Unsafe recovery, fail to add peer state into write batch";
+                "region" => ?region,
+                "err" => ?e,
+            );
+            return;
+        }
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        if let Err(e) = kv_wb.write_opt(&write_opts) {
+            error!("Unsafe recovery, fail to write while creating peer";
+                "region" => ?region,
+                "err" => ?e,
+            );
+            return;
         }
         let mailbox = BasicMailbox::new(sender, peer, self.ctx.router.state_cnt().clone());
         self.ctx.router.register(region.get_id(), mailbox);

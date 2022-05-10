@@ -11,7 +11,7 @@ use std::{
     },
     iter::Iterator,
     mem,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Instant,
     u64,
 };
@@ -79,9 +79,9 @@ use crate::{
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
             ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-            UnsafeRecoveryExecutePlanSharedState, UnsafeRecoveryFillOutReportSharedState,
-            UnsafeRecoveryForceLeaderSharedState, UnsafeRecoveryState,
-            UnsafeRecoveryWaitApplySharedState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+            TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         transport::Transport,
         util,
@@ -743,12 +743,12 @@ where
         }
     }
 
-    fn on_unsafe_recovery_demote_failed_voters(
+    fn on_unsafe_recovery_pre_demote_failed_voters(
         &mut self,
-        shared_state: UnsafeRecoveryExecutePlanSharedState,
+        shared_state: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if self.fsm.peer.force_leader.is_none() {
+        if !self.fsm.peer.is_force_leader() {
             error!(
                 "Unsafe recovery, demoting failed voters failed, since this peer is not forced leader";
                 "region" => ?self.region(),
@@ -765,63 +765,96 @@ where
         }
 
         if self.fsm.peer.in_joint_state() {
-            info!("Unsafe recovery, already in joint state, exit first.";
-            "region" => ?self.region());
+            info!(
+                "Unsafe recovery, already in joint state, exit first";
+                "region" => ?self.region());
+            let proposed = Arc::new(Mutex::new(false));
+            let proposed_clone = proposed.clone();
+            let callback = Callback::<EK::Snapshot>::write_ext(
+                Box::new(|resp| {
+                    if resp.response.get_header().has_error() {
+                        error!(
+                            "Unsafe recovery, fail to exit residual joint state";
+                            "err" => ?resp.response.get_header().get_error(),
+                        );
+                    }
+                }),
+                Some(Box::new(move || {
+                    *proposed_clone.lock().unwrap() = true;
+                })),
+                None,
+            );
             self.propose_raft_command_internal(
                 exit_joint_request(self.region(), &self.fsm.peer.peer),
-                Callback::None,
+                callback,
                 DiskFullOpt::AllowedOnAlmostFull,
             );
-            self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::DemoteFailedVoters {
-                shared_state,
-                failed_voters,
-                commit_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
-                demote_after_exit: true,
-            });
-        } else {
-            if failed_voters.is_empty() {
-                return;
+
+            if *proposed.lock().unwrap() {
+                self.fsm.peer.unsafe_recovery_state =
+                    Some(UnsafeRecoveryState::DemoteFailedVoters {
+                        shared_state,
+                        failed_voters,
+                        commit_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
+                        demote_after_exit: true,
+                    });
             }
-            let req =
-                demote_failed_voters_request(self.region(), &self.fsm.peer.peer, failed_voters);
-            info!("Unsafe recovery, demoting failed voters";
+        } else {
+            self.unsafe_recovery_demote_failed_voters(shared_state, failed_voters);
+        }
+    }
+
+    fn unsafe_recovery_demote_failed_voters(
+        &mut self,
+        shared_state: UnsafeRecoveryExecutePlanSyncer,
+        failed_voters: Vec<metapb::Peer>,
+    ) {
+        if let Some(req) =
+            demote_failed_voters_request(self.region(), &self.fsm.peer.peer, failed_voters)
+        {
+            info!(
+                "Unsafe recovery, demoting failed voters";
                 "region" => ?self.region(),
                 "req" => ?req);
-            self.propose_raft_command_internal(
-                req,
-                Callback::None,
-                DiskFullOpt::AllowedOnAlmostFull,
+            let proposed = Arc::new(Mutex::new(false));
+            let proposed_clone = proposed.clone();
+            let callback = Callback::<EK::Snapshot>::write_ext(
+                Box::new(|resp| {
+                    if resp.response.get_header().has_error() {
+                        error!(
+                            "Unsafe recovery, fail to finish demotion";
+                            "err" => ?resp.response.get_header().get_error(),
+                        );
+                    }
+                }),
+                Some(Box::new(move || {
+                    *proposed_clone.lock().unwrap() = true;
+                })),
+                None,
             );
-            self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::DemoteFailedVoters {
-                shared_state,
-                failed_voters: vec![], // No longer needed since here.
-                commit_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
-                demote_after_exit: false,
-            });
+            self.propose_raft_command_internal(req, callback, DiskFullOpt::AllowedOnAlmostFull);
+            if *proposed.lock().unwrap() {
+                self.fsm.peer.unsafe_recovery_state =
+                    Some(UnsafeRecoveryState::DemoteFailedVoters {
+                        shared_state,
+                        failed_voters: vec![], // No longer needed since here.
+                        commit_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
+                        demote_after_exit: false,
+                    });
+            }
         }
     }
 
-    fn on_unsafe_recovery_destroy(&mut self, shared_state: UnsafeRecoveryExecutePlanSharedState) {
+    fn on_unsafe_recovery_destroy(&mut self, shared_state: UnsafeRecoveryExecutePlanSyncer) {
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Destroy(shared_state));
-        let region_id = self.fsm.region_id();
-        if self.fsm.peer.is_initialized() {
-            self.ctx
-                .apply_router
-                .schedule_task(region_id, ApplyTask::destroy(region_id, false));
-        } else {
-            self.destroy_peer(false);
-        }
+        self.handle_destroy_peer(DestroyPeerJob {
+            initialized: self.fsm.peer.is_initialized(),
+            region_id: self.region_id(),
+            peer: self.fsm.peer.peer.clone(),
+        });
     }
 
-    fn finish_unsafe_recovery_destroy_peer(&mut self) {
-        if let Some(UnsafeRecoveryState::Destroy(_shared_state)) =
-            &self.fsm.peer.unsafe_recovery_state
-        {
-            self.fsm.peer.unsafe_recovery_state = None;
-        }
-    }
-
-    fn on_unsafe_recovery_wait_apply(&mut self, shared_state: UnsafeRecoveryWaitApplySharedState) {
+    fn on_unsafe_recovery_wait_apply(&mut self, shared_state: UnsafeRecoveryWaitApplySyncer) {
         let target_index = if self.fsm.peer.force_leader.is_some() {
             // For regions that lose quorum (or regions have force leader), whatever has been
             // proposed will be committed. Based on that fact, we simply use "last index" here to
@@ -849,7 +882,7 @@ where
 
     fn on_unsafe_recovery_fill_out_report(
         &mut self,
-        shared_state: UnsafeRecoveryFillOutReportSharedState,
+        shared_state: UnsafeRecoveryFillOutReportSyncer,
     ) {
         info!(
             "Unsafe recovery, filling out peer report.";
@@ -1220,7 +1253,7 @@ where
             SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
                 shared_state,
                 failed_voters,
-            } => self.on_unsafe_recovery_demote_failed_voters(shared_state, failed_voters),
+            } => self.on_unsafe_recovery_pre_demote_failed_voters(shared_state, failed_voters),
             SignificantMsg::UnsafeRecoveryDestroy(shared_state) => {
                 self.on_unsafe_recovery_destroy(shared_state)
             }
@@ -1235,7 +1268,7 @@ where
 
     fn on_enter_pre_force_leader(
         &mut self,
-        shared_state: UnsafeRecoveryForceLeaderSharedState,
+        shared_state: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
     ) {
         match self.fsm.peer.force_leader {
@@ -1484,9 +1517,9 @@ where
         }) = &mut self.fsm.peer.force_leader
         {
             if *ticks == 0 {
-                let owned_shared_state = shared_state.to_owned();
+                let shared_state_clone = shared_state.clone();
                 let s = mem::take(failed_stores);
-                self.on_enter_pre_force_leader(owned_shared_state, s);
+                self.on_enter_pre_force_leader(shared_state_clone, s);
             } else {
                 *ticks -= 1;
             }
@@ -1914,76 +1947,30 @@ where
             }) => {
                 if self.fsm.peer.raft_group.raft.raft_log.applied >= *commit_index {
                     if *demote_after_exit {
-                        let still_need_demote = || {
-                            if failed_voters.is_empty() {
-                                return false;
-                            }
-                            if self.fsm.peer.force_leader.is_none() {
-                                error!(
-                                    "Unsafe recovery, demoting failed voters failed, after exit joint, this peer is no longer forced leader"
-                                );
-                                return false;
-                            }
-                            let mut failed_voter_ids = HashSet::default();
-                            for failed_voter in failed_voters {
-                                failed_voter_ids.insert(failed_voter.get_id());
-                            }
-                            let mut finished = true;
-                            for peer in self.region().get_peers() {
-                                if failed_voter_ids.contains(&peer.get_id())
-                                    && peer.get_role() == metapb::PeerRole::Voter
-                                {
-                                    finished = false;
-                                }
-                            }
-                            if finished {
-                                warn!(
-                                    "Unsafe recovery, failed voters have already been demoted";
-                                    "region" => ?self.region(),
-                                );
-                                return false;
-                            }
-                            true
-                        };
-
-                        let owned_failed_voters = failed_voters.to_owned();
-                        let owned_shared_state = shared_state.clone();
-                        if still_need_demote() {
-                            info!(
-                                "Unsafe recovery, demoting failed voters after exiting joint stata.";
+                        if !self.fsm.peer.is_force_leader() {
+                            error!(
+                                "Unsafe recovery, lost forced leadership after exiting joint state";
                                 "region" => ?self.region(),
-                                "failed_voters" => ?owned_failed_voters
                             );
-                            self.propose_raft_command_internal(
-                                demote_failed_voters_request(
-                                    self.region(),
-                                    &self.fsm.peer.peer,
-                                    owned_failed_voters,
-                                ),
-                                Callback::None,
-                                DiskFullOpt::AllowedOnAlmostFull,
-                            );
-                            self.fsm.peer.unsafe_recovery_state =
-                                Some(UnsafeRecoveryState::DemoteFailedVoters {
-                                    shared_state: owned_shared_state,
-                                    failed_voters: vec![], // No longer needed since here.
-                                    commit_index: self
-                                        .fsm
-                                        .peer
-                                        .raft_group
-                                        .raft
-                                        .raft_log
-                                        .last_index(),
-                                    demote_after_exit: false,
-                                });
-                        } else {
-                            self.fsm.peer.unsafe_recovery_state = None;
                         }
+                        let shared_state_clone = shared_state.clone();
+                        let failed_voters_clone = failed_voters.clone();
+                        self.unsafe_recovery_demote_failed_voters(
+                            shared_state_clone,
+                            failed_voters_clone,
+                        );
                     } else {
                         info!("Unsafe recovery, exiting joint state."; "region" => ?self.region());
                         self.propose_raft_command_internal(
                             exit_joint_request(self.region(), &self.fsm.peer.peer),
-                            Callback::None,
+                            Callback::<EK::Snapshot>::write(Box::new(|resp| {
+                                if resp.response.get_header().has_error() {
+                                    error!(
+                                        "Unsafe recovery, fail to exit joint state";
+                                        "err" => ?resp.response.get_header().get_error(),
+                                    );
+                                }
+                            })),
                             DiskFullOpt::AllowedOnAlmostFull,
                         );
 
@@ -1991,6 +1978,7 @@ where
                     }
                 }
             }
+            // Destroy does not need be processed, the state is cleaned up together with peer.
             Some(_) | None => {}
         }
     }
@@ -2041,11 +2029,6 @@ where
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
                 if !merge_from_snapshot {
                     self.destroy_peer(false);
-                    if let Some(UnsafeRecoveryState::Destroy(_)) =
-                        self.fsm.peer.unsafe_recovery_state
-                    {
-                        self.finish_unsafe_recovery_destroy_peer();
-                    }
                 } else {
                     // Wait for its target peer to apply snapshot and then send `MergeResult` back
                     // to destroy itself
@@ -5873,7 +5856,24 @@ fn demote_failed_voters_request(
     region: &metapb::Region,
     peer: &metapb::Peer,
     mut failed_voters: Vec<metapb::Peer>,
-) -> RaftCmdRequest {
+) -> Option<RaftCmdRequest> {
+    let mut failed_voter_ids = HashSet::default();
+    for failed_voter in &failed_voters {
+        failed_voter_ids.insert(failed_voter.get_id());
+    }
+    let mut finished = true;
+    for peer in region.get_peers() {
+        if failed_voter_ids.contains(&peer.get_id()) && peer.get_role() == metapb::PeerRole::Voter {
+            finished = false;
+        }
+    }
+    if finished {
+        warn!(
+            "Unsafe recovery, failed voters have already been demoted";
+            "region" => ?region,
+        );
+        return None;
+    }
     let mut req = new_admin_request(region.get_id(), peer.clone());
     req.mut_header()
         .set_region_epoch(region.get_region_epoch().clone());
@@ -5887,6 +5887,7 @@ fn demote_failed_voters_request(
             cp
         })
         .collect();
+
     // Promote self if it is a learner.
     if peer.get_role() == metapb::PeerRole::Learner {
         let mut cp = pdpb::ChangePeer::default();
@@ -5894,8 +5895,11 @@ fn demote_failed_voters_request(
         cp.set_peer(peer.clone());
         change_peer_reqs.push(cp);
     }
+    if change_peer_reqs.is_empty() {
+        return None;
+    }
     req.set_admin_request(new_change_peer_v2_request(change_peer_reqs));
-    req
+    Some(req)
 }
 
 fn exit_joint_request(region: &metapb::Region, peer: &metapb::Peer) -> RaftCmdRequest {
