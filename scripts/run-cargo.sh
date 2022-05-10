@@ -50,6 +50,20 @@ if [[ -n "$X_CARGO_CONFIG_FILE" ]]; then
     set +x
 fi
 
+if [[ -n "$X_CARGO_TARGET" ]]; then
+    args="$args --target=$X_CARGO_TARGET"
+    # When `build-std` is enabled, `--target` must be specified explicitly,
+    # and specifying `--target` will cause the generated binary to be located
+    # in the `target/${TARGET}/release` directory instead of `target/release`,
+    # so we need to explicitly specify `--out-dir` here, to avoid errors when
+    # copying the output binary later.
+    if [[ -n "$X_CARGO_RELEASE" && "$X_CARGO_RELEASE" != "0" ]]; then
+        args="$args -Z unstable-options --out-dir=target/release"
+    else
+        args="$args -Z unstable-options --out-dir=target/debug"
+    fi
+fi
+
 if [[ -n "$X_RUSTFLAGS" ]]; then
     export RUSTFLAGS="$RUSTFLAGS $X_RUSTFLAGS"
 fi
