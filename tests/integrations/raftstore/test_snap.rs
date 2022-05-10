@@ -158,7 +158,7 @@ fn test_server_snap_gc_internal(version: &str) {
             >= 2
     );
 
-    let actual_max_per_file_size = cluster.get_snap_mgr(1).get_actual_max_per_file_size();
+    let actual_max_per_file_size = cluster.get_snap_mgr(1).get_actual_max_per_file_size(true);
 
     // version > 6.0.0 should enable multi_snapshot_file feature, which means actual max_per_file_size equals the config
     if version == "6.5.0" {
@@ -566,6 +566,7 @@ fn test_gen_during_heavy_recv() {
         r2,
         snap_term,
         snap_apply_state,
+        true,
         true,
     )
     .unwrap();

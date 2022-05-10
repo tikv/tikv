@@ -1355,6 +1355,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cfg.value().snap_generator_pool_size,
             workers.coprocessor_host.clone(),
             self.router(),
+            Some(Arc::clone(&pd_client)),
         );
         let region_scheduler = workers
             .region_worker

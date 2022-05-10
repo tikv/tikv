@@ -830,6 +830,7 @@ impl Snapshot {
         kv_snap: &EK::Snapshot,
         region: &Region,
         stat: &mut SnapshotStatistics,
+        allow_multi_files_snapshot: bool,
     ) -> RaftStoreResult<()>
     where
         EK: KvEngine,
@@ -872,7 +873,8 @@ impl Snapshot {
                     kv_snap,
                     &begin_key,
                     &end_key,
-                    self.mgr.get_actual_max_per_file_size(),
+                    self.mgr
+                        .get_actual_max_per_file_size(allow_multi_files_snapshot),
                     &self.mgr.limiter,
                 )?
             };
@@ -1016,9 +1018,10 @@ impl Snapshot {
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
+        allow_multi_files_snapshot: bool,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build::<EK>(engine, kv_snap, region, stat)?;
+        self.do_build::<EK>(engine, kv_snap, region, stat, allow_multi_files_snapshot)?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;
@@ -1600,8 +1603,9 @@ impl SnapManager {
         }
     }
 
-    pub fn get_actual_max_per_file_size(&self) -> u64 {
-        self.core.get_actual_max_per_file_size()
+    pub fn get_actual_max_per_file_size(&self, allow_multi_files_snapshot: bool) -> u64 {
+        self.core
+            .get_actual_max_per_file_size(allow_multi_files_snapshot)
     }
 
     pub fn set_enable_multi_snapshot_files(&mut self, enable_multi_snapshot_files: bool) {
@@ -1776,7 +1780,11 @@ impl SnapManagerCore {
         Ok(())
     }
 
-    pub fn get_actual_max_per_file_size(&self) -> u64 {
+    pub fn get_actual_max_per_file_size(&self, allow_multi_files_snapshot: bool) -> u64 {
+        if !allow_multi_files_snapshot {
+            return u64::MAX;
+        }
+
         if self.enable_multi_snapshot_files.load(Ordering::Relaxed) {
             return self.max_per_file_size.load(Ordering::Relaxed);
         }
@@ -2208,6 +2216,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
 
@@ -2321,6 +2330,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s1.exists());
@@ -2335,6 +2345,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s2.exists());
@@ -2487,6 +2498,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s1.exists());
@@ -2504,6 +2516,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s2.exists());
@@ -2576,6 +2589,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s1.exists());
@@ -2593,6 +2607,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s2.exists());
@@ -2668,6 +2683,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         let mut s = Snapshot::new_for_sending(&path, &key1, &mgr_core).unwrap();
@@ -2744,7 +2760,7 @@ pub mod tests {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat)
+        s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat, true)
             .unwrap();
         let v = snap_data.write_to_bytes().unwrap();
 
@@ -2830,6 +2846,7 @@ pub mod tests {
                 &gen_test_region(100, 1, 1),
                 &mut snap_data,
                 &mut stat,
+                true,
             )
             .unwrap();
             snap_data.write_to_bytes().unwrap()
@@ -2853,8 +2870,15 @@ pub mod tests {
             let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let mut snap_data = RaftSnapshotData::default();
             let mut stat = SnapshotStatistics::new();
-            s.build(&engine.kv, &snapshot, &region, &mut snap_data, &mut stat)
-                .unwrap();
+            s.build(
+                &engine.kv,
+                &snapshot,
+                &region,
+                &mut snap_data,
+                &mut stat,
+                true,
+            )
+            .unwrap();
 
             // TODO: this size may change in different RocksDB version.
             let snap_size = 1660;
@@ -2938,7 +2962,7 @@ pub mod tests {
             let mut snap_data = RaftSnapshotData::default();
             snap_data.set_region(region.clone());
             let mut stat = SnapshotStatistics::new();
-            s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat)
+            s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat, true)
                 .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }

@@ -1312,8 +1312,12 @@ where
             index: index.clone(),
             receiver,
         };
+        let mut to_store_id = 0;
+        if let Some(peer) = self.region().get_peers().iter().find(|p| p.id == to) {
+            to_store_id = peer.store_id;
+        }
+        let task = GenSnapTask::new(self.region.get_id(), index, canceled, sender, to_store_id);
 
-        let task = GenSnapTask::new(self.region.get_id(), index, canceled, sender);
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Some(task);
@@ -1886,6 +1890,7 @@ pub fn do_snapshot<E>(
     last_applied_index_term: u64,
     last_applied_state: RaftApplyState,
     for_balance: bool,
+    allow_multi_files_snapshot: bool,
 ) -> raft::Result<Snapshot>
 where
     E: KvEngine,
@@ -1953,6 +1958,7 @@ where
         state.get_region(),
         &mut snap_data,
         &mut stat,
+        allow_multi_files_snapshot,
     )?;
     snap_data.mut_meta().set_for_balance(for_balance);
     let v = snap_data.write_to_bytes()?;
@@ -2054,6 +2060,7 @@ mod tests {
     use engine_traits::{Iterable, SyncMutable, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
+    use pd_client::RpcClient;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, GetEntriesContext, StorageError};
@@ -2726,6 +2733,7 @@ mod tests {
             2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
+            Option::<Arc<RpcClient>>::None,
         );
         worker.start_with_timer(runner);
         let snap = s.snapshot(0, 0);
@@ -3123,6 +3131,7 @@ mod tests {
             2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
+            Option::<Arc<RpcClient>>::None,
         );
         worker.start(runner);
         assert!(s1.snapshot(0, 0).is_err());
