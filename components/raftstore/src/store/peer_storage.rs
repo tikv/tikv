@@ -2049,6 +2049,7 @@ impl CachedEntries {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::coprocessor::CoprocessorHost;
     use crate::store::async_io::write::write_to_db_for_test;
     use crate::store::fsm::apply::compact_raft_log;
@@ -2060,20 +2061,17 @@ mod tests {
     use engine_traits::{Iterable, SyncMutable, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use pd_client::RpcClient;
+    use metapb::{Peer, Store, StoreLabel};
+    use pd_client::PdClient;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, GetEntriesContext, StorageError};
     use std::cell::RefCell;
     use std::path::Path;
-    use std::sync::atomic::*;
     use std::sync::mpsc::*;
-    use std::sync::*;
     use std::time::Duration;
     use tempfile::{Builder, TempDir};
     use tikv_util::worker::{dummy_scheduler, LazyWorker, Scheduler, Worker};
-
-    use super::*;
 
     impl EntryCache {
         fn new_with_cb(cb: impl Fn(i64) + Send + 'static) -> Self {
@@ -2106,6 +2104,15 @@ mod tests {
 
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
+
+        // write some data into CF_DEFAULT cf
+        let mut p = Peer::default();
+        p.set_store_id(1);
+        p.set_id(1 as u64);
+        for k in 0..100 {
+            let key = keys::data_key(format!("akey{}", k).as_bytes());
+            engines.kv.put_msg_cf(CF_DEFAULT, &key[..], &p).unwrap();
+        }
         PeerStorage::new(
             engines,
             &region,
@@ -2179,6 +2186,32 @@ mod tests {
 
     fn size_of<T: protobuf::Message>(m: &T) -> u32 {
         m.compute_size()
+    }
+
+    pub struct TestPdClient {
+        stores: Vec<metapb::Store>,
+    }
+    
+    impl TestPdClient {
+        pub fn new() -> TestPdClient {
+            TestPdClient {
+                stores: vec![metapb::Store::default();4], 
+            } 
+        }
+
+        pub fn add_store(&mut self, store: metapb::Store) {
+            let id = store.get_id();
+            self.stores[id as usize] = store;
+        }
+    }
+
+    impl PdClient for TestPdClient {
+        fn get_store(&self, store_id: u64) -> pd_client::Result<metapb::Store> {
+            if store_id < 4{
+                return Ok(self.stores[store_id as usize].clone());
+            }
+            Err(pd_client::Error::StoreTombstone(format!("{:?}", store_id)))
+        }
     }
 
     #[test]
@@ -2711,6 +2744,15 @@ mod tests {
         )
     }
 
+    fn new_store(id: u64, labels: Vec<StoreLabel>) -> Store {
+        let mut store = Store {
+            id,
+            ..Default::default()
+        };
+        store.set_labels(labels.into());
+        store
+    }
+
     #[test]
     fn test_storage_create_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
@@ -2733,7 +2775,7 @@ mod tests {
             2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
-            Option::<Arc<RpcClient>>::None,
+            Option::<Arc<TestPdClient>>::None,
         );
         worker.start_with_timer(runner);
         let snap = s.snapshot(0, 0);
@@ -2848,6 +2890,78 @@ mod tests {
             Err(RaftError::Store(StorageError::Other(_))) => {}
             res => panic!("unexpected res: {:?}", res),
         }
+    }
+
+    fn test_storage_create_snapshot_for_role(role: &str, expected_snapshot_file_count: usize) {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut cs = ConfState::default();
+        cs.set_voters(vec![1, 2, 3]);
+
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
+        let mut mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.set_enable_multi_snapshot_files(true);
+        mgr.set_max_per_file_size_for_test(500);
+        let mut worker = Worker::new("region-worker").lazy_build("region-worker");
+        let sched = worker.scheduler();
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
+        let (router, _) = mpsc::sync_channel(100);
+        let mut pd_client = TestPdClient::new();
+        let labels = vec![StoreLabel {
+            key: "engine".to_string(),
+            value: role.to_string(),
+            ..Default::default()
+        }];
+        let store = new_store(1, labels);
+        pd_client.add_store(store);
+        let pd_mock = Arc::new(pd_client);
+        let runner = RegionRunner::new(
+            s.engines.kv.clone(),
+            mgr,
+            0,
+            true,
+            2,
+            CoprocessorHost::<KvTestEngine>::default(),
+            router,
+            Some(pd_mock.clone()),
+        );
+        worker.start_with_timer(runner);
+        let snap = s.snapshot(0, 1);
+        let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
+        assert_eq!(snap.unwrap_err(), unavailable);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+        let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
+        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
+        let snap = match *s.snap_state.borrow() {
+            SnapState::Generating { ref receiver, .. } => {
+                receiver.recv_timeout(Duration::from_secs(3)).unwrap()
+            }
+            ref s => panic!("unexpected state: {:?}", s),
+        };
+        assert_eq!(snap.get_metadata().get_index(), 5);
+        assert_eq!(snap.get_metadata().get_term(), 5);
+        assert!(!snap.get_data().is_empty());
+
+        let mut data = RaftSnapshotData::default();
+        protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).unwrap();
+        assert_eq!(data.get_region().get_id(), 1);
+        assert_eq!(data.get_region().get_peers().len(), 1);
+        let files = data.get_meta().get_cf_files(); 
+        assert_eq!(files.len(), expected_snapshot_file_count);
+    }
+
+    #[test]
+    fn test_storage_create_snapshot_for_tiflash() {
+        // each cf will have one cf file
+        test_storage_create_snapshot_for_role("TiFlash"/* case does not matter */, 3);
+    }
+
+
+    #[test]
+    fn test_storage_create_snapshot_for_tikv() {
+        // default cf will have 3 sst files
+        test_storage_create_snapshot_for_role("tikv", 5); 
     }
 
     #[test]
@@ -3131,7 +3245,7 @@ mod tests {
             2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
-            Option::<Arc<RpcClient>>::None,
+            Option::<Arc<TestPdClient>>::None,
         );
         worker.start(runner);
         assert!(s1.snapshot(0, 0).is_err());

@@ -54,6 +54,7 @@ pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
 const TIFLASH: &str = "tiflash";
+const ENGINE: &str = "engine";
 
 /// Region related task
 #[derive(Debug)]
@@ -710,13 +711,16 @@ where
                     } else {
                         let is_tiflash = self.pd_client.as_ref().map_or(false, |pd_client| {
                             if let Ok(s) = pd_client.get_store(to_store_id) {
-                                if let Some(_l) = s.get_labels().iter().find(|l| l.key == TIFLASH) {
+                                if let Some(_l) = s.get_labels().iter().find(|l| {
+                                    l.key.to_lowercase() == ENGINE
+                                        && l.value.to_lowercase() == TIFLASH
+                                }) {
                                     return true;
                                 } else {
                                     return false;
                                 }
                             }
-                            false
+                            true
                         });
                         self.tiflash_stores.insert(to_store_id, is_tiflash);
                         allow_multi_files_snapshot = !is_tiflash;
