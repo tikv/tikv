@@ -552,6 +552,7 @@ where
             }
 
             if raw_modifies.write_size >= MAX_RAW_WRITE_SIZE {
+                self.stats.data.add(&statistics);
                 return Ok(());
             }
 
