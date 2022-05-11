@@ -502,6 +502,7 @@ impl StdThreadBuildWrapper for std::thread::Builder {
         F: Send + 'static,
         T: Send + 'static,
     {
+        #[allow(clippy::disallowed_methods)]
         self.spawn(|| {
             add_thread_name_to_map();
             let res = f();
@@ -516,6 +517,7 @@ impl<T: PoolTicker> ThreadBuildWrapper for YatpPoolBuilder<T> {
     where
         F: Fn() + Send + Sync + 'static,
     {
+        // #[allow(clippy::disallowed_methods)]
         self.after_start(move || {
             add_thread_name_to_map();
             f();
@@ -526,6 +528,7 @@ impl<T: PoolTicker> ThreadBuildWrapper for YatpPoolBuilder<T> {
     where
         F: Fn() + Send + Sync + 'static,
     {
+        // #[allow(clippy::disallowed_methods)]
         self.before_stop(move || {
             f();
             remove_thread_name_from_map();
@@ -538,6 +541,7 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
+        #[allow(clippy::disallowed_methods)]
         self.on_thread_start(move || {
             add_thread_name_to_map();
             f();
@@ -548,6 +552,7 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
+        #[allow(clippy::disallowed_methods)]
         self.on_thread_stop(move || {
             f();
             remove_thread_name_from_map();
@@ -560,6 +565,7 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
     where
         F: Fn() + Send + Sync + 'static,
     {
+        #[allow(clippy::disallowed_methods)]
         self.after_start(move |_| {
             add_thread_name_to_map();
             f();
@@ -570,6 +576,7 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
     where
         F: Fn() + Send + Sync + 'static,
     {
+        #[allow(clippy::disallowed_methods)]
         self.before_stop(move |_| {
             f();
             remove_thread_name_from_map();
@@ -582,6 +589,7 @@ where
     T: Future + Send + 'static,
     T::Output: Send + 'static,
 {
+    #[allow(clippy::disallowed_methods)]
     tokio::spawn(async {
         add_thread_name_to_map();
         let res = f.await;

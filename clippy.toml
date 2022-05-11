@@ -1,0 +1,14 @@
+disallowed-methods = [
+    { path = "std::thread::Builder::spawn", reason = "Wrapper function should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+
+    { path = "tokio::spawn", reason = "Wrapper function should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+
+    { path = "tikv_util::yatp_pool::YatpPoolBuilder::after_start", reason = "Wrapper function should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+    { path = "tikv_util::yatp_pool::YatpPoolBuilder::before_stop", reason = "Wrapper function should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+
+    { path = "tokio::runtime::builder::Builder::on_thread_start", reason = "Wrapper function should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+    { path = "tokio::runtime::builder::Builder::on_thread_stop", reason = "Wrapper function should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+
+    { path = "futures_executor::thread_pool::ThreadPoolBuilder::after_start", reason = "Wrapper function should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+    { path = "futures_executor::thread_pool::ThreadPoolBuilder::before_stop", reason = "Wrapper function should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+]
