@@ -1,8 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use collections::HashMap;
 use engine_traits::KvEngine;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use raft::StateRole;
@@ -13,21 +12,21 @@ use raftstore::coprocessor::{
 };
 
 use crate::CausalTsProvider;
-use crate::Resolver;
+use crate::TsTracker;
 
 /// CausalObserver appends timestamp for RawKV V2 data,
 /// and invoke causal_ts_provider.flush() on specified event, e.g. leader transfer, snapshot apply.
 /// Should be used ONLY when API v2 is enabled.
-pub struct CausalObserver<Ts: CausalTsProvider> {
+pub struct CausalObserver<Ts: CausalTsProvider, Cb: TsTracker> {
     causal_ts_provider: Arc<Ts>,
-    subscribed_regions: Arc<RwLock<HashMap<u64, Arc<RwLock<Resolver>>>>>,
+    causal_barrier: Option<Cb>,
 }
 
-impl<Ts: CausalTsProvider> Clone for CausalObserver<Ts> {
+impl<Ts: CausalTsProvider, Cb: TsTracker> Clone for CausalObserver<Ts, Cb> {
     fn clone(&self) -> Self {
         Self {
             causal_ts_provider: self.causal_ts_provider.clone(),
-            subscribed_regions: self.subscribed_regions.clone(),
+            causal_barrier: self.causal_barrier.clone(),
         }
     }
 }
@@ -35,11 +34,18 @@ impl<Ts: CausalTsProvider> Clone for CausalObserver<Ts> {
 // Causal observer's priority should be higher than all other observers, to avoid being bypassed.
 const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
 
-impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
+impl<Ts: CausalTsProvider + 'static, Cb: TsTracker + 'static> CausalObserver<Ts, Cb> {
     pub fn new(causal_ts_provider: Arc<Ts>) -> Self {
+        Self::new_with_causal_barrier(causal_ts_provider, None)
+    }
+
+    pub fn new_with_causal_barrier(
+        causal_ts_provider: Arc<Ts>,
+        causal_barrier: Option<Cb>,
+    ) -> Self {
         Self {
             causal_ts_provider,
-            subscribed_regions: Arc::default(),
+            causal_barrier,
         }
     }
 
@@ -52,37 +58,19 @@ impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
             .registry
             .register_role_observer(CAUSAL_OBSERVER_PRIORITY, BoxRoleObserver::new(self.clone()));
     }
-
-    pub fn subscribe_region(&self, region_id: u64, resolver: Arc<RwLock<Resolver>>) {
-        debug!("causal ob subscribe region"; "region_id" => region_id);
-        self.subscribed_regions
-            .write()
-            .unwrap()
-            .insert(region_id, resolver);
-    }
-
-    pub fn unsubscribe_region(&self, region_id: u64) {
-        debug!("causal ob unsubscribe region"; "region_id" => region_id);
-        let mut regions = self.subscribed_regions.write().unwrap();
-        regions.remove(&region_id);
-    }
 }
 
-impl<Ts: CausalTsProvider> Coprocessor for CausalObserver<Ts> {}
+impl<Ts: CausalTsProvider, Cb: TsTracker> Coprocessor for CausalObserver<Ts, Cb> {}
 
-impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
+impl<Ts: CausalTsProvider, Cb: TsTracker> QueryObserver for CausalObserver<Ts, Cb> {
     fn pre_propose_query(
         &self,
         ctx: &mut ObserverContext<'_>,
         requests: &mut Vec<RaftRequest>,
     ) -> coprocessor::Result<()> {
-        let mut ts = None;
+        let mut ts;
 
-        let region_id = ctx.region().id;
-        let mut m = self.subscribed_regions.write().unwrap();
-        let resolver = m.get_mut(&region_id);
-
-        if let Some(resolver) = resolver {
+        if let Some(causal_barrier) = self.causal_barrier.as_ref() {
             let mut need_track = false;
             for req in requests.iter() {
                 if req.get_cmd_type() == CmdType::Put
@@ -93,33 +81,27 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
                 }
             }
             if need_track {
-                if ts.is_none() {
-                    ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
-                        coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
-                    })?);
-                }
-                resolver.write().unwrap().track_ts(ts.unwrap());
+                ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
+                    coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
+                })?);
+                causal_barrier.track_ts(ctx.region().id, ts.unwrap())
             }
         }
 
-        ts = None;
+        ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
+            coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
+        })?);
         for req in requests.iter_mut().filter(|r| {
             r.get_cmd_type() == CmdType::Put
                 && ApiV2::parse_key_mode(r.get_put().get_key()) == KeyMode::Raw
         }) {
-            if ts.is_none() {
-                ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
-                    coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
-                })?);
-            }
-
             ApiV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
         }
         Ok(())
     }
 }
 
-impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
+impl<Ts: CausalTsProvider, Cb: TsTracker> RoleObserver for CausalObserver<Ts, Cb> {
     /// Observe becoming leader, to flush CausalTsProvider.
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         if role_change.state == StateRole::Leader {
@@ -136,6 +118,7 @@ impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::tests::TestTsTracker;
     use crate::BatchTsoProvider;
     use api_version::{ApiV2, KvFormat};
     use futures::executor::block_on;
@@ -147,7 +130,7 @@ pub mod tests {
     use test_raftstore::TestPdClient;
     use txn_types::{Key, TimeStamp};
 
-    fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>> {
+    fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>, TestTsTracker> {
         let pd_cli = Arc::new(TestPdClient::new(0, true));
         pd_cli.set_tso(100.into());
         let causal_ts_provider =

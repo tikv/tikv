@@ -66,7 +66,9 @@ impl TestEngineBuilder {
     // Consider decoupling them.
     fn register_causal_observer(engine: &mut RocksEngine) {
         let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-        let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        let causal_ob = causal_ts::CausalObserver::<_, causal_ts::tests::TestTsTracker>::new(
+            causal_ts_provider,
+        );
         engine.register_observer(|host| {
             causal_ob.register_to(host);
         });

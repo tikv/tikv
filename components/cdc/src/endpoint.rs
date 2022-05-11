@@ -4,10 +4,10 @@ use std::cmp::Reverse;
 use std::cmp::{Ord, Ordering as CmpOrdering, PartialOrd};
 use std::collections::BinaryHeap;
 use std::fmt;
-use std::sync::{Arc, Mutex as StdMutex, RwLock};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use causal_ts::{CausalObserver, CausalTsProvider, Resolver as RawKvResolver};
+use causal_ts::Resolver as RawKvResolver;
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
@@ -49,7 +49,7 @@ use crate::initializer::Initializer;
 use crate::metrics::*;
 use crate::old_value::{OldValueCache, OldValueCallback};
 use crate::service::{Conn, ConnID, FeatureGate};
-use crate::{CdcObserver, Error};
+use crate::{CdcObserver, CdcTsTracker, Error};
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
@@ -160,6 +160,10 @@ pub enum Task {
         incremental_scan_barrier: CdcEvent,
         cb: InitCallback,
     },
+    TrackTs {
+        region_id: u64,
+        ts: TimeStamp,
+    },
     TxnExtra(TxnExtra),
     Validate(Validate),
     ChangeConfig(ConfigChange),
@@ -224,6 +228,14 @@ impl fmt::Debug for Task {
                 .field("type", &"init_downstream")
                 .field("region_id", &region_id)
                 .field("downstream", &downstream_id)
+                .finish(),
+            Task::TrackTs {
+                ref region_id,
+                ref ts,
+            } => de
+                .field("type", &"track_ts")
+                .field("region_id", &region_id)
+                .field("ts", &ts)
                 .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
             Task::Validate(validate) => match validate {
@@ -308,7 +320,7 @@ impl ResolvedRegionHeap {
     }
 }
 
-pub struct Endpoint<T, E, Ts: CausalTsProvider> {
+pub struct Endpoint<T, E> {
     cluster_id: u64,
 
     capture_regions: HashMap<u64, Delegate>,
@@ -317,7 +329,7 @@ pub struct Endpoint<T, E, Ts: CausalTsProvider> {
     raft_router: T,
     engine: E,
     observer: CdcObserver,
-    causal_observer: Option<CausalObserver<Ts>>,
+    ts_tracker: CdcTsTracker,
 
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
@@ -361,9 +373,7 @@ pub struct Endpoint<T, E, Ts: CausalTsProvider> {
     warn_resolved_ts_repeat_count: usize,
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider>
-    Endpoint<T, E, Ts>
-{
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
@@ -373,13 +383,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
         raft_router: T,
         engine: E,
         observer: CdcObserver,
-        causal_observer: Option<CausalObserver<Ts>>,
+        ts_tracker: CdcTsTracker,
         store_meta: Arc<StdMutex<StoreMeta>>,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: MemoryQuota,
-    ) -> Endpoint<T, E, Ts> {
+    ) -> Endpoint<T, E> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
             .worker_threads(config.incremental_scan_threads)
@@ -429,7 +439,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
             raft_router,
             engine,
             observer,
-            causal_observer,
+            ts_tracker,
             store_meta,
             concurrency_manager,
             txnkv_min_resolved_ts: TimeStamp::max(),
@@ -524,9 +534,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                 if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                     is_last = delegate.unsubscribe(downstream_id, err);
                     if delegate.rawkv_resolver.is_some() && !delegate.has_rawkv_downstream() {
-                        if let Some(causal_observer) = &self.causal_observer {
-                            causal_observer.unsubscribe_region(region_id);
-                        }
+                        self.ts_tracker.unsubscribe_region(region_id);
                     }
                 }
                 if let Some(conn) = self.connections.get_mut(&conn_id) {
@@ -564,9 +572,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                 if need_remove {
                     if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                         if delegate.rawkv_resolver.is_some() {
-                            if let Some(causal_observer) = &self.causal_observer {
-                                causal_observer.unsubscribe_region(region_id);
-                            }
+                            self.ts_tracker.unsubscribe_region(region_id);
                         }
                         delegate.stop(err);
                     }
@@ -594,9 +600,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                                 if !delegate.has_rawkv_downstream()
                                     && delegate.rawkv_resolver.is_some()
                                 {
-                                    if let Some(causal_observer) = &self.causal_observer {
-                                        causal_observer.unsubscribe_region(region_id);
-                                    }
+                                    self.ts_tracker.unsubscribe_region(region_id);
                                 }
                                 if is_last {
                                     let delegate = self.capture_regions.remove(&region_id).unwrap();
@@ -828,12 +832,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                 let region_id = delegate.region_id;
                 match resolver {
                     Resolver::RawKvResolver(rawkv_resolver) => {
-                        let rawkv_resolver = Arc::new(RwLock::new(rawkv_resolver));
-                        downstream =
-                            delegate.on_region_ready_for_rawkv(rawkv_resolver.clone(), region);
-                        if let Some(causal_observer) = &self.causal_observer {
-                            causal_observer.subscribe_region(region_id, rawkv_resolver);
-                        }
+                        downstream = delegate.on_region_ready_for_rawkv(rawkv_resolver, region);
+                        self.ts_tracker.subscribe_region(region_id);
                     }
                     Resolver::TxnKvResolver(txnkv_resolver) => {
                         downstream = delegate.on_region_ready_for_txnkv(txnkv_resolver, region);
@@ -931,8 +931,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                     delegate
                         .rawkv_resolver
                         .as_ref()
-                        .unwrap()
-                        .read()
                         .map_or(TimeStamp::zero(), |r| r.resolved_ts())
                 };
 
@@ -1242,11 +1240,21 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.get_id(), conn);
     }
+
+    fn on_track_ts(&mut self, region_id: u64, ts: TimeStamp) {
+        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+            if let Some(ref mut resolver) = delegate.rawkv_resolver {
+                resolver.track_ts(ts);
+            } else {
+                error!("cdc region has subscribed in CdcTsTracker, but rawkv_resolver is not ready"; "region_id" => region_id);
+            }
+        } else {
+            error!("cdc region has subscribed in CdcTsTracker, but delegate is not existing"; "region_id" => region_id);
+        }
+    }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider> Runnable
-    for Endpoint<T, E, Ts>
-{
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
@@ -1301,6 +1309,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                 }
                 cb();
             }
+            Task::TrackTs { region_id, ts } => self.on_track_ts(region_id, ts),
             Task::TxnExtra(txn_extra) => {
                 for (k, v) in txn_extra.old_values {
                     self.old_value_cache.insert(k, v);
@@ -1319,9 +1328,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider> RunnableWithTimer
-    for Endpoint<T, E, Ts>
-{
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoint<T, E> {
     fn on_timeout(&mut self) {
         CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);
 
@@ -1391,7 +1398,6 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 mod tests {
     use std::ops::{Deref, DerefMut};
 
-    use causal_ts::tests::TestProvider;
     use engine_rocks::RocksEngine;
     use kvproto::cdcpb::{ChangeDataRequestKvApi, Header};
     use kvproto::errorpb::Error as ErrorHeader;
@@ -1410,7 +1416,7 @@ mod tests {
 
     struct TestEndpointSuite {
         // The order must ensure `endpoint` be dropped before other fields.
-        endpoint: Endpoint<MockRaftStoreRouter, RocksEngine, TestProvider>,
+        endpoint: Endpoint<MockRaftStoreRouter, RocksEngine>,
         raft_router: MockRaftStoreRouter,
         task_rx: ReceiverWrapper<Task>,
         raft_rxs: HashMap<u64, tikv_util::mpsc::Receiver<PeerMsg<RocksEngine>>>,
@@ -1450,7 +1456,7 @@ mod tests {
     }
 
     impl Deref for TestEndpointSuite {
-        type Target = Endpoint<MockRaftStoreRouter, RocksEngine, TestProvider>;
+        type Target = Endpoint<MockRaftStoreRouter, RocksEngine>;
         fn deref(&self) -> &Self::Target {
             &self.endpoint
         }
@@ -1465,7 +1471,6 @@ mod tests {
     fn mock_endpoint(
         cfg: &CdcConfig,
         engine: Option<RocksEngine>,
-        causal_ob: Option<CausalObserver<TestProvider>>,
         api_version: ApiVersion,
     ) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
@@ -1483,8 +1488,8 @@ mod tests {
                     .unwrap()
                     .kv_engine()
             }),
-            CdcObserver::new(task_sched),
-            causal_ob,
+            CdcObserver::new(task_sched.clone()),
+            CdcTsTracker::new(task_sched),
             Arc::new(StdMutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
             Arc::new(Environment::new(1)),
@@ -1503,7 +1508,7 @@ mod tests {
     #[test]
     fn test_api_version_check() {
         let cfg = CdcConfig::default();
-        let mut suite = mock_endpoint(&cfg, None, None, ApiVersion::V1);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1630,7 +1635,7 @@ mod tests {
     #[test]
     fn test_change_endpoint_cfg() {
         let cfg = CdcConfig::default();
-        let mut suite = mock_endpoint(&cfg, None, None, ApiVersion::V2);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V2);
         let ep = &mut suite.endpoint;
 
         // Modify min_ts_interval and hibernate_regions_compatible.
@@ -1755,7 +1760,7 @@ mod tests {
     fn test_raftstore_is_busy() {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, _rx) = channel::channel(1, quota);
-        let mut suite = mock_endpoint(&CdcConfig::default(), None, None, ApiVersion::V1);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
 
         // Fill the channel.
         suite.add_region(1 /* region id */, 1 /* cap */);
@@ -1801,7 +1806,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None, None, ApiVersion::V1);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1981,7 +1986,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None, None, ApiVersion::V1);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
 
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
@@ -2134,7 +2139,7 @@ mod tests {
 
     #[test]
     fn test_deregister() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None, None, ApiVersion::V1);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -2275,7 +2280,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None, None, ApiVersion::V2);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V2);
 
         // Open five connections a, b, c, d, e,
         // registers region 1, 2 to conn a,
@@ -2425,7 +2430,7 @@ mod tests {
     // too, because epoch not match.
     #[test]
     fn test_deregister_conn_then_delegate() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None, None, ApiVersion::V1);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
 

@@ -3,7 +3,7 @@
 use std::mem;
 use std::string::String;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use causal_ts::Resolver as RawKvResolver;
@@ -232,7 +232,7 @@ pub struct Delegate {
     // None if the delegate is not initialized.
     region: Option<Region>,
     pub txnkv_resolver: Option<TxnKvResolver>,
-    pub rawkv_resolver: Option<Arc<RwLock<RawKvResolver>>>,
+    pub rawkv_resolver: Option<RawKvResolver>,
 
     // Downstreams after the delegate has been resolved.
     txnkv_resolved_downstreams: Vec<Downstream>,
@@ -457,7 +457,7 @@ impl Delegate {
 
     pub fn on_region_ready_for_rawkv(
         &mut self,
-        resolver: Arc<RwLock<RawKvResolver>>,
+        mut resolver: RawKvResolver,
         region: Region,
     ) -> Vec<(&Downstream, Error)> {
         assert!(
@@ -468,7 +468,7 @@ impl Delegate {
 
         // Mark the delegate as initialized.
         let mut pending = self.rawkv_pending.take().unwrap();
-        let resolved_ts = resolver.write().unwrap().resolve(pending.rawkv_resolved_ts);
+        let resolved_ts = resolver.resolve(pending.rawkv_resolved_ts);
         assert!(
             resolved_ts == pending.rawkv_resolved_ts,
             "rawkv resolver has initialized"
@@ -513,13 +513,8 @@ impl Delegate {
             return None;
         }
         debug!("cdc try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
-        let resolved_ts = self
-            .rawkv_resolver
-            .as_mut()
-            .unwrap()
-            .write()
-            .unwrap()
-            .resolve(min_ts);
+        let resolver = self.rawkv_resolver.as_mut().unwrap();
+        let resolved_ts = resolver.resolve(min_ts);
         debug!("cdc rawkv resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
@@ -724,10 +719,7 @@ impl Delegate {
             self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
             match self.rawkv_resolver {
                 Some(ref mut resolver) => {
-                    resolver
-                        .write()
-                        .unwrap()
-                        .untrack_ts_before(rawkv_max_ts.into());
+                    resolver.untrack_ts_before(rawkv_max_ts.into());
                 }
                 None => {
                     assert!(self.rawkv_pending.is_some(), "region resolver not ready");
@@ -1351,8 +1343,7 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(1);
         region.mut_region_epoch().set_version(1);
         {
-            let failures = delegate
-                .on_region_ready_for_rawkv(Arc::new(RwLock::new(RawKvResolver::new(1))), region);
+            let failures = delegate.on_region_ready_for_rawkv(RawKvResolver::new(1), region);
             assert_eq!(failures.len(), 1);
             let id = failures[0].0.id;
             delegate.unsubscribe(id, None);

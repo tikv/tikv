@@ -3,7 +3,6 @@
 use std::sync::*;
 use std::time::Duration;
 
-use causal_ts::{tests::TestProvider, CausalObserver};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -132,7 +131,7 @@ impl TestSuiteBuilder {
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
         let mut cdc_obs = HashMap::default();
-        let mut causal_obs = HashMap::default();
+        let mut ts_trackers = HashMap::default();
         let mut concurrency_managers = HashMap::default();
         // Hack! node id are generated from 1..count+1.
         for id in 1..=count as u64 {
@@ -157,23 +156,15 @@ impl TestSuiteBuilder {
             );
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
+            let ts_tracker = cdc::CdcTsTracker::new(scheduler.clone());
             cdc_obs.insert(id, cdc_ob.clone());
+            ts_trackers.insert(id, ts_tracker.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
                     cdc_ob.register_to(host);
                 },
             ));
 
-            if cluster.cfg.tikv.storage.api_version == 2 {
-                let causal_ts_provider = Arc::new(TestProvider::default());
-                let causal_ob = CausalObserver::new(causal_ts_provider);
-                causal_obs.insert(id, Some(causal_ob.clone()));
-                sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
-                    move |host: &mut CoprocessorHost<RocksEngine>| {
-                        causal_ob.register_to(host);
-                    },
-                ));
-            }
             endpoints.insert(id, worker);
         }
 
@@ -182,13 +173,10 @@ impl TestSuiteBuilder {
             let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = cdc_obs.get(id).unwrap().clone();
+            let ts_tracker = ts_trackers.get(id).unwrap().clone();
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
             let cfg = CdcConfig::default();
-            let mut causal_ob = None;
-            if cluster.cfg.tikv.storage.api_version == 2 {
-                causal_ob = causal_obs.get(id).unwrap().clone();
-            }
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
                 &cfg,
@@ -198,7 +186,7 @@ impl TestSuiteBuilder {
                 raft_router,
                 cluster.engines[id].kv.clone(),
                 cdc_ob,
-                causal_ob,
+                ts_tracker,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
                 env,
@@ -217,7 +205,6 @@ impl TestSuiteBuilder {
             cluster,
             endpoints,
             cdc_obs,
-            causal_obs,
             concurrency_managers,
             env: Arc::new(Environment::new(1)),
             tikv_cli: HashMap::default(),
@@ -230,7 +217,6 @@ pub struct TestSuite {
     pub cluster: Cluster<ServerCluster>,
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub cdc_obs: HashMap<u64, CdcObserver>,
-    pub causal_obs: HashMap<u64, Option<CausalObserver<TestProvider>>>,
     tikv_cli: HashMap<u64, TikvClient>,
     cdc_cli: HashMap<u64, ChangeDataClient>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,

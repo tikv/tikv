@@ -30,6 +30,10 @@ pub trait CausalTsProvider: Send + Sync {
     }
 }
 
+pub trait TsTracker: Send + Sync + Clone {
+    fn track_ts(&self, region_id: u64, ts: TimeStamp);
+}
+
 pub mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,5 +57,12 @@ pub mod tests {
         fn get_ts(&self) -> Result<TimeStamp> {
             Ok(self.ts.fetch_add(1, Ordering::Relaxed).into())
         }
+    }
+
+    #[derive(Clone)]
+    pub struct TestTsTracker {}
+
+    impl TsTracker for TestTsTracker {
+        fn track_ts(&self, _: u64, _: TimeStamp) {}
     }
 }

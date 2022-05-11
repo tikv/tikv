@@ -716,27 +716,9 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             );
         }
 
-        // Register causal observer for RawKV API V2
-        let mut causal_ob_opt = None;
-        if let ApiVersion::V2 = F::TAG {
-            let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
-                self.pd_client.clone(),
-                self.config.causal_ts.renew_interval.0,
-                self.config.causal_ts.renew_batch_min_size,
-            ));
-            if let Err(e) = tso {
-                panic!("Causal timestamp provider initialize failed: {:?}", e);
-            }
-            let causal_ts_provider = Arc::new(tso.unwrap());
-            info!("Causal timestamp provider startup.");
-
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-            causal_ob_opt = Some(causal_ob);
-        }
-
         // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        let cdc_ts_tracker = cdc::CdcTsTracker::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
@@ -761,6 +743,26 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         } else {
             None
         };
+
+        // Register causal observer for RawKV API V2
+        if let ApiVersion::V2 = F::TAG {
+            let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
+                self.pd_client.clone(),
+                self.config.causal_ts.renew_interval.0,
+                self.config.causal_ts.renew_batch_min_size,
+            ));
+            if let Err(e) = tso {
+                panic!("Causal timestamp provider initialize failed: {:?}", e);
+            }
+            let causal_ts_provider = Arc::new(tso.unwrap());
+            info!("Causal timestamp provider startup.");
+
+            let causal_ob = causal_ts::CausalObserver::new_with_causal_barrier(
+                causal_ts_provider,
+                Some(cdc_ts_tracker.clone()),
+            );
+            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        }
 
         let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
         let check_leader_scheduler = self
@@ -927,7 +929,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.router.clone(),
             self.engines.as_ref().unwrap().engines.kv.clone(),
             cdc_ob,
-            causal_ob_opt,
+            cdc_ts_tracker,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
             server.env(),
