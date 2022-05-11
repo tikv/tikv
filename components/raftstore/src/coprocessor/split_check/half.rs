@@ -360,23 +360,34 @@ mod tests {
         exp_bucket_keys.clear();
 
         // use non-existing bucket-range to simulate deleted data
-        let start = format!("{:04}", 11).into_bytes();
-        let end = format!("{:04}", 12).into_bytes();
-        let end2 = format!("{:04}", 13).into_bytes();
-        let bucket_range = BucketRange(
-            Key::from_raw(&start).as_encoded().clone(),
-            Key::from_raw(&end).as_encoded().clone(),
-        );
-        let bucket_range2 = BucketRange(
-            Key::from_raw(&end).as_encoded().clone(),
-            Key::from_raw(&end2).as_encoded().clone(),
-        );
+        // [0001,0002] [00032, 00035], [0004,0006], [0012, 0015], [0016, 0017]
+        //  non-empty       empty         non-empty     empty       empty
+        let mut starts = vec![format!("{:04}", 1).into_bytes()];
+        let mut ends = vec![format!("{:04}", 2).into_bytes()];
+        starts.push(format!("{:05}", 32).into_bytes());
+        ends.push(format!("{:05}", 35).into_bytes());
+        starts.push(format!("{:04}", 4).into_bytes());
+        ends.push(format!("{:04}", 6).into_bytes());
+        starts.push(format!("{:04}", 12).into_bytes());
+        ends.push(format!("{:04}", 15).into_bytes());
+        starts.push(format!("{:04}", 16).into_bytes());
+        ends.push(format!("{:04}", 17).into_bytes());
+        let mut bucket_range_list = vec![BucketRange(
+            Key::from_raw(&starts[0]).as_encoded().clone(),
+            Key::from_raw(&ends[0]).as_encoded().clone(),
+        )];
+        for i in 1..starts.len() {
+            bucket_range_list.push(BucketRange(
+                Key::from_raw(&starts[i]).as_encoded().clone(),
+                Key::from_raw(&ends[i]).as_encoded().clone(),
+            ))
+        }
 
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             false,
             CheckPolicy::Scan,
-            Some(vec![bucket_range, bucket_range2]),
+            Some(bucket_range_list),
         ));
 
         loop {
@@ -384,18 +395,22 @@ mod tests {
                 _,
                 CasualMessage::RefreshRegionBuckets {
                     region_epoch: _,
-                    mut buckets,
+                    buckets,
                     bucket_ranges,
                     ..
                 },
             )) = rx.try_recv()
             {
                 assert_eq!(buckets.len(), bucket_ranges.unwrap().len());
-                assert_eq!(buckets.len(), 2);
-                for _i in 0..2 {
-                    let bucket = buckets.pop().unwrap();
-                    assert!(bucket.keys.is_empty());
-                    assert_eq!(bucket.size, 0);
+                assert_eq!(buckets.len(), 5);
+                for i in 0..5 {
+                    if i == 0 || i == 2 {
+                        assert!(!buckets[i].keys.is_empty());
+                        assert!(buckets[i].size > 0);
+                    } else {
+                        assert!(buckets[i].keys.is_empty());
+                        assert_eq!(buckets[i].size, 0);
+                    }
                 }
                 break;
             }
