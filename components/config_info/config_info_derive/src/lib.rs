@@ -164,8 +164,6 @@ fn build_filed_constructer(
     desc: String,
 ) -> Result<TokenStream> {
     let CfgAttrs {
-        is_sub_module: _,
-        skipped: _,
         default_value_desc,
         min_value,
         min_value_desc,
@@ -173,6 +171,7 @@ fn build_filed_constructer(
         max_value_desc,
         value_options,
         field_type,
+        ..
     } = attrs;
     let convert_field = |l: Lit| match l {
         Lit::Str(s) => {
