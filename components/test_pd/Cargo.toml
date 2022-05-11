@@ -5,13 +5,13 @@ edition = "2018"
 publish = false
 
 [dependencies]
+collections = { path = "../collections" }
 fail = "0.5"
 futures = "0.3"
-grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+pd_client = { path = "../pd_client", default-features = false }
+security = { path = "../security", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-pd_client = { path = "../pd_client", default-features = false }
-security = { path = "../security",  default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
-collections = { path = "../collections" }

@@ -55,7 +55,7 @@ ENABLE_FEATURES += mem-profiling
 endif
 endif
 
-# Disable portable on MacOS to sidestep the compiler bug in clang 4.9
+# Disable portable on macOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
@@ -89,7 +89,7 @@ endif
 
 # Set the storage engines used for testing
 ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
-ENABLE_FEATURES += test-engines-rocksdb
+ENABLE_FEATURES += test-engine-kv-rocksdb test-engine-raft-raft-engine
 else
 # Caller is responsible for setting up test engine features
 endif
@@ -271,10 +271,11 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
+	@cargo install -q cargo-sort 
 
 format: pre-format
-	@cargo fmt -- --check >/dev/null || \
-	cargo fmt
+	@cargo fmt
+	@cargo sort -w ./Cargo.toml ./*/Cargo.toml components/*/Cargo.toml cmd/*/Cargo.toml >/dev/null 
 
 doc:
 	@cargo doc --workspace --document-private-items \

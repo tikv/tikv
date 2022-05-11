@@ -1,24 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, convert::TryFrom, sync::Arc};
 
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::Aggregation;
-use tipb::{Expr, FieldType};
-
-use crate::interface::*;
-use crate::util::aggr_executor::*;
-use crate::util::*;
 use tidb_query_aggr::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::match_template_evaltype;
-use tidb_query_expr::RpnStackNode;
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
+    expr::{EvalConfig, EvalContext},
+    match_template_evaltype, EvalType, FieldTypeAccessor,
+};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use tipb::{Aggregation, Expr, FieldType};
+
+use crate::{
+    interface::*,
+    util::{aggr_executor::*, *},
+};
 
 pub struct BatchStreamAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, BatchStreamAggregationImpl>,
@@ -441,16 +441,17 @@ fn update_current_states(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeTp};
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder, expr::EvalWarnings, Collation, FieldTypeTp,
+    };
+    use tidb_query_expr::{
+        impl_arithmetic::{arithmetic_fn_meta, RealPlus},
+        RpnExpressionBuilder,
+    };
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::util::mock_executor::MockExecutor;
-    use tidb_query_datatype::expr::EvalWarnings;
-    use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
-    use tidb_query_expr::RpnExpressionBuilder;
 
     #[test]
     fn test_it_works_integration() {

@@ -1,25 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc::channel;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{fs, thread};
-
-use kvproto::metapb;
-use kvproto::pdpb;
-use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::RaftMessage;
-use raft::eraftpb::MessageType;
+use std::{
+    fs,
+    sync::{mpsc::channel, Arc},
+    thread,
+    time::Duration,
+};
 
 use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable, CF_WRITE};
 use keys::data_key;
+use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
-use raftstore::store::{Bucket, BucketRange, Callback, WriteResponse};
-use raftstore::Result;
+use raft::eraftpb::MessageType;
+use raftstore::{
+    store::{Bucket, BucketRange, Callback, WriteResponse},
+    Result,
+};
 use test_raftstore::*;
-use tikv::storage::kv::SnapshotExt;
-use tikv::storage::Snapshot;
+use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::config::*;
 use txn_types::{Key, PessimisticLock};
 

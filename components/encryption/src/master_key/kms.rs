@@ -1,18 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Mutex;
-use std::time::Duration;
+use std::{sync::Mutex, time::Duration};
 
 use async_trait::async_trait;
 use derive_more::Deref;
 use kvproto::encryptionpb::EncryptedContent;
+use tikv_util::{
+    box_err, error,
+    stream::{retry, with_timeout},
+};
 use tokio::runtime::{Builder, Runtime};
 
 use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
-use crate::crypter::{Iv, PlainKey};
-use crate::{Error, Result};
-use tikv_util::stream::{retry, with_timeout};
-use tikv_util::{box_err, error};
+use crate::{
+    crypter::{Iv, PlainKey},
+    Error, Result,
+};
 
 #[async_trait]
 pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
@@ -229,10 +232,10 @@ mod fake {
 
 #[cfg(test)]
 mod tests {
-    use super::fake::FakeKms;
-    use super::*;
     use hex::FromHex;
     use matches::assert_matches;
+
+    use super::{fake::FakeKms, *};
 
     #[test]
     fn test_state() {

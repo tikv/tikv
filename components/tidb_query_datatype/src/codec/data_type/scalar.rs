@@ -2,13 +2,14 @@
 
 use std::cmp::Ordering;
 
-use crate::codec::collation::Collator;
-use crate::{match_template_collator, match_template_evaltype};
-use crate::{Collation, EvalType, FieldTypeAccessor};
 use match_template::match_template;
 use tipb::FieldType;
 
 use super::*;
+use crate::{
+    codec::collation::Collator, match_template_collator, match_template_evaltype, Collation,
+    EvalType, FieldTypeAccessor,
+};
 
 /// A scalar value container, a.k.a. datum, for all concrete eval types.
 ///

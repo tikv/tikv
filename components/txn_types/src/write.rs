@@ -1,13 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use codec::prelude::NumberDecoder;
 use std::mem::size_of;
+
+use codec::prelude::NumberDecoder;
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
-use crate::lock::LockType;
-use crate::timestamp::TimeStamp;
-use crate::types::{Value, SHORT_VALUE_PREFIX};
-use crate::{Error, ErrorInner, Result};
+use crate::{
+    lock::LockType,
+    timestamp::TimeStamp,
+    types::{Value, SHORT_VALUE_PREFIX},
+    Error, ErrorInner, Result,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {

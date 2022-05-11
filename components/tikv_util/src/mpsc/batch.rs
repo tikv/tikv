@@ -1,16 +1,22 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::pin::Pin;
-use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    pin::Pin,
+    ptr::null_mut,
+    sync::{
+        atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
 };
-use futures::stream::Stream;
-use futures::task::{Context, Poll, Waker};
+use futures::{
+    stream::Stream,
+    task::{Context, Poll, Waker},
+};
 
 struct State {
     // If the receiver can't get any messages temporarily in `poll` context, it will put its
@@ -344,12 +350,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{mpsc, Mutex};
-    use std::{thread, time};
+    use std::{
+        sync::{mpsc, Mutex},
+        thread, time,
+    };
 
-    use futures::future::{self, BoxFuture, FutureExt};
-    use futures::stream::{self, StreamExt};
-    use futures::task::{self, ArcWake, Poll};
+    use futures::{
+        future::{self, BoxFuture, FutureExt},
+        stream::{self, StreamExt},
+        task::{self, ArcWake, Poll},
+    };
     use tokio::runtime::Builder;
 
     use super::*;

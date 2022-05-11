@@ -1,18 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::From;
-use std::fs::{read_dir, File};
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::Path;
+use std::{
+    convert::From,
+    fs::{read_dir, File},
+    io::{BufRead, BufReader, Seek, SeekFrom},
+    path::Path,
+};
 
 use chrono::{DateTime, Local};
 use futures::stream::{self, Stream};
 use itertools::Itertools;
 use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
-use nom::bytes::complete::{tag, take};
-use nom::character::complete::{alpha1, space0, space1};
-use nom::sequence::tuple;
-use nom::*;
+use nom::{
+    bytes::complete::{tag, take},
+    character::complete::{alpha1, space0, space1},
+    sequence::tuple,
+    *,
+};
 
 const TIMESTAMP_LENGTH: usize = 30;
 
@@ -341,11 +345,12 @@ pub fn search<P: AsRef<Path>>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::executor::block_on;
-    use futures::stream::StreamExt;
     use std::io::Write;
+
+    use futures::{executor::block_on, stream::StreamExt};
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn test_parse_time() {

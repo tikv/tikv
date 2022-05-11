@@ -1,32 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{
+    sync::{Arc, *},
+    thread,
+    time::Duration,
+};
 
-use kvproto::pdpb::QueryKind;
-
-use api_version::{APIVersion, APIV1, APIV1TTL, APIV2};
-use futures::executor::block_on;
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb_grpc::TikvClient;
+use api_version::{test_kv_format_impl, KvFormat};
+use futures::{executor::block_on, SinkExt, StreamExt};
+use grpcio::*;
+use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use raftstore::store::QueryStats;
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::*;
-
-use futures::{SinkExt, StreamExt};
-use grpcio::*;
-
-use kvproto::tikvpb::*;
-
 use txn_types::Key;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     let engine = cluster.get_engine(1);
-    let raft_engine = cluster.get_raft_engine(1);
 
     let stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(stats.get_region_count(), 2);
@@ -35,7 +27,6 @@ fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     for i in 0..1000 {
         let last_available = stats.get_available();
         cluster.must_put(format!("k{}", i).as_bytes(), &value);
-        raft_engine.flush(true).unwrap();
         engine.flush(true).unwrap();
         sleep_ms(20);
 
@@ -67,8 +58,6 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     let engine = cluster.get_engine(1);
-    let raft_engine = cluster.get_raft_engine(1);
-    raft_engine.flush(true).unwrap();
     engine.flush(true).unwrap();
     let last_stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(last_stats.get_region_count(), 1);
@@ -78,7 +67,6 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let region = pd_client.get_region(b"").unwrap();
     cluster.must_split(&region, b"k2");
-    raft_engine.flush(true).unwrap();
     engine.flush(true).unwrap();
 
     // wait report region count after split
@@ -157,15 +145,12 @@ type Query = dyn Fn(Context, &Cluster<ServerCluster>, TikvClient, u64, u64, Vec<
 
 #[test]
 fn test_query_stats() {
-    test_raw_query_stats_tmpl::<APIV1>();
-    test_raw_query_stats_tmpl::<APIV1TTL>();
-    test_raw_query_stats_tmpl::<APIV2>();
+    test_kv_format_impl!(test_raw_query_stats_tmpl);
 
-    test_txn_query_stats_tmpl::<APIV1>();
-    test_txn_query_stats_tmpl::<APIV2>();
+    test_kv_format_impl!(test_txn_query_stats_tmpl<ApiV1  ApiV2>);
 }
 
-fn test_raw_query_stats_tmpl<Api: APIVersion>() {
+fn test_raw_query_stats_tmpl<F: KvFormat>() {
     let raw_get: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = RawGetRequest::default();
         req.set_context(ctx);
@@ -180,7 +165,7 @@ fn test_raw_query_stats_tmpl<Api: APIVersion>() {
         ));
         assert!(check_split_key(
             cluster,
-            Api::encode_raw_key_owned(start_key, None).into_encoded(),
+            F::encode_raw_key_owned(start_key, None).into_encoded(),
             None
         ));
     });
@@ -199,7 +184,7 @@ fn test_raw_query_stats_tmpl<Api: APIVersion>() {
             ));
             assert!(check_split_key(
                 cluster,
-                Api::encode_raw_key_owned(start_key, None).into_encoded(),
+                F::encode_raw_key_owned(start_key, None).into_encoded(),
                 None
             ));
         });
@@ -219,8 +204,8 @@ fn test_raw_query_stats_tmpl<Api: APIVersion>() {
         ));
         assert!(check_split_key(
             cluster,
-            Api::encode_raw_key_owned(start_key, None).into_encoded(),
-            Some(Api::encode_raw_key_owned(end_key, None).into_encoded())
+            F::encode_raw_key_owned(start_key, None).into_encoded(),
+            Some(F::encode_raw_key_owned(end_key, None).into_encoded())
         ));
     });
     let raw_batch_scan: Box<Query> =
@@ -242,8 +227,8 @@ fn test_raw_query_stats_tmpl<Api: APIVersion>() {
             ));
             assert!(check_split_key(
                 cluster,
-                Api::encode_raw_key_owned(start_key, None).into_encoded(),
-                Some(Api::encode_raw_key_owned(end_key, None).into_encoded())
+                F::encode_raw_key_owned(start_key, None).into_encoded(),
+                Some(F::encode_raw_key_owned(end_key, None).into_encoded())
             ));
         });
     let raw_get_key_ttl: Box<Query> =
@@ -261,7 +246,7 @@ fn test_raw_query_stats_tmpl<Api: APIVersion>() {
             ));
             assert!(check_split_key(
                 cluster,
-                Api::encode_raw_key_owned(start_key, None).into_encoded(),
+                F::encode_raw_key_owned(start_key, None).into_encoded(),
                 None
             ));
         });
@@ -280,7 +265,7 @@ fn test_raw_query_stats_tmpl<Api: APIVersion>() {
                 batch_commands(&ctx, &client, get_command, &start_key);
                 assert!(check_split_key(
                     cluster,
-                    Api::encode_raw_key_owned(start_key.clone(), None).into_encoded(),
+                    F::encode_raw_key_owned(start_key.clone(), None).into_encoded(),
                     None
                 ));
                 if check_query_num_read(
@@ -299,21 +284,21 @@ fn test_raw_query_stats_tmpl<Api: APIVersion>() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
-    test_query_num::<Api>(raw_get, true);
-    test_query_num::<Api>(raw_batch_get, true);
-    test_query_num::<Api>(raw_scan, true);
-    test_query_num::<Api>(raw_batch_scan, true);
-    if Api::IS_TTL_ENABLED {
-        test_query_num::<Api>(raw_get_key_ttl, true);
+    test_query_num::<F>(raw_get, true);
+    test_query_num::<F>(raw_batch_get, true);
+    test_query_num::<F>(raw_scan, true);
+    test_query_num::<F>(raw_batch_scan, true);
+    if F::IS_TTL_ENABLED {
+        test_query_num::<F>(raw_get_key_ttl, true);
     }
-    test_query_num::<Api>(raw_batch_get_command, true);
-    test_raw_delete_query::<Api>();
+    test_query_num::<F>(raw_batch_get_command, true);
+    test_raw_delete_query::<F>();
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
     fail::remove("mock_collect_tick_interval");
 }
 
-fn test_txn_query_stats_tmpl<Api: APIVersion>() {
+fn test_txn_query_stats_tmpl<F: KvFormat>() {
     let get: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = GetRequest::default();
         req.set_context(ctx);
@@ -422,12 +407,12 @@ fn test_txn_query_stats_tmpl<Api: APIVersion>() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
-    test_query_num::<Api>(get, false);
-    test_query_num::<Api>(batch_get, false);
-    test_query_num::<Api>(scan, false);
-    test_query_num::<Api>(scan_lock, false);
-    test_query_num::<Api>(batch_get_command, false);
-    test_txn_delete_query::<Api>();
+    test_query_num::<F>(get, false);
+    test_query_num::<F>(batch_get, false);
+    test_query_num::<F>(scan, false);
+    test_query_num::<F>(scan_lock, false);
+    test_query_num::<F>(batch_get_command, false);
+    test_txn_delete_query::<F>();
     test_pessimistic_lock();
     test_rollback();
     fail::remove("mock_tick_interval");
@@ -435,7 +420,7 @@ fn test_txn_query_stats_tmpl<Api: APIVersion>() {
     fail::remove("mock_collect_tick_interval");
 }
 
-fn raw_put<Api: APIVersion>(
+fn raw_put<F: KvFormat>(
     _cluster: &Cluster<ServerCluster>,
     client: &TikvClient,
     ctx: &Context,
@@ -587,7 +572,7 @@ pub fn test_rollback() {
     ));
 }
 
-fn test_query_num<Api: APIVersion>(query: Box<Query>, is_raw_kv: bool) {
+fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool) {
     let (mut cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
         cluster.cfg.split.qps_threshold = 0;
@@ -595,9 +580,9 @@ fn test_query_num<Api: APIVersion>(query: Box<Query>, is_raw_kv: bool) {
         cluster.cfg.split.split_contained_score = 2.0;
         cluster.cfg.split.detect_times = 1;
         cluster.cfg.split.sample_threshold = 0;
-        cluster.cfg.storage.set_api_version(Api::TAG);
+        cluster.cfg.storage.set_api_version(F::TAG);
     });
-    ctx.set_api_version(Api::CLIENT_TAG);
+    ctx.set_api_version(F::CLIENT_TAG);
 
     let mut k = b"key".to_vec();
     // When a peer becomes leader, it can't read before committing to current term.
@@ -606,7 +591,7 @@ fn test_query_num<Api: APIVersion>(query: Box<Query>, is_raw_kv: bool) {
     let store_id = 1;
     if is_raw_kv {
         k = b"r_key".to_vec(); // "r" is key prefix of RawKV.
-        raw_put::<Api>(&cluster, &client, &ctx, store_id, k.clone());
+        raw_put::<F>(&cluster, &client, &ctx, store_id, k.clone());
     } else {
         k = b"x_key".to_vec(); // "x" is key prefix of TxnKV.
         put(&cluster, &client, &ctx, store_id, k.clone());
@@ -615,18 +600,18 @@ fn test_query_num<Api: APIVersion>(query: Box<Query>, is_raw_kv: bool) {
     query(ctx, &cluster, client, store_id, region_id, k.clone());
 }
 
-fn test_raw_delete_query<Api: APIVersion>() {
+fn test_raw_delete_query<F: KvFormat>() {
     let k = b"r_key".to_vec();
     let store_id = 1;
 
     {
         let (cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
             cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-            cluster.cfg.storage.set_api_version(Api::TAG);
+            cluster.cfg.storage.set_api_version(F::TAG);
         });
-        ctx.set_api_version(Api::CLIENT_TAG);
+        ctx.set_api_version(F::CLIENT_TAG);
 
-        raw_put::<Api>(&cluster, &client, &ctx, store_id, k.clone());
+        raw_put::<F>(&cluster, &client, &ctx, store_id, k.clone());
         // Raw Delete
         let mut delete_req = RawDeleteRequest::default();
         delete_req.set_context(ctx.clone());
@@ -634,7 +619,7 @@ fn test_raw_delete_query<Api: APIVersion>() {
         client.raw_delete(&delete_req).unwrap();
         // skip raw kv write query check
 
-        raw_put::<Api>(&cluster, &client, &ctx, store_id, k.clone());
+        raw_put::<F>(&cluster, &client, &ctx, store_id, k.clone());
         // Raw DeleteRange
         let mut delete_req = RawDeleteRangeRequest::default();
         delete_req.set_context(ctx);
@@ -645,7 +630,7 @@ fn test_raw_delete_query<Api: APIVersion>() {
     }
 }
 
-fn test_txn_delete_query<Api: APIVersion>() {
+fn test_txn_delete_query<F: KvFormat>() {
     let k = b"t_key".to_vec();
     let store_id = 1;
 

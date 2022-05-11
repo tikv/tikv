@@ -4,17 +4,15 @@ use std::cmp::Ordering;
 
 use engine_traits::{IterOptions, Iterator, KvEngine, SeekKey, CF_WRITE};
 use error_code::ErrorCodeExt;
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
+use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tidb_query_datatype::codec::table as table_codec;
-use tikv_util::keybuilder::KeyBuilder;
-use tikv_util::{box_err, box_try, warn};
+use tikv_util::{box_err, box_try, keybuilder::KeyBuilder, warn};
 use txn_types::Key;
 
-use super::super::{
-    Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
+use super::{
+    super::{Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker},
+    Host,
 };
-use super::Host;
 
 #[derive(Default)]
 pub struct Checker {
@@ -227,24 +225,21 @@ fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-    use std::sync::mpsc;
+    use std::{io::Write, sync::mpsc};
 
-    use kvproto::metapb::Peer;
-    use kvproto::pdpb::CheckPolicy;
-    use tempfile::Builder;
-
-    use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use engine_test::kv::new_engine;
     use engine_traits::{SyncMutable, ALL_CFS};
+    use kvproto::{metapb::Peer, pdpb::CheckPolicy};
+    use tempfile::Builder;
     use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
-    use tikv_util::codec::number::NumberEncoder;
-    use tikv_util::config::ReadableSize;
-    use tikv_util::worker::Runnable;
+    use tikv_util::{codec::number::NumberEncoder, config::ReadableSize, worker::Runnable};
     use txn_types::Key;
 
     use super::*;
-    use crate::coprocessor::{Config, CoprocessorHost};
+    use crate::{
+        coprocessor::{Config, CoprocessorHost},
+        store::{CasualMessage, SplitCheckRunner, SplitCheckTask},
+    };
 
     /// Composes table record and index prefix: `t[table_id]`.
     // Port from TiDB

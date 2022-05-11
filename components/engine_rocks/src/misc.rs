@@ -1,16 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::RocksEngine;
-use crate::rocks_metrics_defs::*;
-use crate::sst::RocksSstWriterBuilder;
-use crate::{util, RocksSstWriter};
 use engine_traits::{
     CFNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
-use tikv_util::box_try;
-use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::{box_try, keybuilder::KeyBuilder};
+
+use crate::{
+    engine::RocksEngine, rocks_metrics_defs::*, sst::RocksSstWriterBuilder, util, RocksSstWriter,
+};
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
 
@@ -338,17 +337,19 @@ impl MiscExt for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::Builder;
-
-    use crate::engine::RocksEngine;
-    use crate::raw::DB;
-    use crate::raw::{ColumnFamilyOptions, DBOptions};
-    use crate::raw_util::{new_engine_opt, CFOptions};
     use std::sync::Arc;
 
+    use engine_traits::{
+        DeleteStrategy, Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt, ALL_CFS,
+    };
+    use tempfile::Builder;
+
     use super::*;
-    use engine_traits::{DeleteStrategy, ALL_CFS};
-    use engine_traits::{Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt};
+    use crate::{
+        engine::RocksEngine,
+        raw::{ColumnFamilyOptions, DBOptions, DB},
+        raw_util::{new_engine_opt, CFOptions},
+    };
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {

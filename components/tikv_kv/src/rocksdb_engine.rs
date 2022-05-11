@@ -1,32 +1,33 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    fmt::{self, Debug, Display, Formatter},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 
-use engine_rocks::get_env;
-use engine_rocks::raw::DBOptions;
-use engine_rocks::raw_util::CFOptions;
-use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
-use engine_traits::CfName;
+pub use engine_rocks::RocksSnapshot;
+use engine_rocks::{
+    get_env, raw::DBOptions, raw_util::CFOptions, RocksEngine as BaseRocksEngine,
+    RocksEngineIterator,
+};
 use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
+    CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
 };
 use file_system::IORateLimiter;
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
-use txn_types::{Key, Value};
-
 use tikv_util::worker::{Runnable, Scheduler, Worker};
+use txn_types::{Key, Value};
 
 use super::{
     write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
     Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
-
-pub use engine_rocks::RocksSnapshot;
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";

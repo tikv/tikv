@@ -1,35 +1,38 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::borrow::Cow;
-use std::fmt;
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
+use std::{
+    borrow::Cow,
+    fmt,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
-use engine_traits::{CompactedEvent, KvEngine, Snapshot};
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb;
-use kvproto::metapb::RegionEpoch;
-use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use kvproto::raft_serverpb::RaftMessage;
-use kvproto::replication_modepb::ReplicationStatus;
-use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
-use raft::{GetEntriesContext, SnapshotStatus};
-use smallvec::{smallvec, SmallVec};
-
-use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
-use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
-use crate::store::metrics::RaftEventDurationType;
-use crate::store::util::{KeysInfoFormatter, LatencyInspector};
-use crate::store::worker::{Bucket, BucketRange};
-use crate::store::{RaftlogFetchResult, SnapKey};
 use collections::HashSet;
+use engine_traits::{CompactedEvent, KvEngine, Snapshot};
+use kvproto::{
+    import_sstpb::SstMeta,
+    kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
+    metapb,
+    metapb::RegionEpoch,
+    pdpb::CheckPolicy,
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    raft_serverpb::RaftMessage,
+    replication_modepb::ReplicationStatus,
+};
 #[cfg(any(test, feature = "testexport"))]
 use pd_client::BucketMeta;
+use raft::{GetEntriesContext, SnapshotStatus};
+use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
+use crate::store::{
+    fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
+    metrics::RaftEventDurationType,
+    util::{KeysInfoFormatter, LatencyInspector},
+    worker::{Bucket, BucketRange},
+    RaftlogFetchResult, SnapKey,
+};
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
@@ -259,7 +262,7 @@ pub enum StoreTick {
     SnapGc,
     CompactLockCf,
     ConsistencyCheck,
-    CleanupImportSST,
+    CleanupImportSst,
 }
 
 impl StoreTick {
@@ -271,7 +274,7 @@ impl StoreTick {
             StoreTick::SnapGc => RaftEventDurationType::snap_gc,
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
-            StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
         }
     }
 }
@@ -614,7 +617,7 @@ where
 {
     RaftMessage(InspectedRaftMessage),
 
-    ValidateSSTResult {
+    ValidateSstResult {
         invalid_ssts: Vec<SstMeta>,
     },
 
@@ -665,7 +668,7 @@ where
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
             StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
-            StoreMsg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
+            StoreMsg::ValidateSstResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {
                 ref start_key,
                 ref end_key,

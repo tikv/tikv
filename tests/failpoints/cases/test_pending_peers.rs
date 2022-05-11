@@ -3,9 +3,7 @@
 use std::sync::Arc;
 
 use test_raftstore::*;
-
-use tikv_util::config::*;
-use tikv_util::time::Instant;
+use tikv_util::{config::*, time::Instant};
 
 #[test]
 fn test_pending_peers() {

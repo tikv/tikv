@@ -1,11 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use server::setup::initial_logger;
-use std::borrow::ToOwned;
-use std::error::Error;
-use std::str::FromStr;
-use std::{str, u64};
+use std::{borrow::ToOwned, error::Error, str, str::FromStr, u64};
 
+use server::setup::initial_logger;
 use tikv::config::TiKvConfig;
 
 const LOG_DIR: &str = "./ctl-engine-info-log";

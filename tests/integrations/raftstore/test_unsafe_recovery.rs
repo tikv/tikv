@@ -1,18 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::FromIterator;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use collections::HashSet;
 use futures::executor::block_on;
 use kvproto::metapb;
 use pd_client::PdClient;
-use raft::eraftpb::ConfChangeType;
-use raft::eraftpb::MessageType;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 #[test]
 fn test_unsafe_recover_update_region() {

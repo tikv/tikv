@@ -13,16 +13,15 @@ mod write;
 
 use std::io;
 
+use error_code::{self, ErrorCode, ErrorCodeExt};
 pub use lock::{Lock, LockType, PessimisticLock};
+use thiserror::Error;
 pub use timestamp::{TimeStamp, TsSet};
 pub use types::{
     is_short_value, Key, KvPair, Mutation, MutationType, OldValue, OldValues, TxnExtra,
     TxnExtraScheduler, Value, WriteBatchFlags, SHORT_VALUE_MAX_LEN,
 };
 pub use write::{Write, WriteRef, WriteType};
-
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ErrorInner {
