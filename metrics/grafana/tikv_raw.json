@@ -301,7 +301,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The count of get_ts requests",
+          "description": "The number of get_ts requests",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -349,7 +349,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(tikv_causal_ts_provider_get_ts_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type!=\"kv_gc\"}[1m])) by (result)",
+              "expr": "sum(rate(tikv_causal_ts_provider_get_ts_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (result)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
@@ -363,7 +363,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "get_ts count",
+          "title": "Get_ts requests",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -407,7 +407,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The get_ts duration (P99)",
+          "description": "The get_ts requests duration (P99)",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -470,7 +470,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "99% get_ts duration",
+          "title": "99% get_ts requests duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -514,7 +514,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The count of TSO batch renew",
+          "description": "The number of TSO batch renew requests",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -562,7 +562,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(tikv_causal_ts_provider_tso_batch_renew_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type!=\"kv_gc\"}[1m])) by (result, reason)",
+              "expr": "sum(rate(tikv_causal_ts_provider_tso_batch_renew_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (result, reason)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
@@ -576,7 +576,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TSO batch renew count",
+          "title": "TSO batch renew requests",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -620,7 +620,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The TSO batch renew duration (P99)",
+          "description": "The TSO batch renew requests duration (P99)",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -683,7 +683,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "99% TSO batch renew duration",
+          "title": "99% TSO batch renew requests duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
