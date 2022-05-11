@@ -1,18 +1,18 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt;
+use std::{fmt, marker::PhantomData, ops::Deref};
 
-use crate::store::{
-    CasualMessage, PeerMsg, RaftRouter, SnapKey, SnapManager, Snapshot, StoreMsg, StoreRouter,
-};
-use crate::Result;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
-use std::marker::PhantomData;
-use std::ops::Deref;
-use tikv_util::worker::Runnable;
-use tikv_util::{debug, error, info, warn};
+use tikv_util::{debug, error, info, warn, worker::Runnable};
+
+use crate::{
+    store::{
+        CasualMessage, PeerMsg, RaftRouter, SnapKey, SnapManager, Snapshot, StoreMsg, StoreRouter,
+    },
+    Result,
+};
 
 pub enum Task {
     GcSnapshot,
