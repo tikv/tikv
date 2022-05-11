@@ -440,8 +440,11 @@ impl BlockBuilder {
         for i in 0..num_entries {
             self.block.build_entry(buf, i, common_prefix_len);
         }
-        if self.compression_tp != NO_COMPRESSION {
-            self.compress();
+        match self.compression_tp {
+            NO_COMPRESSION => (),
+            LZ4_COMPRESSION => self.compress_lz4(),
+            ZSTD_COMPRESSION => self.compress_zstd(),
+            _ => panic!("unexpected compression type {}", self.compression_tp),
         }
         let mut checksum = 0u32;
         if checksum_tp == CRC32_IEEE {
@@ -511,36 +514,38 @@ impl BlockBuilder {
         }
     }
 
-    fn compress(&mut self) {
+    fn compress_lz4(&mut self) {
+        unsafe {
+            self.buf.put_u32_le(self.compression_buf.len() as u32);
+            let buf_len = self.buf.len();
+            let compress_bound = lz4::liblz4::LZ4_compressBound(self.compression_buf.len() as i32);
+            self.buf.reserve(compress_bound as usize);
+            let src = &self.compression_buf;
+            let mut dst = &mut self.buf[buf_len..];
+            let size = lz4::liblz4::LZ4_compress_default(
+                src.as_ptr() as *const libc::c_char,
+                dst.as_mut_ptr() as *mut libc::c_char,
+                src.len() as i32,
+                compress_bound as i32,
+            ) as usize;
+            self.buf.set_len(buf_len + size);
+        }
+    }
+
+    fn compress_zstd(&mut self) {
         unsafe {
             let buf_len = self.buf.len();
-            let compress_bound = if self.compression_tp == LZ4_COMPRESSION {
-                lz4::liblz4::LZ4_compressBound(self.compression_buf.len() as i32) as usize + 4
-            } else {
-                zstd_sys::ZSTD_compressBound(self.compression_buf.len())
-            };
+            let compress_bound = zstd_sys::ZSTD_compressBound(self.compression_buf.len());
             self.buf.reserve(compress_bound);
-            // self.buf.set_len(buf_len + compress_bound);
             let src = &self.compression_buf;
-            let dst = &mut self.buf[buf_len..];
-            let size = if self.compression_tp == LZ4_COMPRESSION {
-                lz4::liblz4::LZ4_compress_default(
-                    src.as_ptr() as *const libc::c_char,
-                    dst.as_mut_ptr() as *mut libc::c_char,
-                    src.len() as i32,
-                    compress_bound as i32,
-                ) as usize
-            } else if self.compression_tp == ZSTD_COMPRESSION {
-                zstd_sys::ZSTD_compress(
-                    dst.as_mut_ptr() as *mut libc::c_void,
-                    compress_bound,
-                    src.as_ptr() as *const libc::c_void,
-                    src.len(),
-                    zstd_sys::ZSTD_defaultCLevel(),
-                )
-            } else {
-                panic!("unexpected compression type {}", self.compression_tp);
-            };
+            let mut dst = &mut self.buf[buf_len..];
+            let size = zstd_sys::ZSTD_compress(
+                dst.as_mut_ptr() as *mut libc::c_void,
+                compress_bound,
+                src.as_ptr() as *const libc::c_void,
+                src.len(),
+                zstd_sys::ZSTD_defaultCLevel(),
+            );
             self.buf.set_len(buf_len + size);
         }
     }
