@@ -16,11 +16,13 @@ pub const PROP_KEY_MAX_TS: &str = "max_ts";
 pub const PROP_KEY_ENTRIES: &str = "entries";
 pub const PROP_KEY_OLD_ENTRIES: &str = "old_entries";
 pub const PROP_KEY_TOMBS: &str = "tombs";
-pub const PROP_KEY_FUSE8: &str = "fuse8";
+pub const AUX_INDEX_BINARY_FUSE8: u32 = 1;
+pub const INDEX_FORMAT_V1: u32 = 1;
+pub const BLOCK_FORMAT_V1: u32 = 1;
 pub const NO_COMPRESSION: u8 = 0;
 pub const LZ4_COMPRESSION: u8 = 1;
 pub const ZSTD_COMPRESSION: u8 = 2;
-const TABLE_FORMAT: u16 = 1;
+pub const TABLE_FORMAT_V1: u16 = 1;
 pub const MAGIC_NUMBER: u32 = 2940551257;
 pub const META_HAS_OLD: u8 = 1 << 1;
 pub const BLOCK_ADDR_SIZE: usize = mem::size_of::<BlockAddress>();
@@ -204,23 +206,44 @@ impl Builder {
             .build_index(base_off + data_section_size, self.checksum_tp);
         data_buf.extend_from_slice(self.old_builder.buf.as_slice());
         let old_index_section_size = self.old_builder.buf.len() as u32;
-
+        let aux_index_section_size = if let Ok(filter) = BinaryFuse8::try_from(&self.key_hashes) {
+            let bin = bincode::serialize(&filter).unwrap();
+            let origin_len = data_buf.len();
+            self.build_aux_index(data_buf, &bin);
+            (data_buf.len() - origin_len) as u32
+        } else {
+            warn!("failed to build binary fuse 8 filter");
+            0
+        };
         self.build_properties(data_buf);
 
         let mut footer = Footer::default();
         footer.old_data_offset = data_section_size;
         footer.index_offset = footer.old_data_offset + old_data_section_size;
         footer.old_index_offset = footer.index_offset + index_section_size;
-        footer.properties_offset = footer.old_index_offset + old_index_section_size;
+        footer.aux_index_offset = footer.old_index_offset + old_index_section_size;
+        footer.properties_offset = footer.aux_index_offset + aux_index_section_size;
         footer.compression_type = self.block_builder.compression_tp;
         footer.checksum_type = self.checksum_tp;
-        footer.table_format_version = TABLE_FORMAT;
+        footer.table_format_version = TABLE_FORMAT_V1;
         footer.magic = MAGIC_NUMBER;
         data_buf.extend_from_slice(footer.marshal());
         BuildResult {
             id: self.fid,
             smallest: self.smallest.clone(),
             biggest: self.biggest.clone(),
+        }
+    }
+
+    fn build_aux_index(&self, buf: &mut BytesMut, fuse8: &[u8]) {
+        let origin_len = buf.len();
+        buf.put_u32_le(0);
+        buf.put_u32_le(AUX_INDEX_BINARY_FUSE8);
+        buf.put_u32_le(fuse8.len() as u32);
+        buf.extend_from_slice(fuse8);
+        if self.checksum_tp == CRC32_IEEE {
+            let checksum = crc32fast::hash(&buf[(origin_len + 4)..]);
+            LittleEndian::write_u32(&mut buf[origin_len..], checksum);
         }
     }
 
@@ -238,12 +261,6 @@ impl Builder {
             &self.old_entries.to_le_bytes(),
         );
         Builder::add_property(buf, PROP_KEY_TOMBS.as_bytes(), &self.tombs.to_le_bytes());
-        if let Ok(filter) = BinaryFuse8::try_from(&self.key_hashes) {
-            let bin = bincode::serialize(&filter).unwrap();
-            Builder::add_property(buf, PROP_KEY_FUSE8.as_bytes(), &bin);
-        } else {
-            warn!("failed to build binary fuse 8 filter");
-        }
         if self.checksum_tp == CRC32_IEEE {
             let checksum = crc32fast::hash(&buf[(origin_len + 4)..]);
             LittleEndian::write_u32(&mut buf[origin_len..], checksum);
@@ -270,6 +287,7 @@ pub struct Footer {
     pub old_data_offset: u32,
     pub index_offset: u32,
     pub old_index_offset: u32,
+    pub aux_index_offset: u32,
     pub properties_offset: u32,
     pub compression_type: u8,
     pub checksum_type: u8,
@@ -291,7 +309,11 @@ impl Footer {
     }
 
     pub fn old_index_len(&self) -> usize {
-        (self.properties_offset - self.old_index_offset) as usize
+        (self.aux_index_offset - self.old_index_offset) as usize
+    }
+
+    pub fn aux_index_len(&self) -> usize {
+        (self.properties_offset - self.aux_index_offset) as usize
     }
 
     pub fn properties_len(&self, table_size: usize) -> usize {
@@ -404,6 +426,7 @@ impl BlockBuilder {
             &mut self.compression_buf
         };
         let num_entries = self.block.tmp_keys.length();
+        buf.put_u32_le(BLOCK_FORMAT_V1);
         buf.put_u32_le(num_entries as u32);
         let mut offset = 0u32;
         for i in 0..num_entries {
@@ -453,6 +476,7 @@ impl BlockBuilder {
         let num_blocks = self.block_addrs.len();
         // checksum place holder.
         self.buf.put_u32_le(0);
+        self.buf.put_u32_le(INDEX_FORMAT_V1);
         self.buf.put_u32_le(num_blocks as u32);
         let mut common_prefix_len = 0;
         if num_blocks > 0 {

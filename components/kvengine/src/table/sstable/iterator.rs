@@ -6,7 +6,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
 
 use super::{builder::META_HAS_OLD, SSTable};
-use crate::table::{search, table, LocalAddr};
+use crate::table::{search, sstable::BLOCK_FORMAT_V1, table, LocalAddr};
 
 pub struct BlockIterator {
     b: Bytes,
@@ -64,12 +64,13 @@ impl BlockIterator {
 
     fn load_entries(&mut self) {
         let data = self.b.chunk();
-        let num_entries = LittleEndian::read_u32(data) as usize;
+        assert_eq!(LittleEndian::read_u32(data), BLOCK_FORMAT_V1);
+        let num_entries = LittleEndian::read_u32(&data[4..]) as usize;
         self.entry_offs = unsafe {
-            let ptr = data[4..].as_ptr() as *mut u32;
+            let ptr = data[8..].as_ptr() as *mut u32;
             slice::from_raw_parts(ptr, num_entries as usize)
         };
-        let common_prefix_len_off = 4 + 4 * num_entries;
+        let common_prefix_len_off = 8 + 4 * num_entries;
         let common_prefix_len = LittleEndian::read_u16(&data[common_prefix_len_off..]) as usize;
         let common_prefix_off = common_prefix_len_off + 2;
         let entries_data_off = common_prefix_off + common_prefix_len;

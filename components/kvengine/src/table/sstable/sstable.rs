@@ -155,6 +155,31 @@ impl SSTableCore {
             footer.old_index_len(),
         )?;
         let old_idx = Index::new(old_idx_data, footer.checksum_type)?;
+        if footer.aux_index_len() > 0 {
+            let aux_idx_data = file.read(
+                start_off + footer.aux_index_offset as u64,
+                footer.aux_index_len(),
+            )?;
+            let mut aux_idx_slice = aux_idx_data.chunk();
+            validate_checksum(aux_idx_slice, footer.checksum_type)?;
+            aux_idx_slice = &aux_idx_slice[4..];
+            assert_eq!(
+                LittleEndian::read_u32(aux_idx_slice),
+                AUX_INDEX_BINARY_FUSE8
+            );
+            aux_idx_slice = &aux_idx_slice[4..];
+            let fuse8_len = LittleEndian::read_u32(aux_idx_slice) as usize;
+            aux_idx_slice = &aux_idx_slice[4..];
+            let fuse8_data = &aux_idx_slice[..fuse8_len];
+            match bincode::deserialize::<BinaryFuse8>(fuse8_data) {
+                Ok(binary_fuse) => {
+                    idx.set_filter(Arc::new(binary_fuse));
+                }
+                Err(err) => {
+                    warn!("failed to deserialize BinaryFuse8 {:?}", err);
+                }
+            }
+        }
         let props_data = file.read(
             start_off + footer.properties_offset as u64,
             footer.properties_len(size as usize),
@@ -183,15 +208,6 @@ impl SSTableCore {
                 old_entries = LittleEndian::read_u32(val);
             } else if key == PROP_KEY_TOMBS.as_bytes() {
                 tombs = LittleEndian::read_u32(val);
-            } else if key == PROP_KEY_FUSE8.as_bytes() {
-                match bincode::deserialize::<BinaryFuse8>(val) {
-                    Ok(binary_fuse) => {
-                        idx.set_filter(Arc::new(binary_fuse));
-                    }
-                    Err(err) => {
-                        warn!("failed to deserialize BinaryFuse8 {:?}", err);
-                    }
-                }
             }
         }
         Ok(Self {
@@ -354,6 +370,8 @@ impl Index {
         let data = bin.chunk();
         validate_checksum(data, checksum_type)?;
         let mut offset = 4_usize;
+        assert_eq!(LittleEndian::read_u32(&data[offset..]), INDEX_FORMAT_V1);
+        offset += 4;
         let num_blocks = LittleEndian::read_u32(&data[offset..]) as usize;
         offset += 4;
         let block_key_offs = unsafe {
