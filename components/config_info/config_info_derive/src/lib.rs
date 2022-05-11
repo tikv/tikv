@@ -100,7 +100,8 @@ fn encoder(
             (inner_type.is_some(), inner_type.unwrap_or(field.ty.clone()))
         };
 
-        construct_fields.push(if cfg_attrs.is_sub_module {
+        let is_sub_module = cfg_attrs.is_sub_module;
+        construct_fields.push(if is_sub_module {
             quote! { #field_name: #from_ident.#field_name.get_cfg_encoder(&#target_ident.#field_name) }
         } else {
             let description = fetch_doc_comment(field.span(), &field.attrs)?;
@@ -111,14 +112,14 @@ fn encoder(
                 field_name,
                 &real_type,
                 optional,
-                &cfg_attrs,
+                cfg_attrs,
                 description,
             )?;
             quote! { #field_name: #cons }
         });
 
         field.ty = {
-            if cfg_attrs.is_sub_module {
+            if is_sub_module {
                 Type::Verbatim(quote! { <#real_type as #crate_name::ConfigInfo>::Encoder })
             } else {
                 Type::Verbatim(quote! { config_info::FieldInfo<#real_type> })
@@ -156,48 +157,59 @@ fn build_filed_constructer(
     field_name: &Ident,
     inner_type: &Type,
     optional: bool,
-    attrs: &CfgAttrs,
+    attrs: CfgAttrs,
     desc: String,
 ) -> Result<TokenStream> {
     let CfgAttrs {
         is_sub_module: _,
         skipped: _,
+        default_value_desc,
         min_value,
+        min_value_desc,
         max_value,
+        max_value_desc,
         value_options,
         field_type,
     } = attrs;
-    let convert_field = |l: &Lit| match l {
+    let convert_field = |l: Lit| match l {
         Lit::Str(s) => {
             let value = s.value();
             quote!(core::convert::TryInto::try_into(#value).unwrap())
         }
         _ => l.to_token_stream(),
     };
-    let default_value = if !optional {
-        quote!(Some(#source.#field_name.clone()))
+    let default_value = if default_value_desc.is_some() {
+        let value = default_value_desc.unwrap();
+        quote!(Some(#crate_name::ConfigValue::Desc(#value.into())))
+    } else if !optional {
+        quote!(Some(#crate_name::ConfigValue::Concrete(#source.#field_name.clone())))
     } else {
-        quote!(#source.#field_name.clone())
+        quote!(#source.#field_name.clone().map(#crate_name::ConfigValue::Concrete))
     };
     let value_in_file = quote!( if #source.#field_name != #target.#field_name{ #target.#field_name.clone().into() } else {None});
     let min_value = min_value
-        .as_ref()
         .map(|l| {
             let value_tokens = convert_field(l);
-            quote! { .set_min_value(#value_tokens) }
+            quote! { .set_min_value(#crate_name::ConfigValue::Concrete(#value_tokens)) }
+        })
+        .or_else(|| {
+            min_value_desc
+                .map(|l| quote! { .set_min_value(#crate_name::ConfigValue::Desc(#l.into())) })
         })
         .unwrap_or_default();
     let max_value = max_value
-        .as_ref()
         .map(|l| {
             let value_tokens = convert_field(l);
-            quote! { .set_max_value(#value_tokens) }
+            quote! { .set_max_value(#crate_name::ConfigValue::Concrete(#value_tokens)) }
+        })
+        .or_else(|| {
+            max_value_desc
+                .map(|l| quote! { .set_max_value(#crate_name::ConfigValue::Desc(#l.into())) })
         })
         .unwrap_or_default();
     let options_token = value_options
-        .as_deref()
-        .map(|ls: &[Lit]| {
-            let value_tokens: Vec<_> = ls.iter().map(convert_field).collect();
+        .map(|ls: Vec<Lit>| {
+            let value_tokens: Vec<_> = ls.into_iter().map(convert_field).collect();
             quote! { .set_value_options([ #(#value_tokens,)* ].into()) }
         })
         .unwrap_or_default();
@@ -207,7 +219,7 @@ fn build_filed_constructer(
         convert_to_config_type(inner_type)?
     };
     Ok(
-        quote! { #crate_name::FieldInfo::new(config_info::FieldCfgType::#ft_token, #default_value, #value_in_file, #desc.into())#min_value#max_value#options_token },
+        quote! { #crate_name::FieldInfo::new(#crate_name::FieldCfgType::#ft_token, #default_value, #value_in_file, #desc.into())#min_value#max_value#options_token },
     )
 }
 
@@ -223,8 +235,11 @@ fn get_encoder(encoder_name: &Ident) -> TokenStream {
 struct CfgAttrs {
     is_sub_module: bool,
     skipped: bool,
+    default_value_desc: Option<String>,
     min_value: Option<Lit>,
+    min_value_desc: Option<String>,
     max_value: Option<Lit>,
+    max_value_desc: Option<String>,
     value_options: Option<Vec<Lit>>,
     field_type: Option<Path>,
 }
@@ -252,11 +267,44 @@ fn get_config_attrs(attrs: &[Attribute]) -> Result<CfgAttrs> {
                         }
                         NestedMeta::Meta(Meta::NameValue(nv)) => {
                             match &*format!("{}", nv.path.get_ident().unwrap()) {
+                                "default_desc" => {
+                                    cfg_attrs.default_value_desc = Some(get_lit_str(&nv.lit)?);
+                                }
                                 "min" => {
+                                    if cfg_attrs.min_value_desc.is_some() {
+                                        return Err(Error::new(
+                                            nv.span(),
+                                            "`min` and `min_desc` should not be both set",
+                                        ));
+                                    }
                                     cfg_attrs.min_value = Some(nv.lit);
                                 }
+                                "min_desc" => {
+                                    if cfg_attrs.min_value.is_some() {
+                                        return Err(Error::new(
+                                            nv.span(),
+                                            "`min` and `min_desc` should not be both set",
+                                        ));
+                                    }
+                                    cfg_attrs.min_value_desc = Some(get_lit_str(&nv.lit)?)
+                                }
                                 "max" => {
+                                    if cfg_attrs.max_value_desc.is_some() {
+                                        return Err(Error::new(
+                                            nv.span(),
+                                            "`max` and `max_desc` should not be both set",
+                                        ));
+                                    }
                                     cfg_attrs.max_value = Some(nv.lit);
+                                }
+                                "max_desc" => {
+                                    if cfg_attrs.max_value.is_some() {
+                                        return Err(Error::new(
+                                            nv.span(),
+                                            "`max` and `max_desc` should not be both set",
+                                        ));
+                                    }
+                                    cfg_attrs.max_value_desc = Some(get_lit_str(&nv.lit)?)
                                 }
                                 "options" => {
                                     let span = nv.lit.span();
@@ -272,10 +320,7 @@ fn get_config_attrs(attrs: &[Attribute]) -> Result<CfgAttrs> {
                                 _ => {
                                     return Err(Error::new(
                                         nv.span(),
-                                        format!(
-                                            "unknown attribute '{:?}', expect #[config_info(type=.., min=.., max=.., options=..)]",
-                                            &nv.path
-                                        ),
+                                        format!("unknown attribute '{:?}'", &nv.path),
                                     ));
                                 }
                             }
@@ -283,7 +328,7 @@ fn get_config_attrs(attrs: &[Attribute]) -> Result<CfgAttrs> {
                         _ => {
                             return Err(Error::new(
                                 inner.span(),
-                                "expect #[config_info(submodule)] or #[config_info(default=.., min=.., max=..)]",
+                                "expect #[config_info(submodule)] or #[config_info(min=.., max=.., ..)]",
                             ));
                         }
                     }
@@ -293,6 +338,17 @@ fn get_config_attrs(attrs: &[Attribute]) -> Result<CfgAttrs> {
         }
     }
     Ok(cfg_attrs)
+}
+
+fn get_lit_str(value: &Lit) -> Result<String> {
+    if let Lit::Str(s) = value {
+        Ok(s.value())
+    } else {
+        Err(Error::new(
+            value.span(),
+            "invalid literal value, literal string is expected",
+        ))
+    }
 }
 
 fn parse_cfg_type(value: &Lit) -> Result<Path> {
@@ -318,14 +374,20 @@ fn parse_cfg_type(value: &Lit) -> Result<Path> {
 }
 
 fn fetch_doc_comment(field_span: Span, attrs: &[Attribute]) -> Result<String> {
+    let mut description = String::new();
     for attr in attrs {
         if !is_attr("doc", attr) {
             continue;
         }
         if let Meta::NameValue(nv) = attr.parse_meta()? {
+            // return the first
             if let Lit::Str(s) = nv.lit {
-                // TODO: maybe we need to return all the docs instead of only the first line.
-                return Ok(s.value());
+                let value = s.value();
+                if !value.trim().is_empty() {
+                    description += &value;
+                } else if !description.is_empty() {
+                    break;
+                }
             } else {
                 return Err(Error::new(
                     nv.span(),
@@ -334,10 +396,14 @@ fn fetch_doc_comment(field_span: Span, attrs: &[Attribute]) -> Result<String> {
             }
         }
     }
-    Err(Error::new(
-        field_span,
-        "doc attribute not found. Please add docs for this field like '/// ...' or #[doc = \"...\"]",
-    ))
+    if !description.is_empty() {
+        Ok(description.trim().into())
+    } else {
+        Err(Error::new(
+            field_span,
+            "doc attribute not found. Please add docs for this field like '/// ...' or #[doc = \"...\"]",
+        ))
+    }
 }
 
 fn parse_value_options(tokens: Lit) -> Result<Vec<Lit>> {
