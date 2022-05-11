@@ -1,28 +1,36 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::collections::{HashMap, VecDeque};
-use std::fmt::Display;
-use std::option::Option;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex};
-use std::{cmp, fmt, u64};
+use std::{
+    cmp,
+    collections::{HashMap, VecDeque},
+    fmt,
+    fmt::Display,
+    option::Option,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
+        Arc, Mutex,
+    },
+    u64,
+};
 
-use kvproto::kvrpcpb::{self, KeyRange, LeaderInfo};
-use kvproto::metapb::{self, Peer, PeerRole, Region, RegionEpoch};
-use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::{
+    kvrpcpb::{self, KeyRange, LeaderInfo},
+    metapb::{self, Peer, PeerRole, Region, RegionEpoch},
+    raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest},
+    raft_serverpb::RaftMessage,
+};
 use protobuf::{self, Message};
-use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
-use raft::INVALID_INDEX;
+use raft::{
+    eraftpb::{self, ConfChangeType, ConfState, MessageType},
+    INVALID_INDEX,
+};
 use raft_proto::ConfChangeI;
-use tikv_util::time::monotonic_raw_now;
-use tikv_util::{box_err, debug, info};
+use tikv_util::{box_err, debug, info, time::monotonic_raw_now, Either};
 use time::{Duration, Timespec};
 
 use super::peer_storage;
 use crate::{Error, Result};
-use tikv_util::Either;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     region
@@ -780,10 +788,6 @@ impl<
     }
 }
 
-pub fn integration_on_half_fail_quorum_fn(voters: usize) -> usize {
-    (voters + 1) / 2 + 1
-}
-
 #[derive(PartialEq, Eq, Debug)]
 pub enum ConfChangeKind {
     // Only contains one configuration change
@@ -1341,15 +1345,16 @@ impl LatencyInspector {
 mod tests {
     use std::thread;
 
-    use kvproto::metapb::{self, RegionEpoch};
-    use kvproto::raft_cmdpb::AdminRequest;
+    use kvproto::{
+        metapb::{self, RegionEpoch},
+        raft_cmdpb::AdminRequest,
+    };
     use raft::eraftpb::{ConfChangeType, Entry, Message, MessageType};
+    use tikv_util::time::monotonic_raw_now;
     use time::Duration as TimeDuration;
 
-    use crate::store::peer_storage;
-    use tikv_util::time::monotonic_raw_now;
-
     use super::*;
+    use crate::store::peer_storage;
 
     #[test]
     fn test_lease() {
@@ -1932,16 +1937,6 @@ mod tests {
                 check_region_epoch(&req, &region, false).unwrap_err();
                 check_region_epoch(&req, &region, true).unwrap_err();
             }
-        }
-    }
-
-    #[test]
-    fn test_integration_on_half_fail_quorum_fn() {
-        let voters = vec![1, 2, 3, 4, 5, 6, 7];
-        let quorum = vec![2, 2, 3, 3, 4, 4, 5];
-        for (voter_count, expected_quorum) in voters.into_iter().zip(quorum) {
-            let quorum = super::integration_on_half_fail_quorum_fn(voter_count);
-            assert_eq!(quorum, expected_quorum);
         }
     }
 

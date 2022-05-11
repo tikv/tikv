@@ -8,13 +8,16 @@ mod txn;
 
 use std::fmt;
 
-use self::engine::bench_engine;
-use self::engine_factory::{BTreeEngineFactory, EngineFactory, RocksEngineFactory};
-use self::mvcc::bench_mvcc;
-use self::storage::bench_storage;
-use self::txn::bench_txn;
 use criterion::Criterion;
 use tikv::storage::Engine;
+
+use self::{
+    engine::bench_engine,
+    engine_factory::{BTreeEngineFactory, EngineFactory, RocksEngineFactory},
+    mvcc::bench_mvcc,
+    storage::bench_storage,
+    txn::bench_txn,
+};
 
 const DEFAULT_ITERATIONS: usize = 10;
 const DEFAULT_KEY_LENGTHS: [usize; 1] = [64];

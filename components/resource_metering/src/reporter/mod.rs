@@ -6,20 +6,26 @@ pub mod data_sink_reg;
 pub mod pubsub;
 pub mod single_target;
 
-use crate::recorder::{CollectorGuard, CollectorRegHandle};
-use crate::reporter::collector_impl::CollectorImpl;
-use crate::reporter::data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle};
-use crate::{Config, DataSink, RawRecords, Records};
-
-use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::Arc,
+};
 
 use collections::HashMap;
 use kvproto::resource_usage_agent::ResourceUsageRecord;
-use tikv_util::time::Duration;
-use tikv_util::warn;
-use tikv_util::worker::{
-    Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler,
+use tikv_util::{
+    time::Duration,
+    warn,
+    worker::{Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler},
+};
+
+use crate::{
+    recorder::{CollectorGuard, CollectorRegHandle},
+    reporter::{
+        collector_impl::CollectorImpl,
+        data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle},
+    },
+    Config, DataSink, RawRecords, Records,
 };
 
 /// A structure for reporting statistics through [Client].
@@ -129,9 +135,18 @@ impl Reporter {
     }
 
     fn upload(&mut self) {
+        // When either of records.records and records.others is not empty, we
+        // will report it. Only when the cpu_time of all tags is equal, and the
+        // number of tags exceeds the max_resource_group limit, will records.records
+        // be empty and records.others not be empty. This means that we will report
+        // a batch of data that only contains records.others.
+        //
+        // See: https://github.com/tikv/tikv/issues/12234
         if self.records.is_empty() {
+            // This means records.records and records.others are both empty.
             return;
         }
+
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
         let report_data: Arc<Vec<ResourceUsageRecord>> = Arc::new(records.into());
@@ -218,17 +233,17 @@ pub fn init_reporter(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::error::Result;
-    use crate::{RawRecord, TagInfos};
-
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering::SeqCst;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
     use collections::HashMap;
     use kvproto::resource_usage_agent::ResourceUsageRecord;
-    use tikv_util::config::ReadableDuration;
-    use tikv_util::worker::{LazyWorker, Runnable, RunnableWithTimer};
+    use tikv_util::{
+        config::ReadableDuration,
+        worker::{LazyWorker, Runnable, RunnableWithTimer},
+    };
+
+    use super::*;
+    use crate::{error::Result, RawRecord, TagInfos};
 
     #[derive(Default, Clone)]
     struct MockDataSink {

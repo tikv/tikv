@@ -1,15 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, Range};
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
+use kvproto::{metapb::Region, pdpb::CheckPolicy};
+use tikv_util::{box_try, config::ReadableSize};
 
-use tikv_util::box_try;
-use tikv_util::config::ReadableSize;
-
-use super::super::error::Result;
-use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
-use super::Host;
+use super::{
+    super::{
+        error::Result, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker,
+    },
+    Host,
+};
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
@@ -123,32 +123,32 @@ pub fn get_region_approximate_middle(
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
-    use std::sync::mpsc;
+    use std::{iter, sync::mpsc};
 
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
-    use kvproto::metapb::Peer;
-    use kvproto::metapb::Region;
-    use kvproto::pdpb::CheckPolicy;
+    use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, LARGE_CFS};
+    use kvproto::{
+        metapb::{Peer, Region},
+        pdpb::CheckPolicy,
+    };
     use tempfile::Builder;
-
-    use crate::store::{SplitCheckRunner, SplitCheckTask};
-    use engine_traits::{MiscExt, SyncMutable};
-    use tikv_util::config::ReadableSize;
-    use tikv_util::escape;
-    use tikv_util::worker::Runnable;
+    use tikv_util::{config::ReadableSize, escape, worker::Runnable};
     use txn_types::Key;
 
-    use super::super::size::tests::{must_generate_buckets, must_split_at};
-    use super::*;
-    use crate::coprocessor::{Config, CoprocessorHost};
+    use super::{
+        super::size::tests::{must_generate_buckets, must_split_at},
+        *,
+    };
+    use crate::{
+        coprocessor::{Config, CoprocessorHost},
+        store::{BucketRange, SplitCheckRunner, SplitCheckTask},
+    };
 
     #[test]
     fn test_split_check() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| {
@@ -184,6 +184,7 @@ mod tests {
             region.clone(),
             false,
             CheckPolicy::Scan,
+            None,
         ));
         let split_key = Key::from_raw(b"0005");
         must_split_at(&rx, &region, vec![split_key.clone().into_encoded()]);
@@ -191,6 +192,7 @@ mod tests {
             region.clone(),
             false,
             CheckPolicy::Approximate,
+            None,
         ));
         must_split_at(&rx, &region, vec![split_key.into_encoded()]);
     }
@@ -199,7 +201,7 @@ mod tests {
     fn test_generate_region_bucket() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| {
@@ -239,8 +241,72 @@ mod tests {
             region.clone(),
             false,
             CheckPolicy::Scan,
+            None,
         ));
-        must_generate_buckets(&rx, exp_bucket_keys);
+        must_generate_buckets(&rx, &exp_bucket_keys);
+
+        exp_bucket_keys.clear();
+
+        // now insert a few keys to grow the bucket 0001
+        let start = format!("{:04}", 1).into_bytes();
+        let end = format!("{:04}", 2).into_bytes();
+        exp_bucket_keys.push(Key::from_raw(&start).as_encoded().clone());
+        let bucket_range = BucketRange(
+            Key::from_raw(&start).as_encoded().clone(),
+            Key::from_raw(&end).as_encoded().clone(),
+        );
+        for i in 10..20 {
+            let k = format!("{:05}", i).into_bytes();
+            exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            false,
+            CheckPolicy::Scan,
+            Some(vec![bucket_range]),
+        ));
+
+        must_generate_buckets(&rx, &exp_bucket_keys);
+
+        // testing split bucket with end key ""
+        exp_bucket_keys.clear();
+
+        // now insert a few keys to grow the bucket 0010
+        let start = format!("{:04}", 10).into_bytes();
+        exp_bucket_keys.push(Key::from_raw(&start).as_encoded().clone());
+        let bucket_range = BucketRange(Key::from_raw(&start).as_encoded().clone(), vec![]);
+        for i in 11..20 {
+            let k = format!("{:04}", i).into_bytes();
+            exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            false,
+            CheckPolicy::Scan,
+            Some(vec![bucket_range]),
+        ));
+
+        must_generate_buckets(&rx, &exp_bucket_keys);
+
+        exp_bucket_keys.clear();
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            false,
+            CheckPolicy::Scan,
+            Some(vec![]), // empty bucket, no buckets are expected
+        ));
+
+        must_generate_buckets(&rx, &exp_bucket_keys);
     }
 
     #[test]
@@ -251,7 +317,7 @@ mod tests {
             .unwrap();
         let path = tmp.path().to_str().unwrap();
 
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS

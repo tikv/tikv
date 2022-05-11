@@ -1,28 +1,36 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use protobuf::Message;
-use std::convert::TryFrom;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{convert::TryFrom, sync::Arc, time::Duration};
 
 use fail::fail_point;
 use kvproto::coprocessor::KeyRange;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::{deadline::Deadline, time::Instant};
-use tipb::StreamResponse;
-use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
-use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
+use protobuf::Message;
+use tidb_query_common::{
+    execute_stats::ExecSummary,
+    metrics::*,
+    storage::{IntervalRange, Storage},
+    Result,
+};
+use tidb_query_datatype::{
+    expr::{EvalConfig, EvalContext, EvalWarnings},
+    EvalType, FieldTypeAccessor,
+};
+use tikv_util::{
+    deadline::Deadline,
+    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
+    quota_limiter::QuotaLimiter,
+    time::Instant,
+};
+use tipb::{
+    self, Chunk, DagRequest, EncodeType, ExecType, ExecutorExecutionSummary, FieldType,
+    SelectResponse, StreamResponse,
+};
 use yatp::task::future::reschedule;
 
-use super::interface::{BatchExecutor, ExecuteStats};
-use super::*;
-use tidb_query_common::execute_stats::ExecSummary;
-use tidb_query_common::metrics::*;
-use tidb_query_common::storage::{IntervalRange, Storage};
-use tidb_query_common::Result;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
-use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
-use tikv_util::quota_limiter::QuotaLimiter;
+use super::{
+    interface::{BatchExecutor, ExecuteStats},
+    *,
+};
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value

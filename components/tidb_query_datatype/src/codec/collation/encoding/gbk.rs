@@ -1,8 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use encoding_rs::GBK;
+
 use super::*;
 use crate::codec::data_type::{BytesGuard, BytesWriter};
-use encoding_rs::GBK;
 
 #[derive(Debug)]
 pub struct EncodingGBK;

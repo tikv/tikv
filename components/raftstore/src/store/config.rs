@@ -1,25 +1,26 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use std::u64;
-use time::Duration as TimeDuration;
+use std::{collections::HashMap, sync::Arc, time::Duration, u64};
 
-use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
-use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
-use engine_traits::perf_level_serde;
-use engine_traits::PerfLevel;
+use engine_traits::{perf_level_serde, PerfLevel};
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
 use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
-use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::sys::SysQuota;
-use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, error, info, warn};
+use tikv_util::{
+    box_err,
+    config::{ReadableDuration, ReadableSize, VersionTrack},
+    error, info,
+    sys::SysQuota,
+    warn,
+    worker::Scheduler,
+};
+use time::Duration as TimeDuration;
+
+use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
+use crate::{coprocessor, Result};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -212,6 +213,7 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
+    /// Disable this feature by set to 0, logic will be removed in other pr.
     /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
     /// increasing. For raftstore layer entries will be evicted from entry cache, if they
     /// utilize memory more than `evict_cache_on_memory_ratio` * total.
@@ -272,6 +274,8 @@ pub struct Config {
     pub reactive_memory_lock_tick_interval: ReadableDuration,
     /// Max tick count before reactivating in-memory pessimistic lock.
     pub reactive_memory_lock_timeout_tick: usize,
+    // Interval of scheduling a tick to report region buckets.
+    pub report_region_buckets_tick_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -341,8 +345,8 @@ impl Default for Config {
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
-            perf_level: PerfLevel::EnableTime,
-            evict_cache_on_memory_ratio: 0.2,
+            perf_level: PerfLevel::Uninitialized,
+            evict_cache_on_memory_ratio: 0.0,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -361,6 +365,7 @@ impl Default for Config {
             report_min_resolved_ts_interval: ReadableDuration::millis(0),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
+            report_region_buckets_tick_interval: ReadableDuration::secs(10),
         }
     }
 }

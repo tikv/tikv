@@ -1,14 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::deadlock::Scheduler as DeadlockScheduler;
-use super::waiter_manager::Scheduler as WaiterMgrScheduler;
+use std::{
+    error::Error,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
+
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
-
-use std::error::Error;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use tikv_util::config::ReadableDuration;
+
+use super::{
+    deadlock::Scheduler as DeadlockScheduler, waiter_manager::Scheduler as WaiterMgrScheduler,
+};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]

@@ -1,14 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{future::Future, sync::Arc};
+
+use api_version::KvFormat;
 use coprocessor_plugin_api::*;
 use kvproto::kvrpcpb;
 use semver::VersionReq;
-use std::future::Future;
-use std::sync::Arc;
 
-use super::config::Config;
-use super::plugin_registry::PluginRegistry;
-use super::raw_storage_impl::RawStorageImpl;
+use super::{config::Config, plugin_registry::PluginRegistry, raw_storage_impl::RawStorageImpl};
 use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
 
 #[allow(clippy::large_enum_variant)]
@@ -53,9 +52,9 @@ impl Endpoint {
     /// Each request is dispatched to the corresponding coprocessor plugin based on it's `copr_name`
     /// field. A plugin with a matching name must be loaded by TiKV, otherwise an error is returned.
     #[inline]
-    pub fn handle_request<E: Engine, L: LockManager>(
+    pub fn handle_request<E: Engine, L: LockManager, F: KvFormat>(
         &self,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, F>,
         req: kvrpcpb::RawCoprocessorRequest,
     ) -> impl Future<Output = kvrpcpb::RawCoprocessorResponse> {
         let mut response = kvrpcpb::RawCoprocessorResponse::default();
@@ -72,9 +71,9 @@ impl Endpoint {
     }
 
     #[inline]
-    fn handle_request_impl<E: Engine, L: LockManager>(
+    fn handle_request_impl<E: Engine, L: LockManager, F: KvFormat>(
         &self,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, F>,
         mut req: kvrpcpb::RawCoprocessorRequest,
     ) -> Result<RawResponse, CoprocessorError> {
         let plugin_registry = self

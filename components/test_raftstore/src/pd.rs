@@ -1,37 +1,51 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
-use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
-
-use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use futures::compat::Future01CompatExt;
-use futures::executor::block_on;
-use futures::future::{err, ok, ready, BoxFuture, FutureExt};
-use futures::{stream, stream::StreamExt};
-use tokio_timer::timer::Handle;
-
-use kvproto::metapb::{self, PeerRole};
-use kvproto::pdpb;
-use kvproto::replication_modepb::{
-    DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
-    StoreDrAutoSyncStatus,
+use std::{
+    cmp,
+    collections::{
+        BTreeMap,
+        Bound::{Excluded, Unbounded},
+    },
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock,
+    },
+    time::Duration,
 };
-use raft::eraftpb::ConfChangeType;
 
 use collections::{HashMap, HashMapEntry, HashSet};
 use fail::fail_point;
+use futures::{
+    channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    compat::Future01CompatExt,
+    executor::block_on,
+    future::{err, ok, ready, BoxFuture, FutureExt},
+    stream,
+    stream::StreamExt,
+};
 use keys::{self, data_key, enc_end_key, enc_start_key};
-use pd_client::{Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
-use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
-use raftstore::store::QueryStats;
-use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
-use tikv_util::time::{Instant, UnixSecs};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{Either, HandyRwLock};
+use kvproto::{
+    metapb::{self, PeerRole},
+    pdpb,
+    replication_modepb::{
+        DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
+        StoreDrAutoSyncStatus,
+    },
+};
+use pd_client::{
+    BucketStat, Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result,
+};
+use raft::eraftpb::ConfChangeType;
+use raftstore::store::{
+    util::{check_key_in_region, find_peer, is_learner},
+    QueryStats, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+};
+use tikv_util::{
+    time::{Instant, UnixSecs},
+    timer::GLOBAL_TIMER_HANDLE,
+    Either, HandyRwLock,
+};
+use tokio_timer::timer::Handle;
 use txn_types::TimeStamp;
 
 use super::*;
@@ -300,6 +314,7 @@ struct PdCluster {
     region_last_report_ts: HashMap<u64, UnixSecs>,
     region_last_report_term: HashMap<u64, u64>,
     base_id: AtomicUsize,
+    buckets: HashMap<u64, BucketStat>,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
     store_hotspots: HashMap<u64, HashMap<u64, pdpb::PeerStat>>,
@@ -361,6 +376,7 @@ impl PdCluster {
             check_merge_target_integrity: true,
             unsafe_recovery_require_report: false,
             unsafe_recovery_store_reported: HashMap::default(),
+            buckets: HashMap::default(),
         }
     }
 
@@ -1290,6 +1306,7 @@ impl TestPdClient {
         self.cluster.wl().check_merge_target_integrity = false;
     }
 
+    /// The next generated TSO will be `ts + 1`. See `get_tso()` and `batch_get_tso()`.
     pub fn set_tso(&self, ts: TimeStamp) {
         let old = self.tso.swap(ts.into_inner(), Ordering::SeqCst);
         if old > ts.into_inner() {
@@ -1310,6 +1327,10 @@ impl TestPdClient {
 
     pub fn must_get_store_reported(&self, store_id: &u64) -> i32 {
         self.cluster.rl().get_store_reported(store_id)
+    }
+
+    pub fn get_buckets(&self, region_id: u64) -> Option<BucketStat> {
+        self.cluster.rl().buckets.get(&region_id).cloned()
     }
 }
 
@@ -1461,11 +1482,6 @@ impl PdClient for TestPdClient {
     {
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();
-        {
-            if let Err(e) = self.cluster.try_write() {
-                println!("try write {:?}", e);
-            }
-        }
         let mut cluster = self.cluster.wl();
         let store = cluster
             .stores
@@ -1646,7 +1662,7 @@ impl PdClient for TestPdClient {
         Ok(resp)
     }
 
-    fn get_tso(&self) -> PdFuture<TimeStamp> {
+    fn batch_get_tso(&self, count: u32) -> PdFuture<TimeStamp> {
         fail_point!("test_raftstore_get_tso", |t| {
             let duration = Duration::from_millis(t.map_or(1000, |t| t.parse().unwrap()));
             Box::pin(async move {
@@ -1665,8 +1681,17 @@ impl PdClient for TestPdClient {
                 )),
             )));
         }
-        let tso = self.tso.fetch_add(1, Ordering::SeqCst);
-        Box::pin(ok(TimeStamp::new(tso)))
+        let tso = self.tso.fetch_add(count as u64, Ordering::SeqCst);
+        Box::pin(ok(TimeStamp::new(tso + count as u64)))
+    }
+
+    fn update_service_safe_point(
+        &self,
+        _name: String,
+        _safepoint: TimeStamp,
+        _ttl: Duration,
+    ) -> PdFuture<()> {
+        Box::pin(ok(()))
     }
 
     fn feature_gate(&self) -> &FeatureGate {
@@ -1679,5 +1704,16 @@ impl PdClient for TestPdClient {
         }
         self.cluster.wl().set_min_resolved_ts(min_resolved_ts);
         Box::pin(ok(()))
+    }
+
+    fn report_region_buckets(&self, bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        self.cluster
+            .wl()
+            .buckets
+            .insert(bucket_stat.meta.region_id, bucket_stat.clone());
+        ready(Ok(())).boxed()
     }
 }

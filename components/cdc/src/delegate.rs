@@ -1,34 +1,46 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::mem;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    mem,
+    string::String,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
+use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
-use kvproto::cdcpb::{
-    Error as EventError, Event, EventEntries, EventLogType, EventRow, EventRowOpType,
-    Event_oneof_event,
+use kvproto::{
+    cdcpb::{
+        ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
+        EventRowOpType, Event_oneof_event,
+    },
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb::{Region, RegionEpoch},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
+    },
 };
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{Region, RegionEpoch};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
+use raftstore::{
+    coprocessor::{Cmd, CmdBatch, ObserveHandle},
+    store::util::compare_region_epoch,
+    Error as RaftStoreError,
 };
-use raftstore::coprocessor::{Cmd, CmdBatch, ObserveHandle};
-use raftstore::store::util::compare_region_epoch;
-use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
-use tikv::storage::txn::TxnEntry;
-use tikv::storage::Statistics;
+use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
-use crate::channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES};
-use crate::metrics::*;
-use crate::old_value::{OldValueCache, OldValueCallback};
-use crate::service::ConnID;
-use crate::{Error, Result};
+use crate::{
+    channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
+    initializer::KvEntry,
+    metrics::*,
+    old_value::{OldValueCache, OldValueCallback},
+    service::ConnID,
+    Error, Result,
+};
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -113,6 +125,7 @@ pub struct Downstream {
     region_epoch: RegionEpoch,
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
+    kv_api: ChangeDataRequestKvApi,
 }
 
 impl Downstream {
@@ -125,6 +138,7 @@ impl Downstream {
         region_epoch: RegionEpoch,
         req_id: u64,
         conn_id: ConnID,
+        kv_api: ChangeDataRequestKvApi,
     ) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
@@ -134,6 +148,7 @@ impl Downstream {
             region_epoch,
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
+            kv_api,
         }
     }
 
@@ -224,10 +239,12 @@ pub struct Delegate {
     region: Option<Region>,
     pub resolver: Option<Resolver>,
 
-    downstreams: Vec<Downstream>,
+    // Downstreams after the delegate has been resolved.
+    resolved_downstreams: Vec<Downstream>,
     pending: Option<Pending>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
+    has_resolver: bool,
 }
 
 impl Delegate {
@@ -236,13 +253,18 @@ impl Delegate {
         Delegate {
             region_id,
             handle: ObserveHandle::new(),
-            downstreams: Vec::new(),
             resolver: None,
             region: None,
+            resolved_downstreams: Vec::new(),
             pending: Some(Pending::default()),
             txn_extra_op,
             failed: false,
+            has_resolver: false,
         }
+    }
+
+    pub fn has_resolver(&self) -> bool {
+        self.has_resolver
     }
 
     /// Let downstream subscribe the delegate.
@@ -251,6 +273,9 @@ impl Delegate {
         if self.region.is_some() {
             // Check if the downstream is out dated.
             self.check_epoch_on_ready(&downstream)?;
+        }
+        if downstream.kv_api == ChangeDataRequestKvApi::TiDb {
+            self.has_resolver = true;
         }
         self.add_downstream(downstream);
         Ok(())
@@ -264,14 +289,14 @@ impl Delegate {
         self.pending
             .as_ref()
             .map(|p| &p.downstreams)
-            .unwrap_or(&self.downstreams)
+            .unwrap_or(&self.resolved_downstreams)
     }
 
     pub fn downstreams_mut(&mut self) -> &mut Vec<Downstream> {
         self.pending
             .as_mut()
             .map(|p| &mut p.downstreams)
-            .unwrap_or(&mut self.downstreams)
+            .unwrap_or(&mut self.resolved_downstreams)
     }
 
     /// Let downstream unsubscribe the delegate.
@@ -306,8 +331,8 @@ impl Delegate {
     /// This means the region has met an unrecoverable error for CDC.
     /// It broadcasts errors to all downstream and stops.
     pub fn stop(&mut self, err: Error) {
-        self.stop_observing();
         self.mark_failed();
+        self.stop_observing();
 
         info!("cdc met region error";
             "region_id" => self.region_id, "error" => ?err);
@@ -380,9 +405,9 @@ impl Delegate {
         }
         self.resolver = Some(resolver);
 
-        self.downstreams = mem::take(&mut pending.downstreams);
+        self.resolved_downstreams = mem::take(&mut pending.downstreams);
         let mut failed_downstreams = Vec::new();
-        for downstream in &self.downstreams {
+        for downstream in self.downstreams() {
             if let Err(e) = self.check_epoch_on_ready(downstream) {
                 failed_downstreams.push((downstream, e));
             }
@@ -450,65 +475,80 @@ impl Delegate {
     pub(crate) fn convert_to_grpc_events(
         region_id: u64,
         request_id: u64,
-        entries: Vec<Option<TxnEntry>>,
-    ) -> Vec<CdcEvent> {
+        entries: Vec<Option<KvEntry>>,
+    ) -> Result<Vec<CdcEvent>> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
-                Some(TxnEntry::Prewrite {
-                    default,
-                    lock,
-                    old_value,
-                }) => {
+                Some(KvEntry::RawKvEntry(kv_pair)) => {
                     let mut row = EventRow::default();
-                    let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
-                    if skip {
-                        continue;
-                    }
-                    decode_default(default.1, &mut row);
+                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row)?;
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                         rows.push(Vec::with_capacity(entries_len));
                         current_rows_size = 0;
                     }
                     current_rows_size += row_size;
-                    row.old_value = old_value.finalized().unwrap_or_default();
                     rows.last_mut().unwrap().push(row);
                 }
-                Some(TxnEntry::Commit {
-                    default,
-                    write,
-                    old_value,
-                }) => {
-                    let mut row = EventRow::default();
-                    let skip = decode_write(write.0, &write.1, &mut row, false);
-                    if skip {
-                        continue;
-                    }
-                    decode_default(default.1, &mut row);
+                Some(KvEntry::TxnEntry(txn_entry)) => {
+                    match txn_entry {
+                        TxnEntry::Prewrite {
+                            default,
+                            lock,
+                            old_value,
+                        } => {
+                            let mut row = EventRow::default();
+                            let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
+                            if skip {
+                                continue;
+                            }
+                            decode_default(default.1, &mut row);
+                            let row_size = row.key.len() + row.value.len();
+                            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
+                                rows.push(Vec::with_capacity(entries_len));
+                                current_rows_size = 0;
+                            }
+                            current_rows_size += row_size;
+                            row.old_value = old_value.finalized().unwrap_or_default();
+                            rows.last_mut().unwrap().push(row);
+                        }
+                        TxnEntry::Commit {
+                            default,
+                            write,
+                            old_value,
+                        } => {
+                            let mut row = EventRow::default();
+                            let skip = decode_write(write.0, &write.1, &mut row, false);
+                            if skip {
+                                continue;
+                            }
+                            decode_default(default.1, &mut row);
 
-                    // This type means the row is self-contained, it has,
-                    //   1. start_ts
-                    //   2. commit_ts
-                    //   3. key
-                    //   4. value
-                    if row.get_type() == EventLogType::Rollback {
-                        // We dont need to send rollbacks to downstream,
-                        // because downstream does not needs rollback to clean
-                        // prewrite as it drops all previous stashed data.
-                        continue;
+                            // This type means the row is self-contained, it has,
+                            //   1. start_ts
+                            //   2. commit_ts
+                            //   3. key
+                            //   4. value
+                            if row.get_type() == EventLogType::Rollback {
+                                // We dont need to send rollbacks to downstream,
+                                // because downstream does not needs rollback to clean
+                                // prewrite as it drops all previous stashed data.
+                                continue;
+                            }
+                            set_event_row_type(&mut row, EventLogType::Committed);
+                            row.old_value = old_value.finalized().unwrap_or_default();
+                            let row_size = row.key.len() + row.value.len();
+                            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
+                                rows.push(Vec::with_capacity(entries_len));
+                                current_rows_size = 0;
+                            }
+                            current_rows_size += row_size;
+                            rows.last_mut().unwrap().push(row);
+                        }
                     }
-                    set_event_row_type(&mut row, EventLogType::Committed);
-                    row.old_value = old_value.finalized().unwrap_or_default();
-                    let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                        rows.push(Vec::with_capacity(entries_len));
-                        current_rows_size = 0;
-                    }
-                    current_rows_size += row_size;
-                    rows.last_mut().unwrap().push(row);
                 }
                 None => {
                     let mut row = EventRow::default();
@@ -520,7 +560,8 @@ impl Delegate {
             }
         }
 
-        rows.into_iter()
+        let rows = rows
+            .into_iter()
             .filter(|rs| !rs.is_empty())
             .map(|rs| {
                 let event_entries = EventEntries {
@@ -534,7 +575,8 @@ impl Delegate {
                     ..Default::default()
                 })
             })
-            .collect()
+            .collect();
+        Ok(rows)
     }
 
     fn sink_data(
@@ -554,11 +596,18 @@ impl Delegate {
             Ok(())
         };
 
-        let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
+        let mut txn_rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
+        let mut raw_rows: Vec<EventRow> = Vec::new();
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => {
-                    self.sink_put(req.take_put(), is_one_pc, &mut rows, &mut read_old_value)?;
+                    self.sink_put(
+                        req.take_put(),
+                        is_one_pc,
+                        &mut txn_rows,
+                        &mut raw_rows,
+                        &mut read_old_value,
+                    )?;
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete()),
                 _ => {
@@ -570,14 +619,28 @@ impl Delegate {
                 }
             }
         }
-        // Skip broadcast if there is no Put or Delete.
-        if rows.is_empty() {
-            return Ok(());
+
+        if !txn_rows.is_empty() {
+            let mut rows = Vec::with_capacity(txn_rows.len());
+            for (_, v) in txn_rows {
+                rows.push(v);
+            }
+            self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
         }
-        let mut entries = Vec::with_capacity(rows.len());
-        for (_, v) in rows {
-            entries.push(v);
+
+        if !raw_rows.is_empty() {
+            self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
         }
+
+        Ok(())
+    }
+
+    fn sink_downstream(
+        &mut self,
+        entries: Vec<EventRow>,
+        index: u64,
+        kv_api: ChangeDataRequestKvApi,
+    ) -> Result<()> {
         let event_entries = EventEntries {
             entries: entries.into(),
             ..Default::default()
@@ -589,7 +652,10 @@ impl Delegate {
             ..Default::default()
         };
         let send = move |downstream: &Downstream| {
-            if !downstream.state.load().ready_for_change_events() {
+            // No ready downstream or a downstream that does not match the kv_api type, will be ignored.
+            // There will be one region that contains both Txn & Raw entries.
+            // The judgement here is for sending entries to downstreams with correct kv_api.
+            if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
             }
             let event = change_data_event.clone();
@@ -607,6 +673,29 @@ impl Delegate {
     }
 
     fn sink_put(
+        &mut self,
+        put: PutRequest,
+        is_one_pc: bool,
+        txn_rows: &mut HashMap<Vec<u8>, EventRow>,
+        raw_rows: &mut Vec<EventRow>,
+        read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+    ) -> Result<()> {
+        let key_mode = ApiV2::parse_key_mode(put.get_key());
+        if key_mode == KeyMode::Raw {
+            self.sink_raw_put(put, raw_rows)
+        } else {
+            self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
+        }
+    }
+
+    fn sink_raw_put(&mut self, mut put: PutRequest, rows: &mut Vec<EventRow>) -> Result<()> {
+        let mut row = EventRow::default();
+        decode_rawkv(put.take_key(), put.take_value(), &mut row)?;
+        rows.push(row);
+        Ok(())
+    }
+
+    fn sink_txn_put(
         &mut self,
         mut put: PutRequest,
         is_one_pc: bool,
@@ -638,7 +727,8 @@ impl Delegate {
                     let resolved_ts = resolver.resolved_ts();
                     assert!(
                         commit_ts > resolved_ts,
-                        "commit_ts: {:?}, resolved_ts: {:?}",
+                        "region {} commit_ts: {:?}, resolved_ts: {:?}",
+                        self.region_id,
                         commit_ts,
                         resolved_ts
                     );
@@ -760,7 +850,9 @@ impl Delegate {
         let downstreams = self.downstreams_mut();
         if let Some(index) = downstreams.iter().position(|x| x.id == id) {
             let downstream = downstreams.swap_remove(index);
-            if self.downstreams.is_empty() {
+            if downstreams.is_empty() {
+                // Stop observing when the last downstream is removed. Otherwise the observer
+                // will keep pushing events to the delegate.
                 self.stop_observing();
             }
             return Some(downstream);
@@ -793,6 +885,7 @@ impl Delegate {
     }
 
     fn stop_observing(&self) {
+        info!("stop observing"; "region_id" => self.region_id, "failed" => self.failed);
         // Stop observe further events.
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
@@ -883,6 +976,28 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     false
 }
 
+fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) -> Result<()> {
+    let (decoded_key, ts) = ApiV2::decode_raw_key_owned(Key::from_encoded(key), true)?;
+    let decoded_value = ApiV2::decode_raw_value_owned(value)?;
+
+    row.start_ts = ts.unwrap().into_inner();
+    row.commit_ts = row.start_ts;
+    row.key = decoded_key;
+    row.value = decoded_value.user_value;
+
+    if let Some(expire_ts) = decoded_value.expire_ts {
+        row.expire_ts_unix_secs = expire_ts;
+    }
+
+    if decoded_value.is_delete {
+        row.op_type = EventRowOpType::Delete;
+    } else {
+        row.op_type = EventRowOpType::Put;
+    }
+    set_event_row_type(row, EventLogType::Committed);
+    Ok(())
+}
+
 fn decode_default(value: Vec<u8>, row: &mut EventRow) {
     if !value.is_empty() {
         row.value = value.to_vec();
@@ -891,12 +1006,13 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::executor::block_on;
-    use futures::stream::StreamExt;
-    use kvproto::errorpb::Error as ErrorHeader;
-    use kvproto::metapb::Region;
     use std::cell::Cell;
+
+    use api_version::RawValue;
+    use futures::{executor::block_on, stream::StreamExt};
+    use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
+
+    use super::*;
 
     #[test]
     fn test_error() {
@@ -912,8 +1028,13 @@ mod tests {
         let (sink, mut drain) = crate::channel::channel(1, quota);
         let rx = drain.drain();
         let request_id = 123;
-        let mut downstream =
-            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
+        let mut downstream = Downstream::new(
+            String::new(),
+            region_epoch,
+            request_id,
+            ConnID::new(),
+            ChangeDataRequestKvApi::TiDb,
+        );
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id, Default::default());
         delegate.subscribe(downstream).unwrap();
@@ -1021,5 +1142,99 @@ mod tests {
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
+    }
+
+    #[test]
+    fn test_delegate_subscribe_unsubscribe() {
+        let new_downstream = |id: u64, region_version: u64| {
+            let peer = format!("{}", id);
+            let mut epoch = RegionEpoch::default();
+            epoch.set_conf_ver(region_version);
+            epoch.set_version(region_version);
+            Downstream::new(peer, epoch, id, ConnID::new(), ChangeDataRequestKvApi::TiDb)
+        };
+
+        // Create a new delegate.
+        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
+        let mut delegate = Delegate::new(1, txn_extra_op.clone());
+        assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
+        assert!(delegate.handle.is_observing());
+
+        // Subscribe once.
+        let downstream1 = new_downstream(1, 1);
+        let downstream1_id = downstream1.id;
+        delegate.subscribe(downstream1).unwrap();
+        assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+        assert!(delegate.handle.is_observing());
+
+        // Subscribe twice and then unsubscribe the second downstream.
+        let downstream2 = new_downstream(2, 1);
+        let downstream2_id = downstream2.id;
+        delegate.subscribe(downstream2).unwrap();
+        assert!(!delegate.unsubscribe(downstream2_id, None));
+        assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+        assert!(delegate.handle.is_observing());
+
+        // `on_region_ready` when the delegate isn't resolved.
+        delegate.subscribe(new_downstream(1, 2)).unwrap();
+        let mut region = Region::default();
+        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(1);
+        {
+            let failures = delegate.on_region_ready(Resolver::new(1), region);
+            assert_eq!(failures.len(), 1);
+            let id = failures[0].0.id;
+            delegate.unsubscribe(id, None);
+            assert_eq!(delegate.downstreams().len(), 1);
+        }
+        assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+        assert!(delegate.handle.is_observing());
+
+        // Subscribe with an invalid epoch.
+        assert!(delegate.subscribe(new_downstream(1, 2)).is_err());
+        assert_eq!(delegate.downstreams().len(), 1);
+
+        // Unsubscribe all downstreams.
+        assert!(delegate.unsubscribe(downstream1_id, None));
+        assert!(delegate.downstreams().is_empty());
+        assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
+        assert!(!delegate.handle.is_observing());
+    }
+
+    #[test]
+    fn test_decode_rawkv() {
+        let cases = vec![
+            (vec![b'r', 2, 3, 4], b"world1".to_vec(), 1, Some(10), false),
+            (vec![b'r', 3, 4, 5], b"world2".to_vec(), 2, None, true),
+        ];
+
+        for (key, value, start_ts, expire_ts, is_delete) in cases.into_iter() {
+            let mut row = EventRow::default();
+            let key_with_ts = ApiV2::encode_raw_key(&key, Some(start_ts.into())).into_encoded();
+            let raw_value = RawValue {
+                user_value: value.to_vec(),
+                expire_ts,
+                is_delete,
+            };
+            let encoded_value = ApiV2::encode_raw_value_owned(raw_value);
+            decode_rawkv(key_with_ts, encoded_value, &mut row).unwrap();
+
+            assert_eq!(row.start_ts, start_ts);
+            assert_eq!(row.commit_ts, start_ts);
+            assert_eq!(row.key, key);
+            assert_eq!(row.value, value);
+
+            if is_delete {
+                assert_eq!(row.op_type, EventRowOpType::Delete);
+            } else {
+                assert_eq!(row.op_type, EventRowOpType::Put);
+            }
+
+            if let Some(expire_ts) = expire_ts {
+                assert_eq!(row.expire_ts_unix_secs, expire_ts);
+            } else {
+                assert_eq!(row.expire_ts_unix_secs, 0);
+            }
+        }
     }
 }

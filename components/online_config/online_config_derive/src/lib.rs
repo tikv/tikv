@@ -3,14 +3,14 @@
 //! This crate provides a macro that can be used to generate code to
 //! implement `OnlineConfig` trait
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use syn::punctuated::Punctuated;
-use syn::token::Comma;
-use syn::*;
+use syn::{punctuated::Punctuated, token::Comma, *};
 
 #[proc_macro_derive(OnlineConfig, attributes(online_config))]
 pub fn config(input: proc_macro::TokenStream) -> proc_macro::TokenStream {

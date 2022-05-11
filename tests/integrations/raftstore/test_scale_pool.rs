@@ -1,13 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{collections::HashMap, time::Duration};
+
 use engine_traits::CF_DEFAULT;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raftstore::Result;
-use std::collections::HashMap;
-use std::time::Duration;
 use test_raftstore::*;
-use tikv_util::sys::thread::{self, Pid};
-use tikv_util::HandyRwLock;
+use tikv_util::{
+    sys::thread::{self, Pid},
+    HandyRwLock,
+};
 
 fn put_with_timeout<T: Simulator>(
     cluster: &mut Cluster<T>,

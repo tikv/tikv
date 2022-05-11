@@ -83,4 +83,17 @@ lazy_static! {
         &["type", "error"]
     )
     .unwrap();
+    pub static ref IMPORTER_APPLY_DURATION: HistogramVec = register_histogram_vec!(
+        "tikv_import_apply_duration",
+        "Bucketed histogram of importer apply duration",
+        &["type"],
+        // Start from 10ms.
+        exponential_buckets(0.01, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref INPORTER_APPLY_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_import_apply_count",
+        "Bucketed histogram of importer apply count",
+        &["type"]
+    ).unwrap();
 }

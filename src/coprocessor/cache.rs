@@ -5,9 +5,10 @@ use kvproto::coprocessor::Response;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
 
-use crate::coprocessor::RequestHandler;
-use crate::coprocessor::*;
-use crate::storage::Snapshot;
+use crate::{
+    coprocessor::{RequestHandler, *},
+    storage::Snapshot,
+};
 
 pub struct CachedRequestHandler {
     data_version: Option<u64>,

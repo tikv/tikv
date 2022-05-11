@@ -6,9 +6,7 @@ use raft::StateRole;
 use raftstore::coprocessor::*;
 use tikv_util::worker::Scheduler;
 
-use crate::cmd::lock_only_filter;
-use crate::endpoint::Task;
-use crate::metrics::RTS_CHANNEL_PENDING_CMD_BYTES;
+use crate::{cmd::lock_only_filter, endpoint::Task, metrics::RTS_CHANNEL_PENDING_CMD_BYTES};
 
 pub struct Observer<E: KvEngine> {
     scheduler: Scheduler<Task<E::Snapshot>>,
@@ -130,19 +128,22 @@ impl<E: KvEngine> RegionChangeObserver for Observer<E> {
                     }
                 }
             }
+            RegionChangeEvent::UpdateBuckets(_) => {}
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use std::time::Duration;
+
     use engine_rocks::RocksSnapshot;
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use kvproto::raft_cmdpb::*;
-    use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+
+    use super::*;
 
     fn put_cf(cf: &str, key: &[u8], value: &[u8]) -> Request {
         let mut cmd = Request::default();
@@ -191,7 +192,11 @@ mod test {
         }
 
         // Both cdc and resolved-ts worker are observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
         observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
@@ -199,7 +204,11 @@ mod test {
         expect_recv(&mut rx, data.clone());
 
         // Only cdc is observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         observe_info.rts_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
@@ -207,8 +216,24 @@ mod test {
         // Still observe all data
         expect_recv(&mut rx, data.clone());
 
+        // Pitr and rts is observing
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::default(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
+        let mut cb = CmdBatch::new(&observe_info, 0);
+        cb.push(&observe_info, 0, cmd.clone());
+        observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
+        // Still observe all data
+        expect_recv(&mut rx, data.clone());
+
         // Only resolved-ts worker is observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         observe_info.cdc_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
@@ -218,7 +243,11 @@ mod test {
         expect_recv(&mut rx, data);
 
         // Both cdc and resolved-ts worker are not observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         observe_info.rts_id.stop_observing();
         observe_info.cdc_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);

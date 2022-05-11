@@ -1,27 +1,27 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
-use std::hash::{Hash, Hasher};
-use std::ptr::NonNull;
-use std::sync::Arc;
+use std::{
+    convert::TryFrom,
+    hash::{Hash, Hasher},
+    ptr::NonNull,
+    sync::Arc,
+};
 
-use collections::HashMap;
-use collections::HashMapEntry;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::Aggregation;
-use tipb::{Expr, FieldType};
-
-use crate::interface::*;
-use crate::util::aggr_executor::*;
-use crate::util::hash_aggr_helper::HashAggregationHelper;
-use crate::util::*;
+use collections::{HashMap, HashMapEntry};
 use tidb_query_aggr::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_expr::RpnStackNode;
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+    expr::{EvalConfig, EvalContext},
+    EvalType, FieldTypeAccessor,
+};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use tipb::{Aggregation, Expr, FieldType};
+
+use crate::{
+    interface::*,
+    util::{aggr_executor::*, hash_aggr_helper::HashAggregationHelper, *},
+};
 
 /// Slow Hash Aggregation Executor supports multiple groups but uses less efficient ways to
 /// store group keys in hash tables.
@@ -494,15 +494,15 @@ impl Eq for GroupKeyRefUnsafe {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::{codec::data_type::*, FieldTypeTp};
+    use tidb_query_expr::{
+        impl_arithmetic::{arithmetic_fn_meta, RealPlus},
+        RpnExpressionBuilder,
+    };
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::util::aggr_executor::tests::*;
-    use tidb_query_datatype::codec::data_type::*;
-    use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
-    use tidb_query_expr::RpnExpressionBuilder;
 
     #[test]
     #[allow(clippy::string_lit_as_bytes)]

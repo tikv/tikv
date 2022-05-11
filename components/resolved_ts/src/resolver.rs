@@ -1,10 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{cmp, collections::BTreeMap, sync::Arc};
+
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
-use std::cmp;
-use std::collections::BTreeMap;
-use std::sync::Arc;
 use txn_types::TimeStamp;
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
@@ -27,6 +26,27 @@ pub struct Resolver {
     min_ts: TimeStamp,
     // Whether the `Resolver` is stopped
     stopped: bool,
+}
+
+impl std::fmt::Debug for Resolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let far_lock = self.lock_ts_heap.iter().next();
+        let mut dt = f.debug_tuple("Resolver");
+        dt.field(&format_args!("region={}", self.region_id));
+
+        if let Some((ts, keys)) = far_lock {
+            dt.field(&format_args!(
+                "far_lock={:?}",
+                keys.iter()
+                    // We must use Display format here or the redact won't take effect.
+                    .map(|k| format!("{}", log_wrappers::Value::key(k)))
+                    .collect::<Vec<_>>()
+            ));
+            dt.field(&format_args!("far_lock_ts={:?}", ts));
+        }
+
+        dt.finish()
+    }
 }
 
 impl Resolver {
@@ -174,8 +194,9 @@ impl Resolver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use txn_types::Key;
+
+    use super::*;
 
     #[derive(Clone)]
     enum Event {

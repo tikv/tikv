@@ -1,15 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::{Key, KvPair, OldValue, TimeStamp, TsSet, Value, WriteRef};
 
 use super::{Error, ErrorInner, Result};
-use crate::storage::kv::{Snapshot, Statistics};
-use crate::storage::metrics::*;
-use crate::storage::mvcc::{
-    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState, PointGetter,
-    PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
+use crate::storage::{
+    kv::{Snapshot, Statistics},
+    metrics::*,
+    mvcc::{
+        EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState,
+        PointGetter, PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
+    },
 };
-use txn_types::{Key, KvPair, OldValue, TimeStamp, TsSet, Value, WriteRef};
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -275,7 +277,6 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
-            .multi(false)
             .bypass_locks(self.bypass_locks.clone())
             .access_locks(self.access_locks.clone())
             .build()?;
@@ -290,7 +291,6 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                 PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
                     .fill_cache(self.fill_cache)
                     .isolation_level(self.isolation_level)
-                    .multi(true)
                     .bypass_locks(self.bypass_locks.clone())
                     .access_locks(self.access_locks.clone())
                     .check_has_newer_ts_data(self.check_has_newer_ts_data)
@@ -326,15 +326,9 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         keys: &[Key],
         statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<Value>>>> {
-        if keys.len() == 1 {
-            statistics.push(Statistics::default());
-            return Ok(vec![self.get(&keys[0], statistics.last_mut().unwrap())]);
-        }
-
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
-            .multi(true)
             .bypass_locks(self.bypass_locks.clone())
             .access_locks(self.access_locks.clone())
             .build()?;
@@ -635,21 +629,22 @@ impl Scanner for FixtureStoreScanner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::kv::{
-        Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, SnapContext,
-        TestEngineBuilder, WriteData,
-    };
-    use crate::storage::mvcc::{Mutation, MvccTxn, SnapshotReader};
-    use crate::storage::txn::{
-        commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
-    };
-    use concurrency_manager::ConcurrencyManager;
-    use engine_traits::CfName;
-    use engine_traits::{IterOptions, ReadOptions};
-    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use std::sync::Arc;
+
+    use concurrency_manager::ConcurrencyManager;
+    use engine_traits::{CfName, IterOptions, ReadOptions};
+    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use tikv_kv::DummySnapshotExt;
+
+    use super::*;
+    use crate::storage::{
+        kv::{
+            Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, SnapContext,
+            TestEngineBuilder, WriteData,
+        },
+        mvcc::{Mutation, MvccTxn, SnapshotReader},
+        txn::{commit, prewrite, CommitKind, TransactionKind, TransactionProperties},
+    };
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: TimeStamp = TimeStamp::new(10);
@@ -1385,10 +1380,12 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
+    use std::collections::BTreeMap;
+
+    use rand::RngCore;
+
     use super::*;
     use crate::test;
-    use rand::RngCore;
-    use std::collections::BTreeMap;
 
     fn gen_payload(n: usize) -> Vec<u8> {
         let mut data = vec![0; n];

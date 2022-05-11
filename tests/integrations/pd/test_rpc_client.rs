@@ -1,24 +1,24 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc,
+    },
+    thread,
+    time::Duration,
+};
 
 use futures::executor::block_on;
-use grpcio::EnvBuilder;
-use grpcio::{Error as GrpcError, RpcStatus, RpcStatusCode};
-use kvproto::metapb;
-use kvproto::pdpb;
-use tokio::runtime::Builder;
-
+use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
+use kvproto::{metapb, pdpb};
 use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
-use tikv_util::config::ReadableDuration;
-use txn_types::TimeStamp;
-
 use test_pd::{mocker::*, util::*, Server as MockServer};
+use tikv_util::config::ReadableDuration;
+use tokio::runtime::Builder;
+use txn_types::TimeStamp;
 
 #[test]
 fn test_retry_rpc_client() {
@@ -90,6 +90,9 @@ fn test_rpc_client() {
 
     let ts = block_on(client.get_tso()).unwrap();
     assert_ne!(ts, TimeStamp::zero());
+
+    let ts100 = block_on(client.batch_get_tso(100)).unwrap();
+    assert_eq!(ts.logical() + 100, ts100.logical());
 
     let mut prev_id = 0;
     for _ in 0..100 {

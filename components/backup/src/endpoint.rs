@@ -1,47 +1,55 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
-use std::cell::RefCell;
-use std::fmt;
-use std::sync::atomic::*;
-use std::sync::{mpsc, Arc, Mutex, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    fmt,
+    sync::{atomic::*, mpsc, Arc, Mutex, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use async_channel::SendError;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
-use engine_traits::{name_to_cf, CfName, SstCompressionType};
+use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, SstCompressionType};
 use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
 use futures::channel::mpsc::*;
-use kvproto::brpb::*;
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
-use kvproto::metapb::*;
-use online_config::OnlineConfig;
-
-use raft::StateRole;
-use raftstore::coprocessor::RegionInfoProvider;
-use raftstore::store::util::find_peer;
-use tikv::config::BackupConfig;
-use tikv::storage::kv::{CursorBuilder, Engine, ScanMode, SnapContext};
-use tikv::storage::mvcc::Error as MvccError;
-use tikv::storage::txn::{
-    EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
+use kvproto::{
+    brpb::*,
+    encryptionpb::EncryptionMethod,
+    kvrpcpb::{ApiVersion, Context, IsolationLevel},
+    metapb::*,
 };
-use tikv::storage::Statistics;
-use tikv_util::time::{Instant, Limiter};
-use tikv_util::worker::Runnable;
-use tikv_util::{box_err, debug, error, error_unknown, impl_display_as_debug, info, warn};
+use online_config::OnlineConfig;
+use raft::StateRole;
+use raftstore::{coprocessor::RegionInfoProvider, store::util::find_peer};
+use tikv::{
+    config::BackupConfig,
+    storage::{
+        kv::{CursorBuilder, Engine, ScanMode, SnapContext},
+        mvcc::Error as MvccError,
+        raw::raw_mvcc::RawMvccSnapshot,
+        txn::{EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore},
+        Snapshot, Statistics,
+    },
+};
+use tikv_util::{
+    box_err, debug, error, error_unknown, impl_display_as_debug, info,
+    time::{Instant, Limiter},
+    warn,
+    worker::Runnable,
+};
 use tokio::runtime::Runtime;
 use txn_types::{Key, Lock, TimeStamp};
 
-use crate::metrics::*;
-use crate::softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu};
-use crate::utils::ControlThreadPool;
-use crate::writer::{BackupWriterBuilder, CfNameWrap};
-use crate::Error;
-use crate::*;
+use crate::{
+    metrics::*,
+    softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu},
+    utils::{ControlThreadPool, KeyValueCodec},
+    writer::{BackupWriterBuilder, CfNameWrap},
+    Error, *,
+};
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
 
@@ -55,6 +63,7 @@ struct Request {
     backend: StorageBackend,
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
+    dst_api_ver: ApiVersion,
     cf: CfName,
     compression_type: CompressionType,
     compression_level: i32,
@@ -80,6 +89,7 @@ impl fmt::Debug for Task {
             )
             .field("end_key", &log_wrappers::Value::key(&self.request.end_key))
             .field("is_raw_kv", &self.request.is_raw_kv)
+            .field("dst_api_ver", &self.request.dst_api_ver)
             .field("cf", &self.request.cf)
             .finish()
     }
@@ -113,6 +123,7 @@ impl Task {
                 limiter,
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
+                dst_api_ver: req.get_dst_api_version(),
                 cf,
                 compression_type: req.get_compression_type(),
                 compression_level: req.get_compression_level(),
@@ -139,7 +150,7 @@ pub struct BackupRange {
     end_key: Option<Key>,
     region: Region,
     leader: Peer,
-    is_raw_kv: bool,
+    codec: KeyValueCodec,
     cf: CfName,
 }
 
@@ -147,7 +158,7 @@ pub struct BackupRange {
 /// Maybe what we really need is make Writer a trait...
 enum KvWriter {
     Txn(BackupWriter),
-    Raw(BackupRawKVWriter),
+    Raw(BackupRawKvWriter),
 }
 
 impl std::fmt::Debug for KvWriter {
@@ -189,15 +200,22 @@ async fn save_backup_file_worker(
     rx: async_channel::Receiver<InMemBackupFiles>,
     tx: UnboundedSender<BackupResponse>,
     storage: Arc<dyn ExternalStorage>,
-    api_version: ApiVersion,
+    codec: KeyValueCodec,
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
             match msg.files.save(&storage).await {
                 Ok(mut split_files) => {
                     for file in split_files.iter_mut() {
-                        file.set_start_key(msg.start_key.clone());
-                        file.set_end_key(msg.end_key.clone());
+                        // In the case that backup from v1 and restore to v2,
+                        // the file range need be encoded as v2 format.
+                        // And range in response keep in v1 format.
+                        let (start, end) = codec.convert_key_range_to_dst_version(
+                            msg.start_key.clone(),
+                            msg.end_key.clone(),
+                        );
+                        file.set_start_key(start);
+                        file.set_end_key(end);
                         file.set_start_version(msg.start_version.into_inner());
                         file.set_end_version(msg.end_version.into_inner());
                     }
@@ -227,7 +245,7 @@ async fn save_backup_file_worker(
         }
         response.set_start_key(msg.start_key.clone());
         response.set_end_key(msg.end_key.clone());
-        response.set_api_version(api_version);
+        response.set_api_version(codec.dst_api_ver);
         if let Err(e) = tx.unbounded_send(response) {
             error_unknown!(?e; "backup failed to send response"; "region" => ?msg.region,
             "start_key" => &log_wrappers::Value::key(&msg.start_key),
@@ -266,7 +284,7 @@ impl BackupRange {
         begin_ts: TimeStamp,
         saver: async_channel::Sender<InMemBackupFiles>,
     ) -> Result<Statistics> {
-        assert!(!self.is_raw_kv);
+        assert!(!self.codec.is_raw_kv);
 
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
@@ -413,32 +431,16 @@ impl BackupRange {
         Ok(stat)
     }
 
-    fn backup_raw<E: Engine>(
+    fn backup_raw<S: Snapshot>(
         &self,
-        writer: &mut BackupRawKVWriter,
-        engine: &E,
+        writer: &mut BackupRawKvWriter,
+        snapshot: &S,
     ) -> Result<Statistics> {
-        assert!(self.is_raw_kv);
-
-        let mut ctx = Context::default();
-        ctx.set_region_id(self.region.get_id());
-        ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
-        ctx.set_peer(self.leader.clone());
-        let snap_ctx = SnapContext {
-            pb_ctx: &ctx,
-            ..Default::default()
-        };
-        let snapshot = match engine.snapshot(snap_ctx) {
-            Ok(s) => s,
-            Err(e) => {
-                error!(?e; "backup raw kv snapshot failed");
-                return Err(e.into());
-            }
-        };
+        assert!(self.codec.is_raw_kv);
         let start = Instant::now();
         let mut statistics = Statistics::default();
         let cfstatistics = statistics.mut_cf_statistics(self.cf);
-        let mut cursor = CursorBuilder::new(&snapshot, self.cf)
+        let mut cursor = CursorBuilder::new(snapshot, self.cf)
             .range(None, self.end_key.clone())
             .scan_mode(ScanMode::Forward)
             .build()?;
@@ -450,12 +452,25 @@ impl BackupRange {
             return Ok(statistics);
         }
         let mut batch = vec![];
+        let current_ts = ttl_current_ts();
         loop {
             while cursor.valid()? && batch.len() < BACKUP_BATCH_LIMIT {
-                batch.push(Ok((
-                    cursor.key(cfstatistics).to_owned(),
-                    cursor.value(cfstatistics).to_owned(),
-                )));
+                let key = cursor.key(cfstatistics);
+                let value = cursor.value(cfstatistics);
+                let is_valid = self.codec.is_valid_raw_value(key, value, current_ts)?;
+                if is_valid {
+                    batch.push(Ok((
+                        self.codec
+                            .convert_encoded_key_to_dst_version(key)?
+                            .into_encoded(),
+                        self.codec.convert_encoded_value_to_dst_version(value)?,
+                    )));
+                };
+                debug!("backup raw key";
+                    "key" => &log_wrappers::Value::key(&self.codec.convert_encoded_key_to_dst_version(key)?.into_encoded()),
+                    "value" => &log_wrappers::Value::value(&self.codec.convert_encoded_value_to_dst_version(value)?),
+                    "valid" => is_valid,
+                );
                 cursor.next(cfstatistics);
             }
             if batch.is_empty() {
@@ -463,7 +478,7 @@ impl BackupRange {
             }
             debug!("backup scan raw kv entries"; "len" => batch.len());
             // Build sst files.
-            if let Err(e) = writer.write(batch.drain(..), false) {
+            if let Err(e) = writer.write(batch.drain(..), true) {
                 error_unknown!(?e; "backup raw kv build sst failed");
                 return Err(e);
             }
@@ -486,7 +501,7 @@ impl BackupRange {
         cipher: CipherInfo,
         saver_tx: async_channel::Sender<InMemBackupFiles>,
     ) -> Result<Statistics> {
-        let mut writer = match BackupRawKVWriter::new(
+        let mut writer = match BackupRawKvWriter::new(
             db,
             &file_name,
             cf,
@@ -494,6 +509,7 @@ impl BackupRange {
             compression_type,
             compression_level,
             cipher,
+            self.codec,
         ) {
             Ok(w) => w,
             Err(e) => {
@@ -501,20 +517,36 @@ impl BackupRange {
                 return Err(e);
             }
         };
-        let stat = match self.backup_raw(&mut writer, &engine) {
+
+        let mut ctx = Context::default();
+        ctx.set_region_id(self.region.get_id());
+        ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
+        ctx.set_peer(self.leader.clone());
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let engine_snapshot = match engine.snapshot(snap_ctx) {
+            Ok(s) => s,
+            Err(e) => {
+                error!(?e; "backup raw kv snapshot failed");
+                return Err(e.into());
+            }
+        };
+        let backup_ret = if self.codec.use_raw_mvcc_snapshot() {
+            self.backup_raw(
+                &mut writer,
+                &RawMvccSnapshot::from_snapshot(engine_snapshot),
+            )
+        } else {
+            self.backup_raw(&mut writer, &engine_snapshot)
+        };
+        let stat = match backup_ret {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
-        let start_key = self
-            .start_key
-            .clone()
-            .map(Key::into_encoded)
-            .unwrap_or_default();
-        let end_key = self
-            .end_key
-            .clone()
-            .map(Key::into_encoded)
-            .unwrap_or_default();
+        let start_key = self.codec.decode_backup_key(self.start_key.clone())?;
+        let end_key = self.codec.decode_backup_key(self.end_key.clone())?;
         let msg = InMemBackupFiles {
             files: KvWriter::Raw(writer),
             start_key,
@@ -632,7 +664,7 @@ pub struct Progress<R: RegionInfoProvider> {
     end_key: Option<Key>,
     region_info: R,
     finished: bool,
-    is_raw_kv: bool,
+    codec: KeyValueCodec,
     cf: CfName,
 }
 
@@ -642,7 +674,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         next_start: Option<Key>,
         end_key: Option<Key>,
         region_info: R,
-        is_raw_kv: bool,
+        codec: KeyValueCodec,
         cf: CfName,
     ) -> Self {
         Progress {
@@ -651,7 +683,7 @@ impl<R: RegionInfoProvider> Progress<R> {
             end_key,
             region_info,
             finished: false,
-            is_raw_kv,
+            codec,
             cf,
         }
     }
@@ -672,7 +704,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
         let start_key = self.next_start.clone();
         let end_key = self.end_key.clone();
-        let raw_kv = self.is_raw_kv;
+        let codec = self.codec;
         let cf_name = self.cf;
         let res = self.region_info.seek_region(
             &start_key_,
@@ -699,7 +731,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                             end_key: ekey,
                             region: region.clone(),
                             leader,
-                            is_raw_kv: raw_kv,
+                            codec,
                             cf: cf_name,
                         };
                         tx.send(backup_range).unwrap();
@@ -828,7 +860,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     if batch.is_empty() {
                         return;
                     }
-                    (batch, progress.is_raw_kv, progress.cf)
+                    (batch, progress.codec.is_raw_kv, progress.cf)
                 };
 
                 for brange in batch {
@@ -843,11 +875,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // TODO: make file_name unique and short
                     let key = brange.start_key.clone().and_then(|k| {
                         // use start_key sha256 instead of start_key to avoid file name too long os error
-                        let input = if is_raw_kv {
-                            k.into_encoded()
-                        } else {
-                            k.into_raw().unwrap()
-                        };
+                        let input = brange.codec.decode_backup_key(Some(k)).unwrap_or_default();
                         file_system::sha256(&input).ok().map(hex::encode)
                     });
                     let name = backup_file_name(store_id, &brange.region, key);
@@ -912,31 +940,28 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
 
     pub fn handle_backup_task(&self, task: Task) {
         let Task { request, resp } = task;
-        let is_raw_kv = request.is_raw_kv;
-        let start_key = if request.start_key.is_empty() {
-            None
-        } else {
-            // TODO: if is_raw_kv is written everywhere. It need to be simplified.
-            if is_raw_kv {
-                Some(Key::from_encoded(request.start_key.clone()))
-            } else {
-                Some(Key::from_raw(&request.start_key))
+        let codec = KeyValueCodec::new(request.is_raw_kv, self.api_version, request.dst_api_ver);
+        if !codec.check_backup_api_version(&request.start_key, &request.end_key) {
+            let mut response = BackupResponse::default();
+            let err_msg = format!(
+                "invalid backup version, cur: {:?}, dst: {:?}",
+                self.api_version, request.dst_api_ver
+            );
+            response.set_error(crate::Error::Other(box_err!(err_msg)).into());
+            if let Err(err) = resp.unbounded_send(response) {
+                error_unknown!(?err; "backup failed to send response");
             }
-        };
-        let end_key = if request.end_key.is_empty() {
-            None
-        } else if is_raw_kv {
-            Some(Key::from_encoded(request.end_key.clone()))
-        } else {
-            Some(Key::from_raw(&request.end_key))
-        };
+            return;
+        }
+        let start_key = codec.encode_backup_key(request.start_key.clone());
+        let end_key = codec.encode_backup_key(request.end_key.clone());
 
         let prs = Arc::new(Mutex::new(Progress::new(
             self.store_id,
             start_key,
             end_key,
             self.region_info.clone(),
-            is_raw_kv,
+            codec,
             request.cf,
         )));
         let backend = match create_storage(&request.backend, self.get_config()) {
@@ -968,7 +993,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 rx.clone(),
                 resp.clone(),
                 backend.clone(),
-                self.api_version,
+                codec,
             ));
         }
     }
@@ -1074,25 +1099,32 @@ fn redact_option_key(key: &Option<Key>) -> log_wrappers::Value<'_> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::time::Duration;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::Mutex,
+        time::Duration,
+    };
 
+    use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
     use file_system::{IOOp, IORateLimiter, IOType};
-    use futures::executor::block_on;
-    use futures::stream::StreamExt;
+    use futures::{executor::block_on, stream::StreamExt};
     use kvproto::metapb;
-    use raftstore::coprocessor::RegionCollector;
-    use raftstore::coprocessor::Result as CopResult;
-    use raftstore::coprocessor::SeekRegionCallback;
-    use raftstore::store::util::new_peer;
+    use raftstore::{
+        coprocessor::{RegionCollector, Result as CopResult, SeekRegionCallback},
+        store::util::new_peer,
+    };
     use rand::Rng;
-    use std::sync::Mutex;
     use tempfile::TempDir;
-    use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
-    use tikv::storage::{RocksEngine, TestEngineBuilder};
+    use tikv::{
+        coprocessor::checksum_crc64_xor,
+        storage::{
+            txn::tests::{must_commit, must_prewrite_put},
+            RocksEngine, TestEngineBuilder,
+        },
+    };
     use tikv_util::config::ReadableSize;
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
@@ -1103,23 +1135,33 @@ pub mod tests {
     pub struct MockRegionInfoProvider {
         regions: Arc<Mutex<RegionCollector>>,
         cancel: Option<Arc<AtomicBool>>,
+        need_encode_key: bool,
     }
 
     impl MockRegionInfoProvider {
-        pub fn new() -> Self {
+        pub fn new(encode_key: bool) -> Self {
             MockRegionInfoProvider {
                 regions: Arc::new(Mutex::new(RegionCollector::new())),
                 cancel: None,
+                need_encode_key: encode_key,
             }
         }
         pub fn set_regions(&self, regions: Vec<(Vec<u8>, Vec<u8>, u64)>) {
             let mut map = self.regions.lock().unwrap();
             for (mut start_key, mut end_key, id) in regions {
                 if !start_key.is_empty() {
-                    start_key = Key::from_raw(&start_key).into_encoded();
+                    if self.need_encode_key {
+                        start_key = Key::from_raw(&start_key).into_encoded();
+                    } else {
+                        start_key = Key::from_encoded(start_key).into_encoded();
+                    }
                 }
                 if !end_key.is_empty() {
-                    end_key = Key::from_raw(&end_key).into_encoded();
+                    if self.need_encode_key {
+                        end_key = Key::from_raw(&end_key).into_encoded();
+                    } else {
+                        end_key = Key::from_encoded(end_key).into_encoded();
+                    }
                 }
                 let mut r = metapb::Region::default();
                 r.set_id(id);
@@ -1147,11 +1189,13 @@ pub mod tests {
     }
 
     pub fn new_endpoint() -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
-        new_endpoint_with_limiter(None)
+        new_endpoint_with_limiter(None, ApiVersion::V1, false)
     }
 
     pub fn new_endpoint_with_limiter(
         limiter: Option<Arc<IORateLimiter>>,
+        api_version: ApiVersion,
+        is_raw_kv: bool,
     ) -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
@@ -1162,16 +1206,18 @@ pub mod tests {
                 engine_traits::CF_WRITE,
             ])
             .io_rate_limiter(limiter)
+            .api_version(api_version)
             .build()
             .unwrap();
         let concurrency_manager = ConcurrencyManager::new(1.into());
+        let need_encode_key = !is_raw_kv || api_version == ApiVersion::V2;
         let db = rocks.get_rocksdb().get_sync_db();
         (
             temp,
             Endpoint::new(
                 1,
                 rocks,
-                MockRegionInfoProvider::new(),
+                MockRegionInfoProvider::new(need_encode_key),
                 db,
                 BackupConfig {
                     num_threads: 4,
@@ -1180,7 +1226,7 @@ pub mod tests {
                     ..Default::default()
                 },
                 concurrency_manager,
-                ApiVersion::V1,
+                api_version,
             ),
         )
     }
@@ -1273,7 +1319,7 @@ pub mod tests {
                     start_key,
                     end_key,
                     endpoint.region_info.clone(),
-                    false,
+                    KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
                     engine_traits::CF_DEFAULT,
                 );
 
@@ -1326,6 +1372,7 @@ pub mod tests {
                         limiter: Limiter::new(f64::INFINITY),
                         cancel: Arc::default(),
                         is_raw_kv: false,
+                        dst_api_ver: ApiVersion::V1,
                         cf: engine_traits::CF_DEFAULT,
                         compression_type: CompressionType::Unknown,
                         compression_level: 0,
@@ -1389,7 +1436,7 @@ pub mod tests {
     fn test_handle_backup_task() {
         let limiter = Arc::new(IORateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
-        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter));
+        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), ApiVersion::V1, false);
         let engine = endpoint.engine.clone();
 
         endpoint
@@ -1466,6 +1513,196 @@ pub mod tests {
             assert!(none.is_none(), "{:?}", none);
             assert_eq!(stats.fetch(IOType::Export, IOOp::Write), 0);
             assert_ne!(stats.fetch(IOType::Export, IOOp::Read), 0);
+        }
+    }
+
+    fn generate_test_raw_key(idx: u64, api_ver: ApiVersion) -> String {
+        // first key is an empty key for testing purposes
+        let mut key = if idx == 0 {
+            String::from("")
+        } else {
+            format!("k{:0>10}", idx)
+        };
+        if api_ver == ApiVersion::V2 {
+            key.insert(0, RAW_KEY_PREFIX as char);
+        }
+        key
+    }
+
+    fn generate_test_raw_value(idx: u64, api_ver: ApiVersion) -> String {
+        format!("v_{}", generate_test_raw_key(idx, api_ver))
+    }
+
+    fn generate_engine_test_key(
+        user_key: String,
+        ts: Option<TimeStamp>,
+        api_ver: ApiVersion,
+    ) -> Key {
+        dispatch_api_version!(api_ver, {
+            return API::encode_raw_key_owned(user_key.into_bytes(), ts);
+        })
+    }
+
+    fn generate_engine_test_value(user_value: String, api_ver: ApiVersion) -> Vec<u8> {
+        let raw_value = RawValue {
+            user_value: user_value.into_bytes(),
+            expire_ts: Some(u64::MAX),
+            is_delete: false,
+        };
+        dispatch_api_version!(api_ver, {
+            return API::encode_raw_value_owned(raw_value);
+        })
+    }
+
+    fn convert_test_backup_user_key(
+        mut raw_key: String,
+        cur_ver: ApiVersion,
+        dst_ver: ApiVersion,
+    ) -> Key {
+        if (cur_ver == ApiVersion::V1 || cur_ver == ApiVersion::V1ttl) && dst_ver == ApiVersion::V2
+        {
+            raw_key.insert(0, RAW_KEY_PREFIX as char);
+        }
+        Key::from_encoded(raw_key.into_bytes())
+    }
+
+    fn test_handle_backup_raw_task_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> bool {
+        let limiter = Arc::new(IORateLimiter::new_for_test());
+        let stats = limiter.statistics().unwrap();
+        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true);
+        let engine = endpoint.engine.clone();
+
+        let start_key_idx: u64 = 100;
+        let end_key_idx: u64 = 110;
+        endpoint.region_info.set_regions(vec![(
+            vec![], //generate_test_raw_key(start_key_idx).into_bytes(),
+            vec![], //generate_test_raw_key(end_key_idx).into_bytes(),
+            1,
+        )]);
+        let ctx = Context::default();
+        let mut i = start_key_idx;
+        let digest = crc64fast::Digest::new();
+        let mut checksum: u64 = 0;
+        while i < end_key_idx {
+            let key_str = generate_test_raw_key(i, cur_api_ver);
+            let value_str = generate_test_raw_value(i, cur_api_ver);
+            let key = generate_engine_test_key(key_str.clone(), None, cur_api_ver);
+            let value = generate_engine_test_value(value_str.clone(), cur_api_ver);
+            let dst_user_key = convert_test_backup_user_key(key_str, cur_api_ver, dst_api_ver);
+            let dst_value = value_str.as_bytes();
+            checksum = checksum_crc64_xor(
+                checksum,
+                digest.clone(),
+                dst_user_key.as_encoded(),
+                dst_value,
+            );
+            let ret = engine.put(&ctx, key, value);
+            assert!(ret.is_ok());
+            i += 1;
+        }
+        // flush to disk so that read requests can be traced by TiKV limiter.
+        engine
+            .get_rocksdb()
+            .flush_cf(engine_traits::CF_DEFAULT, true /*sync*/)
+            .unwrap();
+
+        // TODO: check key number for each snapshot.
+        stats.reset();
+        let mut req = BackupRequest::default();
+        let backup_start = if cur_api_ver == ApiVersion::V2 {
+            vec![RAW_KEY_PREFIX]
+        } else {
+            vec![]
+        };
+        let backup_end = if cur_api_ver == ApiVersion::V2 {
+            vec![RAW_KEY_PREFIX + 1]
+        } else {
+            vec![]
+        };
+        let file_start = if dst_api_ver == ApiVersion::V2 {
+            vec![RAW_KEY_PREFIX]
+        } else {
+            vec![]
+        };
+        let file_end = if dst_api_ver == ApiVersion::V2 {
+            vec![RAW_KEY_PREFIX + 1]
+        } else {
+            vec![]
+        };
+        req.set_start_key(backup_start.clone());
+        req.set_end_key(backup_end.clone());
+        req.set_is_raw_kv(true);
+        req.set_dst_api_version(dst_api_ver);
+        let (tx, rx) = unbounded();
+
+        let limiter = Limiter::new(10.0 * 1024.0 * 1024.0 /* 10 MB/s */);
+        let tmp1 = make_unique_dir(tmp.path());
+        req.set_storage_backend(make_local_backend(&tmp1));
+        req.set_rate_limit(10 * 1024 * 1024);
+        let (mut task, _) = Task::new(req, tx).unwrap();
+        task.request.limiter = limiter;
+        endpoint.handle_backup_task(task);
+        let (resp, rx) = block_on(rx.into_future());
+        let resp = resp.unwrap();
+        if cur_api_ver != dst_api_ver && dst_api_ver != ApiVersion::V2 {
+            assert!(resp.has_error());
+            return false;
+        }
+        assert!(!resp.has_error(), "{:?}", resp);
+        assert_eq!(resp.get_start_key(), backup_start);
+        assert_eq!(resp.get_end_key(), backup_end);
+        let file_len = 1;
+        let files = resp.get_files();
+        info!("{:?}", files);
+        assert_eq!(files.len(), file_len /* default cf*/, "{:?}", resp);
+        assert_eq!(files[0].total_kvs, end_key_idx - start_key_idx);
+        assert_eq!(files[0].crc64xor, checksum);
+        assert_eq!(files[0].get_start_key(), file_start);
+        assert_eq!(files[0].get_end_key(), file_end);
+        let first_kv_backup_size = {
+            let raw_key_str = generate_test_raw_key(start_key_idx, cur_api_ver);
+            let raw_value_str = generate_test_raw_value(start_key_idx, cur_api_ver);
+            let backup_key = convert_test_backup_user_key(raw_key_str, cur_api_ver, dst_api_ver);
+            let backup_value = raw_value_str.as_bytes();
+            backup_key.len() + backup_value.len()
+        } as u64;
+        let kv_backup_size = {
+            let raw_key_str = generate_test_raw_key(1, cur_api_ver);
+            let raw_value_str = generate_test_raw_value(1, cur_api_ver);
+            let backup_key = convert_test_backup_user_key(raw_key_str, cur_api_ver, dst_api_ver);
+            let backup_value = raw_value_str.as_bytes();
+            backup_key.len() + backup_value.len()
+        } as u64;
+        assert_eq!(
+            files[0].total_bytes,
+            (end_key_idx - start_key_idx - 1) * kv_backup_size + first_kv_backup_size
+        );
+        let (none, _rx) = block_on(rx.into_future());
+        assert!(none.is_none(), "{:?}", none);
+        assert_eq!(stats.fetch(IOType::Export, IOOp::Write), 0);
+        assert_ne!(stats.fetch(IOType::Export, IOOp::Read), 0);
+        true
+    }
+
+    #[test]
+    fn test_handle_backup_raw() {
+        // (src_api_version, dst_api_version, result)
+        let test_backup_cases = vec![
+            (ApiVersion::V1, ApiVersion::V1, true),
+            (ApiVersion::V1ttl, ApiVersion::V1ttl, true),
+            (ApiVersion::V2, ApiVersion::V2, true),
+            (ApiVersion::V1, ApiVersion::V2, true),
+            (ApiVersion::V1ttl, ApiVersion::V2, true),
+            (ApiVersion::V1, ApiVersion::V1ttl, false),
+            (ApiVersion::V2, ApiVersion::V1, false),
+            (ApiVersion::V2, ApiVersion::V1ttl, false),
+            (ApiVersion::V1ttl, ApiVersion::V1, false),
+        ];
+        for test_case in test_backup_cases {
+            assert_eq!(
+                test_handle_backup_raw_task_impl(test_case.0, test_case.1),
+                test_case.2
+            );
         }
     }
 

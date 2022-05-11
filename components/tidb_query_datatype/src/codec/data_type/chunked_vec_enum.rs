@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
-use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
-use super::{Enum, EnumRef};
-use crate::codec::data_type::{retain_lifetime_transmute, ChunkedVecBytes, ChunkedVecSized, Int};
-use crate::impl_chunked_vec_common;
+use super::{bit_vec::BitVec, ChunkRef, ChunkedVec, Enum, EnumRef, UnsafeRefInto};
+use crate::{
+    codec::data_type::{retain_lifetime_transmute, ChunkedVecBytes, ChunkedVecSized, Int},
+    impl_chunked_vec_common,
+};
 
 /// `ChunkedVecEnum` is a vector storing `Option<Enum>`.
 ///

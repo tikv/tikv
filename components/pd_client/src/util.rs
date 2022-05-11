@@ -1,44 +1,45 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::pin::Pin;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
-use std::sync::RwLock;
-use std::thread;
-use std::time::Duration;
-
-use futures::channel::mpsc::UnboundedSender;
-use futures::compat::Future01CompatExt;
-use futures::executor::block_on;
-use futures::future::{self, TryFutureExt};
-use futures::stream::Stream;
-use futures::stream::TryStreamExt;
-use futures::task::Context;
-use futures::task::Poll;
-use futures::task::Waker;
-
-use super::{
-    metrics::*, tso::TimestampOracle, Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT,
+use std::{
+    pin::Pin,
+    sync::{atomic::AtomicU64, Arc, RwLock},
+    thread,
+    time::Duration,
 };
+
 use collections::HashSet;
 use fail::fail_point;
-use grpcio::{
-    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
+use futures::{
+    channel::mpsc::UnboundedSender,
+    compat::Future01CompatExt,
+    executor::block_on,
+    future::{self, TryFutureExt},
+    stream::{Stream, TryStreamExt},
+    task::{Context, Poll, Waker},
 };
-use kvproto::metapb::BucketStats;
-use kvproto::pdpb::{
-    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
-    RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
+use grpcio::{
+    CallOption, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver, ClientDuplexSender,
+    Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
+};
+use kvproto::{
+    metapb::BucketStats,
+    pdpb::{
+        ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
+        RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest,
+        ReportBucketsResponse, ResponseHeader,
+    },
 };
 use security::SecurityManager;
-use tikv_util::time::Instant;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{box_err, debug, error, info, slow_log, warn};
-use tikv_util::{Either, HandyRwLock};
+use tikv_util::{
+    box_err, debug, error, info, slow_log, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, Either,
+    HandyRwLock,
+};
 use tokio_timer::timer::Handle;
 
-use crate::BucketMeta;
+use super::{
+    metrics::*, tso::TimestampOracle, BucketMeta, Config, Error, FeatureGate, PdFuture, Result,
+    REQUEST_TIMEOUT,
+};
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // 1s
 const MAX_RETRY_TIMES: u64 = 5;
@@ -88,12 +89,18 @@ pub struct Inner {
         UnboundedSender<RegionHeartbeatRequest>,
     >,
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Waker>,
+    pub buckets_sender: Either<
+        Option<ClientDuplexSender<ReportBucketsRequest>>,
+        UnboundedSender<ReportBucketsRequest>,
+    >,
+    pub buckets_resp: Option<ClientCStreamReceiver<ReportBucketsResponse>>,
     pub client_stub: PdClientStub,
     target: TargetInfo,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
     pub pending_heartbeat: Arc<AtomicU64>,
+    pub pending_buckets: Arc<AtomicU64>,
     pub tso: TimestampOracle,
 
     last_try_reconnect: Instant,
@@ -166,21 +173,27 @@ impl Client {
                 .with_label_values(&[&target.via])
                 .set(1);
         }
-        let (tx, rx) = client_stub
+        let (hb_tx, hb_rx) = client_stub
             .region_heartbeat_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+        let (buckets_tx, buckets_resp) = client_stub
+            .report_buckets_opt(target.call_option())
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "report_buckets", e));
         Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: RwLock::new(Inner {
                 env,
-                hb_sender: Either::Left(Some(tx)),
-                hb_receiver: Either::Left(Some(rx)),
+                hb_sender: Either::Left(Some(hb_tx)),
+                hb_receiver: Either::Left(Some(hb_rx)),
+                buckets_sender: Either::Left(Some(buckets_tx)),
+                buckets_resp: Some(buckets_resp),
                 client_stub,
                 members,
                 target,
                 security_mgr,
                 on_reconnect: None,
                 pending_heartbeat: Arc::default(),
+                pending_buckets: Arc::default(),
                 last_try_reconnect: Instant::now(),
                 tso,
             }),
@@ -199,7 +212,7 @@ impl Client {
         let start_refresh = Instant::now();
         let mut inner = self.inner.wl();
 
-        let (tx, rx) = client_stub
+        let (hb_tx, hb_rx) = client_stub
             .region_heartbeat_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
         info!("heartbeat sender and receiver are stale, refreshing ...");
@@ -208,9 +221,21 @@ impl Client {
         if let Either::Left(Some(ref mut r)) = inner.hb_sender {
             r.cancel();
         }
-        inner.hb_sender = Either::Left(Some(tx));
-        let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
+        inner.hb_sender = Either::Left(Some(hb_tx));
+        let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(hb_rx)));
         let _ = prev_receiver.right().map(|t| t.wake());
+
+        let (buckets_tx, buckets_resp) = client_stub
+            .report_buckets_opt(target.call_option())
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_buckets", e));
+        info!("buckets sender and receiver are stale, refreshing ...");
+        // Try to cancel an unused buckets sender.
+        if let Either::Left(Some(ref mut r)) = inner.buckets_sender {
+            r.cancel();
+        }
+        inner.buckets_sender = Either::Left(Some(buckets_tx));
+        inner.buckets_resp = Some(buckets_resp);
+
         inner.client_stub = client_stub;
         inner.members = members;
         inner.tso = tso;
@@ -840,24 +865,29 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
                 }
             }
         };
-        let end = match find_bucket_index(range.1, keys) {
-            Some(idx) => {
-                // If end key is the start key of a bucket, this bucket should not be included.
-                if range.1 == keys[idx].as_ref() {
-                    if idx == 0 {
+
+        let end = if range.1.is_empty() {
+            last_bucket_idx
+        } else {
+            match find_bucket_index(range.1, keys) {
+                Some(idx) => {
+                    // If end key is the start key of a bucket, this bucket should not be included.
+                    if range.1 == keys[idx].as_ref() {
+                        if idx == 0 {
+                            return None;
+                        }
+                        idx - 1
+                    } else {
+                        idx
+                    }
+                }
+                None => {
+                    if range.1 >= keys[keys.len() - 1].as_ref() {
+                        last_bucket_idx
+                    } else {
+                        // Not in the bucket range.
                         return None;
                     }
-                    idx - 1
-                } else {
-                    idx
-                }
-            }
-            None => {
-                if range.1 >= keys[keys.len() - 1].as_ref() {
-                    last_bucket_idx
-                } else {
-                    // Not in the bucket range.
-                    return None;
                 }
             }
         };
@@ -893,12 +923,14 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
 
 #[cfg(test)]
 mod test {
-    use crate::{merge_bucket_stats, util::find_bucket_index};
     use kvproto::metapb::BucketStats;
+
+    use crate::{merge_bucket_stats, util::find_bucket_index};
 
     #[test]
     fn test_merge_bucket_stats() {
-        let cases = [
+        #[allow(clippy::type_complexity)]
+        let cases: &[((Vec<&[u8]>, _), (Vec<&[u8]>, _), _)] = &[
             (
                 (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
                 (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
@@ -930,15 +962,55 @@ mod test {
                 (vec![b"k4", b"k5"], vec![1]),
                 vec![2, 1],
             ),
+            (
+                (vec![b"", b""], vec![1]),
+                (vec![b"", b""], vec![1]),
+                vec![2],
+            ),
+            (
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                (vec![b"", b"k2", b""], vec![1, 1]),
+                vec![2, 3],
+            ),
+            (
+                (vec![b"", b""], vec![1]),
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                vec![3],
+            ),
+            (
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                (vec![b"", b""], vec![1]),
+                vec![2, 2],
+            ),
+            (
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                (vec![b"k2", b"k3"], vec![1]),
+                vec![1, 2],
+            ),
+            (
+                (vec![b"", b"k3", b""], vec![1, 1]),
+                (vec![b"k1", b"k2"], vec![1]),
+                vec![2, 1],
+            ),
+            (
+                (vec![b"", b"k3"], vec![1]),
+                (vec![b"k1", b""], vec![1]),
+                vec![2],
+            ),
+            (
+                (vec![b"", b"k3"], vec![1]),
+                (vec![b"k4", b""], vec![1]),
+                vec![1],
+            ),
         ];
         for (current, incoming, expected) in cases {
-            let cur_keys = current.0;
-            let incoming_keys = incoming.0;
+            let cur_keys = &current.0;
+            let incoming_keys = &incoming.0;
             let mut cur_stats = BucketStats::default();
-            cur_stats.set_read_qps(current.1);
+            cur_stats.set_read_qps(current.1.to_vec());
             let mut incoming_stats = BucketStats::default();
-            incoming_stats.set_read_qps(incoming.1);
-            merge_bucket_stats(&cur_keys, &mut cur_stats, &incoming_keys, &incoming_stats);
+            incoming_stats.set_read_qps(incoming.1.to_vec());
+            merge_bucket_stats(cur_keys, &mut cur_stats, incoming_keys, &incoming_stats);
             assert_eq!(cur_stats.get_read_qps(), expected);
         }
     }

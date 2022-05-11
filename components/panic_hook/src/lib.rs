@@ -6,9 +6,11 @@
 //! is fatal, and it is compiled with panic=abort, so use of this crate in
 //! production is an error.
 
-use std::cell::RefCell;
-use std::panic::{self, AssertUnwindSafe, PanicInfo};
-use std::sync::Once;
+use std::{
+    cell::RefCell,
+    panic::{self, AssertUnwindSafe, PanicInfo},
+    sync::Once,
+};
 
 static INIT: Once = Once::new();
 // store the default panic hook defined in std.

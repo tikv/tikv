@@ -1,15 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Result;
-use std::sync::Arc;
+use std::{io::Result, sync::Arc};
 
-use crate::raw::Env;
 use encryption::{self, DataKeyManager};
 use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 use rocksdb::{
     DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
     FileEncryptionInfo as DBFileEncryptionInfo,
 };
+
+use crate::raw::Env;
 
 // Use engine::Env directly since Env is not abstracted.
 pub(crate) fn get_env(

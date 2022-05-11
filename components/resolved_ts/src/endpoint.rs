@@ -1,36 +1,44 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt;
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    fmt,
+    marker::PhantomData,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::AdminCmdType;
+use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
 use pd_client::PdClient;
-use raftstore::coprocessor::CmdBatch;
-use raftstore::coprocessor::{ObserveHandle, ObserveID};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::StoreMeta;
-use raftstore::store::util::{self, RegionReadProgress, RegionReadProgressRegistry};
-use raftstore::store::RegionSnapshot;
+use raftstore::{
+    coprocessor::{CmdBatch, ObserveHandle, ObserveID},
+    router::RaftStoreRouter,
+    store::{
+        fsm::StoreMeta,
+        util::{self, RegionReadProgress, RegionReadProgressRegistry},
+        RegionSnapshot,
+    },
+};
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 use txn_types::{Key, TimeStamp};
 
-use crate::advance::AdvanceTsWorker;
-use crate::cmd::{ChangeLog, ChangeRow};
-use crate::metrics::*;
-use crate::resolver::Resolver;
-use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
-use crate::sinker::{CmdSinker, SinkCmd};
+use crate::{
+    advance::AdvanceTsWorker,
+    cmd::{ChangeLog, ChangeRow},
+    metrics::*,
+    resolver::Resolver,
+    scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
+    sinker::{CmdSinker, SinkCmd},
+};
 
 enum ResolverStatus {
     Pending {
@@ -361,7 +369,7 @@ where
                         entries,
                         apply_index,
                     })
-                    .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
+                    .unwrap_or_else(|e| warn!("schedule resolved ts task failed"; "err" => ?e));
                 RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
             }),
             on_error: Some(Box::new(move |observe_id, _region, e| {
@@ -371,7 +379,7 @@ where
                         observe_id,
                         cause: format!("met error while handle scan task {:?}", e),
                     })
-                    .unwrap();
+                    .unwrap_or_else(|schedule_err| warn!("schedule re-register task failed"; "err" => ?schedule_err, "re-register cause" => ?e));
                 RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
             })),
         }

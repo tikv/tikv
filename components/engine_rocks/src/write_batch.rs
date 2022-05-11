@@ -2,11 +2,10 @@
 
 use std::sync::Arc;
 
-use crate::engine::RocksEngine;
-use crate::options::RocksWriteOptions;
-use crate::util::get_cf_handle;
 use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
+
+use crate::{engine::RocksEngine, options::RocksWriteOptions, util::get_cf_handle};
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
@@ -94,8 +93,9 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
         self.wb.rollback_to_save_point().map_err(Error::Engine)
     }
 
-    fn merge(&mut self, other: Self) {
+    fn merge(&mut self, other: Self) -> Result<()> {
         self.wb.append(other.wb.data());
+        Ok(())
     }
 }
 
@@ -134,12 +134,14 @@ impl Mutable for RocksWriteBatch {
 
 #[cfg(test)]
 mod tests {
-    use super::super::util::new_engine_opt;
-    use super::super::RocksDBOptions;
-    use super::*;
     use engine_traits::{Peekable, WriteBatch};
     use rocksdb::DBOptions as RawDBOptions;
     use tempfile::Builder;
+
+    use super::{
+        super::{util::new_engine_opt, RocksDBOptions},
+        *,
+    };
 
     #[test]
     fn test_should_write_to_engine() {
