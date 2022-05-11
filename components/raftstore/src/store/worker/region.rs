@@ -4,8 +4,7 @@ use std::{
     collections::{
         BTreeMap,
         Bound::{Excluded, Included, Unbounded},
-        HashMap,
-        VecDeque,
+        HashMap, VecDeque,
     },
     fmt::{self, Display, Formatter},
     sync::{

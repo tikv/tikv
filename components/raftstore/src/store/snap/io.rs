@@ -8,7 +8,6 @@ use std::{
     usize,
 };
 
-use super::{CfFile, Error, IO_LIMITER_CHUNK_SIZE};
 use encryption::{
     encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter,
     Iv,
@@ -21,12 +20,11 @@ use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
     box_try,
     codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder},
-    debug,
-    info,
+    debug, info,
     time::Limiter,
 };
 
-use super::{Error, IO_LIMITER_CHUNK_SIZE};
+use super::{CfFile, Error, IO_LIMITER_CHUNK_SIZE};
 
 /// Used to check a procedure is stale or not.
 pub trait StaleDetector {
@@ -302,11 +300,10 @@ pub fn get_decrypter_reader(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, path::PathBuf};
 
     use engine_test::kv::KvTestEngine;
     use engine_traits::CF_DEFAULT;
-    use std::path::PathBuf;
     use tempfile::Builder;
     use tikv_util::time::Limiter;
 
@@ -406,7 +403,7 @@ mod tests {
         for max_file_size in max_file_sizes {
             for db_creater in db_creaters {
                 let (_enc_dir, enc_opts) =
-                   gen_db_options_with_encryption("test_cf_build_and_apply_sst_files_enc");
+                    gen_db_options_with_encryption("test_cf_build_and_apply_sst_files_enc");
                 for db_opt in vec![None, Some(enc_opts)] {
                     let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
                     let db = db_creater(dir.path(), db_opt.clone(), None).unwrap();

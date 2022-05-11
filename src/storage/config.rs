@@ -2,17 +2,13 @@
 
 //! Storage configuration.
 
-use std::error::Error;
+use std::{cmp::max, error::Error};
 
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use file_system::{IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
 use online_config::OnlineConfig;
-use std::{
-  cmp::max, 
-  error::Error
-};
 use tikv_util::{
     config::{self, ReadableDuration, ReadableSize},
     sys::SysQuota,

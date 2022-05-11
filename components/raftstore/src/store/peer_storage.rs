@@ -2069,7 +2069,7 @@ mod tests {
     };
     use engine_traits::{
         Engines, Iterable, RaftEngineDebug, RaftEngineReadOnly, SyncMutable, WriteBatch,
-        WriteBatchExt, ALL_CFS,
+        WriteBatchExt, ALL_CFS, CF_DEFAULT,
     };
     use kvproto::raft_serverpb::RaftSnapshotData;
     use metapb::{Peer, Store, StoreLabel};
@@ -2126,7 +2126,7 @@ mod tests {
         // write some data into CF_DEFAULT cf
         let mut p = Peer::default();
         p.set_store_id(1);
-        p.set_id(1 as u64);
+        p.set_id(1_u64);
         for k in 0..100 {
             let key = keys::data_key(format!("akey{}", k).as_bytes());
             engines.kv.put_msg_cf(CF_DEFAULT, &key[..], &p).unwrap();
@@ -2211,12 +2211,12 @@ mod tests {
     pub struct TestPdClient {
         stores: Vec<metapb::Store>,
     }
-    
+
     impl TestPdClient {
         pub fn new() -> TestPdClient {
             TestPdClient {
-                stores: vec![metapb::Store::default();4], 
-            } 
+                stores: vec![metapb::Store::default(); 4],
+            }
         }
 
         pub fn add_store(&mut self, store: metapb::Store) {
@@ -2227,7 +2227,7 @@ mod tests {
 
     impl PdClient for TestPdClient {
         fn get_store(&self, store_id: u64) -> pd_client::Result<metapb::Store> {
-            if store_id < 4{
+            if store_id < 4 {
                 return Ok(self.stores[store_id as usize].clone());
             }
             Err(pd_client::Error::StoreTombstone(format!("{:?}", store_id)))
@@ -2960,7 +2960,7 @@ mod tests {
             2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
-            Some(pd_mock.clone()),
+            Some(pd_mock),
         );
         worker.start_with_timer(runner);
         let snap = s.snapshot(0, 1);
@@ -2983,21 +2983,20 @@ mod tests {
         protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).unwrap();
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
-        let files = data.get_meta().get_cf_files(); 
+        let files = data.get_meta().get_cf_files();
         assert_eq!(files.len(), expected_snapshot_file_count);
     }
 
     #[test]
     fn test_storage_create_snapshot_for_tiflash() {
         // each cf will have one cf file
-        test_storage_create_snapshot_for_role("TiFlash"/* case does not matter */, 3);
+        test_storage_create_snapshot_for_role("TiFlash" /* case does not matter */, 3);
     }
-
 
     #[test]
     fn test_storage_create_snapshot_for_tikv() {
         // default cf will have 3 sst files
-        test_storage_create_snapshot_for_role("tikv", 5); 
+        test_storage_create_snapshot_for_role("tikv", 5);
     }
 
     #[test]

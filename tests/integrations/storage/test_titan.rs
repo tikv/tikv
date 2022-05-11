@@ -1,6 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{path::Path, path::PathBuf, sync::Arc, thread, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    thread,
+    time::Duration,
+};
 
 use engine_rocks::{
     raw::{IngestExternalFileOptions, Writable},
@@ -13,7 +18,7 @@ use engine_traits::{
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
-use raftstore::store::{apply_sst_cf_file, build_sst_cf_file, CfFile, RegionSnapshot};
+use raftstore::store::{apply_sst_cf_file, build_sst_cf_file_list, CfFile, RegionSnapshot};
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::{
