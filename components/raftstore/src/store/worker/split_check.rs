@@ -321,6 +321,24 @@ where
                 }
             }
 
+<<<<<<< HEAD
+=======
+            if buckets.len() < bucket_range_list.len()
+                || bucket_range_list.is_empty() && !skip_check_bucket
+            {
+                buckets.push(bucket);
+                // in case some range's data in bucket_range_list is deleted
+                if buckets.len() < bucket_range_list.len() {
+                    let mut deleted_buckets =
+                        vec![Bucket::default(); bucket_range_list.len() - buckets.len()];
+                    buckets.append(&mut deleted_buckets);
+                }
+                if !bucket_range_list.is_empty() {
+                    assert_eq!(buckets.len(), bucket_range_list.len());
+                }
+            }
+
+>>>>>>> 4476e2738... raftstore: fix split buckets bug (#12476)
             // if we scan the whole range, we can update approximate size and keys with accurate value.
             info!(
                 "update approximate size and keys with accurate value";
