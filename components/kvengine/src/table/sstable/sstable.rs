@@ -163,7 +163,10 @@ impl SSTableCore {
             let mut aux_idx_slice = aux_idx_data.chunk();
             validate_checksum(aux_idx_slice, footer.checksum_type)?;
             aux_idx_slice = &aux_idx_slice[4..];
-            assert_eq!(LittleEndian::read_u32(aux_idx_slice), AUX_INDEX_BINARY_FUSE8);
+            assert_eq!(
+                LittleEndian::read_u32(aux_idx_slice),
+                AUX_INDEX_BINARY_FUSE8
+            );
             aux_idx_slice = &aux_idx_slice[4..];
             let fuse8_len = LittleEndian::read_u32(aux_idx_slice) as usize;
             aux_idx_slice = &aux_idx_slice[4..];

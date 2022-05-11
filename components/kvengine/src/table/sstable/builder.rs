@@ -235,7 +235,7 @@ impl Builder {
         }
     }
 
-    fn build_aux_index(&self, buf: &mut BytesMut, fuse8: &[u8] ) {
+    fn build_aux_index(&self, buf: &mut BytesMut, fuse8: &[u8]) {
         let origin_len = buf.len();
         buf.put_u32_le(0);
         buf.put_u32_le(AUX_INDEX_BINARY_FUSE8);

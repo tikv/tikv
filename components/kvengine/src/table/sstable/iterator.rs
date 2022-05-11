@@ -6,8 +6,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
 
 use super::{builder::META_HAS_OLD, SSTable};
-use crate::table::{search, table, LocalAddr};
-use crate::table::sstable::BLOCK_FORMAT_V1;
+use crate::table::{search, sstable::BLOCK_FORMAT_V1, table, LocalAddr};
 
 pub struct BlockIterator {
     b: Bytes,
