@@ -12,7 +12,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use syn::{punctuated::Punctuated, spanned::Spanned, token::Comma, *};
 
-const CRATE_NAME: &'static str = "config_info";
+const CRATE_NAME: &str = "config_info";
 
 #[proc_macro_derive(ConfigInfo, attributes(config_info))]
 pub fn config(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -97,7 +97,10 @@ fn encoder(
         let field_name = field.ident.as_ref().unwrap();
         let (optional, real_type) = {
             let inner_type = extract_option_inner_type(&field.ty);
-            (inner_type.is_some(), inner_type.unwrap_or(field.ty.clone()))
+            (
+                inner_type.is_some(),
+                inner_type.unwrap_or_else(|| field.ty.clone()),
+            )
         };
 
         let is_sub_module = cfg_attrs.is_sub_module;
@@ -178,8 +181,7 @@ fn build_filed_constructer(
         }
         _ => l.to_token_stream(),
     };
-    let default_value = if default_value_desc.is_some() {
-        let value = default_value_desc.unwrap();
+    let default_value = if let Some(value) = default_value_desc {
         quote!(Some(#crate_name::ConfigValue::Desc(#value.into())))
     } else if !optional {
         quote!(Some(#crate_name::ConfigValue::Concrete(#source.#field_name.clone())))
@@ -424,7 +426,7 @@ struct ValueOptions {
 }
 
 impl parse::Parse for ValueOptions {
-    fn parse(input: parse::ParseStream) -> Result<Self> {
+    fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         let content;
         Ok(Self {
             _bracket_token: bracketed!(content in input),
@@ -466,7 +468,7 @@ fn extract_inner_type(ty: &Type, type_paths: &[&str]) -> Option<Type> {
             });
 
         type_paths
-            .into_iter()
+            .iter()
             .find(|s| idents_of_path == **s)
             .and_then(|_| path.segments.last())
     }
@@ -486,13 +488,12 @@ fn extract_inner_type(ty: &Type, type_paths: &[&str]) -> Option<Type> {
 }
 
 fn extract_option_inner_type(ty: &Type) -> Option<Type> {
-    const OPTION_TYPES: [&'static str; 3] =
-        ["Option|", "std|option|Option|", "core|option|Option|"];
+    const OPTION_TYPES: [&str; 3] = ["Option|", "std|option|Option|", "core|option|Option|"];
     extract_inner_type(ty, &OPTION_TYPES)
 }
 
 fn convert_to_config_type(ty: &Type) -> Result<TokenStream> {
-    let real_type = extract_option_inner_type(ty).unwrap_or(ty.clone());
+    let real_type = extract_option_inner_type(ty).unwrap_or_else(|| ty.clone());
 
     let match_primitive_ident = |ident: &Ident| match &*format!("{}", ident) {
         "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "i128" | "u128" | "isize"
