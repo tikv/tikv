@@ -33,7 +33,7 @@ pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
-pub use prewrite::{one_pc_commit_ts, Prewrite, PrewritePessimistic};
+pub use prewrite::{one_pc_commit, Prewrite, PrewritePessimistic};
 pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
@@ -345,9 +345,6 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
     }
 }
 
-#[derive(Default)]
-pub(super) struct ReleasedLocks(Vec<ReleasedLock>);
-
 /// Represents for a scheduler command, when should the response sent to the client.
 /// For most cases, the response should be sent after the result being successfully applied to
 /// the storage (if needed). But in some special cases, some optimizations allows the response to be
@@ -434,6 +431,9 @@ impl WriteResultLockInfo {
     }
 }
 
+#[derive(Default)]
+pub(super) struct ReleasedLocks(Vec<ReleasedLock>);
+
 impl ReleasedLocks {
     pub fn new() -> Self {
         Self::default()
@@ -446,11 +446,12 @@ impl ReleasedLocks {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hashes.is_empty()
+        self.0.is_empty()
     }
 
     // Wake up pessimistic transactions that waiting for these locks.
-    pub fn wake_up<L: LockManager>(self, lock_mgr: &L) {
+    #[deprecated = "wake up invocations may need to be updated"]
+    pub fn wake_up<L: LockManager>(&self, lock_mgr: &L) {
         lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
     }
 }

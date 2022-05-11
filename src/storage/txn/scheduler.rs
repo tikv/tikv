@@ -291,7 +291,10 @@ impl<L: LockManager> SchedulerInner<L> {
         tctx
     }
 
-    fn take_task_cb_and_pr(&self, cid: u64) -> (Option<StorageCallback>, Option<ProcessResult>) {
+    fn take_task_cb_and_pr(
+        &self,
+        cid: u64,
+    ) -> (Option<SchedulerTaskCallback>, Option<ProcessResult>) {
         self.get_task_slot(cid)
             .get_mut(&cid)
             .map(|tctx| (tctx.cb.take(), tctx.pr.take()))
@@ -770,7 +773,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     fn early_response(
         cid: u64,
-        cb: StorageCallback,
+        cb: SchedulerTaskCallback,
         pr: ProcessResult,
         tag: metrics::CommandKind,
         stage: metrics::CommandStageKind,

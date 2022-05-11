@@ -113,8 +113,8 @@ impl Latch {
         let (result, delete_entry) = if let Some(v) = self.lock_waiting.get_mut(key) {
             let mut result = None;
             for i in 0..v.len() {
-                let lock_info = &v[i];
-                // TODO: Early cancel entries with mismatching term.
+                // let lock_info = &v[i];
+                // TODO: Early cancel entries with mismatching term; cleanup already cancelled items.
                 result = Some(v.swap_remove(i));
                 break;
             }

@@ -6,6 +6,7 @@
 //! handling of the commands is similar. We therefore have a single type (Prewriter) to handle both
 //! kinds of prewrite.
 
+use crate::storage::mvcc::ReleasedLock;
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
@@ -27,6 +28,7 @@ use crate::storage::{
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::{AssertionLevel, ExtraOp};
 use std::mem;
+use std::sync::atomic::Ordering::Release;
 use tikv_kv::SnapshotExt;
 use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 
@@ -576,16 +578,17 @@ impl<K: PrewriteKind> Prewriter<K> {
         };
 
         let mut result = if locks.is_empty() {
+            let (one_pc_commit_ts, released_locks) =
+                one_pc_commit(self.try_one_pc, &mut txn, final_min_commit_ts);
+            if !released_locks.is_empty() {
+                released_locks.wake_up(lock_manager);
+            }
+
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
                     min_commit_ts: async_commit_ts,
-                    one_pc_commit_ts: one_pc_commit_ts(
-                        self.try_one_pc,
-                        &mut txn,
-                        final_min_commit_ts,
-                        lock_manager,
-                    ),
+                    one_pc_commit_ts,
                 },
             };
             let extra = TxnExtra {
@@ -606,6 +609,11 @@ impl<K: PrewriteKind> Prewriter<K> {
                 rows,
                 pr,
                 encountered_locks: None,
+                released_locks: if released_locks.is_empty() {
+                    None
+                } else {
+                    Some(released_locks)
+                },
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -624,6 +632,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 rows,
                 pr,
                 encountered_locks: None,
+                released_locks: None,
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -741,25 +750,21 @@ impl MutationLock for (Mutation, bool) {
     }
 }
 
-/// Compute the commit ts of a 1pc transaction.
-pub fn one_pc_commit_ts(
+/// Commits a 1pc transaction if possible, returns the commit ts and released locks on succeeded.
+pub fn one_pc_commit(
     try_one_pc: bool,
     txn: &mut MvccTxn,
     final_min_commit_ts: TimeStamp,
-    lock_manager: &impl LockManager,
-) -> TimeStamp {
+) -> (TimeStamp, ReleasedLocks) {
     if try_one_pc {
         assert_ne!(final_min_commit_ts, TimeStamp::zero());
         // All keys can be successfully locked and `try_one_pc` is set. Try to directly
         // commit them.
         let released_locks = handle_1pc_locks(txn, final_min_commit_ts);
-        if !released_locks.is_empty() {
-            released_locks.wake_up(lock_manager);
-        }
-        final_min_commit_ts
+        (final_min_commit_ts, released_locks)
     } else {
         assert!(txn.locks_for_1pc.is_empty());
-        TimeStamp::zero()
+        (TimeStamp::zero(), ReleasedLocks::new())
     }
 }
 

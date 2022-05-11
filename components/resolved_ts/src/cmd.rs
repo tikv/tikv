@@ -285,7 +285,7 @@ mod tests {
     use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
     use tikv::storage::lock_manager::DummyLockManager;
     use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader};
-    use tikv::storage::txn::commands::one_pc_commit_ts;
+    use tikv::storage::txn::commands::one_pc_commit;
     use tikv::storage::txn::tests::*;
     use tikv::storage::txn::{prewrite, CommitKind, TransactionKind, TransactionProperties};
     use tikv::storage::Engine;
@@ -400,7 +400,7 @@ mod tests {
             false,
         )
         .unwrap();
-        one_pc_commit_ts(true, &mut txn, 10.into(), &DummyLockManager);
+        one_pc_commit(true, &mut txn, 10.into(), &DummyLockManager);
         write(&engine, &Default::default(), txn.into_modifies());
         let one_pc_row = engine
             .take_last_modifies()
