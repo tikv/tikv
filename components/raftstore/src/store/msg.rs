@@ -341,12 +341,12 @@ where
         res: Box<RaftlogFetchResult>,
     },
     EnterForceLeaderState {
-        shared_state: UnsafeRecoveryForceLeaderSyncer,
+        syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
     },
     ExitForceLeaderState,
     UnsafeRecoveryDemoteFailedVoters {
-        shared_state: UnsafeRecoveryExecutePlanSyncer,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     },
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
@@ -655,7 +655,7 @@ where
 
     UnsafeRecoveryReport(pdpb::StoreReport),
     UnsafeRecoveryCreatePeer {
-        shared_state: UnsafeRecoveryExecutePlanSyncer,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
         create: metapb::Region,
     },
 }

@@ -479,12 +479,12 @@ pub struct ReadyResult {
 /// 6. After the plan steps are all applied, exit force leader state
 pub enum ForceLeaderState {
     WaitTicks {
-        shared_state: UnsafeRecoveryForceLeaderSyncer,
+        syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
         ticks: usize,
     },
     PreForceLeader {
-        shared_state: UnsafeRecoveryForceLeaderSyncer,
+        syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
     },
     ForceLeader {
@@ -642,10 +642,10 @@ pub enum UnsafeRecoveryState {
     // sending a store heartbeat message to store fsm.
     WaitApply {
         target_index: u64,
-        shared_state: UnsafeRecoveryWaitApplySyncer,
+        syncer: UnsafeRecoveryWaitApplySyncer,
     },
     DemoteFailedVoters {
-        shared_state: UnsafeRecoveryExecutePlanSyncer,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
         commit_index: u64,
         // Failed regions may be stuck in joint state, if that is the case, we need to ask the
@@ -4724,6 +4724,7 @@ where
         }
     }
 
+    #[inline]
     pub fn is_force_leader(&self) -> bool {
         matches!(
             self.force_leader,

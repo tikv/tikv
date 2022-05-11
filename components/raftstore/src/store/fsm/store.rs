@@ -703,11 +703,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
                 StoreMsg::UnsafeRecoveryCreatePeer {
-                    shared_state: _,
+                    syncer: _,
                     create,
                 } => {
                     self.on_unsafe_recovery_create_peer(create);
-                    // shared_state's destruction triggers the next step.
+                    // syncer's destruction triggers the next step.
                 }
             }
         }

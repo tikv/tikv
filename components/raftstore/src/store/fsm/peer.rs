@@ -745,7 +745,7 @@ where
 
     fn on_unsafe_recovery_pre_demote_failed_voters(
         &mut self,
-        shared_state: UnsafeRecoveryExecutePlanSyncer,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
         if !self.fsm.peer.is_force_leader() {
@@ -792,20 +792,20 @@ where
             if !*failed.lock().unwrap() {
                 self.fsm.peer.unsafe_recovery_state =
                     Some(UnsafeRecoveryState::DemoteFailedVoters {
-                        shared_state,
+                        syncer,
                         failed_voters,
                         commit_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
                         demote_after_exit: true,
                     });
             }
         } else {
-            self.unsafe_recovery_demote_failed_voters(shared_state, failed_voters);
+            self.unsafe_recovery_demote_failed_voters(syncer, failed_voters);
         }
     }
 
     fn unsafe_recovery_demote_failed_voters(
         &mut self,
-        shared_state: UnsafeRecoveryExecutePlanSyncer,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
         if let Some(req) =
@@ -831,7 +831,7 @@ where
             if !*failed.lock().unwrap() {
                 self.fsm.peer.unsafe_recovery_state =
                     Some(UnsafeRecoveryState::DemoteFailedVoters {
-                        shared_state,
+                        syncer,
                         failed_voters: vec![], // No longer needed since here.
                         commit_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
                         demote_after_exit: false,
@@ -840,8 +840,8 @@ where
         }
     }
 
-    fn on_unsafe_recovery_destroy(&mut self, shared_state: UnsafeRecoveryExecutePlanSyncer) {
-        self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Destroy(shared_state));
+    fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
+        self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Destroy(syncer));
         self.handle_destroy_peer(DestroyPeerJob {
             initialized: self.fsm.peer.is_initialized(),
             region_id: self.region_id(),
@@ -849,7 +849,7 @@ where
         });
     }
 
-    fn on_unsafe_recovery_wait_apply(&mut self, shared_state: UnsafeRecoveryWaitApplySyncer) {
+    fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
         let target_index = if self.fsm.peer.force_leader.is_some() {
             // For regions that lose quorum (or regions have force leader), whatever has been
             // proposed will be committed. Based on that fact, we simply use "last index" here to
@@ -868,7 +868,7 @@ where
 
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
             target_index,
-            shared_state,
+            syncer,
         });
         self.fsm
             .peer
@@ -877,7 +877,7 @@ where
 
     fn on_unsafe_recovery_fill_out_report(
         &mut self,
-        shared_state: UnsafeRecoveryFillOutReportSyncer,
+        syncer: UnsafeRecoveryFillOutReportSyncer,
     ) {
         info!(
             "Unsafe recovery, filling out peer report.";
@@ -890,7 +890,7 @@ where
         region_local_state.set_region(self.region().clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
-        shared_state.report_for_self(self_report);
+        syncer.report_for_self(self_report);
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -1239,31 +1239,31 @@ where
                 self.on_raft_log_fetched(context, res);
             }
             SignificantMsg::EnterForceLeaderState {
-                shared_state,
+                syncer,
                 failed_stores,
             } => {
-                self.on_enter_pre_force_leader(shared_state, failed_stores);
+                self.on_enter_pre_force_leader(syncer, failed_stores);
             }
             SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
             SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
-                shared_state,
+                syncer,
                 failed_voters,
-            } => self.on_unsafe_recovery_pre_demote_failed_voters(shared_state, failed_voters),
-            SignificantMsg::UnsafeRecoveryDestroy(shared_state) => {
-                self.on_unsafe_recovery_destroy(shared_state)
+            } => self.on_unsafe_recovery_pre_demote_failed_voters(syncer, failed_voters),
+            SignificantMsg::UnsafeRecoveryDestroy(syncer) => {
+                self.on_unsafe_recovery_destroy(syncer)
             }
-            SignificantMsg::UnsafeRecoveryWaitApply(shared_state) => {
-                self.on_unsafe_recovery_wait_apply(shared_state)
+            SignificantMsg::UnsafeRecoveryWaitApply(syncer) => {
+                self.on_unsafe_recovery_wait_apply(syncer)
             }
-            SignificantMsg::UnsafeRecoveryFillOutReport(shared_state) => {
-                self.on_unsafe_recovery_fill_out_report(shared_state)
+            SignificantMsg::UnsafeRecoveryFillOutReport(syncer) => {
+                self.on_unsafe_recovery_fill_out_report(syncer)
             }
         }
     }
 
     fn on_enter_pre_force_leader(
         &mut self,
-        shared_state: UnsafeRecoveryForceLeaderSyncer,
+        syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
     ) {
         match self.fsm.peer.force_leader {
@@ -1328,7 +1328,7 @@ where
                 "ticks" => ticks,
             );
             self.fsm.peer.force_leader = Some(ForceLeaderState::WaitTicks {
-                shared_state,
+                syncer,
                 failed_stores,
                 ticks,
             });
@@ -1392,7 +1392,7 @@ where
         }
 
         self.fsm.peer.force_leader = Some(ForceLeaderState::PreForceLeader {
-            shared_state,
+            syncer,
             failed_stores,
         });
         self.fsm.has_ready = true;
@@ -1506,15 +1506,15 @@ where
     #[inline]
     fn check_force_leader(&mut self) {
         if let Some(ForceLeaderState::WaitTicks {
-            shared_state,
+            syncer,
             failed_stores,
             ticks,
         }) = &mut self.fsm.peer.force_leader
         {
             if *ticks == 0 {
-                let shared_state_clone = shared_state.clone();
+                let syncer_clone = syncer.clone();
                 let s = mem::take(failed_stores);
-                self.on_enter_pre_force_leader(shared_state_clone, s);
+                self.on_enter_pre_force_leader(syncer_clone, s);
             } else {
                 *ticks -= 1;
             }
@@ -1935,7 +1935,7 @@ where
                 .peer
                 .unsafe_recovery_maybe_finish_wait_apply(/*force=*/ false),
             Some(UnsafeRecoveryState::DemoteFailedVoters {
-                shared_state,
+                syncer,
                 failed_voters,
                 commit_index,
                 demote_after_exit,
@@ -1948,10 +1948,10 @@ where
                                 "region" => ?self.region(),
                             );
                         }
-                        let shared_state_clone = shared_state.clone();
+                        let syncer_clone = syncer.clone();
                         let failed_voters_clone = failed_voters.clone();
                         self.unsafe_recovery_demote_failed_voters(
-                            shared_state_clone,
+                            syncer_clone,
                             failed_voters_clone,
                         );
                     } else {

@@ -1182,7 +1182,7 @@ where
                             for failed_store in plan.get_force_leader().get_failed_stores() {
                                 failed_stores.insert(*failed_store);
                             }
-                            let shared_state = UnsafeRecoveryForceLeaderSyncer::new(
+                            let syncer = UnsafeRecoveryForceLeaderSyncer::new(
                                 plan.get_step(),
                                 router.clone(),
                             );
@@ -1191,7 +1191,7 @@ where
                                 if let Err(e) = router.significant_send(
                                     *region,
                                     SignificantMsg::EnterForceLeaderState {
-                                        shared_state: shared_state.clone(),
+                                        syncer: syncer.clone(),
                                         failed_stores: failed_stores.clone(),
                                     },
                                 ) {
@@ -1199,7 +1199,7 @@ where
                                 }
                             }
                         } else {
-                            let shared_state = UnsafeRecoveryExecutePlanSyncer::new(
+                            let syncer = UnsafeRecoveryExecutePlanSyncer::new(
                                 plan.get_step(),
                                 router.clone(),
                             );
@@ -1207,7 +1207,7 @@ where
                                 info!("Unsafe recovery, asked to create region"; "region" => ?create);
                                 if let Err(e) =
                                     router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
-                                        shared_state: shared_state.clone(),
+                                        syncer: syncer.clone(),
                                         create,
                                     })
                                 {
@@ -1218,7 +1218,7 @@ where
                                 info!("Unsafe recovery, asked to delete peer"; "peer" => delete);
                                 if let Err(e) = router.significant_send(
                                     delete,
-                                    SignificantMsg::UnsafeRecoveryDestroy(shared_state.clone()),
+                                    SignificantMsg::UnsafeRecoveryDestroy(syncer.clone()),
                                 ) {
                                     error!("fail to send delete peer message for recovery"; "err" => ?e);
                                 }
@@ -1228,7 +1228,7 @@ where
                                 if let Err(e) = router.significant_send(
                                     demote.get_region_id(),
                                     SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
-                                        shared_state: shared_state.clone(),
+                                        syncer: syncer.clone(),
                                         failed_voters: demote.get_failed_voters().to_vec(),
                                     },
                                 ) {
