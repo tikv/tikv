@@ -14,8 +14,7 @@ pub enum Error {
     #[error("TSO batch({0}) used up")]
     TsoBatchUsedUp(u32),
     #[error("Batch renew error {0:?}")]
-    // BatchRenew(Arc<dyn error::Error + Sync + Send>),
-    BatchRenew(Arc<String>),
+    BatchRenew(Arc<dyn error::Error + Sync + Send>),
     #[error("unknown error {0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
