@@ -16,7 +16,9 @@ use raftstore::{
 };
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
-    box_err, debug, error, info,
+    box_err,
+    config::ReadableDuration,
+    debug, error, info,
     time::Instant,
     warn,
     worker::{Runnable, Scheduler},
@@ -91,6 +93,7 @@ where
             PathBuf::from(config.temp_path.clone()),
             scheduler.clone(),
             config.temp_file_size_limit_per_task.0,
+            config.max_flush_interval.0,
         );
 
         if let Some(meta_client) = meta_client.as_ref() {
@@ -164,6 +167,7 @@ where
             PathBuf::from(config.temp_path.clone()),
             scheduler.clone(),
             config.temp_file_size_limit_per_task.0,
+            config.max_flush_interval.0,
         );
 
         if let Some(meta_client) = meta_client.as_ref() {
@@ -223,6 +227,13 @@ where
         self.pool.block_on(async move {
             // TODO: also pause the task using the meta client.
             let err_fut = async {
+                self.pd_client
+                    .update_service_safe_point(
+                        format!("{}-pause-guard", task),
+                        self.subs.safepoint(),
+                        ReadableDuration::hours(24).0,
+                    )
+                    .await?;
                 meta_cli.pause(&task).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(err.error_code().code.to_owned());
@@ -400,10 +411,10 @@ where
                 self.on_unregister(&task_name);
             }
             TaskOp::PauseTask(task_name) => {
-                self.on_unregister(&task_name);
+                self.unload_task(&task_name);
             }
             TaskOp::ResumeTask(task) => {
-                self.on_register(task);
+                self.load_task(task);
             }
         }
     }
@@ -447,6 +458,17 @@ where
 
     // register task ranges
     pub fn on_register(&self, task: StreamTask) {
+        let name = task.info.name.clone();
+        let start_ts = task.info.start_ts;
+        self.load_task(task);
+
+        metrics::STORE_CHECKPOINT_TS
+            .with_label_values(&[name.as_str()])
+            .set(start_ts as _);
+    }
+
+    /// Load the task into memory: this would make the endpint start to observe.
+    fn load_task(&self, task: StreamTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
             let init = self.make_initial_loader();
@@ -501,7 +523,6 @@ where
                             "failed to register backup stream task {} to router: ranges not found",
                             task.info.get_name()
                         ));
-                        // TODO build a error handle mechanism #error 5
                     }
                 }
             });
@@ -509,6 +530,16 @@ where
     }
 
     pub fn on_unregister(&self, task: &str) {
+        self.unload_task(task);
+
+        // reset the checkpoint ts of the task so it won't
+        metrics::STORE_CHECKPOINT_TS
+            .with_label_values(&[task])
+            .set(0);
+    }
+
+    /// unload a task from memory: this would stop observe the changes required by the task temporarily.
+    fn unload_task(&self, task: &str) {
         let router = self.range_router.clone();
 
         self.pool.block_on(async move {
@@ -685,7 +716,12 @@ where
             ObserveOp::Start {
                 region,
                 needs_initial_scanning,
-            } => self.start_observe(region, needs_initial_scanning),
+            } => {
+                self.start_observe(region, needs_initial_scanning);
+                metrics::INITIAL_SCAN_REASON
+                    .with_label_values(&["leader-changed"])
+                    .inc();
+            }
             ObserveOp::Stop { ref region } => {
                 self.subs.deregister_region(region, |_, _| true);
             }
@@ -715,6 +751,9 @@ where
                                 region
                             )
                         });
+                        metrics::INITIAL_SCAN_REASON
+                            .with_label_values(&["region-changed"])
+                            .inc();
                         if let Err(e) = self.observe_over_with_initial_data_from_checkpoint(
                             region,
                             for_task,
@@ -826,6 +865,9 @@ where
                 .inc();
             return Ok(());
         }
+        metrics::INITIAL_SCAN_REASON
+            .with_label_values(&["retry"])
+            .inc();
         self.start_observe(region, true);
         Ok(())
     }
