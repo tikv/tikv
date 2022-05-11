@@ -4,7 +4,7 @@ use std::{
     collections::{
         BTreeMap,
         Bound::{Excluded, Included, Unbounded},
-        VecDeque,
+        HashMap, VecDeque,
     },
     fmt::{self, Display, Formatter},
     sync::{
@@ -20,6 +20,7 @@ use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOC
 use fail::fail_point;
 use file_system::{IOType, WithIOType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
     box_err, box_try, defer, error, info, thd_name,
@@ -63,6 +64,9 @@ pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
+const TIFLASH: &str = "tiflash";
+const ENGINE: &str = "engine";
+
 /// Region related task
 #[derive(Debug)]
 pub enum Task<S> {
@@ -74,6 +78,7 @@ pub enum Task<S> {
         canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
+        to_store_id: u64,
     },
     Apply {
         region_id: u64,
@@ -262,6 +267,7 @@ where
         kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
+        allow_multi_files_snapshot: bool,
     ) -> Result<()> {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<EK>(
@@ -272,6 +278,7 @@ where
             last_applied_index_term,
             last_applied_state,
             for_balance,
+            allow_multi_files_snapshot,
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
@@ -300,6 +307,7 @@ where
         canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
+        allow_multi_files_snapshot: bool,
     ) {
         fail_point!("before_region_gen_snap", |_| ());
         SNAP_COUNTER.generate.all.inc();
@@ -322,6 +330,7 @@ where
             kv_snap,
             notifier,
             for_balance,
+            allow_multi_files_snapshot,
         ) {
             error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
             return;
@@ -613,9 +622,10 @@ where
     }
 }
 
-pub struct Runner<EK, R>
+pub struct Runner<EK, R, T>
 where
     EK: KvEngine,
+    T: PdClient + 'static,
 {
     pool: ThreadPool<TaskCell>,
     ctx: SnapContext<EK, R>,
@@ -624,12 +634,15 @@ where
     pending_applies: VecDeque<Task<EK::Snapshot>>,
     clean_stale_tick: usize,
     clean_stale_check_interval: Duration,
+    tiflash_stores: HashMap<u64, bool>,
+    pd_client: Option<Arc<T>>,
 }
 
-impl<EK, R> Runner<EK, R>
+impl<EK, R, T> Runner<EK, R, T>
 where
     EK: KvEngine,
     R: CasualRouter<EK>,
+    T: PdClient + 'static,
 {
     pub fn new(
         engine: EK,
@@ -639,7 +652,8 @@ where
         snap_generator_pool_size: usize,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
-    ) -> Runner<EK, R> {
+        pd_client: Option<Arc<T>>,
+    ) -> Runner<EK, R, T> {
         Runner {
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(snap_generator_pool_size)
@@ -656,6 +670,8 @@ where
             pending_applies: VecDeque::new(),
             clean_stale_tick: 0,
             clean_stale_check_interval: Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
+            tiflash_stores: HashMap::default(),
+            pd_client,
         }
     }
 
@@ -675,10 +691,11 @@ where
     }
 }
 
-impl<EK, R> Runnable for Runner<EK, R>
+impl<EK, R, T> Runnable for Runner<EK, R, T>
 where
     EK: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
+    T: PdClient,
 {
     type Task = Task<EK::Snapshot>;
 
@@ -692,10 +709,34 @@ where
                 canceled,
                 notifier,
                 for_balance,
+                to_store_id,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
+                let mut allow_multi_files_snapshot = false;
+                // if to_store_id is 0, it means the to_store_id cannot be found
+                if to_store_id != 0 {
+                    if let Some(is_tiflash) = self.tiflash_stores.get(&to_store_id) {
+                        allow_multi_files_snapshot = !is_tiflash;
+                    } else {
+                        let is_tiflash = self.pd_client.as_ref().map_or(false, |pd_client| {
+                            if let Ok(s) = pd_client.get_store(to_store_id) {
+                                if let Some(_l) = s.get_labels().iter().find(|l| {
+                                    l.key.to_lowercase() == ENGINE
+                                        && l.value.to_lowercase() == TIFLASH
+                                }) {
+                                    return true;
+                                } else {
+                                    return false;
+                                }
+                            }
+                            true
+                        });
+                        self.tiflash_stores.insert(to_store_id, is_tiflash);
+                        allow_multi_files_snapshot = !is_tiflash;
+                    }
+                }
 
                 self.pool.spawn(async move {
                     tikv_alloc::add_thread_memory_accessor();
@@ -707,6 +748,7 @@ where
                         canceled,
                         notifier,
                         for_balance,
+                        allow_multi_files_snapshot,
                     );
                     tikv_alloc::remove_thread_memory_accessor();
                 });
@@ -741,10 +783,11 @@ where
     }
 }
 
-impl<EK, R> RunnableWithTimer for Runner<EK, R>
+impl<EK, R, T> RunnableWithTimer for Runner<EK, R, T>
 where
     EK: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
+    T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
         self.handle_pending_applies();
@@ -779,6 +822,7 @@ mod tests {
     };
     use keys::data_key;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+    use pd_client::RpcClient;
     use tempfile::Builder;
     use tikv_util::worker::{LazyWorker, Worker};
 
@@ -889,6 +933,7 @@ mod tests {
             2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
+            Option::<Arc<RpcClient>>::None,
         );
         runner.clean_stale_check_interval = Duration::from_millis(100);
 
@@ -992,6 +1037,7 @@ mod tests {
             2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
+            Option::<Arc<RpcClient>>::None,
         );
         worker.start_with_timer(runner);
 
@@ -1014,6 +1060,7 @@ mod tests {
                     canceled: Arc::new(AtomicBool::new(false)),
                     notifier: tx,
                     for_balance: false,
+                    to_store_id: 0,
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();
