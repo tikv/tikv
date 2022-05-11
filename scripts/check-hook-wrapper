@@ -7,11 +7,11 @@ function error_msg() {
 }
 
 if [[ "$(uname)" == "Darwin" ]]; then
-   if grep -r -n --color=always --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'after_start' . | grep -v after_start_wrapper; then
+   if grep -r -n --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'after_start' . | grep -v after_start_wrapper; then
       error_msg
       exit 1
    fi
-   if grep -r -n --color=always --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'before_stop' . | grep -v before_stop_wrapper; then
+   if grep -r -n --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'before_stop' . | grep -v before_stop_wrapper; then
       error_msg
       exit 1
    fi
