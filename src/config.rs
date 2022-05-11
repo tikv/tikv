@@ -2322,13 +2322,17 @@ impl Default for BackupConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct BackupStreamConfig {
+    #[online_config(skip)]
     pub num_threads: usize,
     #[online_config(skip)]
     pub io_threads: usize,
     #[online_config(skip)]
     pub enable: bool,
+    #[online_config(skip)]
     pub temp_path: String,
+    #[online_config(skip)]
     pub temp_file_size_limit_per_task: ReadableSize,
+    #[online_config(skip)]
     pub initial_scan_pending_memory_quota: ReadableSize,
 }
 
