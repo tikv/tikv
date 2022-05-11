@@ -36,7 +36,7 @@ use serde::Serialize;
 /// The `min` and `max` attribue define the lower and upper bound of target field. The provide literal
 /// value must be the same type with target field or can be converted to target type with `TryInto::try_into`.
 ///
-/// 
+///
 /// # Field Value Bound Description(#config_info(default_desc="..", min_desc = "...", max_desc = "..."))
 ///
 /// All the config types in TiKV has implement the `Default` trait, so the `ConfigInfo` marco by default
@@ -47,14 +47,14 @@ use serde::Serialize;
 ///
 /// This same rule also applies for the `min_desc` and `max_desc`.
 ///
-/// 
+///
 /// # Config Value Options(#[config_info(opitons= [ .., .. ])])
 /// The `options` attribue define the set of all valid valid for target field. The value of each element
 /// must be either the same type with target field or can be converted to target type with `TryInto::try_into`.
 ///
-/// 
+///
 /// Example:
-/// Please refer the unit test at the bottom of the file.
+/// Please refer the unit test at the bottom of this file.
 ///
 pub trait ConfigInfo {
     type Encoder: Serialize;
@@ -146,7 +146,7 @@ pub enum FieldCfgType {
 #[cfg(test)]
 mod tests {
     use serde::{Deserialize, Serialize};
-    use serde_json::{from_str, to_string_pretty, Value};
+    use serde_json::{from_str, to_string, Value};
     use tikv_util::config::{ReadableDuration, ReadableSize};
 
     use crate::{self as config_info, ConfigInfo};
@@ -177,8 +177,8 @@ mod tests {
         /// e is a custom type with 2 string options.
         #[config_info(options = r#"["1MB", "10KB"]"#)]
         e: ReadableSize,
-        #[config_info(type = "Number")]
-        /// a custom field with manually assigned type
+        #[config_info(type = "Number", min = 1, max = 100)]
+        /// a custom field with manually assigned type and manually implement of `From`
         f: NewType,
         /// This is a field that it's value bound depend on other field or the env variable.
         #[config_info(
@@ -187,6 +187,10 @@ mod tests {
             max_desc = "`a` * 5"
         )]
         g: u64,
+        /// This is a example of Vec type.
+        h: Vec<u64>,
+        /// This is a example of array type.
+        i: [String; 2],
     }
 
     impl Default for Config {
@@ -203,6 +207,8 @@ mod tests {
                 e: ReadableSize::mb(1),
                 f: NewType(1),
                 g: 10,
+                h: vec![1, 2, 3],
+                i: ["lz4".into(), "zstd".into()],
             }
         }
     }
@@ -216,6 +222,12 @@ mod tests {
     #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
     struct NewType(i32);
 
+    impl From<i32> for NewType {
+        fn from(v: i32) -> Self {
+            Self(v)
+        }
+    }
+
     #[test]
     fn test_config() {
         let cfg = Config::default();
@@ -223,8 +235,7 @@ mod tests {
         new_cfg.a = 20;
         new_cfg.c = "test123".into();
         new_cfg.d = Some(ReadableDuration::secs(2));
-        let str_value = to_string_pretty(&cfg.get_cfg_encoder(&new_cfg)).unwrap();
-        println!("{}", str_value);
+        let str_value = to_string(&cfg.get_cfg_encoder(&new_cfg)).unwrap();
         let expected = r###"
         {
             "a": {
@@ -279,8 +290,10 @@ mod tests {
             },
             "f": {
                 "Type": "Number",
+                "MinValue": 1,
+                "MaxValue": 100,
                 "DefaultValue": 1,
-                "Description": "a custom field with manually assigned type"
+                "Description": "a custom field with manually assigned type and manually implement of `From`"
             },
             "g": {
                 "Type": "Number",
@@ -288,6 +301,23 @@ mod tests {
                 "MaxValue": "`a` * 5",
                 "DefaultValue": "MAX(4, CPU * 0.8)",
                 "Description": "This is a field that it's value bound depend on other field or the env variable."
+            },
+            "h": {
+                "Type": "Array",
+                "DefaultValue": [
+                    1,
+                    2,
+                    3
+                ],
+                "Description": "This is a example of Vec type."
+            },
+            "i": {
+                "Type": "Array",
+                "DefaultValue": [
+                    "lz4",
+                    "zstd"
+                ],
+                "Description": "This is a example of array type."
             }
           }"###;
         let source_obj = from_str::<Value>(&*str_value).unwrap();

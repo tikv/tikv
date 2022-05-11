@@ -9,7 +9,7 @@ use std::{
 };
 
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, ToTokens};
+use quote::quote;
 use syn::{punctuated::Punctuated, spanned::Spanned, token::Comma, *};
 
 const CRATE_NAME: &str = "config_info";
@@ -176,10 +176,9 @@ fn build_filed_constructer(
     } = attrs;
     let convert_field = |l: Lit| match l {
         Lit::Str(s) => {
-            let value = s.value();
-            quote!(core::convert::TryInto::try_into(#value).unwrap())
+            quote!(core::convert::TryInto::try_into(#s).unwrap())
         }
-        _ => l.to_token_stream(),
+        s @ _ => quote!(Into::into(#s)),
     };
     let default_value = if let Some(value) = default_value_desc {
         quote!(Some(#crate_name::ConfigValue::Desc(#value.into())))
