@@ -7,30 +7,30 @@ function error_msg() {
 }
 
 if [[ "$(uname)" == "Darwin" ]]; then
-   if grep -r -n --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'after_start' . | grep -v after_start_wrapper; then
+   if grep -r -n --include '*.rs' --exclude threads_linux.rs --exclude threads_dummy.rs --exclude-dir yatp_pool --exclude-dir target 'after_start' . | grep -v after_start_wrapper; then
       error_msg
       exit 1
    fi
-   if grep -r -n --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'before_stop' . | grep -v before_stop_wrapper; then
+   if grep -r -n --include '*.rs' --exclude threads_linux.rs --exclude threads_dummy.rs --exclude-dir yatp_pool --exclude-dir target 'before_stop' . | grep -v before_stop_wrapper; then
       error_msg
       exit 1
    fi
 else
-   if grep -r -n -P 'after_start(?!_wrapper)' -C 1 --color=always --include \*.rs --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target .; then
+   if grep -r -n -P 'after_start(?!_wrapper)' -C 1 --color=always --include \*.rs --exclude threads_linux.rs --exclude threads_dummy.rs --exclude-dir yatp_pool --exclude-dir target .; then
       error_msg
       exit 1
    fi
-   if grep -r -n -P 'before_stop(?!_wrapper)' -C 1 --color=always --include \*.rs --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target .; then
+   if grep -r -n -P 'before_stop(?!_wrapper)' -C 1 --color=always --include \*.rs --exclude threads_linux.rs --exclude threads_dummy.rs --exclude-dir yatp_pool --exclude-dir target .; then
       error_msg
       exit 1
    fi
 fi
 
-if grep -r -n --color=always --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'on_thread_start' .; then
+if grep -r -n --color=always --include '*.rs' --exclude threads_linux.rs --exclude threads_dummy.rs --exclude-dir yatp_pool --exclude-dir target 'on_thread_start' .; then
    error_msg
    exit 1
 fi
-if grep -r -n --color=always --include '*.rs' --exclude threads_linux.rs --exclude-dir yatp_pool --exclude-dir target 'on_thread_stop' .; then
+if grep -r -n --color=always --include '*.rs' --exclude threads_linux.rs --exclude threads_dummy.rs --exclude-dir yatp_pool --exclude-dir target 'on_thread_stop' .; then
    error_msg
    exit 1
 fi
