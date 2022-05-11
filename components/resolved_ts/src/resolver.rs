@@ -28,6 +28,27 @@ pub struct Resolver {
     stopped: bool,
 }
 
+impl std::fmt::Debug for Resolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let far_lock = self.lock_ts_heap.iter().next();
+        let mut dt = f.debug_tuple("Resolver");
+        dt.field(&format_args!("region={}", self.region_id));
+
+        if let Some((ts, keys)) = far_lock {
+            dt.field(&format_args!(
+                "far_lock={:?}",
+                keys.iter()
+                    // We must use Display format here or the redact won't take effect.
+                    .map(|k| format!("{}", log_wrappers::Value::key(k)))
+                    .collect::<Vec<_>>()
+            ));
+            dt.field(&format_args!("far_lock_ts={:?}", ts));
+        }
+
+        dt.finish()
+    }
+}
+
 impl Resolver {
     pub fn new(region_id: u64) -> Resolver {
         Resolver::with_read_progress(region_id, None)

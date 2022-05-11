@@ -75,6 +75,7 @@ end-point-max-concurrency = 10
 end-point-perf-level = 5
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
+max-snapshot-file-raw-size = "10GB"
 stats-concurrency = 10
 heavy-load-threshold = 25
 heavy-load-wait-duration = "2ms"
@@ -576,6 +577,7 @@ purge-threshold = "1GB"
 recovery-mode = "tolerate-tail-corruption"
 recovery-read-block-size = "1KB"
 recovery-threads = 2
+memory-limit = "1GB"
 
 [security]
 ca-path = "invalid path"

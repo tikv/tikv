@@ -16,7 +16,12 @@ use futures::{
     stream::TryStreamExt,
 };
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
-use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility};
+use kvproto::{
+    cdcpb::{
+        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi, Compatibility,
+    },
+    kvrpcpb::ApiVersion,
+};
 use tikv_util::{error, info, warn, worker::*};
 
 use crate::{
@@ -60,6 +65,11 @@ impl FeatureGate {
     // Returns the first version (v5.3.0) that supports validate cluster id.
     pub(crate) fn validate_cluster_id() -> semver::Version {
         semver::Version::new(5, 3, 0)
+    }
+
+    pub(crate) fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
+        kv_api == ChangeDataRequestKvApi::TiDb
+            || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
     }
 }
 
@@ -220,6 +230,7 @@ impl ChangeData for Service {
         let recv_req = stream.try_for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
+            let req_kvapi = request.get_kv_api();
             let version = match semver::Version::parse(request.get_header().get_ticdc_version()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -229,7 +240,8 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
+            let downstream =
+                Downstream::new(peer.clone(), region_epoch, req_id, conn_id, req_kvapi);
             let ret = scheduler
                 .schedule(Task::Register {
                     request,
