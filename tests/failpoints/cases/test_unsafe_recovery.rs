@@ -182,7 +182,6 @@ fn test_unsafe_recovery_execution_result_report() {
             assert_eq!(region.get_end_key(), b"random_key1".to_vec());
         } else {
             assert_eq!(region.get_id(), region2.get_id());
-            println!("region-----------{:?}", region);
             for peer in region.get_peers() {
                 if peer.get_store_id() != nodes[0] {
                     assert_eq!(peer.get_role(), metapb::PeerRole::Learner);

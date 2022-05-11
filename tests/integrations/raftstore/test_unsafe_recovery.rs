@@ -10,6 +10,22 @@ use raftstore::store::util::find_peer;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 
+fn confirm_quorum_is_lost(cluster: &mut Cluster<ServerCluster>, region: &metapb::Region) {
+    let put = new_put_cmd(b"k2", b"v2");
+    let req = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![put],
+        true,
+    );
+    // marjority is lost, can't propose command successfully.
+    assert!(
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .is_err()
+    );
+}
+
 #[test]
 fn test_unsafe_recovery_demote_failed_voters() {
     let mut cluster = new_server_cluster(0, 3);
@@ -29,21 +45,8 @@ fn test_unsafe_recovery_demote_failed_voters() {
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
 
-    {
-        let put = new_put_cmd(b"k2", b"v2");
-        let req = new_request(
-            region.get_id(),
-            region.get_region_epoch().clone(),
-            vec![put],
-            true,
-        );
-        // marjority is lost, can't propose command successfully.
-        assert!(
-            cluster
-                .call_command_on_leader(req, Duration::from_millis(10))
-                .is_err()
-        );
-    }
+    confirm_quorum_is_lost(&mut cluster, &region);
+
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
 
     let to_be_removed: Vec<metapb::Peer> = region
@@ -76,6 +79,145 @@ fn test_unsafe_recovery_demote_failed_voters() {
         sleep_ms(200);
     }
     assert_eq!(demoted, true);
+}
+
+// Demote non-exist voters will not work, but TiKV should still report to PD.
+#[test]
+fn test_unsafe_recovery_demote_non_exist_voters() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    configure_for_lease_read(&mut cluster, None, None);
+
+    let peer_on_store2 = find_peer(&region, nodes[2]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store2.clone());
+    cluster.stop_node(nodes[1]);
+    cluster.stop_node(nodes[2]);
+
+    confirm_quorum_is_lost(&mut cluster, &region);
+    cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
+
+    let mut plan = pdpb::RecoveryPlan::default();
+    let mut demote = pdpb::DemoteFailedVoters::default();
+    demote.set_region_id(region.get_id());
+    let mut peer = metapb::Peer::default();
+    peer.set_id(12345);
+    peer.set_store_id(region.get_id());
+    peer.set_role(metapb::PeerRole::Voter);
+    demote.mut_failed_voters().push(peer);
+    plan.mut_demotes().push(demote);
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    cluster.must_send_store_heartbeat(nodes[0]);
+
+    let mut store_report = None;
+    for _ in 0..20 {
+        store_report = pd_client.must_get_store_report(nodes[0]);
+        if store_report.is_some() {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert_ne!(store_report, None);
+    let report = store_report.unwrap();
+    let peer_reports = report.get_peer_reports();
+    assert_eq!(peer_reports.len(), 1);
+    let reported_region = peer_reports[0].get_region_state().get_region();
+    assert_eq!(reported_region.get_id(), region.get_id());
+    assert_eq!(reported_region.get_peers().len(), 3);
+    let demoted = reported_region
+        .get_peers()
+        .iter()
+        .any(|peer| peer.get_role() != metapb::PeerRole::Voter);
+    assert_eq!(demoted, false);
+
+    let region_in_pd = block_on(pd_client.get_region_by_id(region.get_id()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_in_pd.get_peers().len(), 3);
+    let demoted = region_in_pd
+        .get_peers()
+        .iter()
+        .any(|peer| peer.get_role() != metapb::PeerRole::Voter);
+    assert_eq!(demoted, false);
+}
+
+#[test]
+fn test_unsafe_recovery_auto_promote_learner() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    configure_for_lease_read(&mut cluster, None, None);
+
+    let peer_on_store0 = find_peer(&region, nodes[0]).unwrap();
+    let peer_on_store2 = find_peer(&region, nodes[2]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store2.clone());
+    // replace one peer with learner
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), peer_on_store0.clone());
+    cluster.pd_client.must_add_peer(
+        region.get_id(),
+        new_learner_peer(nodes[0], peer_on_store0.get_id()),
+    );
+    cluster.stop_node(nodes[1]);
+    cluster.stop_node(nodes[2]);
+
+    confirm_quorum_is_lost(&mut cluster, &region);
+    cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
+
+    let to_be_removed: Vec<metapb::Peer> = region
+        .get_peers()
+        .iter()
+        .filter(|&peer| peer.get_store_id() != nodes[0])
+        .cloned()
+        .collect();
+    let mut plan = pdpb::RecoveryPlan::default();
+    let mut demote = pdpb::DemoteFailedVoters::default();
+    demote.set_region_id(region.get_id());
+    demote.set_failed_voters(to_be_removed.into());
+    plan.mut_demotes().push(demote);
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    cluster.must_send_store_heartbeat(nodes[0]);
+
+    let mut demoted = true;
+    let mut promoted = false;
+    for _ in 0..10 {
+        let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+
+        promoted = region
+            .get_peers()
+            .iter()
+            .find(|peer| peer.get_store_id() == nodes[0])
+            .unwrap()
+            .get_role()
+            != metapb::PeerRole::Learner;
+
+        demoted = region
+            .get_peers()
+            .iter()
+            .filter(|peer| peer.get_store_id() == nodes[0])
+            .all(|peer| peer.get_role() == metapb::PeerRole::Voter);
+        if demoted && promoted {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert_eq!(demoted, true);
+    assert_eq!(promoted, true);
 }
 
 #[test]

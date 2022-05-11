@@ -610,6 +610,7 @@ impl UnsafeRecoveryFillOutReportSyncer {
         let reports = Arc::new(Mutex::new(vec![]));
         let reports_clone = reports.clone();
         let closure = InvokeClosureOnDrop(Box::new(move || {
+            info!("Unsafe recovery, scheduling a store report");
             let mut store_report = pdpb::StoreReport::default();
             {
                 let reports_ptr = reports_clone.lock().unwrap();

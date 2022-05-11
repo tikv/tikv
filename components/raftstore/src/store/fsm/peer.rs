@@ -875,10 +875,7 @@ where
             .unsafe_recovery_maybe_finish_wait_apply(/*force=*/ self.fsm.stopped);
     }
 
-    fn on_unsafe_recovery_fill_out_report(
-        &mut self,
-        syncer: UnsafeRecoveryFillOutReportSyncer,
-    ) {
+    fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
         info!(
             "Unsafe recovery, filling out peer report.";
             "region" => ?self.region(),
@@ -1342,13 +1339,14 @@ where
         }
 
         let expected_alive_voter = self.get_force_leader_expected_alive_voter(&failed_stores);
-        if self
-            .fsm
-            .peer
-            .raft_group
-            .raft
-            .prs()
-            .has_quorum(&expected_alive_voter)
+        if !expected_alive_voter.is_empty()
+            && self
+                .fsm
+                .peer
+                .raft_group
+                .raft
+                .prs()
+                .has_quorum(&expected_alive_voter)
         {
             warn!(
                 "Unsafe recovery, reject pre force leader due to has quorum";
@@ -1370,7 +1368,14 @@ where
         // two force leader in same term.
         self.fsm.peer.raft_group.raft.pre_vote = false;
         // trigger vote request to all voters, will check the vote result in `check_force_leader`
-        self.fsm.peer.raft_group.campaign().unwrap();
+        if let Err(e) = self.fsm.peer.raft_group.campaign() {
+            warn!(
+                "Unsafe recovery, campaign failed";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => ?e,
+            );
+        }
         assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
         if !self
             .fsm
@@ -1583,6 +1588,11 @@ where
                 self.on_force_leader_fail();
             }
             Ok(granted) => {
+                info!(
+                    "Unsafe recovery, expected live voters:";
+                    "voters" => ?expected_alive_voter,
+                    "granted" => granted
+                );
                 if granted == expected_alive_voter.len() {
                     self.on_enter_force_leader();
                 }
@@ -5850,14 +5860,14 @@ fn new_compact_log_request(
 fn demote_failed_voters_request(
     region: &metapb::Region,
     peer: &metapb::Peer,
-    mut failed_voters: Vec<metapb::Peer>,
+    failed_voters: Vec<metapb::Peer>,
 ) -> Option<RaftCmdRequest> {
     let failed_voter_ids = HashSet::from_iter(failed_voters.iter().map(|voter| voter.get_id()));
     let mut req = new_admin_request(region.get_id(), peer.clone());
     req.mut_header()
         .set_region_epoch(region.get_region_epoch().clone());
     let mut change_peer_reqs: Vec<pdpb::ChangePeer> = failed_voters
-        .drain(..)
+        .into_iter()
         .filter_map(|mut peer| {
             if failed_voter_ids.contains(&peer.get_id())
                 && peer.get_role() == metapb::PeerRole::Voter
