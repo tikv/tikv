@@ -177,7 +177,7 @@ fn build_filed_constructer(
         Lit::Str(s) => {
             quote!(core::convert::TryInto::try_into(#s).unwrap())
         }
-        s @ _ => quote!(Into::into(#s)),
+        s => quote!(Into::into(#s)),
     };
     let default_value = if let Some(value) = default_value_desc {
         quote!(Some(#crate_name::ConfigValue::Desc(#value.into())))
