@@ -163,8 +163,8 @@ impl SSTableCore {
             let mut aux_idx_slice = aux_idx_data.chunk();
             validate_checksum(aux_idx_slice, footer.checksum_type)?;
             aux_idx_slice = &aux_idx_slice[4..];
-            assert_eq!(aux_idx_slice[0], AUX_INDEX_BINARY_FUSE8);
-            aux_idx_slice = &aux_idx_slice[1..];
+            assert_eq!(LittleEndian::read_u32(aux_idx_slice), AUX_INDEX_BINARY_FUSE8);
+            aux_idx_slice = &aux_idx_slice[4..];
             let fuse8_len = LittleEndian::read_u32(aux_idx_slice) as usize;
             aux_idx_slice = &aux_idx_slice[4..];
             let fuse8_data = &aux_idx_slice[..fuse8_len];
@@ -367,8 +367,8 @@ impl Index {
         let data = bin.chunk();
         validate_checksum(data, checksum_type)?;
         let mut offset = 4_usize;
-        assert_eq!(bin[offset], INDEX_FORMAT_V1);
-        offset += 1;
+        assert_eq!(LittleEndian::read_u32(&data[offset..]), INDEX_FORMAT_V1);
+        offset += 4;
         let num_blocks = LittleEndian::read_u32(&data[offset..]) as usize;
         offset += 4;
         let block_key_offs = unsafe {

@@ -16,9 +16,9 @@ pub const PROP_KEY_MAX_TS: &str = "max_ts";
 pub const PROP_KEY_ENTRIES: &str = "entries";
 pub const PROP_KEY_OLD_ENTRIES: &str = "old_entries";
 pub const PROP_KEY_TOMBS: &str = "tombs";
-pub const AUX_INDEX_BINARY_FUSE8: u8 = 1;
-pub const INDEX_FORMAT_V1: u8 = 1;
-pub const BLOCK_FORMAT_V1: u8 = 1;
+pub const AUX_INDEX_BINARY_FUSE8: u32 = 1;
+pub const INDEX_FORMAT_V1: u32 = 1;
+pub const BLOCK_FORMAT_V1: u32 = 1;
 pub const NO_COMPRESSION: u8 = 0;
 pub const LZ4_COMPRESSION: u8 = 1;
 pub const ZSTD_COMPRESSION: u8 = 2;
@@ -238,7 +238,7 @@ impl Builder {
     fn build_aux_index(&self, buf: &mut BytesMut, fuse8: &[u8] ) {
         let origin_len = buf.len();
         buf.put_u32_le(0);
-        buf.put_u8(AUX_INDEX_BINARY_FUSE8);
+        buf.put_u32_le(AUX_INDEX_BINARY_FUSE8);
         buf.put_u32_le(fuse8.len() as u32);
         buf.extend_from_slice(fuse8);
         if self.checksum_tp == CRC32_IEEE {
@@ -426,7 +426,7 @@ impl BlockBuilder {
             &mut self.compression_buf
         };
         let num_entries = self.block.tmp_keys.length();
-        buf.put_u8(BLOCK_FORMAT_V1);
+        buf.put_u32_le(BLOCK_FORMAT_V1);
         buf.put_u32_le(num_entries as u32);
         let mut offset = 0u32;
         for i in 0..num_entries {
@@ -476,7 +476,7 @@ impl BlockBuilder {
         let num_blocks = self.block_addrs.len();
         // checksum place holder.
         self.buf.put_u32_le(0);
-        self.buf.put_u8(INDEX_FORMAT_V1);
+        self.buf.put_u32_le(INDEX_FORMAT_V1);
         self.buf.put_u32_le(num_blocks as u32);
         let mut common_prefix_len = 0;
         if num_blocks > 0 {
