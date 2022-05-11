@@ -430,9 +430,10 @@ where
                 || bucket_range_list.is_empty() && !skip_check_bucket
             {
                 buckets.push(bucket);
-                 // in case some range's data in bucket_range_list is deleted
+                // in case some range's data in bucket_range_list is deleted
                 if buckets.len() < bucket_range_list.len() {
-                    let mut deleted_buckets = vec![Bucket::default(); bucket_range_list.len() - buckets.len()];
+                    let mut deleted_buckets =
+                        vec![Bucket::default(); bucket_range_list.len() - buckets.len()];
                     buckets.append(&mut deleted_buckets);
                 }
                 if !bucket_range_list.is_empty() {
