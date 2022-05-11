@@ -36,6 +36,7 @@ use serde::Serialize;
 /// The `min` and `max` attribue define the lower and upper bound of target field. The provide literal
 /// value must be the same type with target field or can be converted to target type with `TryInto::try_into`.
 ///
+/// 
 /// # Field Value Bound Description(#config_info(default_desc="..", min_desc = "...", max_desc = "..."))
 ///
 /// All the config types in TiKV has implement the `Default` trait, so the `ConfigInfo` marco by default
@@ -46,10 +47,12 @@ use serde::Serialize;
 ///
 /// This same rule also applies for the `min_desc` and `max_desc`.
 ///
+/// 
 /// # Config Value Options(#[config_info(opitons= [ .., .. ])])
 /// The `options` attribue define the set of all valid valid for target field. The value of each element
 /// must be either the same type with target field or can be converted to target type with `TryInto::try_into`.
 ///
+/// 
 /// Example:
 /// Please refer the unit test at the bottom of the file.
 ///
@@ -57,7 +60,9 @@ pub trait ConfigInfo {
     type Encoder: Serialize;
     /// Get encoder that can be serialize with `serde::Serializer`
     /// with the disappear of `#[config_info(skip)]` field
-    fn get_cfg_encoder(&self, cfg: &Self) -> Self::Encoder;
+    // NOTE: the `input` parameter is use to extract the value_in_file value,
+    // if the `--config` is not provide, just use self instead.
+    fn get_cfg_encoder(&self, input: &Self) -> Self::Encoder;
 }
 
 // this is the stub Serialize stuct for each config field
