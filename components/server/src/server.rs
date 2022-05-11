@@ -64,7 +64,9 @@ use raftstore::{
     store::{
         config::RaftstoreConfigManager,
         fsm,
-        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
+        fsm::store::{
+            RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
+        },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
@@ -708,6 +710,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .encryption_key_manager(self.encryption_key_manager.clone())
+            .max_per_file_size(self.config.server.max_snapshot_file_raw_size.0)
+            .enable_multi_snapshot_files(
+                self.pd_client
+                    .feature_gate()
+                    .can_enable(MULTI_FILES_SNAPSHOT_FEATURE),
+            )
             .build(snap_path);
 
         // Create coprocessor endpoint.
