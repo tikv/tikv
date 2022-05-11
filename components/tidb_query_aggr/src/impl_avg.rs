@@ -2,15 +2,14 @@
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::builder::FieldTypeBuilder;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
+use tidb_query_datatype::{
+    builder::FieldTypeBuilder, codec::data_type::*, expr::EvalContext, EvalType, FieldTypeFlag,
+    FieldTypeTp,
+};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
-use super::summable::Summable;
-use super::*;
+use super::{summable::Summable, *};
 
 /// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;
@@ -32,6 +31,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         use std::convert::TryFrom;
+
         use tidb_query_datatype::FieldTypeAccessor;
 
         assert_eq!(root_expr.get_tp(), ExprType::Avg);
@@ -312,15 +312,15 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::FieldTypeAccessor;
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        FieldTypeAccessor,
+    };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
+    use super::{super::AggrFunction, *};
     use crate::parser::AggrDefinitionParser;
-
-    use super::super::AggrFunction;
-    use super::*;
 
     #[test]
     fn test_update() {

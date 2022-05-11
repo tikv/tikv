@@ -1,7 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{mpsc, Mutex};
-use std::time::Duration;
+use std::{
+    sync::{mpsc, Mutex},
+    time::Duration,
+};
 
 use collections::HashMap;
 use engine_traits::{Peekable, CF_RAFT};
@@ -45,7 +47,7 @@ fn test_node_async_fetch() {
 
     cluster.stop_node(1);
 
-    for i in 1..60 {
+    for i in 1..60u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         cluster.must_put(&k, &v);
@@ -83,24 +85,36 @@ fn test_node_async_fetch() {
     );
 
     // logs should be replicated to node 1 successfully.
-    for i in 1..60 {
+    for i in 1..60u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         must_get_equal(cluster.engines[&1].kv.as_inner(), &k, &v);
     }
 
-    for i in 60..200 {
+    for i in 60..500u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         cluster.must_put(&k, &v);
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
 
-        if i > 100 && check_compacted(&cluster.engines, &before_states, 1) {
+        if i > 100
+            && check_compacted(
+                &cluster.engines,
+                &before_states,
+                1,
+                false, /*must_compacted*/
+            )
+        {
             return;
         }
     }
-    panic!("cluster is not compacted after inserting 200 entries.");
+    check_compacted(
+        &cluster.engines,
+        &before_states,
+        1,
+        true, /*must_compacted*/
+    );
 }
 
 // Test the case that async fetch is performed well while the peer is removed.

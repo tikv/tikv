@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::black_box;
-use criterion::measurement::Measurement;
+use criterion::{black_box, measurement::Measurement};
 use futures::executor::block_on;
 use tidb_query_executors::interface::*;
 use tikv::coprocessor::RequestHandler;

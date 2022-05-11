@@ -7,16 +7,15 @@ use engine_traits::KvEngine;
 use fail::fail_point;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
-use raftstore::coprocessor::*;
-use raftstore::store::RegionSnapshot;
-use raftstore::Error as RaftStoreError;
+use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
 use tikv::storage::Statistics;
-use tikv_util::worker::Scheduler;
-use tikv_util::{error, warn};
+use tikv_util::{error, warn, worker::Scheduler};
 
-use crate::endpoint::{Deregister, Task};
-use crate::old_value::{self, OldValueCache};
-use crate::Error as CdcError;
+use crate::{
+    endpoint::{Deregister, Task},
+    old_value::{self, OldValueCache},
+    Error as CdcError,
+};
 
 /// An Observer for CDC.
 ///
@@ -195,19 +194,24 @@ impl RegionChangeObserver for CdcObserver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::Duration;
+
     use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
-    use raftstore::coprocessor::RoleChange;
-    use raftstore::store::util::new_peer;
-    use std::time::Duration;
+    use raftstore::{coprocessor::RoleChange, store::util::new_peer};
     use tikv::storage::kv::TestEngineBuilder;
+
+    use super::*;
 
     #[test]
     fn test_register_and_deregister() {
         let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         let mut cb = CmdBatch::new(&observe_info, 0);
@@ -228,6 +232,7 @@ mod tests {
 
         // Stop observing cmd
         observe_info.cdc_id.stop_observing();
+        observe_info.pitr_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
@@ -238,7 +243,7 @@ mod tests {
         );
         match rx.recv_timeout(Duration::from_millis(10)) {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            _ => panic!("unexpected result"),
+            any => panic!("unexpected result: {:?}", any),
         };
 
         // Does not send unsubscribed region events.

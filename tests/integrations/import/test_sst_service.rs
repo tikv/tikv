@@ -1,18 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::executor::block_on;
-use futures::stream::StreamExt;
-use tempfile::Builder;
-
-use kvproto::import_sstpb::*;
-use kvproto::kvrpcpb::Context;
-use kvproto::tikvpb::*;
-
-use super::util::*;
+use futures::{executor::block_on, stream::StreamExt};
+use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
 use pd_client::PdClient;
-
+use tempfile::Builder;
 use test_sst_importer::*;
 use tikv::config::TiKvConfig;
+
+use super::util::*;
 
 macro_rules! assert_to_string_contains {
     ($e:expr, $substr:expr) => {{

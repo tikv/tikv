@@ -1,15 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::config::BlockCacheConfig;
-use crate::storage::kv::{Result, RocksEngine};
-use engine_rocks::raw::ColumnFamilyOptions;
-use engine_rocks::raw_util::CFOptions;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+use engine_rocks::{raw::ColumnFamilyOptions, raw_util::CFOptions};
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IORateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tikv_util::config::ReadableSize;
+
+use crate::storage::{
+    config::BlockCacheConfig,
+    kv::{Result, RocksEngine},
+};
 
 // Duplicated from rocksdb_engine
 const TEMP_DIR: &str = "";
@@ -141,16 +146,17 @@ impl Default for TestEngineBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::super::PerfStatisticsInstant;
-    use super::super::{CfStatistics, TEST_ENGINE_CFS};
-    use super::super::{Engine, Snapshot};
-    use super::*;
-    use crate::storage::{Cursor, CursorBuilder, ScanMode};
+    use engine_rocks::ReadPerfInstant;
     use engine_traits::IterOptions;
     use kvproto::kvrpcpb::Context;
     use tikv_kv::tests::*;
-    use txn_types::Key;
-    use txn_types::TimeStamp;
+    use txn_types::{Key, TimeStamp};
+
+    use super::{
+        super::{CfStatistics, Engine, Snapshot, TEST_ENGINE_CFS},
+        *,
+    };
+    use crate::storage::{Cursor, CursorBuilder, ScanMode};
 
     #[test]
     fn test_rocksdb() {
@@ -257,25 +263,25 @@ mod tests {
 
         let mut statistics = CfStatistics::default();
 
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
-
-        iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+
+        iter.prev(&mut statistics);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
     }
 
     #[test]
@@ -329,40 +335,40 @@ mod tests {
             .unwrap();
 
         let mut statistics = CfStatistics::default();
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         iter.seek(
             &Key::from_raw(b"aoo").append_ts(TimeStamp::zero()),
             &mut statistics,
         )
         .unwrap();
         assert_eq!(iter.valid().unwrap(), true);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         iter.seek(
             &Key::from_raw(b"foo").append_ts(TimeStamp::zero()),
             &mut statistics,
         )
         .unwrap();
         assert_eq!(iter.valid().unwrap(), false);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
-        let perf_statistics = PerfStatisticsInstant::new();
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
+        let perf_statistics = ReadPerfInstant::new();
         iter.seek(
             &Key::from_raw(b"foo1").append_ts(TimeStamp::zero()),
             &mut statistics,
         )
         .unwrap();
         assert_eq!(iter.valid().unwrap(), false);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
-        let perf_statistics = PerfStatisticsInstant::new();
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
+        let perf_statistics = ReadPerfInstant::new();
         iter.seek(
             &Key::from_raw(b"foo2").append_ts(TimeStamp::zero()),
             &mut statistics,
         )
         .unwrap();
         assert_eq!(iter.valid().unwrap(), false);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
-        let perf_statistics = PerfStatisticsInstant::new();
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
+        let perf_statistics = ReadPerfInstant::new();
         assert_eq!(
             iter.seek(
                 &Key::from_raw(b"foo4").append_ts(TimeStamp::zero()),
@@ -379,6 +385,6 @@ mod tests {
                 .as_encoded()
                 .as_slice()
         );
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
     }
 }

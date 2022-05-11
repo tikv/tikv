@@ -6,9 +6,11 @@ use engine_traits::{CF_DEFAULT, CF_WRITE};
 use external_storage_export::{create_storage, make_local_backend};
 use file_system::calc_crc32_bytes;
 use futures::{executor::block_on, AsyncReadExt, StreamExt};
-use kvproto::import_sstpb::*;
-use kvproto::kvrpcpb::*;
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
+use kvproto::{
+    import_sstpb::*,
+    kvrpcpb::*,
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
+};
 use tempfile::Builder;
 use test_backup::*;
 use tikv::coprocessor::checksum_crc64_xor;

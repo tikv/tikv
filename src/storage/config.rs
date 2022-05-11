@@ -2,16 +2,23 @@
 
 //! Storage configuration.
 
-use crate::config::{BLOCK_CACHE_RATE, MIN_BLOCK_CACHE_SHARD_SIZE};
+use std::error::Error;
+
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use file_system::{IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
 use online_config::OnlineConfig;
-use std::cmp::max;
-use std::error::Error;
-use tikv_util::config::{self, ReadableDuration, ReadableSize};
-use tikv_util::sys::SysQuota;
+use std::{
+  cmp::max, 
+  error::Error
+};
+use tikv_util::{
+    config::{self, ReadableDuration, ReadableSize},
+    sys::SysQuota,
+};
+
+use crate::config::{BLOCK_CACHE_RATE, MIN_BLOCK_CACHE_SHARD_SIZE};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -52,6 +59,8 @@ pub struct Config {
     pub api_version: u8,
     #[online_config(skip)]
     pub enable_ttl: bool,
+    #[online_config(skip)]
+    pub background_error_recovery_window: ReadableDuration,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
     #[online_config(submodule)]
@@ -84,6 +93,7 @@ impl Default for Config {
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IORateLimitConfig::default(),
+            background_error_recovery_window: ReadableDuration::hours(1),
         }
     }
 }

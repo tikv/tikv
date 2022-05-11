@@ -1,14 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::{Modify, WriteData};
-use crate::storage::lock_manager::LockManager;
-use crate::storage::txn::commands::{
-    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
-};
-use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot};
 use engine_traits::CfName;
+
+use crate::storage::{
+    kv::{Modify, WriteData},
+    lock_manager::LockManager,
+    txn::{
+        commands::{
+            Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+            WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Snapshot,
+};
 
 command! {
     /// Run Put or Delete for keys which may be changed by `RawCompareAndSwap`.

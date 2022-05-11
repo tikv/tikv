@@ -13,7 +13,7 @@ thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 
 [dev-dependencies]
+bytes = "1.0"
 panic_hook = { path = "../panic_hook" }
 protobuf = "2"
-bytes = "1.0"
 rand = "0.8"

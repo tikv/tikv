@@ -54,9 +54,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicI32, Ordering::SeqCst},
+        Arc,
+    };
+
     use super::*;
-    use std::sync::atomic::{AtomicI32, Ordering::SeqCst};
-    use std::sync::Arc;
 
     fn create_plus_int_cb() -> (Callback<i32>, Arc<AtomicI32>) {
         let v = Arc::new(AtomicI32::new(0i32));

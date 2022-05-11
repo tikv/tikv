@@ -1,12 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use tidb_query_common::storage::IntervalRange;
+use tidb_query_datatype::{
+    codec::{batch::LazyBatchColumnVec, data_type::VectorValue},
+    expr::EvalWarnings,
+};
 use tipb::FieldType;
 
 use crate::interface::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::codec::data_type::VectorValue;
-use tidb_query_datatype::expr::EvalWarnings;
 
 /// A simple mock executor that will return batch data according to a fixture without any
 /// modification.

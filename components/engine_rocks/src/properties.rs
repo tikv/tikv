@@ -1,23 +1,31 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
-use std::collections::HashMap;
-use std::io::Read;
-use std::ops::{Deref, DerefMut};
-use std::u64;
+use std::{
+    cmp,
+    collections::HashMap,
+    io::Read,
+    ops::{Deref, DerefMut},
+    u64,
+};
 
-use crate::decode_properties::{DecodeProperties, IndexHandle, IndexHandles};
 use engine_traits::{MvccProperties, Range};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
 };
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::{Error, Result};
-use tikv_util::info;
+use tikv_util::{
+    codec::{
+        number::{self, NumberEncoder},
+        Error, Result,
+    },
+    info,
+};
 use txn_types::{Key, Write, WriteType};
 
-use crate::mvcc_properties::*;
+use crate::{
+    decode_properties::{DecodeProperties, IndexHandle, IndexHandles},
+    mvcc_properties::*,
+};
 
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
@@ -528,21 +536,20 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
-
     use std::sync::Arc;
 
-    use crate::raw::{ColumnFamilyOptions, DBOptions, Writable};
-    use crate::raw::{DBEntryType, TablePropertiesCollector};
+    use engine_traits::{CF_WRITE, LARGE_CFS};
+    use rand::Rng;
     use tempfile::Builder;
     use test::Bencher;
-
-    use crate::compat::Compat;
-    use crate::raw_util::CFOptions;
-    use engine_traits::{CF_WRITE, LARGE_CFS};
     use txn_types::{Key, Write, WriteType};
 
     use super::*;
+    use crate::{
+        compat::Compat,
+        raw::{ColumnFamilyOptions, DBEntryType, DBOptions, TablePropertiesCollector, Writable},
+        raw_util::CFOptions,
+    };
 
     #[allow(clippy::many_single_char_names)]
     #[test]

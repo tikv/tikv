@@ -1,21 +1,20 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryInto;
-use std::io::Write;
-use std::sync::Arc;
-use std::{cmp, u8};
+use std::{cmp, convert::TryInto, io::Write, sync::Arc, u8};
 
-use crate::prelude::*;
-use crate::FieldTypeTp;
-use kvproto::coprocessor::KeyRange;
-use tipb::ColumnInfo;
-
-use super::mysql::{Duration, Time};
-use super::{datum, datum::DatumDecoder, Datum, Error, Result};
-use crate::expr::EvalContext;
 use codec::prelude::*;
 use collections::{HashMap, HashSet};
+use kvproto::coprocessor::KeyRange;
 use tikv_util::codec::BytesSlice;
+use tipb::ColumnInfo;
+
+use super::{
+    datum,
+    datum::DatumDecoder,
+    mysql::{Duration, Time},
+    Datum, Error, Result,
+};
+use crate::{expr::EvalContext, prelude::*, FieldTypeTp};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -453,8 +452,10 @@ fn cut_row_v1(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
 
 /// Cuts a non-empty row in row format v2 and encodes into v1 format.
 fn cut_row_v2(data: Vec<u8>, cols: Arc<[ColumnInfo]>) -> Result<RowColsDict> {
-    use crate::codec::datum_codec::{ColumnIdDatumEncoder, EvaluableDatumEncoder};
-    use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
+    use crate::codec::{
+        datum_codec::{ColumnIdDatumEncoder, EvaluableDatumEncoder},
+        row::v2::{RowSlice, V1CompatibleEncoder},
+    };
 
     let mut meta_map = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
     let mut result = Vec::with_capacity(data.len() + cols.len() * 8);
@@ -541,12 +542,11 @@ pub fn generate_index_data_for_test(
 mod tests {
     use std::{i64, iter::FromIterator};
 
+    use collections::{HashMap, HashSet};
     use tipb::ColumnInfo;
 
-    use crate::codec::datum::{self, Datum};
-    use collections::{HashMap, HashSet};
-
     use super::*;
+    use crate::codec::datum::{self, Datum};
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;

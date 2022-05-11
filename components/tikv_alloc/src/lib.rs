@@ -120,8 +120,7 @@ mod imp;
 #[path = "system.rs"]
 mod imp;
 
-pub use crate::imp::*;
-pub use crate::trace::*;
+pub use crate::{imp::*, trace::*};
 
 #[global_allocator]
 static ALLOC: imp::Allocator = imp::allocator();

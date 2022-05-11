@@ -15,9 +15,6 @@ use fail::fail_point;
 mod key_handle;
 mod lock_table;
 
-pub use self::key_handle::{KeyHandle, KeyHandleGuard};
-pub use self::lock_table::LockTable;
-
 use std::{
     mem::MaybeUninit,
     sync::{
@@ -25,7 +22,13 @@ use std::{
         Arc,
     },
 };
+
 use txn_types::{Key, Lock, TimeStamp};
+
+pub use self::{
+    key_handle::{KeyHandle, KeyHandleGuard},
+    lock_table::LockTable,
+};
 
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
@@ -125,8 +128,9 @@ impl ConcurrencyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use txn_types::LockType;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_lock_keys_order() {

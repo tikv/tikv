@@ -1,13 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::recorder::Task;
-use crate::Collector;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
+use tikv_util::{
+    warn,
+    worker::{Scheduler, Worker},
+};
 
-use tikv_util::warn;
-use tikv_util::worker::{Scheduler, Worker};
+use crate::{recorder::Task, Collector};
 
 /// `CollectorRegHandle` accepts registrations of [Collector].
 ///

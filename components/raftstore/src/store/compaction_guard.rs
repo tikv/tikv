@@ -2,7 +2,6 @@
 
 use std::ffi::CString;
 
-use crate::{coprocessor::RegionInfoProvider, Error, Result};
 use engine_traits::{
     CfName, SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
     SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
@@ -12,6 +11,7 @@ use lazy_static::lazy_static;
 use tikv_util::warn;
 
 use super::metrics::*;
+use crate::{coprocessor::RegionInfoProvider, Error, Result};
 
 const COMPACTION_GUARD_MAX_POS_SKIP: u32 = 10;
 
@@ -195,8 +195,8 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use std::{str, sync::Arc};
+
     use engine_rocks::{
         raw::{BlockBasedOptions, ColumnFamilyOptions, DBCompressionType, DBOptions},
         raw_util::{new_engine_opt, CFOptions},
@@ -207,8 +207,10 @@ mod tests {
     };
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
-    use std::{str, sync::Arc};
     use tempfile::TempDir;
+
+    use super::*;
+    use crate::coprocessor::region_info_accessor::MockRegionInfoProvider;
 
     #[test]
     fn test_compaction_guard_non_data() {

@@ -3,12 +3,12 @@
 use tidb_query_common::storage::{
     IntervalRange, OwnedKvPair, PointRange, Result as QEResult, Storage,
 };
-
-use crate::coprocessor::Error;
-use crate::storage::mvcc::NewerTsCheckState;
-use crate::storage::Statistics;
-use crate::storage::{Scanner, Store};
 use txn_types::Key;
+
+use crate::{
+    coprocessor::Error,
+    storage::{mvcc::NewerTsCheckState, Scanner, Statistics, Store},
+};
 
 /// A `Storage` implementation over TiKV's storage.
 pub struct TiKvStorage<S: Store> {

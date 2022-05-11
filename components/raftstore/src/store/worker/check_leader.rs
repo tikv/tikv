@@ -1,15 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::fsm::store::StoreMeta;
-use crate::store::util::RegionReadProgressRegistry;
+use std::{
+    collections::Bound::{Excluded, Unbounded},
+    fmt,
+    sync::{Arc, Mutex},
+};
+
 use fail::fail_point;
 use keys::{data_end_key, data_key, enc_start_key};
 use kvproto::kvrpcpb::{KeyRange, LeaderInfo};
-use std::collections::Bound::{Excluded, Unbounded};
-use std::fmt;
-use std::sync::Arc;
-use std::sync::Mutex;
 use tikv_util::worker::Runnable;
+
+use crate::store::{fsm::store::StoreMeta, util::RegionReadProgressRegistry};
 
 pub struct Runner {
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -121,10 +123,11 @@ impl Runnable for Runner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::store::util::RegionReadProgress;
     use keys::enc_end_key;
     use kvproto::metapb::Region;
+
+    use super::*;
+    use crate::store::util::RegionReadProgress;
 
     #[test]
     fn test_get_range_min_safe_ts() {

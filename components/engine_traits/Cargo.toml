@@ -8,22 +8,22 @@ publish = false
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+case_macros = { path = "../case_macros" }
 error_code = { path = "../error_code", default-features = false }
+fail = "0.5"
 file_system = { path = "../file_system", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "../log_wrappers" }
 protobuf = "2"
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+serde = "1.0"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }
-serde = "1.0"
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-fail = "0.5"
-case_macros = { path = "../case_macros" }
 
 [dev-dependencies]
-toml = "0.5"
 serde_derive = "1.0"
+toml = "0.5"

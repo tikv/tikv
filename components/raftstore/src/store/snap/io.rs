@@ -1,9 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use std::cell::RefCell;
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, Read, Write};
-use std::sync::Arc;
-use std::{fs, usize};
+use std::{
+    cell::RefCell,
+    fs,
+    fs::{File, OpenOptions},
+    io::{self, BufReader, Read, Write},
+    sync::Arc,
+    usize,
+};
 
 use super::{CfFile, Error, IO_LIMITER_CHUNK_SIZE};
 use encryption::{
@@ -15,9 +18,15 @@ use engine_traits::{
     SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
-use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
-use tikv_util::time::Limiter;
-use tikv_util::{box_try, debug, info};
+use tikv_util::{
+    box_try,
+    codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder},
+    debug,
+    info,
+    time::Limiter,
+};
+
+use super::{Error, IO_LIMITER_CHUNK_SIZE};
 
 /// Used to check a procedure is stale or not.
 pub trait StaleDetector {
@@ -295,14 +304,14 @@ pub fn get_decrypter_reader(
 mod tests {
     use std::collections::HashMap;
 
-    use super::*;
-    use crate::store::snap::tests::*;
-    use crate::store::snap::{SNAPSHOT_CFS, SST_FILE_SUFFIX};
     use engine_test::kv::KvTestEngine;
     use engine_traits::CF_DEFAULT;
     use std::path::PathBuf;
     use tempfile::Builder;
     use tikv_util::time::Limiter;
+
+    use super::*;
+    use crate::store::snap::{tests::*, SNAPSHOT_CFS, SST_FILE_SUFFIX};
 
     struct TestStaleDetector;
     impl StaleDetector for TestStaleDetector {
@@ -315,7 +324,9 @@ mod tests {
     fn test_cf_build_and_apply_plain_files() {
         let db_creaters = &[open_test_empty_db, open_test_db];
         for db_creater in db_creaters {
-            for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
+            let (_enc_dir, enc_opts) =
+                gen_db_options_with_encryption("test_cf_build_and_apply_plain_files_enc");
+            for db_opt in vec![None, Some(enc_opts)] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
                 let db: KvTestEngine = db_creater(dir.path(), db_opt.clone(), None).unwrap();
                 // Collect keys via the key_callback into a collection.
@@ -394,7 +405,9 @@ mod tests {
         let limiter = Limiter::new(f64::INFINITY);
         for max_file_size in max_file_sizes {
             for db_creater in db_creaters {
-                for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
+                let (_enc_dir, enc_opts) =
+                   gen_db_options_with_encryption("test_cf_build_and_apply_sst_files_enc");
+                for db_opt in vec![None, Some(enc_opts)] {
                     let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
                     let db = db_creater(dir.path(), db_opt.clone(), None).unwrap();
                     let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();

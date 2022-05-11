@@ -1,16 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::time::Duration;
+use std::{
+    future::Future,
+    marker::PhantomData,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use futures::future::FutureExt;
 use pin_project::pin_project;
-use tokio::sync::{Semaphore, SemaphorePermit};
-
 use tikv_util::time::Instant;
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::coprocessor::metrics::*;
 
@@ -125,12 +126,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{sync::Arc, thread};
+
     use futures::future::FutureExt;
-    use std::sync::Arc;
-    use std::thread;
-    use tokio::task::yield_now;
-    use tokio::time::{sleep, timeout};
+    use tokio::{
+        task::yield_now,
+        time::{sleep, timeout},
+    };
+
+    use super::*;
 
     #[tokio::test(flavor = "current_thread")]
     async fn test_limit_concurrency() {

@@ -293,8 +293,7 @@ mod mvcc_properties;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
 mod range_properties;
-pub use crate::mvcc_properties::*;
-pub use crate::range_properties::*;
+pub use crate::{mvcc_properties::*, range_properties::*};
 mod ttl_properties;
 pub use crate::ttl_properties::*;
 mod perf_context;
@@ -327,9 +326,13 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+
+// FIXME: Move raft engine traits to a separate crate.
+
 mod raft_engine;
 pub use raft_engine::{
-    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, RAFT_LOG_MULTI_GET_CNT,
+    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask,
+    RAFT_LOG_MULTI_GET_CNT,
 };
 
 // These modules need further scrutiny

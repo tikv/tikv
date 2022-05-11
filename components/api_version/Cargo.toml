@@ -10,12 +10,12 @@ testexport = []
 [dependencies]
 bitflags = "1.0.1"
 codec = { path = "../codec", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-thiserror = "1.0"
-tikv_util = { path = "../tikv_util", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 match_template = { path = "../match_template" }
+thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]

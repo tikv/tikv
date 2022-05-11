@@ -1,41 +1,49 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::load_statistics::ThreadLoadPool;
-use crate::server::metrics::*;
-use crate::server::snap::Task as SnapTask;
-use crate::server::{self, Config, StoreAddrResolver};
+use std::{
+    cmp,
+    collections::VecDeque,
+    ffi::CString,
+    marker::{PhantomData, Unpin},
+    mem,
+    pin::Pin,
+    result,
+    sync::{
+        atomic::{AtomicI32, AtomicU8, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
+
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
 use engine_traits::KvEngine;
-use futures::channel::oneshot;
-use futures::compat::Future01CompatExt;
-use futures::task::{Context, Poll, Waker};
-use futures::{ready, Future, Sink};
+use futures::{
+    channel::oneshot,
+    compat::Future01CompatExt,
+    ready,
+    task::{Context, Poll, Waker},
+    Future, Sink,
+};
 use futures_timer::Delay;
 use grpcio::{
     ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
     WriteFlags,
 };
-use kvproto::raft_serverpb::{Done, RaftMessage};
-use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
+use kvproto::{
+    raft_serverpb::{Done, RaftMessage},
+    tikvpb::{BatchRaftMessage, TikvClient},
+};
 use raft::SnapshotStatus;
-use raftstore::errors::DiscardReason;
-use raftstore::router::RaftStoreRouter;
+use raftstore::{errors::DiscardReason, router::RaftStoreRouter};
 use security::SecurityManager;
-use std::collections::VecDeque;
-use std::ffi::CString;
-use std::marker::PhantomData;
-use std::marker::Unpin;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use std::{cmp, mem, result};
-use tikv_util::lru::LruCache;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::worker::Scheduler;
-use yatp::task::future::TaskCell;
-use yatp::ThreadPool;
+use tikv_util::{lru::LruCache, timer::GLOBAL_TIMER_HANDLE, worker::Scheduler};
+use yatp::{task::future::TaskCell, ThreadPool};
+
+use crate::server::{
+    self, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask, Config,
+    StoreAddrResolver,
+};
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
@@ -1091,12 +1099,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use kvproto::{metapb::RegionEpoch, raft_serverpb::RaftMessage};
+    use raft::eraftpb::Snapshot;
+
     use super::*;
     use crate::server::load_statistics::ThreadLoadPool;
-    use kvproto::metapb::RegionEpoch;
-    use kvproto::raft_serverpb::RaftMessage;
-    use raft::eraftpb::Snapshot;
-    use std::sync::Arc;
 
     #[test]
     fn test_push_raft_message_with_context() {

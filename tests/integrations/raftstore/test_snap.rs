@@ -1,11 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Sender},
+        Arc, Mutex, RwLock,
+    },
+    time::Duration,
+};
 
 use engine_traits::{KvEngine, RaftEngineReadOnly};
 use file_system::{IOOp, IOType};

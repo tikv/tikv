@@ -2,50 +2,62 @@
 
 mod profile;
 pub mod region_meta;
-use self::profile::{
-    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
-    read_file, start_one_cpu_profile, start_one_heap_profile,
+use std::{
+    error::Error as StdError,
+    marker::PhantomData,
+    net::SocketAddr,
+    path::PathBuf,
+    pin::Pin,
+    str::{self, FromStr},
+    sync::Arc,
+    task::{Context, Poll},
+    time::{Duration, Instant},
 };
-
-use std::error::Error as StdError;
-use std::marker::PhantomData;
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::pin::Pin;
-use std::str::{self, FromStr};
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
 
 use async_stream::stream;
 use collections::HashMap;
 use engine_traits::KvEngine;
-use futures::compat::{Compat01As03, Stream01CompatExt};
-use futures::future::{ok, poll_fn};
-use futures::prelude::*;
-use hyper::server::accept::Accept;
-use hyper::server::conn::{AddrIncoming, AddrStream};
-use hyper::server::Builder as HyperBuilder;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
+use futures::{
+    compat::{Compat01As03, Stream01CompatExt},
+    future::{ok, poll_fn},
+    prelude::*,
+};
+use hyper::{
+    self, header,
+    server::{
+        accept::Accept,
+        conn::{AddrIncoming, AddrStream},
+        Builder as HyperBuilder,
+    },
+    service::{make_service_fn, service_fn},
+    Body, Method, Request, Response, Server, StatusCode,
+};
 use online_config::OnlineConfig;
-use openssl::ssl::{Ssl, SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use openssl::x509::X509;
+use openssl::{
+    ssl::{Ssl, SslAcceptor, SslFiletype, SslMethod, SslVerifyMode},
+    x509::X509,
+};
 use pin_project::pin_project;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
 use security::{self, SecurityConfig};
 use serde_json::Value;
-use tikv_util::logger::set_log_level;
-use tikv_util::metrics::dump;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::runtime::{Builder, Handle, Runtime};
-use tokio::sync::oneshot::{self, Receiver, Sender};
+use tikv_util::{logger::set_log_level, metrics::dump, timer::GLOBAL_TIMER_HANDLE};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    runtime::{Builder, Handle, Runtime},
+    sync::oneshot::{self, Receiver, Sender},
+};
 use tokio_openssl::SslStream;
 
-use crate::config::{log_level_serde, ConfigController};
-use crate::server::Result;
+use self::profile::{
+    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
+    read_file, start_one_cpu_profile, start_one_heap_profile,
+};
+use crate::{
+    config::{log_level_serde, ConfigController},
+    server::Result,
+};
 
 static TIMER_CANCELED: &str = "tokio timer canceled";
 
@@ -846,30 +858,24 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
-    use futures::future::ok;
-    use futures::prelude::*;
-    use hyper::client::HttpConnector;
-    use hyper::{Body, Client, Method, Request, StatusCode, Uri};
-    use hyper_openssl::HttpsConnector;
-    use openssl::ssl::SslFiletype;
-    use openssl::ssl::{SslConnector, SslMethod};
+    use std::{env, path::PathBuf, sync::Arc};
 
-    use std::env;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    use crate::config::{ConfigController, TiKvConfig};
-    use crate::server::status_server::profile::TEST_PROFILE_MUTEX;
-    use crate::server::status_server::{LogLevelRequest, StatusServer};
     use collections::HashSet;
     use engine_test::kv::KvTestEngine;
+    use futures::{executor::block_on, future::ok, prelude::*};
+    use hyper::{client::HttpConnector, Body, Client, Method, Request, StatusCode, Uri};
+    use hyper_openssl::HttpsConnector;
     use online_config::OnlineConfig;
-    use raftstore::store::transport::CasualRouter;
-    use raftstore::store::CasualMessage;
+    use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
+    use raftstore::store::{transport::CasualRouter, CasualMessage};
     use security::SecurityConfig;
     use test_util::new_security_cfg;
     use tikv_util::logger::get_log_level;
+
+    use crate::{
+        config::{ConfigController, TiKvConfig},
+        server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
+    };
 
     #[derive(Clone)]
     struct MockRouter;
