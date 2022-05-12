@@ -3404,7 +3404,7 @@ where
         let kind = ConfChangeKind::confchange_kind(change_peers.len());
 
         if kind == ConfChangeKind::LeaveJoint {
-            if self.peer.get_role() == PeerRole::DemotingVoter {
+            if self.peer.get_role() == PeerRole::DemotingVoter && !self.is_force_leader() {
                 return Err(box_err!(
                     "{} ignore leave joint command that demoting leader",
                     self.tag

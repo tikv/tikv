@@ -1338,6 +1338,15 @@ where
             return;
         }
 
+        if !self.fsm.peer.is_initialized() {
+            warn!(
+                "Unsafe recovery, cannot force leader since this peer is not initialized";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
+        }
+
         let expected_alive_voter = self.get_force_leader_expected_alive_voter(&failed_stores);
         if !expected_alive_voter.is_empty()
             && self
@@ -3399,7 +3408,7 @@ where
             // until new leader elected, but we can't revert this operation
             // because its result is already persisted in apply worker
             // TODO: should we transfer leader here?
-            let demote_self = is_learner(&self.fsm.peer.peer);
+            let demote_self = is_learner(&self.fsm.peer.peer) && !self.fsm.peer.is_force_leader();
             if remove_self || demote_self {
                 warn!(
                     "Removing or demoting leader";
@@ -5886,7 +5895,9 @@ fn demote_failed_voters_request(
     if peer.get_role() == metapb::PeerRole::Learner {
         let mut cp = pdpb::ChangePeer::default();
         cp.set_change_type(ConfChangeType::AddNode);
-        cp.set_peer(peer.clone());
+        let mut promote = peer.clone();
+        promote.set_role(metapb::PeerRole::Voter);
+        cp.set_peer(promote);
         change_peer_reqs.push(cp);
     }
     if change_peer_reqs.is_empty() {
