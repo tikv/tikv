@@ -63,9 +63,7 @@ pub trait ConfigInfo {
     type Encoder: Serialize;
     /// Get encoder that can be serialize with `serde::Serializer`
     /// with the disappear of `#[config_info(skip)]` field
-    // NOTE: the `input` parameter is use to extract the value_in_file value,
-    // if the `--config` is not provide, just use self instead.
-    fn get_cfg_encoder(&self, input: &Self) -> Self::Encoder;
+    fn get_cfg_encoder(&self) -> Self::Encoder;
 }
 
 // this is the stub Serialize stuct for each config field
@@ -203,12 +201,10 @@ mod tests {
                 a: 10,
                 b: Some(1),
                 c: "test".into(),
-                sub: SubConfig {
-                    h: ReadableSize::kb(3),
-                },
+                sub: SubConfig::default(),
                 d: None,
                 e: ReadableSize::mb(1),
-                f: NewType(1),
+                f: NewType::default(),
                 g: 10,
                 h: vec![1, 2, 3],
                 i: ["lz4".into(), "zstd".into()],
@@ -219,11 +215,25 @@ mod tests {
     #[derive(Serialize, Deserialize, ConfigInfo)]
     struct SubConfig {
         /// test submodule field
-        h: ReadableSize,
+        inner: ReadableSize,
     }
 
-    #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
+    impl Default for SubConfig {
+        fn default() -> Self {
+            Self {
+                inner: ReadableSize::kb(3),
+            }
+        }
+    }
+
+    #[derive(Serialize, Deserialize, Clone, PartialEq)]
     struct NewType(i32);
+
+    impl Default for NewType {
+        fn default() -> Self {
+            Self(3)
+        }
+    }
 
     impl From<i32> for NewType {
         fn from(v: i32) -> Self {
@@ -233,12 +243,11 @@ mod tests {
 
     #[test]
     fn test_config() {
-        let cfg = Config::default();
-        let mut new_cfg = Config::default();
-        new_cfg.a = 20;
-        new_cfg.c = "test123".into();
-        new_cfg.d = Some(ReadableDuration::secs(2));
-        let str_value = to_string(&cfg.get_cfg_encoder(&new_cfg)).unwrap();
+        let mut cfg = Config::default();
+        cfg.a = 20;
+        cfg.c = "test123".into();
+        cfg.d = Some(ReadableDuration::secs(2));
+        let str_value = to_string(&cfg.get_cfg_encoder()).unwrap();
         let expected = r###"
         {
             "a": {
@@ -270,7 +279,7 @@ mod tests {
                 "Description": "c is a string value with 2 string options"
             },
             "sub": {
-                "h": {
+                "inner": {
                     "Type": "String",
                     "DefaultValue": "3KiB",
                     "Description": "test submodule field"
@@ -295,7 +304,7 @@ mod tests {
                 "Type": "Number",
                 "MinValue": 1,
                 "MaxValue": 100,
-                "DefaultValue": 1,
+                "DefaultValue": 3,
                 "Description": "a custom field with manually assigned type and manually implement of `From`"
             },
             "g": {

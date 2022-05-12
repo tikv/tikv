@@ -86,7 +86,7 @@ fn encoder(
     fields: Punctuated<Field, Comma>,
 ) -> Result<TokenStream> {
     let from_ident = Ident::new("source", Span::call_site());
-    let target_ident = Ident::new("target", Span::call_site());
+    let default_ident = Ident::new("default_value", Span::call_site());
     let mut construct_fields = Vec::with_capacity(fields.len());
     let mut serialize_fields = Vec::with_capacity(fields.len());
     for mut field in fields {
@@ -105,13 +105,13 @@ fn encoder(
 
         let is_sub_module = cfg_attrs.is_sub_module;
         construct_fields.push(if is_sub_module {
-            quote! { #field_name: #from_ident.#field_name.get_cfg_encoder(&#target_ident.#field_name) }
+            quote! { #field_name: #from_ident.#field_name.get_cfg_encoder() }
         } else {
             let description = fetch_doc_comment(field.span(), &field.attrs)?;
             let cons = build_filed_constructer(
                 crate_name,
                 &from_ident,
-                &target_ident,
+                &default_ident,
                 field_name,
                 &real_type,
                 optional,
@@ -144,7 +144,8 @@ fn encoder(
         }
 
         impl #encoder_name {
-            fn new(#from_ident: &#name, #target_ident: &#name) -> #encoder_name {
+            fn new(#from_ident: &#name) -> #encoder_name {
+                let #default_ident = #name::default();
                 #encoder_name {
                     #(#construct_fields,)*
                 }
@@ -156,7 +157,7 @@ fn encoder(
 fn build_filed_constructer(
     crate_name: &Ident,
     source: &Ident,
-    target: &Ident,
+    default: &Ident,
     field_name: &Ident,
     inner_type: &Type,
     optional: bool,
@@ -182,11 +183,11 @@ fn build_filed_constructer(
     let default_value = if let Some(value) = default_value_desc {
         quote!(Some(#crate_name::ConfigValue::Desc(#value.into())))
     } else if !optional {
-        quote!(Some(#crate_name::ConfigValue::Concrete(#source.#field_name.clone())))
+        quote!(Some(#crate_name::ConfigValue::Concrete(#default.#field_name.clone())))
     } else {
-        quote!(#source.#field_name.clone().map(#crate_name::ConfigValue::Concrete))
+        quote!(#default.#field_name.clone().map(#crate_name::ConfigValue::Concrete))
     };
-    let value_in_file = quote!( if #source.#field_name != #target.#field_name{ #target.#field_name.clone().into() } else {None});
+    let value_in_file = quote!( if #source.#field_name != #default.#field_name{ #source.#field_name.clone().into() } else {None});
     let min_value = min_value
         .map(|l| {
             let value_tokens = convert_field(l);
@@ -225,8 +226,8 @@ fn build_filed_constructer(
 
 fn get_encoder(encoder_name: &Ident) -> TokenStream {
     quote! {
-        fn get_cfg_encoder(&self, other: &Self) -> Self::Encoder {
-            #encoder_name::new(self, other)
+        fn get_cfg_encoder(&self) -> Self::Encoder {
+            #encoder_name::new(self)
         }
     }
 }
