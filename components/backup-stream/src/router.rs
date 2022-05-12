@@ -911,11 +911,6 @@ impl StreamTaskInfo {
                 .with_label_values(&["generate_metadata"])
                 .observe(sw.lap().as_secs_f64());
 
-            // There is no file to flush, don't write the meta file.
-            if metadata_info.files.is_empty() {
-                return Ok(rts);
-            }
-
             // flush log file to storage.
             self.flush_log().await?;
 
