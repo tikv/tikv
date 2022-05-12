@@ -369,13 +369,12 @@ mod tests {
     };
 
     use super::*;
-    use crate::metrics::thread_spawn_wrapper;
 
     #[test]
     fn test_thread_id() {
         let id = thread_id();
         assert_ne!(id, 0);
-        thread_spawn_wrapper(move || {
+        std::thread::spawn(move || {
             // Two threads should have different ids.
             assert_ne!(thread_id(), id);
         })
@@ -396,7 +395,7 @@ mod tests {
             .map(|_| {
                 let tx = tx.clone();
                 let stop_threads_cvar = stop_threads_cvar.clone();
-                thread_spawn_wrapper(move || {
+                std::thread::spawn(move || {
                     tx.send(thread_id()).unwrap();
 
                     let (lock, cvar) = &*stop_threads_cvar;

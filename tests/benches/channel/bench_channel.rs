@@ -5,13 +5,13 @@ use std::{sync::mpsc::channel, usize};
 use crossbeam::channel;
 use futures::{executor::block_on, stream::StreamExt};
 use test::Bencher;
-use tikv_util::{metrics::thread_spawn_wrapper, mpsc};
+use tikv_util::mpsc;
 
 #[bench]
 fn bench_thread_channel(b: &mut Bencher) {
     let (tx, rx) = channel();
 
-    let t = thread_spawn_wrapper(move || {
+    let t = std::thread::spawn(move || {
         let mut n2: usize = 0;
         loop {
             let n = rx.recv().unwrap();
@@ -37,7 +37,7 @@ fn bench_thread_channel(b: &mut Bencher) {
 fn bench_util_channel(b: &mut Bencher) {
     let (tx, rx) = mpsc::unbounded();
 
-    let t = thread_spawn_wrapper(move || {
+    let t = std::thread::spawn(move || {
         let mut n2: usize = 0;
         loop {
             let n = rx.recv().unwrap();
@@ -63,7 +63,7 @@ fn bench_util_channel(b: &mut Bencher) {
 fn bench_util_loose(b: &mut Bencher) {
     let (tx, rx) = mpsc::loose_bounded(480_000);
 
-    let t = thread_spawn_wrapper(move || {
+    let t = std::thread::spawn(move || {
         let mut n2: usize = 0;
         loop {
             let n = rx.recv().unwrap();
@@ -90,7 +90,7 @@ fn bench_util_loose(b: &mut Bencher) {
 fn bench_crossbeam_channel(b: &mut Bencher) {
     let (tx, rx) = channel::unbounded();
 
-    let t = thread_spawn_wrapper(move || {
+    let t = std::thread::spawn(move || {
         let mut n2: usize = 0;
         loop {
             let n = rx.recv().unwrap();
@@ -117,7 +117,7 @@ fn bench_receiver_stream_batch(b: &mut Bencher) {
     let (tx, rx) = mpsc::batch::bounded::<i32>(128, 8);
     for _ in 0..1 {
         let tx1 = tx.clone();
-        thread_spawn_wrapper(move || {
+        std::thread::spawn(move || {
             (0..usize::MAX)
                 .take_while(|i| tx1.send(*i as i32).is_ok())
                 .count();
@@ -154,7 +154,7 @@ fn bench_receiver_stream(b: &mut Bencher) {
     let (tx, rx) = mpsc::batch::bounded::<i32>(128, 1);
     for _ in 0..1 {
         let tx1 = tx.clone();
-        thread_spawn_wrapper(move || {
+        std::thread::spawn(move || {
             (0..usize::MAX)
                 .take_while(|i| tx1.send(*i as i32).is_ok())
                 .count();

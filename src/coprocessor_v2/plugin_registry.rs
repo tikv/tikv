@@ -14,7 +14,6 @@ use libloading::{Error as DylibError, Library, Symbol};
 use notify::{DebouncedEvent, RecursiveMode, Watcher};
 use semver::Version;
 use thiserror::Error;
-use tikv_util::metrics::thread_spawn_wrapper;
 
 #[derive(Debug, Error)]
 pub enum PluginLoadingError {
@@ -124,7 +123,7 @@ impl PluginRegistry {
             let fs_watcher = notify::watcher(tx, Duration::from_secs(3)).unwrap();
 
             let hot_reload_registry = self.inner.clone();
-            thread_spawn_wrapper(move || {
+            std::thread::spawn(move || {
                 // Simple helper functions for loading/unloading plugins.
                 let maybe_load = |file: &PathBuf| {
                     let mut hot_reload_registry = hot_reload_registry.write().unwrap();

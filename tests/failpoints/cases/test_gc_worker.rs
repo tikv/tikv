@@ -25,7 +25,7 @@ use tikv::{
         txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put},
     },
 };
-use tikv_util::{metrics::thread_spawn_wrapper, HandyRwLock};
+use tikv_util::HandyRwLock;
 use txn_types::{Key, TimeStamp};
 
 // In theory, raft can propose conf change as long as there is no pending one. Replicas
@@ -148,7 +148,7 @@ fn test_notify_observer_after_apply() {
     fail::cfg(post_apply_query_fp, "pause").unwrap();
     let key = b"k";
     let (client_clone, ctx_clone) = (client.clone(), ctx.clone());
-    let handle = thread_spawn_wrapper(move || {
+    let handle = std::thread::spawn(move || {
         must_kv_prewrite(
             &client_clone,
             ctx_clone,

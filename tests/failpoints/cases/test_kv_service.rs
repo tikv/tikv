@@ -5,7 +5,6 @@ use std::{sync::Arc, time::Duration};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use test_raftstore::{must_kv_prewrite, must_new_cluster_and_kv_client, must_new_cluster_mul};
-use tikv_util::metrics::thread_spawn_wrapper;
 
 #[test]
 fn test_batch_get_memory_lock() {
@@ -71,7 +70,7 @@ fn test_scan_lock_push_async_commit() {
         fail::cfg("before-set-lock-in-memory", "pause").unwrap();
         let client1 = client.clone();
         let ctx1 = ctx.clone();
-        let handle1 = thread_spawn_wrapper(move || {
+        let handle1 = std::thread::spawn(move || {
             let mut prewrite = PrewriteRequest::default();
             prewrite.set_context(ctx1);
             let mut mutation = Mutation::default();
@@ -96,7 +95,7 @@ fn test_scan_lock_push_async_commit() {
 
         let client1 = client.clone();
         let ctx1 = ctx.clone();
-        let handle2 = thread_spawn_wrapper(move || {
+        let handle2 = std::thread::spawn(move || {
             if *use_green_gc {
                 let mut req = RegisterLockObserverRequest::default();
                 req.set_max_ts(ts + 20);

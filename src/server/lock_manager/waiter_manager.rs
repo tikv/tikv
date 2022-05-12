@@ -1277,7 +1277,7 @@ pub mod tests {
         );
         let commit_ts = 15.into();
         let (tx, rx) = mpsc::sync_channel(1);
-        tikv_util::metrics::thread_spawn_wrapper(move || {
+        std::thread::spawn(move || {
             // Waiters2's lifetime can't exceed it timeout.
             assert_elapsed(
                 || expect_write_conflict(block_on(f2).unwrap(), 30.into(), lock_info2, 15.into()),

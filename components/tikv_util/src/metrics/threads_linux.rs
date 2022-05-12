@@ -7,7 +7,6 @@ use std::{
 };
 
 use collections::HashMap;
-use futures::Future;
 use procinfo::pid;
 use prometheus::{
     self,
@@ -582,31 +581,6 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
             remove_thread_name_from_map();
         })
     }
-}
-
-pub fn tokio_spawn_wrapper<T>(f: T) -> tokio::task::JoinHandle<T::Output>
-where
-    T: Future + Send + 'static,
-    T::Output: Send + 'static,
-{
-    #[allow(clippy::disallowed_methods)]
-    tokio::spawn(async {
-        add_thread_name_to_map();
-        let res = f.await;
-        remove_thread_name_from_map();
-        res
-    })
-}
-
-pub fn thread_spawn_wrapper<F, T>(f: F) -> std::thread::JoinHandle<T>
-where
-    F: FnOnce() -> T,
-    F: Send + 'static,
-    T: Send + 'static,
-{
-    std::thread::Builder::new()
-        .spawn_wrapper(f)
-        .expect("failed to spawn thread")
 }
 
 #[cfg(test)]

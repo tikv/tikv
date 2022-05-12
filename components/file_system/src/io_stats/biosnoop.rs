@@ -281,7 +281,6 @@ mod tests {
     use rand::Rng;
     use tempfile::TempDir;
     use test::Bencher;
-    use tikv_util::metrics::thread_spawn_wrapper;
 
     use super::{
         fetch_io_bytes, flush_io_latency_metrics, get_io_type, init, set_io_type, BPF_CONTEXT,
@@ -324,7 +323,7 @@ mod tests {
         drop(f);
 
         let other_bytes_before = fetch_io_bytes()[IOType::Other as usize];
-        thread_spawn_wrapper(move || {
+        std::thread::spawn(move || {
             set_io_type(IOType::Other);
             let mut f = OpenOptions::new()
                 .read(true)
@@ -353,7 +352,7 @@ mod tests {
     fn test_thread_idx_allocation() {
         // the thread indexes should be recycled.
         for _ in 1..=MAX_THREAD_IDX * 2 {
-            thread_spawn_wrapper(|| {
+            std::thread::spawn(|| {
                 set_io_type(IOType::Other);
             })
             .join()
@@ -365,7 +364,7 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 1..=MAX_THREAD_IDX {
             let pair1 = pair.clone();
-            let h = thread_spawn_wrapper(move || {
+            let h = std::thread::spawn(move || {
                 set_io_type(IOType::Compaction);
                 let (lock, cvar) = &*pair1;
                 let mut stop = lock.lock().unwrap();
@@ -378,7 +377,7 @@ mod tests {
 
         // the reserved index is used, io type should be IOType::Other
         for _ in 1..=MAX_THREAD_IDX {
-            thread_spawn_wrapper(|| {
+            std::thread::spawn(|| {
                 set_io_type(IOType::Compaction);
                 assert_eq!(get_io_type(), IOType::Other);
             })
@@ -399,7 +398,7 @@ mod tests {
 
         // the thread indexes should be available again.
         for _ in 1..=MAX_THREAD_IDX {
-            thread_spawn_wrapper(|| {
+            std::thread::spawn(|| {
                 set_io_type(IOType::Compaction);
                 assert_eq!(get_io_type(), IOType::Compaction);
             })

@@ -7,7 +7,7 @@ use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
-use tikv_util::{config::*, metrics::thread_spawn_wrapper};
+use tikv_util::config::*;
 
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
@@ -250,7 +250,7 @@ fn test_joint_confchange() {
         .joint_confchange(region.get_id(), confchanges);
     sleep_ms(500);
     let (tx, rx) = std::sync::mpsc::channel();
-    thread_spawn_wrapper(move || {
+    std::thread::spawn(move || {
         receive_resolved_ts(&receive_event);
         tx.send(()).unwrap();
     });

@@ -581,7 +581,6 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::metrics::thread_spawn_wrapper;
 
     #[test]
     fn test_panic_hook() {
@@ -622,7 +621,7 @@ mod tests {
             )
             .unwrap();
 
-            let _ = thread_spawn_wrapper(|| {
+            let _ = std::thread::spawn(|| {
                 // let the global logger is held by the other thread, so the
                 // drop() of the async drain is not called in time.
                 let _guard = slog_global::borrow_global();

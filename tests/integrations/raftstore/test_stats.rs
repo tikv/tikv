@@ -12,7 +12,7 @@ use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use raftstore::store::QueryStats;
 use test_raftstore::*;
-use tikv_util::{config::*, metrics::thread_spawn_wrapper};
+use tikv_util::config::*;
 use txn_types::Key;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -745,7 +745,7 @@ fn batch_commands(
     block_on(sender.close()).unwrap();
 
     let (tx, rx) = mpsc::sync_channel(1);
-    thread_spawn_wrapper(move || {
+    std::thread::spawn(move || {
         // We have send 10k requests to the server, so we should get 10k responses.
         let mut count = 0;
         for x in block_on(

@@ -129,7 +129,6 @@ mod tests {
     use std::{sync::Arc, thread};
 
     use futures::future::FutureExt;
-    use tikv_util::metrics::tokio_spawn_wrapper;
     use tokio::{
         task::yield_now,
         time::{sleep, timeout},
@@ -153,7 +152,7 @@ mod tests {
         // Light tasks should run without any semaphore permit
         let smp2 = smp.clone();
         assert!(
-            tokio_spawn_wrapper(timeout(Duration::from_millis(250), async move {
+            tokio::spawn(timeout(Duration::from_millis(250), async move {
                 limit_concurrency(work(2), &*smp2, Duration::from_millis(500)).await
             }))
             .await
@@ -164,17 +163,19 @@ mod tests {
         // it starts with t1
         smp.add_permits(1);
         let smp2 = smp.clone();
-        let mut t1 = tokio_spawn_wrapper(async move {
-            limit_concurrency(work(8), &*smp2, Duration::default()).await
-        })
-        .fuse();
+        let mut t1 =
+            tokio::spawn(
+                async move { limit_concurrency(work(8), &*smp2, Duration::default()).await },
+            )
+            .fuse();
 
         sleep(Duration::from_millis(100)).await;
         let smp2 = smp.clone();
-        let mut t2 = tokio_spawn_wrapper(async move {
-            limit_concurrency(work(2), &*smp2, Duration::default()).await
-        })
-        .fuse();
+        let mut t2 =
+            tokio::spawn(
+                async move { limit_concurrency(work(2), &*smp2, Duration::default()).await },
+            )
+            .fuse();
 
         let deadline = sleep(Duration::from_millis(1500)).fuse();
         futures::pin_mut!(deadline);

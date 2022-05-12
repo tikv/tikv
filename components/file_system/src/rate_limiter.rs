@@ -561,8 +561,6 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
 mod tests {
     use std::sync::atomic::AtomicBool;
 
-    use tikv_util::metrics::thread_spawn_wrapper;
-
     use super::*;
 
     macro_rules! approximate_eq {
@@ -602,7 +600,7 @@ mod tests {
         for _ in 0..job_count {
             let stop = stop.clone();
             let limiter = limiter.clone();
-            let t = thread_spawn_wrapper(move || {
+            let t = std::thread::spawn(move || {
                 let Request(io_type, op, len) = request;
                 while !stop.load(Ordering::Relaxed) {
                     limiter.request_with_skewed_clock(io_type, op, len);

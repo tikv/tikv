@@ -8,7 +8,7 @@ use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv_util::{debug, metrics::thread_spawn_wrapper, worker::Scheduler};
+use tikv_util::{debug, worker::Scheduler};
 
 use crate::{new_event_feed, ClientReceiver, TestSuite, TestSuiteBuilder};
 
@@ -291,7 +291,7 @@ fn do_test_no_resolved_ts_before_downstream_initialized(version: &str) {
         event_feeds.push(event_feed);
     }
 
-    let th = thread_spawn_wrapper(move || {
+    let th = std::thread::spawn(move || {
         // The first downstream can receive timestamps but the second should receive nothing.
         let mut rx = event_feeds[0].replace(None).unwrap();
         assert!(recv_timeout(&mut rx, Duration::from_secs(1)).is_ok());

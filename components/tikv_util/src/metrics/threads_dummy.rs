@@ -127,27 +127,3 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
         })
     }
 }
-
-pub fn tokio_spawn_wrapper<T>(f: T) -> tokio::task::JoinHandle<T::Output>
-where
-    T: Future + Send + 'static,
-    T::Output: Send + 'static,
-{
-    #[allow(clippy::disallowed_methods)]
-    tokio::spawn(async {
-        let res = f.await;
-        res
-    })
-}
-
-pub fn thread_spawn_wrapper<F, T>(f: F) -> std::thread::JoinHandle<T>
-where
-    F: FnOnce() -> T,
-    F: Send + 'static,
-    T: Send + 'static,
-{
-    #[allow(clippy::disallowed_methods)]
-    std::thread::Builder::new()
-        .spawn(f)
-        .expect("failed to spawn thread")
-}

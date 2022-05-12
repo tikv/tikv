@@ -9,7 +9,7 @@ use std::{
 use collections::HashMap;
 use kvproto::{kvrpcpb::Context, resource_usage_agent::ResourceUsageRecord};
 use resource_metering::{error::Result, init_recorder, init_reporter, Config, DataSink};
-use tikv_util::{config::ReadableDuration, metrics::thread_spawn_wrapper};
+use tikv_util::config::ReadableDuration;
 
 const PRECISION_MS: u64 = 1000;
 const REPORT_INTERVAL_MS: u64 = 3000;
@@ -59,7 +59,7 @@ fn test_summary() {
     {
         let tf = resource_tag_factory.clone();
         let data_sink = data_sink.clone();
-        thread_spawn_wrapper(move || {
+        std::thread::spawn(move || {
             {
                 let mut ctx = Context::default();
                 ctx.set_resource_group_tag(b"TAG-1".to_vec());
@@ -83,7 +83,7 @@ fn test_summary() {
     {
         let tf = resource_tag_factory.clone();
         let data_sink = data_sink.clone();
-        thread_spawn_wrapper(move || {
+        std::thread::spawn(move || {
             {
                 let mut ctx = Context::default();
                 ctx.set_resource_group_tag(b"TAG-1".to_vec());
@@ -122,7 +122,7 @@ fn test_summary() {
     drop(reg_guard);
 
     // expect no data
-    thread_spawn_wrapper(move || {
+    std::thread::spawn(move || {
         {
             let mut ctx = Context::default();
             ctx.set_resource_group_tag(b"TAG-1".to_vec());

@@ -9,7 +9,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, metrics::thread_spawn_wrapper, HandyRwLock};
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
     let key1 = key1.to_vec();
@@ -19,7 +19,7 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
     must_kv_pessimistic_lock(client, ctx.clone(), key2.clone(), ts + 1);
 
     let (client_clone, mut ctx_clone, key1_clone) = (client.clone(), ctx.clone(), key1.clone());
-    let handle = thread_spawn_wrapper(move || {
+    let handle = std::thread::spawn(move || {
         // `resource_group_tag` is set to check if the wait chain reported by the deadlock error
         // carries the correct information.
         ctx_clone.set_resource_group_tag(b"tag1".to_vec());

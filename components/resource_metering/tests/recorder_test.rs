@@ -10,7 +10,7 @@ mod tests {
 
     use collections::HashMap;
     use resource_metering::{init_recorder, Collector, RawRecord, RawRecords, ResourceTagFactory};
-    use tikv_util::{metrics::thread_spawn_wrapper, sys::thread};
+    use tikv_util::sys::thread;
     use Operation::*;
 
     enum Operation {
@@ -81,7 +81,7 @@ mod tests {
                 ..
             } = self;
 
-            let handle = thread_spawn_wrapper(move || {
+            let handle = std::thread::spawn(move || {
                 let mut guard = None;
 
                 for op in ops {

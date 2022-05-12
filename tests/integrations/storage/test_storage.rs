@@ -21,7 +21,6 @@ use tikv::{
     server::gc_worker::DEFAULT_GC_BATCH_KEYS,
     storage::{mvcc::MAX_TXN_WRITE_SIZE, txn::RESOLVE_LOCK_BATCH_SIZE, Engine},
 };
-use tikv_util::metrics::thread_spawn_wrapper;
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
@@ -1222,7 +1221,7 @@ fn test_isolation_inc() {
     for _ in 0..THREAD_NUM {
         let (punch_card, store, oracle) =
             (Arc::clone(&punch_card), store.clone(), Arc::clone(&oracle));
-        threads.push(thread_spawn_wrapper(move || {
+        threads.push(std::thread::spawn(move || {
             for _ in 0..INC_PER_THREAD {
                 let number = inc(&store.store, &oracle, b"key").unwrap() as usize;
                 let mut punch = punch_card.lock().unwrap();
@@ -1311,7 +1310,7 @@ fn test_isolation_multi_inc() {
     let mut threads = vec![];
     for _ in 0..THREAD_NUM {
         let (store, oracle) = (store.clone(), Arc::clone(&oracle));
-        threads.push(thread_spawn_wrapper(move || {
+        threads.push(std::thread::spawn(move || {
             for _ in 0..INC_PER_THREAD {
                 assert!(inc_multi(&store.store, &oracle, KEY_NUM));
             }

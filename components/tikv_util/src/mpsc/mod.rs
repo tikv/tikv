@@ -296,7 +296,7 @@ mod tests {
 
     use crossbeam::channel::*;
 
-    use crate::{metrics::thread_spawn_wrapper, time::Instant};
+    use crate::time::Instant;
 
     #[test]
     fn test_bounded() {
@@ -359,7 +359,7 @@ mod tests {
 
         let (tx1, rx1) = super::bounded::<u64>(10);
         let (tx2, rx2) = super::bounded::<u64>(0);
-        thread_spawn_wrapper(move || {
+        std::thread::spawn(move || {
             thread::sleep(Duration::from_millis(100));
             tx1.send(10).unwrap();
             thread::sleep(Duration::from_millis(100));
@@ -407,7 +407,7 @@ mod tests {
         );
 
         let (tx, rx) = super::unbounded::<u64>();
-        thread_spawn_wrapper(move || {
+        std::thread::spawn(move || {
             thread::sleep(Duration::from_millis(100));
             tx.send(10).unwrap();
         });
@@ -487,7 +487,7 @@ mod tests {
         );
 
         let (tx, rx) = super::loose_bounded(10);
-        thread_spawn_wrapper(move || {
+        std::thread::spawn(move || {
             thread::sleep(Duration::from_millis(100));
             tx.try_send(10).unwrap();
         });

@@ -16,10 +16,7 @@ use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, Rp
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
-use tikv_util::{
-    config::ReadableDuration,
-    metrics::{thread_spawn_wrapper, ThreadBuildWrapper},
-};
+use tikv_util::{config::ReadableDuration, metrics::ThreadBuildWrapper};
 use tokio::runtime::Builder;
 use txn_types::TimeStamp;
 
@@ -32,7 +29,7 @@ fn test_retry_rpc_client() {
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let m_mgr = mgr.clone();
     server.stop();
-    let child = thread_spawn_wrapper(move || {
+    let child = std::thread::spawn(move || {
         let cfg = new_config(m_eps);
         assert_eq!(RpcClient::new(&cfg, None, m_mgr).is_ok(), true);
     });

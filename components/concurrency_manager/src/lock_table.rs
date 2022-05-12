@@ -127,7 +127,6 @@ mod test {
         time::Duration,
     };
 
-    use tikv_util::metrics::tokio_spawn_wrapper;
     use tokio::time::sleep;
     use txn_types::LockType;
 
@@ -142,7 +141,7 @@ mod test {
         for _ in 0..100 {
             let lock_table = lock_table.clone();
             let counter = counter.clone();
-            let handle = tokio_spawn_wrapper(async move {
+            let handle = tokio::spawn(async move {
                 let _guard = lock_table.lock_key(&Key::from_raw(b"k")).await;
                 // Modify an atomic counter with a mutex guard. The value of the counter
                 // should remain unchanged if the mutex works.

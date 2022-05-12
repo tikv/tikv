@@ -15,7 +15,7 @@ use engine_traits::RaftEngineReadOnly;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use tikv_util::{config::*, metrics::thread_spawn_wrapper, time::Instant, HandyRwLock};
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 #[test]
 fn test_overlap_cleanup() {
@@ -364,7 +364,7 @@ fn test_shutdown_when_snap_gc() {
     }
 
     fail::cfg("peer_2_handle_snap_mgr_gc", "pause").unwrap();
-    thread_spawn_wrapper(|| {
+    std::thread::spawn(|| {
         // Sleep a while to wait snap_gc event to reach batch system.
         sleep_ms(500);
         fail::cfg("peer_2_handle_snap_mgr_gc", "off").unwrap();
