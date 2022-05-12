@@ -261,6 +261,7 @@ fn test_unsafe_recovery_already_in_joint_state() {
         ],
     );
     // Sleep 100 ms to wait for the new learner to be initialized.
+    sleep_ms(100);
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
 
