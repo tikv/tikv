@@ -1610,25 +1610,10 @@ impl SnapManager {
                 .max_per_file_size
                 .store(u64::MAX, Ordering::Release);
         } else {
-            const MIN_MAX_SNAP_FILE_RAW_SIZE: u64 = (1 << 20) * 100; // min max snapshot file size is 100MB (before compresssion)
-            if max_per_file_size < MIN_MAX_SNAP_FILE_RAW_SIZE {
-                info!(
-                    "set_max_per_file_size overwrites the {} with {}",
-                    max_per_file_size, MIN_MAX_SNAP_FILE_RAW_SIZE
-                );
-            }
-            self.core.max_per_file_size.store(
-                cmp::max(max_per_file_size, MIN_MAX_SNAP_FILE_RAW_SIZE),
-                Ordering::Release,
-            );
+            self.core
+                .max_per_file_size
+                .store(max_per_file_size, Ordering::Release);
         }
-    }
-
-    #[cfg(any(test, feature = "testexport"))]
-    pub fn set_max_per_file_size_for_test(&mut self, max_per_file_size: u64) {
-        self.core
-            .max_per_file_size
-            .store(max_per_file_size, Ordering::Release);
     }
 
     pub fn get_actual_max_per_file_size(&self, allow_multi_files_snapshot: bool) -> u64 {
