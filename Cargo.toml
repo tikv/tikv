@@ -113,6 +113,7 @@ pd_client = { path = "components/pd_client", default-features = false }
 case_macros = {path = "components/case_macros"}
 pin-project = "1.0"
 pnet_datalink = "0.23"
+pprof = { version = "^0.9", default-features = false, features = ["flamegraph", "protobuf-codec", "protobuf", "cpp", "frame-pointer"] }
 prost = "0.7"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
@@ -164,9 +165,6 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "components/resource_metering" }
 seahash = "4.1.0"
 
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf-codec", "protobuf", "cpp"] }
-
 [dev-dependencies]
 example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" } # should be a binary dependency
 panic_hook = { path = "components/panic_hook" }
@@ -185,7 +183,6 @@ raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
-pprof = { git = "https://github.com/tikv/pprof-rs.git" }
 
 # TODO: remove this replacement after rusoto_s3 truly supports virtual-host style (https://github.com/rusoto/rusoto/pull/1823).
 rusoto_core = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }

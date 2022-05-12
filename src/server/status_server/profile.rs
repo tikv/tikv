@@ -16,7 +16,6 @@ use futures::future::BoxFuture;
 use futures::task::{Context, Poll};
 use futures::{select, Future, FutureExt, Stream, StreamExt};
 use lazy_static::lazy_static;
-#[cfg(target_arch = "x86_64")]
 use pprof::protos::Message;
 use regex::Regex;
 use tempfile::{NamedTempFile, TempDir};
@@ -173,24 +172,7 @@ pub fn deactivate_heap_profile() -> bool {
     activate.take().is_some()
 }
 
-/// Currently, on aarch64 architectures, the underlying libgcc/llvm-libunwind/... which pprof-rs
-/// depends on has a segmentation fault (when backtracking happens in the signal handler).
-/// So, for now, we only allow the x86_64 architecture to perform real profiling, other
-/// architectures will directly return an error until we fix the seg-fault in backtrace.
-#[cfg(not(target_arch = "x86_64"))]
-pub async fn start_one_cpu_profile<F>(
-    _end: F,
-    _frequency: i32,
-    _protobuf: bool,
-) -> Result<Vec<u8>, String>
-where
-    F: Future<Output = Result<(), String>> + Send + 'static,
-{
-    Err("unsupported arch".to_string())
-}
-
 /// Trigger one cpu profile.
-#[cfg(target_arch = "x86_64")]
 pub async fn start_one_cpu_profile<F>(
     end: F,
     frequency: i32,
@@ -300,7 +282,6 @@ where
     Ok(())
 }
 
-#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 fn extract_thread_name(thread_name: &str) -> String {
     THREAD_NAME_RE
         .captures(thread_name)
@@ -327,9 +308,11 @@ mod test_utils {
     pub fn activate_prof() -> ProfResult<()> {
         Ok(())
     }
+
     pub fn deactivate_prof() -> ProfResult<()> {
         Ok(())
     }
+
     pub fn dump_prof(_: &str) -> ProfResult<()> {
         Ok(())
     }
@@ -373,7 +356,6 @@ mod tests {
 
     // Test there is at most 1 concurrent profiling.
     #[test]
-    #[cfg(target_arch = "x86_64")]
     fn test_profile_guard_concurrency() {
         use futures::channel::oneshot;
         use futures::TryFutureExt;
