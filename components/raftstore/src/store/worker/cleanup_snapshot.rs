@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, marker::PhantomData};
+use std::fmt;
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
@@ -40,7 +40,6 @@ where
     store_id: u64,
     router: RaftRouter<EK, ER>,
     snap_mgr: SnapManager,
-    _engine: PhantomData<EK>,
 }
 
 impl<EK, ER> Runner<EK, ER>
@@ -53,7 +52,6 @@ where
             store_id,
             router,
             snap_mgr,
-            _engine: PhantomData,
         }
     }
 

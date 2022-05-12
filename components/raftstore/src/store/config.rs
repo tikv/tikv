@@ -278,8 +278,6 @@ pub struct Config {
     pub report_region_buckets_tick_interval: ReadableDuration,
 
     #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[online_config(skip)]
     pub max_snapshot_file_raw_size: ReadableSize,
 }
 
