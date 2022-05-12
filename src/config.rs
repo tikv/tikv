@@ -2533,6 +2533,7 @@ pub struct QuotaConfig {
     pub foreground_write_bandwidth: ReadableSize,
     pub foreground_read_bandwidth: ReadableSize,
     pub max_delay_duration: ReadableDuration,
+    pub support_auto_tune: bool,
 }
 
 impl Default for QuotaConfig {
@@ -2542,6 +2543,7 @@ impl Default for QuotaConfig {
             foreground_write_bandwidth: ReadableSize(0),
             foreground_read_bandwidth: ReadableSize(0),
             max_delay_duration: ReadableDuration::millis(500),
+            support_auto_tune:false,
         }
     }
 }

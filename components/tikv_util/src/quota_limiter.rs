@@ -7,6 +7,7 @@ use std::{
     },
     time::Duration,
 };
+use std::sync::atomic::AtomicBool;
 
 use cpu_time::ThreadTime;
 use futures::compat::Future01CompatExt;
@@ -31,6 +32,10 @@ pub struct QuotaLimiter {
     read_bandwidth_limiter: Limiter,
     // max delay nano seconds
     max_delay_duration: AtomicU64,
+    // if supports auto tune
+    support_auto_tune: AtomicBool,
+    // if auto tune is enabled
+    auto_tune_enabled: AtomicBool,
 }
 
 // Throttle must be consumed in quota limiter.
@@ -91,6 +96,8 @@ impl Default for QuotaLimiter {
             write_bandwidth_limiter: Limiter::new(f64::INFINITY),
             read_bandwidth_limiter: Limiter::new(f64::INFINITY),
             max_delay_duration: AtomicU64::new(0),
+            support_auto_tune: AtomicBool::new(false),
+            auto_tune_enabled: AtomicBool::new(false),
         }
     }
 }
@@ -102,6 +109,8 @@ impl QuotaLimiter {
         write_bandwidth: ReadableSize,
         read_bandwidth: ReadableSize,
         max_delay_duration: ReadableDuration,
+        support_auto_tune: bool,
+        auto_tune_enabled: bool,
     ) -> Self {
         let cputime_limiter = Limiter::builder(Self::speed_limit(cpu_quota as f64 * 1000_f64))
             .refill(CPU_LIMITER_REFILL_DURATION)
@@ -112,12 +121,16 @@ impl QuotaLimiter {
         let read_bandwidth_limiter = Limiter::new(Self::speed_limit(read_bandwidth.0 as f64));
 
         let max_delay_duration = AtomicU64::new(max_delay_duration.0.as_nanos() as u64);
+        let auto_tune_enabled = AtomicBool::new(auto_tune_enabled);
+        let support_auto_tune = AtomicBool::new(support_auto_tune);
 
         Self {
             cputime_limiter,
             write_bandwidth_limiter,
             read_bandwidth_limiter,
             max_delay_duration,
+            support_auto_tune,
+            auto_tune_enabled,
         }
     }
 
@@ -147,6 +160,15 @@ impl QuotaLimiter {
     pub fn set_max_delay_duration(&self, duration: ReadableDuration) {
         self.max_delay_duration
             .store(duration.0.as_nanos() as u64, Ordering::Relaxed);
+    }
+
+    pub fn set_auto_tune(&self, flag: bool) {
+        if self.support_auto_tune.load(Ordering::Relaxed) {
+            self.auto_tune_enabled.store(flag, Ordering::Relaxed);
+            debug!("quota_limiter auto tune is set";
+                   "value set to" => flag,
+            );
+        }
     }
 
     fn max_delay_duration(&self) -> Duration {
@@ -256,6 +278,8 @@ mod tests {
             ReadableSize::kb(1),
             ReadableSize::kb(1),
             ReadableDuration::millis(0),
+            false,
+            false,
         );
 
         let thread_start_time = ThreadTime::now();
