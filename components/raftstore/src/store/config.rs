@@ -630,6 +630,7 @@ impl Config {
             self.renew_leader_lease_advance_duration = self.raft_store_max_leader_lease / 4;
         }
 
+        #[cfg(not(any(test, feature = "testexport")))]
         if self.max_snapshot_file_raw_size.as_mb() < 100 {
             return Err(box_err!(
                 "max_snapshot_file_raw_size should be no less than 100MB."
