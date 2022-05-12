@@ -8,6 +8,18 @@ echo "profile is ${PROXY_PROFILE}"
 echo "engine is ${ENGINE_LABEL_VALUE}"
 echo "prometheus metric name prefix is ${PROMETHEUS_METRIC_NAME_PREFIX}"
 
+if [[ -n "${PROXY_FRAME_POINTER}" && "${PROXY_FRAME_POINTER}" != 0 ]]; then
+  echo "frame pointer is enabled"
+else
+  echo "frame pointer is disabled"
+fi
+
+if [[ -n "${PROXY_BUILD_STD}" && "${PROXY_BUILD_STD}" != 0 ]]; then
+  echo "rust build-std is enabled"
+else
+  echo "rust build-std is disabled"
+fi
+
 lib_suffix="so"
 if [[ $(uname -s) == "Darwin" ]]; then
   lib_suffix="dylib"

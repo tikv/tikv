@@ -34,6 +34,32 @@
 SHELL := bash
 ENABLE_FEATURES ?=
 
+# Frame pointer is enabled by default.
+#
+# If you want to disable frame-pointer, please manually set the environment
+# variable `PROXY_FRAME_POINTER=0 make` (this will cause CPU Profiling to get
+# only the top function and not the full call stack).
+ifndef PROXY_FRAME_POINTER
+export PROXY_FRAME_POINTER=1
+endif
+
+# The Rust standard library is recompiled by default. (The purpose is to enable
+# frame pointers in std)
+#
+# If you want to avoid recompiling the Rust standard library, please manually
+# set the environment variable `PROXY_BUILD_STD=0 make` (this will lose CPU
+# Profiling samples related to Rust std functions).
+ifndef PROXY_BUILD_STD
+export PROXY_BUILD_STD=1
+endif
+
+ifeq ($(PROXY_FRAME_POINTER),1)
+# Enable frame pointers for stable CPU Profiling.
+export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
+export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+endif
+
 # Pick an allocator
 ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
@@ -101,6 +127,7 @@ BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export PROXY_BUILD_TIME := $(shell date -u '+%Y-%m-%d %H:%M:%S')
 export PROXY_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export PROXY_BUILD_RUSTC_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }')
 export PROXY_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export PROXY_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
