@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -29,6 +29,12 @@ cloud-azure = [
 ]
 cloud-storage-grpc = ["backup/cloud-storage-grpc"]
 cloud-storage-dylib = ["backup/cloud-storage-dylib"]
+test-engine-kv-rocksdb = [
+  "tikv/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "tikv/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]
@@ -65,7 +71,7 @@ pd_client = { path = "../../components/pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raft-engine-ctl = "0.1.0"
+raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
 raft_log_engine = { path = "../../components/raft_log_engine", default-features = false }
 raftstore = { path = "../../components/raftstore", default-features = false }
 rand = "0.8"

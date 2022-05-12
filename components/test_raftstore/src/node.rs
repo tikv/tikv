@@ -9,6 +9,7 @@ use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt, Peekable};
 use kvproto::{
     kvrpcpb::ApiVersion,
@@ -46,7 +47,7 @@ use crate::Config;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>>,
+    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>>,
 }
 
 #[derive(Clone)]
@@ -146,7 +147,7 @@ type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient, RocksEngine, RocksEngine>>,
+    nodes: HashMap<u64, Node<TestPdClient, RocksEngine, RaftTestEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
     cfg_controller: Option<ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
@@ -175,7 +176,7 @@ impl NodeCluster {
     pub fn get_node_router(
         &self,
         node_id: u64,
-    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>> {
+    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>> {
         self.trans
             .core
             .lock()
@@ -200,7 +201,7 @@ impl NodeCluster {
     pub fn get_node(
         &mut self,
         node_id: u64,
-    ) -> Option<&mut Node<TestPdClient, RocksEngine, RocksEngine>> {
+    ) -> Option<&mut Node<TestPdClient, RocksEngine, RaftTestEngine>> {
         self.nodes.get_mut(&node_id)
     }
 
@@ -218,11 +219,11 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: Config,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        router: RaftRouter<RocksEngine, RaftTestEngine>,
+        system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -256,6 +257,7 @@ impl Simulator for NodeCluster {
                 .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
                 .max_total_size(cfg.server.snap_max_total_size.0)
                 .encryption_key_manager(key_manager)
+                .max_per_file_size(cfg.server.max_snapshot_file_raw_size.0)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
@@ -473,7 +475,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

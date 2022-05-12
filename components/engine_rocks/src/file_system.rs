@@ -56,7 +56,7 @@ mod tests {
     fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IORateLimiterStatistics>) {
         let limiter = Arc::new(IORateLimiter::new_for_test());
         let mut db_opts = DBOptions::new();
-        db_opts.add_event_listener(RocksEventListener::new("test_db"));
+        db_opts.add_event_listener(RocksEventListener::new("test_db", None));
         let env = get_env(None, Some(limiter.clone())).unwrap();
         db_opts.set_env(env);
         let mut cf_opts = ColumnFamilyOptions::new();

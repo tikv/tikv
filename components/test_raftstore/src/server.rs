@@ -13,6 +13,7 @@ use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
@@ -74,7 +75,7 @@ use txn_types::TxnExtraScheduler;
 use super::*;
 use crate::Config;
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
+type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>;
 type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver, RocksEngine>>;
 
@@ -115,11 +116,11 @@ impl StoreAddrResolver for AddressMap {
 }
 
 struct ServerMeta {
-    node: Node<TestPdClient, RocksEngine, RocksEngine>,
+    node: Node<TestPdClient, RocksEngine, RaftTestEngine>,
     server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    raw_router: RaftRouter<RocksEngine, RocksEngine>,
+    raw_router: RaftRouter<RocksEngine, RaftTestEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
     rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
@@ -243,11 +244,11 @@ impl ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: Config,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        router: RaftRouter<RocksEngine, RaftTestEngine>,
+        system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = test_util::temp_dir("test_cluster", cfg.prefer_mem);
@@ -277,11 +278,6 @@ impl ServerCluster {
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-        if ApiVersion::V2 == F::TAG {
-            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(&mut coprocessor_host);
-        }
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
@@ -345,6 +341,13 @@ impl ServerCluster {
             None
         };
 
+        if ApiVersion::V2 == F::TAG {
+            let causal_ts_provider =
+                Arc::new(causal_ts::SimpleTsoProvider::new(self.pd_client.clone()));
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(&mut coprocessor_host);
+        }
+
         // Start resource metering.
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
@@ -391,6 +394,7 @@ impl ServerCluster {
         };
         let import_service = ImportSstService::new(
             cfg.import.clone(),
+            cfg.raft_store.raft_entry_max_size,
             sim_router.clone(),
             engines.kv.clone(),
             Arc::clone(&importer),
@@ -406,6 +410,7 @@ impl ServerCluster {
             .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
             .max_total_size(cfg.server.snap_max_total_size.0)
             .encryption_key_manager(key_manager)
+            .max_per_file_size(cfg.server.max_snapshot_file_raw_size.0)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -578,11 +583,11 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         cfg: Config,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        router: RaftRouter<RocksEngine, RaftTestEngine>,
+        system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
@@ -698,7 +703,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }

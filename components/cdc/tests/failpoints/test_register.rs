@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{thread, time::Duration};
 
+use api_version::{test_kv_format_impl, KvFormat};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*, metapb::RegionEpoch};
@@ -13,8 +14,12 @@ use crate::{new_event_feed, TestSuite};
 
 #[test]
 fn test_failed_pending_batch() {
+    test_kv_format_impl!(test_failed_pending_batch_impl<ApiV1 ApiV2>);
+}
+
+fn test_failed_pending_batch_impl<F: KvFormat>() {
     // For test that a pending cmd batch contains a error like epoch not match.
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, F::TAG);
 
     let fp = "cdc_incremental_scan_start";
     fail::cfg(fp, "pause").unwrap();
@@ -25,7 +30,7 @@ fn test_failed_pending_batch() {
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     // Split region.
-    suite.cluster.must_split(&region, b"k0");
+    suite.cluster.must_split(&region, b"xk0");
     // Wait for receiving split cmd.
     sleep_ms(200);
     fail::remove(fp);
@@ -46,7 +51,7 @@ fn test_failed_pending_batch() {
         }
     }
     // Try to subscribe region again.
-    let region = suite.cluster.get_region(b"k0");
+    let region = suite.cluster.get_region(b"xk0");
     // Ensure it is the previous region.
     assert_eq!(req.get_region_id(), region.get_id());
     req.set_region_epoch(region.get_region_epoch().clone());
@@ -68,7 +73,11 @@ fn test_failed_pending_batch() {
 
 #[test]
 fn test_region_ready_after_deregister() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_region_ready_after_deregister_impl<ApiV1 ApiV2>);
+}
+
+fn test_region_ready_after_deregister_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
 
     let fp = "cdc_incremental_scan_start";
     fail::cfg(fp, "pause").unwrap();
@@ -100,12 +109,16 @@ fn test_region_ready_after_deregister() {
 
 #[test]
 fn test_connections_register() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_connections_register_impl<ApiV1 ApiV2>);
+}
+
+fn test_connections_register_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
 
     let fp = "cdc_incremental_scan_start";
     fail::cfg(fp, "pause").unwrap();
 
-    let (k, v) = ("key1".to_owned(), "value".to_owned());
+    let (k, v) = ("xkey1".to_owned(), "value".to_owned());
     // Region info
     let region = suite.cluster.get_region(&[]);
     // Prewrite
@@ -144,7 +157,7 @@ fn test_connections_register() {
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     event_feed_wrap.replace(Some(resp_rx));
     // Split region.
-    suite.cluster.must_split(&region, b"k0");
+    suite.cluster.must_split(&region, b"xk0");
     fail::remove(fp);
     // Receive events from conn 2
     // As split happens before remove the pause fail point, so it must receive
@@ -163,12 +176,16 @@ fn test_connections_register() {
 
 #[test]
 fn test_merge() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_merge_impl<ApiV1 ApiV2>);
+}
+
+fn test_merge_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
     // Split region
     let region = suite.cluster.get_region(&[]);
-    suite.cluster.must_split(&region, b"k1");
+    suite.cluster.must_split(&region, b"xk1");
     // Subscribe source region
-    let source = suite.cluster.get_region(b"k0");
+    let source = suite.cluster.get_region(b"xk0");
     let mut req = suite.new_changedata_request(region.get_id());
     req.region_id = source.get_id();
     req.set_region_epoch(source.get_region_epoch().clone());
@@ -176,7 +193,7 @@ fn test_merge() {
         new_event_feed(suite.get_region_cdc_client(source.get_id()));
     block_on(source_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     // Subscribe target region
-    let target = suite.cluster.get_region(b"k2");
+    let target = suite.cluster.get_region(b"xk2");
     req.region_id = target.get_id();
     req.set_region_epoch(target.get_region_epoch().clone());
     let (mut target_tx, target_wrap, target_event) =
@@ -265,8 +282,12 @@ fn test_merge() {
 }
 
 #[test]
-fn test_deregister_pending_downstream() {
-    let mut suite = TestSuite::new(1);
+fn est_connections_registertest_deregister_pending_downstream() {
+    test_kv_format_impl!(test_deregister_pending_downstream_impl<ApiV1 ApiV2>);
+}
+
+fn test_deregister_pending_downstream_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
 
     let build_resolver_fp = "before_schedule_resolver_ready";
     fail::cfg(build_resolver_fp, "pause").unwrap();
