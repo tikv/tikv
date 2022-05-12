@@ -25,7 +25,6 @@ use tikv::{
         TestStorageBuilderApiV1,
     },
 };
-use tikv_util::metrics::ThreadBuildWrapper;
 use tokio::runtime::{self, Runtime};
 use txn_types::{Key, TimeStamp};
 
@@ -94,8 +93,6 @@ impl TestSuite {
 
         let rt = runtime::Builder::new_multi_thread()
             .worker_threads(4)
-            .after_start_wrapper(|| {})
-            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
 

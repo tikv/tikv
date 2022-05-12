@@ -6,6 +6,7 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::{mpsc, Arc, RwLock},
+    thread,
     time::Duration,
 };
 
@@ -123,7 +124,7 @@ impl PluginRegistry {
             let fs_watcher = notify::watcher(tx, Duration::from_secs(3)).unwrap();
 
             let hot_reload_registry = self.inner.clone();
-            std::thread::spawn(move || {
+            thread::spawn(move || {
                 // Simple helper functions for loading/unloading plugins.
                 let maybe_load = |file: &PathBuf| {
                     let mut hot_reload_registry = hot_reload_registry.write().unwrap();

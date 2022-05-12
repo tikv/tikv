@@ -1095,7 +1095,7 @@ fn test_batch_commands() {
     block_on(sender.close()).unwrap();
 
     let (tx, rx) = mpsc::sync_channel(1);
-    std::thread::spawn(move || {
+    thread::spawn(move || {
         // We have send 10k requests to the server, so we should get 10k responses.
         let mut count = 0;
         for x in block_on(
@@ -1135,7 +1135,7 @@ fn test_empty_commands() {
     block_on(sender.close()).unwrap();
 
     let (tx, rx) = mpsc::sync_channel(1);
-    std::thread::spawn(move || {
+    thread::spawn(move || {
         // We have send 10k requests to the server, so we should get 10k responses.
         let mut count = 0;
         for x in block_on(
@@ -1710,7 +1710,7 @@ fn test_get_lock_wait_info_api() {
     ctx1.set_resource_group_tag(b"resource_group_tag1".to_vec());
     kv_pessimistic_lock_with_ttl(&client, ctx1, vec![b"a".to_vec()], 20, 20, false, 5000);
     let mut ctx2 = ctx.clone();
-    let handle = std::thread::spawn(move || {
+    let handle = thread::spawn(move || {
         ctx2.set_resource_group_tag(b"resource_group_tag2".to_vec());
         kv_pessimistic_lock_with_ttl(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false, 5000);
     });

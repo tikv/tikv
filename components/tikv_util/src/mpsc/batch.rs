@@ -363,7 +363,6 @@ mod tests {
     use tokio::runtime::Builder;
 
     use super::*;
-    use crate::metrics::ThreadBuildWrapper;
 
     #[test]
     fn test_receiver() {
@@ -373,8 +372,6 @@ mod tests {
         let msg_counter1 = Arc::clone(&msg_counter);
         let pool = Builder::new_multi_thread()
             .worker_threads(1)
-            .after_start_wrapper(|| {})
-            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         let _res = pool.spawn(rx.for_each(move |_| {
@@ -420,8 +417,6 @@ mod tests {
         let (nty, polled) = mpsc::sync_channel(1);
         let pool = Builder::new_multi_thread()
             .worker_threads(1)
-            .after_start_wrapper(|| {})
-            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         let _res = pool.spawn(

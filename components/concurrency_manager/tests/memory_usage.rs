@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::mem::{forget, ManuallyDrop};
+use std::{
+    mem::{forget, ManuallyDrop},
+    thread,
+};
 
 use concurrency_manager::ConcurrencyManager;
 use futures::executor::block_on;
@@ -30,7 +33,7 @@ fn test_memory_usage() {
     let mut ths = Vec::with_capacity(THR_NUM);
     for _ in 0..THR_NUM {
         let cm = cm.clone();
-        let th = std::thread::spawn(move || {
+        let th = thread::spawn(move || {
             for _ in 0..(LOCK_COUNT / THR_NUM) {
                 let mut raw = vec![0; KEY_LEN];
                 thread_rng().fill_bytes(&mut raw[..]);

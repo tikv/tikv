@@ -359,7 +359,7 @@ mod tests {
 
         let (tx1, rx1) = super::bounded::<u64>(10);
         let (tx2, rx2) = super::bounded::<u64>(0);
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             thread::sleep(Duration::from_millis(100));
             tx1.send(10).unwrap();
             thread::sleep(Duration::from_millis(100));
@@ -407,7 +407,7 @@ mod tests {
         );
 
         let (tx, rx) = super::unbounded::<u64>();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             thread::sleep(Duration::from_millis(100));
             tx.send(10).unwrap();
         });
@@ -487,7 +487,7 @@ mod tests {
         );
 
         let (tx, rx) = super::loose_bounded(10);
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             thread::sleep(Duration::from_millis(100));
             tx.try_send(10).unwrap();
         });

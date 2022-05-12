@@ -424,7 +424,7 @@ mod tests {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let r = block_on(future);
             sender.send(r).unwrap();
         });

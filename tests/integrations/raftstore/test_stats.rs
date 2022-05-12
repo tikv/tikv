@@ -2,6 +2,7 @@
 
 use std::{
     sync::{Arc, *},
+    thread,
     time::Duration,
 };
 
@@ -745,7 +746,7 @@ fn batch_commands(
     block_on(sender.close()).unwrap();
 
     let (tx, rx) = mpsc::sync_channel(1);
-    std::thread::spawn(move || {
+    thread::spawn(move || {
         // We have send 10k requests to the server, so we should get 10k responses.
         let mut count = 0;
         for x in block_on(

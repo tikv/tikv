@@ -112,7 +112,7 @@ mod tests {
         let worker = Worker::new("test-worker-threaded");
         let (tx, rx) = mpsc::channel();
         let scheduler = worker.start("test-worker", StepRunner { ch: tx });
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             scheduler.schedule(90).unwrap();
             scheduler.schedule(110).unwrap();
         });

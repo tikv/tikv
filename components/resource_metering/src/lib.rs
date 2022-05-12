@@ -322,7 +322,6 @@ impl TagInfos {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]

@@ -29,7 +29,7 @@ fn test_retry_rpc_client() {
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let m_mgr = mgr.clone();
     server.stop();
-    let child = std::thread::spawn(move || {
+    let child = thread::spawn(move || {
         let cfg = new_config(m_eps);
         assert_eq!(RpcClient::new(&cfg, None, m_mgr).is_ok(), true);
     });

@@ -291,7 +291,7 @@ fn do_test_no_resolved_ts_before_downstream_initialized(version: &str) {
         event_feeds.push(event_feed);
     }
 
-    let th = std::thread::spawn(move || {
+    let th = thread::spawn(move || {
         // The first downstream can receive timestamps but the second should receive nothing.
         let mut rx = event_feeds[0].replace(None).unwrap();
         assert!(recv_timeout(&mut rx, Duration::from_secs(1)).is_ok());

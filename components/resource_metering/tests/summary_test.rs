@@ -59,7 +59,7 @@ fn test_summary() {
     {
         let tf = resource_tag_factory.clone();
         let data_sink = data_sink.clone();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             {
                 let mut ctx = Context::default();
                 ctx.set_resource_group_tag(b"TAG-1".to_vec());
@@ -83,7 +83,7 @@ fn test_summary() {
     {
         let tf = resource_tag_factory.clone();
         let data_sink = data_sink.clone();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             {
                 let mut ctx = Context::default();
                 ctx.set_resource_group_tag(b"TAG-1".to_vec());
@@ -122,7 +122,7 @@ fn test_summary() {
     drop(reg_guard);
 
     // expect no data
-    std::thread::spawn(move || {
+    thread::spawn(move || {
         {
             let mut ctx = Context::default();
             ctx.set_resource_group_tag(b"TAG-1".to_vec());

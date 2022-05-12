@@ -356,7 +356,6 @@ mod tests {
     use std::sync::mpsc::sync_channel;
 
     use futures::{channel::mpsc, executor::block_on, SinkExt};
-    use tikv_util::metrics::ThreadBuildWrapper;
     use tokio::runtime;
 
     use super::*;
@@ -388,8 +387,6 @@ mod tests {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let rt = runtime::Builder::new_multi_thread()
             .worker_threads(4)
-            .after_start_wrapper(|| {})
-            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
 
@@ -423,8 +420,6 @@ mod tests {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let rt = runtime::Builder::new_multi_thread()
             .worker_threads(4)
-            .after_start_wrapper(|| {})
-            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
 
@@ -455,8 +450,6 @@ mod tests {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let rt = runtime::Builder::new_multi_thread()
             .worker_threads(4)
-            .after_start_wrapper(|| {})
-            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
 

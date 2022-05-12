@@ -1417,7 +1417,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
     req.set_for_update_ts(10);
     req.set_primary_lock(b"k1".to_vec());
     fail::cfg("txn_before_process_write", "pause").unwrap();
-    let res = std::thread::spawn(move || client2.kv_pessimistic_lock(&req).unwrap());
+    let res = thread::spawn(move || client2.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(150));
     cluster.merge_region(left.id, right.id, Callback::None);
     thread::sleep(Duration::from_millis(150));
@@ -1437,7 +1437,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
     req.set_for_update_ts(10);
     req.set_primary_lock(b"k11".to_vec());
     fail::cfg("txn_before_process_write", "pause").unwrap();
-    let res = std::thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    let res = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(200));
     fail::remove("txn_before_process_write");
     let resp = res.join().unwrap();
@@ -1508,17 +1508,17 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     fail::cfg("on_handle_apply", "pause").unwrap();
     let req2 = req.clone();
     let client2 = client.clone();
-    let resp = std::thread::spawn(move || client2.kv_prewrite(&req2).unwrap());
-    thread::sleep(Duration::from_millis(150));
+    let resp = thread::spawn(move || client2.kv_prewrite(&req2).unwrap());
+    thread::sleep(Duration::from_millis(500));
 
     // Then, start merging. PrepareMerge should wait until prewrite is done.
     cluster.merge_region(left.id, right.id, Callback::None);
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(Duration::from_millis(500));
     assert!(txn_ext.pessimistic_locks.read().is_writable());
 
     // But a later prewrite request should fail because we have already banned all later proposals.
     req.mut_mutations()[0].set_key(b"k1".to_vec());
-    let resp2 = std::thread::spawn(move || client.kv_prewrite(&req).unwrap());
+    let resp2 = thread::spawn(move || client.kv_prewrite(&req).unwrap());
 
     fail::remove("on_handle_apply");
     let resp = resp.join().unwrap();
@@ -1647,7 +1647,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
     fail::cfg("raft_propose", "pause").unwrap();
 
     cluster.merge_region(left.id, right.id, Callback::None);
-    thread::sleep(Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(500));
     assert_eq!(
         txn_ext.pessimistic_locks.read().status,
         LocksStatus::MergingRegion
@@ -1658,7 +1658,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
 
     // But after that, the pessimistic locks status should remain unchanged.
     for _ in 0..5 {
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(500));
         if txn_ext.pessimistic_locks.read().status == LocksStatus::Normal {
             return;
         }

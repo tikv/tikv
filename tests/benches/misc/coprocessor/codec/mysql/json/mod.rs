@@ -5,6 +5,7 @@ use std::{
     io,
     io::prelude::*,
     process::{Command, Stdio},
+    thread,
 };
 
 use test::Bencher;
@@ -25,7 +26,7 @@ fn download_and_extract_file(url: &str) -> io::Result<String> {
 
     let mut dl_output = dl_child.stdout.take().unwrap();
     let mut tar_input = tar_child.stdin.take().unwrap();
-    let th = std::thread::spawn(move || -> io::Result<()> {
+    let th = thread::spawn(move || -> io::Result<()> {
         let mut buf = vec![0; 4096];
         loop {
             let nbytes = dl_output.read(&mut buf)?;

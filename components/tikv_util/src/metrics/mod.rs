@@ -19,9 +19,7 @@ pub use self::process_linux::monitor_process;
 #[cfg(not(target_os = "linux"))]
 mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
-pub use self::threads_dummy::{
-    monitor_threads, std::thread::spawn, tokio_spawn_wrapper, ThreadInfoStatistics,
-};
+pub use self::threads_dummy::{monitor_threads, ThreadInfoStatistics};
 
 #[cfg(not(target_os = "linux"))]
 mod process_dummy;

@@ -456,7 +456,7 @@ fn test_pessimistic_lock_check_epoch() {
     req.set_for_update_ts(10);
     req.set_primary_lock(b"key".to_vec());
 
-    let lock_resp = std::thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    let lock_resp = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(300));
 
     // Transfer leader out and back, so the term should have changed.
@@ -508,7 +508,7 @@ fn test_pessimistic_lock_check_valid() {
     req.set_for_update_ts(10);
     req.set_primary_lock(b"key".to_vec());
 
-    let lock_resp = std::thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    let lock_resp = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(300));
     // Set `status` to `TransferringLeader` to make the locks table not writable,
     // but the region remains available to serve.

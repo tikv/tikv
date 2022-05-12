@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::mpsc::channel, usize};
+use std::{sync::mpsc::channel, thread, usize};
 
 use crossbeam::channel;
 use futures::{executor::block_on, stream::StreamExt};
@@ -11,7 +11,7 @@ use tikv_util::mpsc;
 fn bench_thread_channel(b: &mut Bencher) {
     let (tx, rx) = channel();
 
-    let t = std::thread::spawn(move || {
+    let t = thread::spawn(move || {
         let mut n2: usize = 0;
         loop {
             let n = rx.recv().unwrap();
@@ -37,7 +37,7 @@ fn bench_thread_channel(b: &mut Bencher) {
 fn bench_util_channel(b: &mut Bencher) {
     let (tx, rx) = mpsc::unbounded();
 
-    let t = std::thread::spawn(move || {
+    let t = thread::spawn(move || {
         let mut n2: usize = 0;
         loop {
             let n = rx.recv().unwrap();
@@ -63,7 +63,7 @@ fn bench_util_channel(b: &mut Bencher) {
 fn bench_util_loose(b: &mut Bencher) {
     let (tx, rx) = mpsc::loose_bounded(480_000);
 
-    let t = std::thread::spawn(move || {
+    let t = thread::spawn(move || {
         let mut n2: usize = 0;
         loop {
             let n = rx.recv().unwrap();
@@ -90,7 +90,7 @@ fn bench_util_loose(b: &mut Bencher) {
 fn bench_crossbeam_channel(b: &mut Bencher) {
     let (tx, rx) = channel::unbounded();
 
-    let t = std::thread::spawn(move || {
+    let t = thread::spawn(move || {
         let mut n2: usize = 0;
         loop {
             let n = rx.recv().unwrap();
@@ -117,7 +117,7 @@ fn bench_receiver_stream_batch(b: &mut Bencher) {
     let (tx, rx) = mpsc::batch::bounded::<i32>(128, 8);
     for _ in 0..1 {
         let tx1 = tx.clone();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             (0..usize::MAX)
                 .take_while(|i| tx1.send(*i as i32).is_ok())
                 .count();
@@ -154,7 +154,7 @@ fn bench_receiver_stream(b: &mut Bencher) {
     let (tx, rx) = mpsc::batch::bounded::<i32>(128, 1);
     for _ in 0..1 {
         let tx1 = tx.clone();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             (0..usize::MAX)
                 .take_while(|i| tx1.send(*i as i32).is_ok())
                 .count();

@@ -83,7 +83,7 @@ fn test_pd_client_deadlock() {
         thread::sleep(Duration::from_millis(200));
 
         let (tx, rx) = mpsc::channel();
-        let handle = std::thread::spawn(move || {
+        let handle = thread::spawn(move || {
             func();
             tx.send(()).unwrap();
         });
@@ -194,7 +194,7 @@ fn test_slow_periodical_update() {
     thread::sleep(Duration::from_millis(200));
 
     let (tx, rx) = mpsc::channel();
-    let handle = std::thread::spawn(move || {
+    let handle = thread::spawn(move || {
         client2.alloc_id().unwrap();
         tx.send(()).unwrap();
     });
