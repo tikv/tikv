@@ -275,3 +275,118 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
     fail::remove("worker_gc_raft_log_finished");
     fail::remove("raft_before_apply_snap_callback");
 }
+
+#[test]
+fn test_unsafe_recovery_demotion_reentrancy() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    configure_for_lease_read(&mut cluster, None, None);
+
+    // Makes the leadership definite.
+    let store2_peer = find_peer(&region, nodes[2]).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), store2_peer);
+
+    // Makes the group lose its quorum.
+    cluster.stop_node(nodes[1]);
+    cluster.stop_node(nodes[2]);
+    {
+        let put = new_put_cmd(b"k2", b"v2");
+        let req = new_request(
+            region.get_id(),
+            region.get_region_epoch().clone(),
+            vec![put],
+            true,
+        );
+        // marjority is lost, can't propose command successfully.
+        assert!(
+            cluster
+                .call_command_on_leader(req, Duration::from_millis(10))
+                .is_err()
+        );
+    }
+
+    cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
+
+    // Construct recovery plan.
+    let mut plan = pdpb::RecoveryPlan::default();
+
+    let to_be_removed: Vec<metapb::Peer> = region
+        .get_peers()
+        .iter()
+        .filter(|&peer| peer.get_store_id() != nodes[0])
+        .cloned()
+        .collect();
+    let mut demote = pdpb::DemoteFailedVoters::default();
+    demote.set_region_id(region.get_id());
+    demote.set_failed_voters(to_be_removed.into());
+    plan.mut_demotes().push(demote);
+
+    // Blocks the raft apply process on store 1 entirely .
+    let (apply_released_tx, apply_released_rx) = mpsc::bounded::<()>(1);
+    fail::cfg_callback("on_handle_apply_store_1", move || {
+        let _ = apply_released_rx.recv();
+    })
+    .unwrap();
+
+    // Triggers the unsafe recovery plan execution.
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan.clone());
+    cluster.must_send_store_heartbeat(nodes[0]);
+
+    // No store report is sent, since there are peers have unapplied entries.
+    for _ in 0..10 {
+        assert_eq!(pd_client.must_get_store_report(nodes[0]), None);
+        sleep_ms(100);
+    }
+
+    // Send the plan again.
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    cluster.must_send_store_heartbeat(nodes[0]);
+
+    // Unblocks the apply process.
+    drop(apply_released_tx);
+
+    // Store reports are sent once the entries are applied.
+    // let mut store_report = None;
+    // for _ in 0..20 {
+    //     store_report = pd_client.must_get_store_report(nodes[0]);
+    //     if store_report.is_some() {
+    //         break;
+    //     }
+    //     sleep_ms(100);
+    // }
+    // assert_ne!(store_report, None);
+    // let report = store_report.unwrap();
+    // let peer_reports = report.get_peer_reports();
+    // assert_eq!(peer_reports.len(), 1);
+    // let reported_region = peer_reports[0].get_region_state().get_region();
+    // assert_eq!(reported_region.get_id(), region.get_id());
+    // assert_eq!(reported_region.get_peers().len(), 3);
+    // let demoted = reported_region
+    //     .get_peers()
+    //     .iter()
+    //     .filter(|peer| peer.get_store_id() != nodes[0])
+    //     .all(|peer| peer.get_role() == metapb::PeerRole::Learner);
+    // assert_eq!(demoted, true);
+
+    let mut demoted = false;
+    for _ in 0..10 {
+        let region_in_pd = block_on(pd_client.get_region_by_id(region.get_id()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(region_in_pd.get_peers().len(), 3);
+        demoted = region_in_pd
+            .get_peers()
+            .iter()
+            .filter(|peer| peer.get_store_id() != nodes[0])
+            .all(|peer| peer.get_role() == metapb::PeerRole::Learner);
+        sleep_ms(100);
+    }
+    assert_eq!(demoted, true);
+    fail::remove("on_handle_apply_store_1");
+}

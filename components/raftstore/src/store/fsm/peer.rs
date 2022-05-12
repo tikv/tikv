@@ -748,18 +748,19 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if !self.fsm.peer.is_force_leader() {
-            error!(
-                "Unsafe recovery, demoting failed voters failed, since this peer is not forced leader";
-                "region_id" => self.region().get_id(),
-                "peer_id" => self.fsm.peer.peer.get_id(),
-            );
-            return;
-        }
-
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             warn!(
                 "Unsafe recovery, demote failed voters has already been initiated";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.fsm.peer.peer.get_id(),
+            );
+            syncer.abort();
+            return;
+        }
+
+        if !self.fsm.peer.is_force_leader() {
+            error!(
+                "Unsafe recovery, demoting failed voters failed, since this peer is not forced leader";
                 "region_id" => self.region().get_id(),
                 "peer_id" => self.fsm.peer.peer.get_id(),
             );
@@ -841,6 +842,15 @@ where
     }
 
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
+        if self.fsm.peer.unsafe_recovery_state.is_some() {
+            warn!(
+                "Unsafe recovery, can't destroy, another plan is executing in progress";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            syncer.abort();
+            return;
+        }
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Destroy(syncer));
         self.handle_destroy_peer(DestroyPeerJob {
             initialized: self.fsm.peer.is_initialized(),
@@ -850,6 +860,15 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
+        if self.fsm.peer.unsafe_recovery_state.is_some() {
+            warn!(
+                "Unsafe recovery, can't wait apply, another plan is executing in progress";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            syncer.abort();
+            return;
+        }
         let target_index = if self.fsm.peer.force_leader.is_some() {
             // For regions that lose quorum (or regions have force leader), whatever has been
             // proposed will be committed. Based on that fact, we simply use "last index" here to
@@ -1277,6 +1296,15 @@ where
             None => {}
         }
 
+        if !self.fsm.peer.is_initialized() {
+            warn!(
+                "Unsafe recovery, cannot force leader since this peer is not initialized";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
+        }
+
         let ticks = if self.fsm.peer.is_leader() {
             if self.fsm.hibernate_state.group_state() == GroupState::Ordered {
                 warn!(
@@ -1335,15 +1363,6 @@ where
                 GroupState::Chaos
             });
             self.fsm.has_ready = true;
-            return;
-        }
-
-        if !self.fsm.peer.is_initialized() {
-            warn!(
-                "Unsafe recovery, cannot force leader since this peer is not initialized";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
             return;
         }
 
@@ -1966,6 +1985,7 @@ where
                                 "Unsafe recovery, lost forced leadership after exiting joint state";
                                 "region" => ?self.region(),
                             );
+                            return;
                         }
                         let syncer_clone = syncer.clone();
                         let failed_voters_clone = failed_voters.clone();

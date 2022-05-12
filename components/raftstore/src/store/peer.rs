@@ -563,28 +563,53 @@ impl UnsafeRecoveryForceLeaderSyncer {
 }
 
 #[derive(Clone, Debug)]
-pub struct UnsafeRecoveryExecutePlanSyncer(Arc<InvokeClosureOnDrop>);
+pub struct UnsafeRecoveryExecutePlanSyncer {
+    _closure: Arc<InvokeClosureOnDrop>,
+    abort: Arc<Mutex<bool>>,
+}
 
 impl UnsafeRecoveryExecutePlanSyncer {
     pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
         let thread_safe_router = Mutex::new(router);
-        let inner = InvokeClosureOnDrop(Box::new(move || {
+        let abort = Arc::new(Mutex::new(false));
+        let abort_clone = abort.clone();
+        let closure = InvokeClosureOnDrop(Box::new(move || {
             info!("Unsafe recovery, plan execution finished");
+            if *abort_clone.lock().unwrap() {
+                warn!("Unsafe recovery, plan execution aborted");
+                return;
+            }
             let router_ptr = thread_safe_router.lock().unwrap();
             start_unsafe_recovery_report(&*router_ptr, report_id, true);
         }));
-        UnsafeRecoveryExecutePlanSyncer(Arc::new(inner))
+        UnsafeRecoveryExecutePlanSyncer {
+            _closure: Arc::new(closure),
+            abort,
+        }
+    }
+
+    pub fn abort(&self) {
+        *self.abort.lock().unwrap() = true;
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct UnsafeRecoveryWaitApplySyncer(Arc<InvokeClosureOnDrop>);
+pub struct UnsafeRecoveryWaitApplySyncer {
+    _closure: Arc<InvokeClosureOnDrop>,
+    abort: Arc<Mutex<bool>>,
+}
 
 impl UnsafeRecoveryWaitApplySyncer {
     pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
         let thread_safe_router = Mutex::new(router);
-        let inner = InvokeClosureOnDrop(Box::new(move || {
+        let abort = Arc::new(Mutex::new(false));
+        let abort_clone = abort.clone();
+        let closure = InvokeClosureOnDrop(Box::new(move || {
             info!("Unsafe recovery, wait apply finished");
+            if *abort_clone.lock().unwrap() {
+                warn!("Unsafe recovery, wait apply aborted");
+                return;
+            }
             let router_ptr = thread_safe_router.lock().unwrap();
             let fill_out_report =
                 UnsafeRecoveryFillOutReportSyncer::new(report_id, (*router_ptr).clone());
@@ -594,7 +619,14 @@ impl UnsafeRecoveryWaitApplySyncer {
                 ))
             });
         }));
-        UnsafeRecoveryWaitApplySyncer(Arc::new(inner))
+        UnsafeRecoveryWaitApplySyncer {
+            _closure: Arc::new(closure),
+            abort,
+        }
+    }
+
+    pub fn abort(&self) {
+        *self.abort.lock().unwrap() = true;
     }
 }
 

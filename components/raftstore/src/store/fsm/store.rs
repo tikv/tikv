@@ -2809,8 +2809,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .is_some()
         {
             panic!(
-                "Unsafe recovery, key conflicts while inserting region into store meta";
-                "region" => ?region,
+                "Unsafe recovery, key conflicts while inserting region {:?} into store meta",
+                region,
             );
         }
         drop(meta);
@@ -2820,9 +2820,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             &[Range::new(&start_key, &end_key)],
         ) {
             panic!(
-                "unsafe recovery, fail to clean up stale data while creating the new region";
-                "region" => ?region,
-                "err" => ?e,
+                "unsafe recovery, fail to clean up stale data while creating the new region {:?}, the error is {:?}",
+                region, e,
             );
         }
         let mut kv_wb = self.ctx.engines.kv.write_batch();
@@ -2830,17 +2829,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if let Err(e) = peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None)
         {
             panic!(
-                "Unsafe recovery, fail to add peer state into write batch";
-                "region" => ?region,
-                "err" => ?e,
+                "Unsafe recovery, fail to add peer state for {:?} into write batch, the error is {:?}",
+                region, e,
             );
         }
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         if let Err(e) = kv_wb.write_opt(&write_opts) {
-            panic!("Unsafe recovery, fail to write while creating peer";
-                "region" => ?region,
-                "err" => ?e,
+            panic!(
+                "Unsafe recovery, fail to write to disk while creating peer {:?}, the error is {:?}",
+                region, e,
             );
         }
         let mailbox = BasicMailbox::new(sender, peer, self.ctx.router.state_cnt().clone());
