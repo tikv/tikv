@@ -54,6 +54,8 @@
 # foreground-read-bandwidth = "0B"
 ## Limitation of max delay duration for each request, default value is 0 which means unlimited.
 # max-delay-duration = "500ms"
+## If quota auto tune is supported
+# support-auto-tune = false
 
 [log]
 ## Log levels: debug, info, warn, error, fatal.
