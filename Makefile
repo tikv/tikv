@@ -37,8 +37,8 @@ ENABLE_FEATURES ?=
 # Frame pointer is enabled by default.
 #
 # If you want to disable frame-pointer, please manually set the environment
-# variable `TIKV_FRAME_POINTER=0 make` (this will cause CPU Profiling to get only
-# the top function and not the full call stack).
+# variable `TIKV_FRAME_POINTER=0 make` (This will fallback to `libunwind`
+# based stack backtrace.).
 ifndef TIKV_FRAME_POINTER
 export TIKV_FRAME_POINTER=1
 endif
@@ -55,9 +55,12 @@ endif
 
 ifeq ($(TIKV_FRAME_POINTER),1)
 # Enable frame pointers for stable CPU Profiling.
+ENABLE_FEATURES += pprof-fp
 export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
 export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
 export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+else
+ENABLE_FEATURES += pprof-dwarf
 endif
 
 # Pick an allocator

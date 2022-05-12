@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure", "pprof-dwarf"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -53,6 +53,8 @@ test-engines-panic = [
 ]
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
+pprof-dwarf = ["pprof/backtrace-rs"]
+pprof-fp = ["pprof/frame-pointer"]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -123,7 +125,7 @@ paste = "1.0"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-pprof = { version = "^0.9", default-features = false, features = ["flamegraph", "frame-pointer", "protobuf-codec"] }
+pprof = { version = "^0.9", default-features = false, features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
