@@ -28,8 +28,8 @@ test-engines-panic = ["server/test-engines-panic"]
 
 nortcheck = ["server/nortcheck"]
 
-pprof-dwarf = ["server/pprof-dwarf"]
-pprof-fp = ["server/pprof-fp"]
+pprof-dwarf = ["tikv/pprof-dwarf"]
+pprof-fp = ["tikv/pprof-fp"]
 
 [dependencies]
 clap = "2.32"

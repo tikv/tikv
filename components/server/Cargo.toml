@@ -29,8 +29,6 @@ test-engines-rocksdb = [
 test-engines-panic = [
   "tikv/test-engines-panic",
 ]
-pprof-dwarf = ["tikv/pprof-dwarf"]
-pprof-fp = ["tikv/pprof-fp"]
 nortcheck = ["engine_rocks/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
