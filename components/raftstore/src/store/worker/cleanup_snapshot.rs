@@ -1,4 +1,4 @@
-// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{fmt, marker::PhantomData, ops::Deref};
 
@@ -73,7 +73,7 @@ where
             );
 
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
-            match Deref::deref(&self.router).send(region_id, gc_snap) {
+            match (*self.router).send(region_id, gc_snap) {
                 Ok(()) => Ok(()),
                 Err(TrySendError::Disconnected(_)) if self.router.is_shutdown() => Ok(()),
                 Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
