@@ -794,7 +794,7 @@ where
                     Some(UnsafeRecoveryState::DemoteFailedVoters {
                         syncer,
                         failed_voters,
-                        commit_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
+                        target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
                         demote_after_exit: true,
                     });
             }
@@ -833,7 +833,7 @@ where
                     Some(UnsafeRecoveryState::DemoteFailedVoters {
                         syncer,
                         failed_voters: vec![], // No longer needed since here.
-                        commit_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
+                        target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
                         demote_after_exit: false,
                     });
             }
@@ -1956,10 +1956,10 @@ where
             Some(UnsafeRecoveryState::DemoteFailedVoters {
                 syncer,
                 failed_voters,
-                commit_index,
+                target_index,
                 demote_after_exit,
             }) => {
-                if self.fsm.peer.raft_group.raft.raft_log.applied >= *commit_index {
+                if self.fsm.peer.raft_group.raft.raft_log.applied >= *target_index {
                     if *demote_after_exit {
                         if !self.fsm.peer.is_force_leader() {
                             error!(

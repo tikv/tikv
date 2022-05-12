@@ -702,10 +702,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
-                StoreMsg::UnsafeRecoveryCreatePeer {
-                    syncer: _,
-                    create,
-                } => {
+                StoreMsg::UnsafeRecoveryCreatePeer { syncer: _, create } => {
                     self.on_unsafe_recovery_create_peer(create);
                     // syncer's destruction triggers the next step.
                 }
@@ -2811,18 +2808,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .insert(region.get_id(), peer.peer.read_progress.clone())
                 .is_some()
         {
-            error!(
+            panic!(
                 "Unsafe recovery, key conflicts while inserting region into store meta";
                 "region" => ?region,
             );
-            return;
         }
         drop(meta);
+
         if let Err(e) = self.ctx.engines.kv.delete_all_in_range(
             DeleteStrategy::DeleteByKey,
             &[Range::new(&start_key, &end_key)],
         ) {
-            error!(
+            panic!(
                 "unsafe recovery, fail to clean up stale data while creating the new region";
                 "region" => ?region,
                 "err" => ?e,
@@ -2832,21 +2829,19 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         if let Err(e) = peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None)
         {
-            error!(
+            panic!(
                 "Unsafe recovery, fail to add peer state into write batch";
                 "region" => ?region,
                 "err" => ?e,
             );
-            return;
         }
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         if let Err(e) = kv_wb.write_opt(&write_opts) {
-            error!("Unsafe recovery, fail to write while creating peer";
+            panic!("Unsafe recovery, fail to write while creating peer";
                 "region" => ?region,
                 "err" => ?e,
             );
-            return;
         }
         let mailbox = BasicMailbox::new(sender, peer, self.ctx.router.state_cnt().clone());
         self.ctx.router.register(region.get_id(), mailbox);

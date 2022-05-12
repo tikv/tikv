@@ -638,9 +638,9 @@ impl UnsafeRecoveryFillOutReportSyncer {
 pub enum UnsafeRecoveryState {
     // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
     // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
-    // new entry or a snapshot, if the target index is met, the caller substract 1 from the task
-    // counter, whoever executes the last task is responsible for triggering the reporting logic by
-    // sending a store heartbeat message to store fsm.
+    // new entry or a snapshot, if the target index is met, this state is reset / droppeds. The
+    // syncer holds a reference counted inner object that is shared among all the peers, whose
+    // destructor triggers the next step of unsafe recovery report process.
     WaitApply {
         target_index: u64,
         syncer: UnsafeRecoveryWaitApplySyncer,
@@ -648,7 +648,7 @@ pub enum UnsafeRecoveryState {
     DemoteFailedVoters {
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
-        commit_index: u64,
+        target_index: u64,
         // Failed regions may be stuck in joint state, if that is the case, we need to ask the
         // region to exit joint state before proposing the demotion.
         demote_after_exit: bool,
