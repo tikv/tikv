@@ -53,3 +53,81 @@ impl TsTracker for CdcTsTracker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_subscribe_unsubscribe() {
+        let region_id1 = 1;
+        let region_id2 = 2;
+        let region_id3 = 3;
+
+        let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
+        let ts_tracker = CdcTsTracker::new(scheduler);
+
+        // subscribe region 1, 2
+        ts_tracker.subscribe_region(region_id1);
+        ts_tracker.subscribe_region(region_id2);
+        ts_tracker.track_ts(region_id1, 10.into());
+        ts_tracker.track_ts(region_id2, 11.into());
+        ts_tracker.track_ts(region_id3, 12.into());
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::TrackTs { region_id, .. } => {
+                assert_eq!(region_id, 1);
+            }
+            _ => panic!("unexpected task"),
+        };
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::TrackTs { region_id, .. } => {
+                assert_eq!(region_id, 2);
+            }
+            _ => panic!("unexpected task"),
+        };
+
+        // subscribe region 1, 2, 3
+        ts_tracker.subscribe_region(region_id3);
+        ts_tracker.track_ts(region_id1, 10.into());
+        ts_tracker.track_ts(region_id2, 11.into());
+        ts_tracker.track_ts(region_id3, 12.into());
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::TrackTs { region_id, .. } => {
+                assert_eq!(region_id, 1);
+            }
+            _ => panic!("unexpected task"),
+        };
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::TrackTs { region_id, .. } => {
+                assert_eq!(region_id, 2);
+            }
+            _ => panic!("unexpected task"),
+        };
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::TrackTs { region_id, .. } => {
+                assert_eq!(region_id, 3);
+            }
+            _ => panic!("unexpected task"),
+        };
+
+        // subscribe region 1, 3
+        ts_tracker.subscribe_region(region_id3);
+        ts_tracker.unsubscribe_region(region_id2);
+        ts_tracker.track_ts(region_id1, 10.into());
+        ts_tracker.track_ts(region_id2, 11.into());
+        ts_tracker.track_ts(region_id3, 12.into());
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::TrackTs { region_id, .. } => {
+                assert_eq!(region_id, 1);
+            }
+            _ => panic!("unexpected task"),
+        };
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::TrackTs { region_id, .. } => {
+                assert_eq!(region_id, 3);
+            }
+            _ => panic!("unexpected task"),
+        };
+    }
+}
