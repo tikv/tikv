@@ -2484,7 +2484,8 @@ mod tests {
 
     #[test]
     fn test_report_bucket_stats() {
-        let cases: &[((Vec<&[u8]>, _), (Vec<&[u8]>, _), _)] = &[
+        #[allow(clippy::type_complexity)]
+        let cases: &[((Vec<&[_]>, _), (Vec<&[_]>, _), _)] = &[
             (
                 (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![2, 2, 2, 2]),
                 (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
@@ -2509,12 +2510,12 @@ mod tests {
             let last_keys = &last.0;
 
             let mut cur_meta = BucketMeta::default();
-            cur_meta.keys = cur_keys.into_iter().map(|k| k.to_vec()).collect();
+            cur_meta.keys = cur_keys.iter().map(|k| k.to_vec()).collect();
             let mut cur_stats = new_bucket_stats(&cur_meta);
             cur_stats.set_read_qps(current.1.to_vec());
 
             let mut last_meta = BucketMeta::default();
-            last_meta.keys = last_keys.into_iter().map(|k| k.to_vec()).collect();
+            last_meta.keys = last_keys.iter().map(|k| k.to_vec()).collect();
             let mut last_stats = new_bucket_stats(&last_meta);
             last_stats.set_read_qps(last.1.to_vec());
             let mut bucket = ReportBucket {
