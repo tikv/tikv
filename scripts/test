@@ -27,6 +27,13 @@ export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib"
 export LOG_LEVEL=DEBUG
 export RUST_BACKTRACE=full
 
+# Why "${TIKV_ENABLE_FEATURES//pprof-fp/}" instead of "${TIKV_ENABLE_FEATURES}" ?
+#
+# We have enabled `pprof-fp` in the Makefile. Since `pprof-dwarf` and `pprof-fp` are
+# mutually exclusive features, and test/clippy does not use `--no-default-features`,
+# `pprof-fp` must be removed here to ensure compilation will not fail.
+#
+# We can remove this in the future, when pprof-rs allows `backtrace-rs` and `frame-pointer` to coexist.
 cargo test --workspace \
     --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-    --features "${TIKV_ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} "$@"
+    --features "${TIKV_ENABLE_FEATURES//pprof-fp/}" ${EXTRA_CARGO_ARGS} "$@"
