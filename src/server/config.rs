@@ -136,6 +136,7 @@ pub struct Config {
     pub end_point_perf_level: PerfLevel,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
+    pub max_snapshot_file_raw_size: ReadableSize,
     #[online_config(skip)]
     pub stats_concurrency: usize,
     #[online_config(skip)]
@@ -238,6 +239,7 @@ impl Default for Config {
             end_point_perf_level: PerfLevel::Uninitialized,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
+            max_snapshot_file_raw_size: ReadableSize(0),
             stats_concurrency: 1,
             // 75 means a gRPC thread is under heavy load if its total CPU usage
             // is greater than 75%.
