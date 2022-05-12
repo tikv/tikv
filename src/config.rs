@@ -2967,14 +2967,14 @@ impl TiKvConfig {
 
         // Raft log gc limit must be 75% region size at least;
         if self.raft_store.raft_log_gc_size_limit < self.coprocessor.region_split_size * 3 / 4 {
-            warn!(
+            info!(
                 "raft_log_gc_size_limit:{:?} < 75% * region_split_size:{:?}, adjust raft_log_gc_size_limit automatically",
                 self.raft_store.raft_log_gc_size_limit, self.coprocessor.region_split_size,
             );
             self.raft_store.raft_log_gc_size_limit = self.coprocessor.region_split_size * 3 / 4;
         }
         if self.raft_store.raft_log_gc_count_limit < self.coprocessor.region_split_keys * 3 / 4 {
-            warn!(
+            info!(
                 "raft_log_gc_count_limit:{} < 75% * region_split_keys:{}, adjust raft_log_gc_count_limit automatically",
                 self.raft_store.raft_log_gc_count_limit, self.coprocessor.region_split_keys,
             );
