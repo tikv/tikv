@@ -94,7 +94,7 @@ fn test_region_ready_after_deregister_impl<F: KvFormat>() {
     let leader = suite.cluster.leader_of_region(region.get_id()).unwrap();
     let mut context = ObserverContext::new(&region);
     suite
-        .cdc_obs
+        .obs
         .get(&leader.get_store_id())
         .unwrap()
         .on_role_change(&mut context, &RoleChange::new(StateRole::Follower));

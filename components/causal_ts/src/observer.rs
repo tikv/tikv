@@ -20,14 +20,14 @@ use crate::{CausalTsProvider, TsTracker};
 /// Should be used ONLY when API v2 is enabled.
 pub struct CausalObserver<Ts: CausalTsProvider, Cb: TsTracker> {
     causal_ts_provider: Arc<Ts>,
-    causal_barrier: Option<Cb>,
+    ts_tracker: Option<Cb>,
 }
 
 impl<Ts: CausalTsProvider, Cb: TsTracker> Clone for CausalObserver<Ts, Cb> {
     fn clone(&self) -> Self {
         Self {
             causal_ts_provider: self.causal_ts_provider.clone(),
-            causal_barrier: self.causal_barrier.clone(),
+            ts_tracker: self.ts_tracker.clone(),
         }
     }
 }
@@ -37,16 +37,13 @@ const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
 
 impl<Ts: CausalTsProvider + 'static, Cb: TsTracker + 'static> CausalObserver<Ts, Cb> {
     pub fn new(causal_ts_provider: Arc<Ts>) -> Self {
-        Self::new_with_causal_barrier(causal_ts_provider, None)
+        Self::new_with_ts_tracker(causal_ts_provider, None)
     }
 
-    pub fn new_with_causal_barrier(
-        causal_ts_provider: Arc<Ts>,
-        causal_barrier: Option<Cb>,
-    ) -> Self {
+    pub fn new_with_ts_tracker(causal_ts_provider: Arc<Ts>, ts_tracker: Option<Cb>) -> Self {
         Self {
             causal_ts_provider,
-            causal_barrier,
+            ts_tracker,
         }
     }
 
@@ -71,7 +68,7 @@ impl<Ts: CausalTsProvider, Cb: TsTracker> QueryObserver for CausalObserver<Ts, C
     ) -> coprocessor::Result<()> {
         let mut ts;
 
-        if let Some(causal_barrier) = self.causal_barrier.as_ref() {
+        if let Some(ts_tracker) = self.ts_tracker.as_ref() {
             let mut need_track = false;
             for req in requests.iter() {
                 if req.get_cmd_type() == CmdType::Put
@@ -85,7 +82,7 @@ impl<Ts: CausalTsProvider, Cb: TsTracker> QueryObserver for CausalObserver<Ts, C
                 ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
                     coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
                 })?);
-                causal_barrier.track_ts(ctx.region().id, ts.unwrap())
+                ts_tracker.track_ts(ctx.region().id, ts.unwrap())
             }
         }
 

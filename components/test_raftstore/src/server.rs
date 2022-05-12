@@ -138,6 +138,8 @@ pub struct ServerCluster {
     pub importers: HashMap<u64, Arc<SstImporter>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
+    pub causal_obs:
+        HashMap<u64, causal_ts::CausalObserver<causal_ts::SimpleTsoProvider, cdc::CdcTsTracker>>,
     pub health_services: HashMap<u64, HealthService>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
@@ -183,6 +185,7 @@ impl ServerCluster {
             snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
+            causal_obs: HashMap::default(),
             health_services: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
@@ -341,11 +344,13 @@ impl ServerCluster {
             None
         };
 
-        if ApiVersion::V2 == F::TAG {
+        if ApiVersion::V2 == F::TAG && !self.causal_obs.contains_key(&node_id) {
             let causal_ts_provider =
                 Arc::new(causal_ts::SimpleTsoProvider::new(self.pd_client.clone()));
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            let causal_ob =
+                causal_ts::CausalObserver::<_, cdc::CdcTsTracker>::new(causal_ts_provider);
             causal_ob.register_to(&mut coprocessor_host);
+            self.causal_obs.insert(node_id, causal_ob);
         }
 
         // Start resource metering.

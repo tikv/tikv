@@ -26,6 +26,7 @@ test-engines-panic = [
 api_version = { path = "../api_version" }
 backtrace = "0.3"
 causal_ts = { path = "../causal_ts" }
+cdc = { path = "../cdc" }
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 crossbeam = "0.8"

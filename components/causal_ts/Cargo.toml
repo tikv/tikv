@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 api_version = { path = "../api_version", default-features = false }
+collections = { path = "../collections" }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
@@ -25,7 +26,6 @@ thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }
-collections = { path = "../collections" }
 
 [dev-dependencies]
 test_raftstore = { path = "../test_raftstore", default-features = false }

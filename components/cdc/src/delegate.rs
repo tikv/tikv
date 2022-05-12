@@ -255,11 +255,7 @@ pub struct Delegate {
 
 impl Delegate {
     /// Create a Delegate the given region.
-    pub fn new(
-        region_id: u64,
-        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-        api_version: ApiVersion,
-    ) -> Delegate {
+    pub fn new(region_id: u64, txn_extra_op: Arc<AtomicCell<TxnExtraOp>>) -> Delegate {
         Delegate {
             region_id,
             handle: ObserveHandle::new(),
@@ -276,19 +272,12 @@ impl Delegate {
         }
     }
 
-    pub fn has_resolver(&self) -> bool {
-        self.has_resolver
-    }
-
     /// Let downstream subscribe the delegate.
     /// Return error if subscribe fails and the `Delegate` won't be changed.
     pub fn subscribe(&mut self, downstream: Downstream) -> Result<()> {
         if self.region.is_some() {
             // Check if the downstream is out dated.
             self.check_epoch_on_ready(&downstream)?;
-        }
-        if downstream.kv_api == ChangeDataRequestKvApi::TiDb {
-            self.has_resolver = true;
         }
         self.add_downstream(downstream);
         Ok(())
@@ -796,7 +785,7 @@ impl Delegate {
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
         rawkv_max_ts: &mut u64,
     ) -> Result<()> {
-        let key_mode = ApiV2::parse_key_mode(put.get_key());
+        if ApiV2::parse_key_mode(put.get_key()) == KeyMode::Raw {
             self.sink_raw_put(put, raw_rows, rawkv_max_ts)
         } else {
             self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
@@ -806,7 +795,7 @@ impl Delegate {
     fn sink_raw_put(
         &mut self,
         mut put: PutRequest,
-        rows: &mut HashMap<Vec<u8>, EventRow>,
+        rows: &mut Vec<EventRow>,
         rawkv_max_ts: &mut u64,
     ) -> Result<()> {
         let mut row = EventRow::default();
@@ -1179,7 +1168,7 @@ mod tests {
             ChangeDataRequestKvApi::TiDb,
         );
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id, Default::default(), ApiVersion::V2);
+        let mut delegate = Delegate::new(region_id, Default::default());
         delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
         let resolver = TxnKvResolver::new(region_id);
@@ -1303,7 +1292,7 @@ mod tests {
 
         // Create a new delegate.
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, txn_extra_op.clone(), ApiVersion::V2);
+        let mut delegate = Delegate::new(1, txn_extra_op.clone());
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(delegate.handle.is_observing());
 

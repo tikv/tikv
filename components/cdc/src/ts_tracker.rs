@@ -4,8 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use causal_ts::TsTracker;
 use collections::HashMap;
-use tikv_util::warn;
-use tikv_util::worker::Scheduler;
+use tikv_util::{warn, worker::Scheduler};
 use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
@@ -56,8 +55,9 @@ impl TsTracker for CdcTsTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use super::*;
 
     #[test]
     fn test_subscribe_unsubscribe() {

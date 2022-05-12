@@ -7,9 +7,8 @@ use crossbeam::atomic::AtomicCell;
 use engine_rocks::{ReadPerfContext, ReadPerfInstant, PROP_MAX_TS};
 use engine_traits::{
     IterOptions, KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection,
-    TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE,
+    TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
 };
-
 use fail::fail_point;
 use keys::{data_end_key, data_key};
 use kvproto::{
@@ -25,7 +24,7 @@ use raftstore::{
         msg::{Callback, ReadResponse, SignificantMsg},
     },
 };
-use resolved_ts::Resolver;
+use resolved_ts::Resolver as TxnKvResolver;
 use tikv::storage::{
     kv::Snapshot,
     mvcc::{DeltaScanner, ScannerBuilder},
@@ -50,7 +49,7 @@ use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
 use crate::{
     channel::CdcEvent,
     delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState},
-    endpoint::Deregister,
+    endpoint::{Deregister, Resolver},
     metrics::*,
     old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors},
     service::ConnID,
@@ -64,16 +63,6 @@ struct ScanStat {
     disk_read: Option<usize>,
     // Perf delta for RocksDB.
     perf_delta: ReadPerfContext,
-}
-
-pub(crate) enum KvEntry {
-    TxnEntry(TxnEntry),
-    RawKvEntry(KvPair),
-}
-
-pub(crate) enum Scanner<S: Snapshot> {
-    TxnKvScanner(DeltaScanner<S>),
-    RawKvScanner(RawMvccIterator<<S as Snapshot>::Iter>),
 }
 
 pub(crate) enum KvEntry {
@@ -271,7 +260,6 @@ impl<E: KvEngine> Initializer<E> {
             curr_state,
             DownstreamState::Initializing | DownstreamState::Stopped
         ));
-
 
         let on_cancel = || -> Result<()> {
             info!("cdc async incremental scan canceled";

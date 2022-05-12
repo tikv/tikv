@@ -300,7 +300,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
     rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(
         suite
-            .cdc_obs
+            .obs
             .get(&leader.get_store_id())
             .unwrap()
             .is_subscribed(1)
@@ -327,7 +327,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
     }
     assert!(
         suite
-            .cdc_obs
+            .obs
             .get(&leader.get_store_id())
             .unwrap()
             .is_subscribed(1)
@@ -361,7 +361,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
     }
     assert!(
         suite
-            .cdc_obs
+            .obs
             .get(&leader.get_store_id())
             .unwrap()
             .is_subscribed(1)
@@ -1421,7 +1421,7 @@ fn test_cdc_rawkv_resolve_ts() {
     suite.set_tso(100);
 
     let (k, v) = (b"rkey1".to_vec(), b"value".to_vec());
-    suite.must_kv_raw_v2(1, k, v);
+    suite.must_kv_put(1, k, v);
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
@@ -1451,7 +1451,7 @@ fn test_cdc_rawkv_resolve_ts() {
 
     suite.set_tso(200);
     let (k, v) = (b"rkey2".to_vec(), b"value".to_vec());
-    suite.must_kv_raw_v2(1, k, v);
+    suite.must_kv_put(1, k, v);
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {

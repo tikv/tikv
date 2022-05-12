@@ -132,7 +132,7 @@ impl TestSuiteBuilder {
         let count = cluster.count;
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
-        let mut cdc_obs = HashMap::default();
+        let mut obs = HashMap::default();
         let mut ts_trackers = HashMap::default();
         let mut concurrency_managers = HashMap::default();
         // Hack! node id are generated from 1..count+1.
@@ -159,11 +159,27 @@ impl TestSuiteBuilder {
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             let ts_tracker = cdc::CdcTsTracker::new(scheduler.clone());
-            cdc_obs.insert(id, cdc_ob.clone());
+            let mut causal_ob = None;
+
             ts_trackers.insert(id, ts_tracker.clone());
+            if cluster.cfg.storage.api_version() == ApiVersion::V2 {
+                let causal_ts_provider =
+                    Arc::new(causal_ts::SimpleTsoProvider::new(cluster.pd_client.clone()));
+                let new_causal_ob = causal_ts::CausalObserver::new_with_ts_tracker(
+                    causal_ts_provider,
+                    Some(ts_tracker),
+                );
+                sim.causal_obs.insert(id, new_causal_ob.clone());
+                causal_ob = Some(new_causal_ob);
+            }
+
+            obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
                     cdc_ob.register_to(host);
+                    if causal_ob.is_some() {
+                        causal_ob.as_ref().unwrap().register_to(host);
+                    }
                 },
             ));
 
@@ -174,7 +190,7 @@ impl TestSuiteBuilder {
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);
-            let cdc_ob = cdc_obs.get(id).unwrap().clone();
+            let cdc_ob = obs.get(id).unwrap().clone();
             let ts_tracker = ts_trackers.get(id).unwrap().clone();
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
@@ -206,7 +222,7 @@ impl TestSuiteBuilder {
         TestSuite {
             cluster,
             endpoints,
-            cdc_obs,
+            obs,
             concurrency_managers,
             env: Arc::new(Environment::new(1)),
             tikv_cli: HashMap::default(),
@@ -218,7 +234,7 @@ impl TestSuiteBuilder {
 pub struct TestSuite {
     pub cluster: Cluster<ServerCluster>,
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
-    pub cdc_obs: HashMap<u64, CdcObserver>,
+    pub obs: HashMap<u64, CdcObserver>,
     tikv_cli: HashMap<u64, TikvClient>,
     cdc_cli: HashMap<u64, ChangeDataClient>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,

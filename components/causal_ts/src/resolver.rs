@@ -1,8 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::{cmp, cmp::Reverse, collections::BinaryHeap};
 
 use txn_types::TimeStamp;
 

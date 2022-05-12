@@ -780,7 +780,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             let causal_ts_provider = Arc::new(tso.unwrap());
             info!("Causal timestamp provider startup.");
 
-            let causal_ob = causal_ts::CausalObserver::new_with_causal_barrier(
+            let causal_ob = causal_ts::CausalObserver::new_with_ts_tracker(
                 causal_ts_provider,
                 Some(cdc_ts_tracker.clone()),
             );

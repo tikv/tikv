@@ -712,7 +712,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             HashMapEntry::Occupied(e) => e.into_mut(),
             HashMapEntry::Vacant(e) => {
                 is_new_delegate = true;
-                e.insert(Delegate::new(region_id, txn_extra_op, self.api_version))
+                e.insert(Delegate::new(region_id, txn_extra_op))
             }
         };
 
