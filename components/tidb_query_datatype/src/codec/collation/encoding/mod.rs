@@ -4,13 +4,14 @@ mod ascii;
 mod gbk;
 mod utf8;
 
+use std::str;
+
 pub use ascii::*;
 pub use gbk::*;
 pub use utf8::*;
 
-use std::str;
-
 use super::Encoding;
-use crate::codec::data_type::{Bytes, BytesRef};
-use crate::codec::Error;
-use crate::codec::Result;
+use crate::codec::{
+    data_type::{Bytes, BytesRef},
+    Error, Result,
+};

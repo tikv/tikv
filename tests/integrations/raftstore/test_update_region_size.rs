@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::{thread, time};
+use std::{sync::Arc, thread, time};
 
 use engine_traits::MiscExt;
 use pd_client::PdClient;
@@ -58,7 +57,7 @@ fn test_update_region_size<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = pd_client.get_region(b"").unwrap();
     cluster.must_split(&region, b"k2000");
 
-    thread::sleep(time::Duration::from_millis(300));
+    thread::sleep(time::Duration::from_millis(500));
     let region_id = cluster.get_region_id(b"");
     let old_region_size = cluster
         .pd_client
@@ -67,7 +66,7 @@ fn test_update_region_size<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.compact_data();
 
-    thread::sleep(time::Duration::from_millis(300));
+    thread::sleep(time::Duration::from_millis(500));
     let new_region_size = cluster
         .pd_client
         .get_region_approximate_size(region_id)

@@ -2,21 +2,15 @@
 
 use std::sync::Arc;
 
-use criterion::black_box;
-use criterion::measurement::Measurement;
-
-use tipb::Aggregation;
-use tipb::Expr;
-
+use criterion::{black_box, measurement::Measurement};
 use tidb_query_datatype::expr::EvalConfig;
-use tidb_query_executors::interface::*;
-use tidb_query_executors::BatchFastHashAggregationExecutor;
-use tidb_query_executors::BatchSlowHashAggregationExecutor;
+use tidb_query_executors::{
+    interface::*, BatchFastHashAggregationExecutor, BatchSlowHashAggregationExecutor,
+};
 use tikv::storage::Statistics;
+use tipb::{Aggregation, Expr};
 
-use crate::util::bencher::Bencher;
-
-use crate::util::FixtureBuilder;
+use crate::util::{bencher::Bencher, FixtureBuilder};
 
 pub trait HashAggrBencher<M>
 where

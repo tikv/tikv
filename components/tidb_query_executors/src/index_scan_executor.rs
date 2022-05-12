@@ -2,29 +2,32 @@
 
 use std::sync::Arc;
 
+use codec::{number::NumberCodec, prelude::NumberDecoder};
+use itertools::izip;
 use kvproto::coprocessor::KeyRange;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::ColumnInfo;
-use tipb::FieldType;
-use tipb::IndexScan;
+use tidb_query_common::{
+    storage::{IntervalRange, Storage},
+    Result,
+};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        collation::collator::PADDING_SPACE,
+        datum,
+        datum::DatumDecoder,
+        row::v2::{decode_v2_u64, RowSlice, V1CompatibleEncoder},
+        table,
+        table::{check_index_key, INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN},
+        Datum,
+    },
+    expr::{EvalConfig, EvalContext},
+    EvalType, FieldTypeAccessor,
+};
+use tipb::{ColumnInfo, FieldType, IndexScan};
+use DecodeHandleStrategy::*;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
-use codec::number::NumberCodec;
-use codec::prelude::NumberDecoder;
-use itertools::izip;
-use tidb_query_common::storage::{IntervalRange, Storage};
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::row::v2::{decode_v2_u64, RowSlice, V1CompatibleEncoder};
-use tidb_query_datatype::codec::table::{
-    check_index_key, INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN,
-};
-use tidb_query_datatype::codec::{datum, datum::DatumDecoder, table, Datum};
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-
-use tidb_query_datatype::codec::collation::collator::PADDING_SPACE;
-use DecodeHandleStrategy::*;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
@@ -851,24 +854,24 @@ impl IndexScanExecutorImpl {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::sync::Arc;
 
     use codec::prelude::NumberEncoder;
     use kvproto::coprocessor::KeyRange;
-    use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_common::{storage::test_fixture::FixtureStorage, util::convert_to_prefix_next};
+    use tidb_query_datatype::{
+        codec::{
+            data_type::*,
+            datum,
+            row::v2::encoder_for_test::{Column, RowEncoder},
+            table, Datum,
+        },
+        expr::EvalConfig,
+        Collation, FieldTypeAccessor, FieldTypeTp,
+    };
     use tipb::ColumnInfo;
 
-    use tidb_query_common::storage::test_fixture::FixtureStorage;
-    use tidb_query_common::util::convert_to_prefix_next;
-    use tidb_query_datatype::codec::data_type::*;
-    use tidb_query_datatype::codec::{
-        datum,
-        row::v2::encoder_for_test::{Column, RowEncoder},
-        table, Datum,
-    };
-    use tidb_query_datatype::expr::EvalConfig;
+    use super::*;
 
     #[test]
     fn test_basic() {

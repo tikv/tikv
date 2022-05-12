@@ -1,13 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Types for storage related errors and associated helper methods.
-use std::error::Error as StdError;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
+use std::{
+    error::Error as StdError,
+    fmt::{self, Debug, Display, Formatter},
+    io::Error as IoError,
+};
 
-use kvproto::kvrpcpb::ApiVersion;
-use kvproto::{errorpb, kvrpcpb};
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
+use tikv_util::deadline::DeadlineError;
+use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
     kv::{self, Error as KvError, ErrorInner as KvErrorInner},
@@ -15,9 +19,6 @@ use crate::storage::{
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     CommandKind, Result,
 };
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use tikv_util::deadline::DeadlineError;
-use txn_types::{KvPair, TimeStamp};
 
 #[derive(Debug, Error)]
 /// Detailed errors for storage operations. This enum also unifies code for basic error

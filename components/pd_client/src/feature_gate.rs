@@ -1,8 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+
 use semver::{SemVerError, Version};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
 /// The function assumes only major, minor and patch are considered, and they are
 /// all less than u16::MAX, which is 65535.

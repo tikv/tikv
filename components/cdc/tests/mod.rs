@@ -1,27 +1,29 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::*;
-use std::time::Duration;
+use std::{sync::*, time::Duration};
 
+use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use grpcio::{ChannelBuilder, Environment};
-use grpcio::{ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver};
-use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest};
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::TikvClient;
+use grpcio::{
+    ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver, Environment,
+};
+use kvproto::{
+    cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
+    kvrpcpb::*,
+    tikvpb::TikvClient,
+};
 use online_config::OnlineConfig;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
-use tikv::config::CdcConfig;
-use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv_util::config::ReadableDuration;
-use tikv_util::worker::{LazyWorker, Runnable};
-use tikv_util::HandyRwLock;
+use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID};
+use tikv_util::{
+    config::ReadableDuration,
+    worker::{LazyWorker, Runnable},
+    HandyRwLock,
+};
 use txn_types::TimeStamp;
-
-use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -288,11 +290,9 @@ impl TestSuite {
         );
     }
 
-    pub fn must_kv_raw_v2(&mut self, region_id: u64, key: Vec<u8>, value: Vec<u8>) {
+    pub fn must_kv_put(&mut self, region_id: u64, key: Vec<u8>, value: Vec<u8>) {
         let mut rawkv_req = RawPutRequest::default();
-        let mut context = self.get_context(region_id);
-        context.set_api_version(ApiVersion::V2);
-        rawkv_req.set_context(context);
+        rawkv_req.set_context(self.get_context(region_id));
         rawkv_req.set_key(key);
         rawkv_req.set_value(value);
         rawkv_req.set_ttl(u64::MAX);
@@ -458,10 +458,12 @@ impl TestSuite {
     pub fn get_context(&mut self, region_id: u64) -> Context {
         let epoch = self.cluster.get_region_epoch(region_id);
         let leader = self.cluster.leader_of_region(region_id).unwrap();
+        let api_version = self.cluster.cfg.storage.api_version();
         let mut context = Context::default();
         context.set_region_id(region_id);
         context.set_peer(leader);
         context.set_region_epoch(epoch);
+        context.set_api_version(api_version);
         context
     }
 

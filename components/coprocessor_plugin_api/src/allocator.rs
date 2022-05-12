@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use atomic::{Atomic, Ordering};
 use std::alloc::{GlobalAlloc, Layout};
+
+use atomic::{Atomic, Ordering};
 
 type AllocFn = unsafe fn(Layout) -> *mut u8;
 type DeallocFn = unsafe fn(*mut u8, Layout);

@@ -13,6 +13,7 @@
 //!
 //! - RocksEngine from engine_rocks
 //! - PanicEngine from engine_panic
+//! - RaftLogEngine from raft_log_engine
 //!
 //! TiKV uses two different storage engine instances,
 //! the "raft" engine, for storing consensus data,
@@ -24,15 +25,16 @@
 //! The engine for each module is chosen at compile time with feature flags:
 //!
 //! - `--features test-engine-kv-rocksdb`
-//! - `--features test-engine-raft-rocksdb`
 //! - `--features test-engine-kv-panic`
+//! - `--features test-engine-raft-rocksdb`
 //! - `--features test-engine-raft-panic`
+//! - `--features test-engine-raft-raft-engine`
 //!
 //! By default, the `tikv` crate turns on `test-engine-kv-rocksdb`,
-//! and `test-engine-raft-rocksdb`. This behavior can be disabled
+//! and `test-engine-raft-raft-engine`. This behavior can be disabled
 //! with `--disable-default-features`.
 //!
-//! The `tikv` crate additionally provides two feature flags that
+//! The `tikv` crate additionally provides some feature flags that
 //! contral both the `kv` and `raft` engines at the same time:
 //!
 //! - `--features test-engines-rocksdb`
@@ -55,58 +57,36 @@
 
 /// Types and constructors for the "raft" engine
 pub mod raft {
-    use crate::ctor::{CFOptions, DBOptions, EngineConstructorExt};
-    use engine_traits::Result;
-
     #[cfg(feature = "test-engine-raft-panic")]
-    pub use engine_panic::{
-        PanicEngine as RaftTestEngine, PanicEngineIterator as RaftTestEngineIterator,
-        PanicSnapshot as RaftTestSnapshot, PanicWriteBatch as RaftTestWriteBatch,
-    };
-
+    pub use engine_panic::PanicEngine as RaftTestEngine;
     #[cfg(feature = "test-engine-raft-rocksdb")]
-    pub use engine_rocks::{
-        RocksEngine as RaftTestEngine, RocksEngineIterator as RaftTestEngineIterator,
-        RocksSnapshot as RaftTestSnapshot, RocksWriteBatch as RaftTestWriteBatch,
-    };
+    pub use engine_rocks::RocksEngine as RaftTestEngine;
+    use engine_traits::Result;
+    #[cfg(feature = "test-engine-raft-raft-engine")]
+    pub use raft_log_engine::RaftLogEngine as RaftTestEngine;
 
-    pub fn new_engine(
-        path: &str,
-        db_opt: Option<DBOptions>,
-        cf: &str,
-        opt: Option<CFOptions<'_>>,
-    ) -> Result<RaftTestEngine> {
-        let cfs = &[cf];
-        let opts = opt.map(|o| vec![o]);
-        RaftTestEngine::new_engine(path, db_opt, cfs, opts)
-    }
+    use crate::ctor::{RaftDBOptions, RaftEngineConstructorExt};
 
-    pub fn new_engine_opt(
-        path: &str,
-        db_opt: DBOptions,
-        cf_opt: CFOptions<'_>,
-    ) -> Result<RaftTestEngine> {
-        let cfs_opts = vec![cf_opt];
-        RaftTestEngine::new_engine_opt(path, db_opt, cfs_opts)
+    pub fn new_engine(path: &str, db_opt: Option<RaftDBOptions>) -> Result<RaftTestEngine> {
+        RaftTestEngine::new_raft_engine(path, db_opt)
     }
 }
 
 /// Types and constructors for the "kv" engine
 pub mod kv {
-    use crate::ctor::{CFOptions, DBOptions, EngineConstructorExt};
-    use engine_traits::Result;
-
     #[cfg(feature = "test-engine-kv-panic")]
     pub use engine_panic::{
         PanicEngine as KvTestEngine, PanicEngineIterator as KvTestEngineIterator,
         PanicSnapshot as KvTestSnapshot, PanicWriteBatch as KvTestWriteBatch,
     };
-
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
         RocksSnapshot as KvTestSnapshot, RocksWriteBatch as KvTestWriteBatch,
     };
+    use engine_traits::Result;
+
+    use crate::ctor::{CFOptions, DBOptions, KvEngineConstructorExt};
 
     pub fn new_engine(
         path: &str,
@@ -114,7 +94,7 @@ pub mod kv {
         cfs: &[&str],
         opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<KvTestEngine> {
-        KvTestEngine::new_engine(path, db_opt, cfs, opts)
+        KvTestEngine::new_kv_engine(path, db_opt, cfs, opts)
     }
 
     pub fn new_engine_opt(
@@ -122,12 +102,12 @@ pub mod kv {
         db_opt: DBOptions,
         cfs_opts: Vec<CFOptions<'_>>,
     ) -> Result<KvTestEngine> {
-        KvTestEngine::new_engine_opt(path, db_opt, cfs_opts)
+        KvTestEngine::new_kv_engine_opt(path, db_opt, cfs_opts)
     }
 }
 
 /// Create a storage engine with a concrete type. This should ultimately be the
-/// only module within TiKv that needs to know about concrete engines. Other
+/// only module within TiKV that needs to know about concrete engines. Other
 /// code only uses the `engine_traits` abstractions.
 ///
 /// At the moment this has a lot of open-coding of engine-specific
@@ -137,9 +117,13 @@ pub mod kv {
 /// This module itself is intended to be extracted from this crate into its own
 /// crate, once the requirements for engine construction are better understood.
 pub mod ctor {
-    use engine_traits::Result;
+    use std::sync::Arc;
 
-    /// Engine construction
+    use encryption::DataKeyManager;
+    use engine_traits::Result;
+    use file_system::IORateLimiter;
+
+    /// Kv engine construction
     ///
     /// For simplicity, all engine constructors are expected to configure every
     /// engine such that all of TiKV and its tests work correctly, for the
@@ -147,8 +131,8 @@ pub mod ctor {
     ///
     /// Specifically, this means that RocksDB constructors should set up
     /// all properties collectors, always.
-    pub trait EngineConstructorExt: Sized {
-        /// Create a new engine with either:
+    pub trait KvEngineConstructorExt: Sized {
+        /// Create a new kv engine with either:
         ///
         /// - The column families specified as `cfs`, with default options, or
         /// - The column families specified as `opts`, with options.
@@ -157,7 +141,7 @@ pub mod ctor {
         ///
         /// The engine stores its data in the `path` directory.
         /// If that directory does not exist, then it is created.
-        fn new_engine(
+        fn new_kv_engine(
             path: &str,
             db_opt: Option<DBOptions>,
             cfs: &[&str],
@@ -168,41 +152,36 @@ pub mod ctor {
         ///
         /// The engine stores its data in the `path` directory.
         /// If that directory does not exist, then it is created.
-        fn new_engine_opt(
+        fn new_kv_engine_opt(
             path: &str,
             db_opt: DBOptions,
             cfs_opts: Vec<CFOptions<'_>>,
         ) -> Result<Self>;
     }
 
-    #[derive(Clone)]
-    pub enum CryptoOptions {
-        None,
-        DefaultCtrEncryptedEnv(Vec<u8>),
+    /// Raft engine construction
+    pub trait RaftEngineConstructorExt: Sized {
+        /// Create a new raft engine.
+        fn new_raft_engine(path: &str, db_opt: Option<RaftDBOptions>) -> Result<Self>;
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Default)]
     pub struct DBOptions {
-        encryption: CryptoOptions,
+        key_manager: Option<Arc<DataKeyManager>>,
+        rate_limiter: Option<Arc<IORateLimiter>>,
     }
 
     impl DBOptions {
-        pub fn new() -> DBOptions {
-            DBOptions {
-                encryption: CryptoOptions::None,
-            }
+        pub fn set_key_manager(&mut self, key_manager: Option<Arc<DataKeyManager>>) {
+            self.key_manager = key_manager;
         }
 
-        pub fn with_default_ctr_encrypted_env(&mut self, ciphertext: Vec<u8>) {
-            self.encryption = CryptoOptions::DefaultCtrEncryptedEnv(ciphertext);
+        pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IORateLimiter>>) {
+            self.rate_limiter = rate_limiter;
         }
     }
 
-    impl Default for DBOptions {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
+    pub type RaftDBOptions = DBOptions;
 
     pub struct CFOptions<'a> {
         pub cf: &'a str,
@@ -308,12 +287,13 @@ pub mod ctor {
     }
 
     mod panic {
-        use super::{CFOptions, DBOptions, EngineConstructorExt};
         use engine_panic::PanicEngine;
         use engine_traits::Result;
 
-        impl EngineConstructorExt for engine_panic::PanicEngine {
-            fn new_engine(
+        use super::{CFOptions, DBOptions, KvEngineConstructorExt, RaftEngineConstructorExt};
+
+        impl KvEngineConstructorExt for engine_panic::PanicEngine {
+            fn new_kv_engine(
                 _path: &str,
                 _db_opt: Option<DBOptions>,
                 _cfs: &[&str],
@@ -322,7 +302,7 @@ pub mod ctor {
                 Ok(PanicEngine)
             }
 
-            fn new_engine_opt(
+            fn new_kv_engine_opt(
                 _path: &str,
                 _db_opt: DBOptions,
                 _cfs_opts: Vec<CFOptions<'_>>,
@@ -330,30 +310,38 @@ pub mod ctor {
                 Ok(PanicEngine)
             }
         }
+
+        impl RaftEngineConstructorExt for engine_panic::PanicEngine {
+            fn new_raft_engine(_path: &str, _db_opt: Option<DBOptions>) -> Result<Self> {
+                Ok(PanicEngine)
+            }
+        }
     }
 
     mod rocks {
-        use super::{
-            CFOptions, ColumnFamilyOptions, CryptoOptions, DBOptions, EngineConstructorExt,
+        use engine_rocks::{
+            get_env,
+            properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
+            raw::{
+                ColumnFamilyOptions as RawRocksColumnFamilyOptions, DBOptions as RawRocksDBOptions,
+            },
+            util::{
+                new_engine as rocks_new_engine, new_engine_opt as rocks_new_engine_opt,
+                RocksCFOptions,
+            },
+            RocksColumnFamilyOptions, RocksDBOptions,
         };
-
         use engine_traits::{ColumnFamilyOptions as ColumnFamilyOptionsTrait, Result};
 
-        use engine_rocks::properties::{
-            MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+        use super::{
+            CFOptions, ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftDBOptions,
+            RaftEngineConstructorExt,
         };
-        use engine_rocks::raw::ColumnFamilyOptions as RawRocksColumnFamilyOptions;
-        use engine_rocks::raw::{DBOptions as RawRocksDBOptions, Env};
-        use engine_rocks::util::{
-            new_engine as rocks_new_engine, new_engine_opt as rocks_new_engine_opt, RocksCFOptions,
-        };
-        use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
-        use std::sync::Arc;
 
-        impl EngineConstructorExt for engine_rocks::RocksEngine {
+        impl KvEngineConstructorExt for engine_rocks::RocksEngine {
             // FIXME this is duplicating behavior from engine_rocks::raw_util in order to
             // call set_standard_cf_opts.
-            fn new_engine(
+            fn new_kv_engine(
                 path: &str,
                 db_opt: Option<DBOptions>,
                 cfs: &[&str],
@@ -385,7 +373,7 @@ pub mod ctor {
                 rocks_new_engine(path, rocks_db_opts, &[], Some(rocks_cfs_opts))
             }
 
-            fn new_engine_opt(
+            fn new_kv_engine_opt(
                 path: &str,
                 db_opt: DBOptions,
                 cfs_opts: Vec<CFOptions<'_>>,
@@ -401,6 +389,21 @@ pub mod ctor {
                     })
                     .collect();
                 rocks_new_engine_opt(path, rocks_db_opts, rocks_cfs_opts)
+            }
+        }
+
+        impl RaftEngineConstructorExt for engine_rocks::RocksEngine {
+            fn new_raft_engine(path: &str, db_opt: Option<RaftDBOptions>) -> Result<Self> {
+                let rocks_db_opts = match db_opt {
+                    Some(db_opt) => Some(get_rocks_db_opts(db_opt)?),
+                    None => None,
+                };
+                let cf_opts = CFOptions::new(engine_traits::CF_DEFAULT, ColumnFamilyOptions::new());
+                let mut rocks_cf_opts = RocksColumnFamilyOptions::new();
+                set_standard_cf_opts(rocks_cf_opts.as_raw_mut(), &cf_opts.options);
+                set_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
+                let default_cfs_opts = vec![RocksCFOptions::new(cf_opts.cf, rocks_cf_opts)];
+                rocks_new_engine(path, rocks_db_opts, &[], Some(default_cfs_opts))
             }
         }
 
@@ -441,15 +444,29 @@ pub mod ctor {
 
         fn get_rocks_db_opts(db_opts: DBOptions) -> Result<RocksDBOptions> {
             let mut rocks_db_opts = RawRocksDBOptions::new();
-            match db_opts.encryption {
-                CryptoOptions::None => (),
-                CryptoOptions::DefaultCtrEncryptedEnv(ciphertext) => {
-                    let env = Arc::new(Env::new_default_ctr_encrypted_env(&ciphertext)?);
-                    rocks_db_opts.set_env(env);
-                }
-            }
+            let env = get_env(db_opts.key_manager.clone(), db_opts.rate_limiter)?;
+            rocks_db_opts.set_env(env);
             let rocks_db_opts = RocksDBOptions::from_raw(rocks_db_opts);
             Ok(rocks_db_opts)
+        }
+    }
+
+    mod raft_engine {
+        use engine_traits::Result;
+        use raft_log_engine::{RaftEngineConfig, RaftLogEngine};
+
+        use super::{RaftDBOptions, RaftEngineConstructorExt};
+
+        impl RaftEngineConstructorExt for raft_log_engine::RaftLogEngine {
+            fn new_raft_engine(path: &str, db_opts: Option<RaftDBOptions>) -> Result<Self> {
+                let mut config = RaftEngineConfig::default();
+                config.dir = path.to_owned();
+                RaftLogEngine::new(
+                    config,
+                    db_opts.as_ref().and_then(|opts| opts.key_manager.clone()),
+                    db_opts.and_then(|opts| opts.rate_limiter),
+                )
+            }
         }
     }
 }
@@ -469,12 +486,6 @@ pub fn new_temp_engine(
             None,
         )
         .unwrap(),
-        crate::raft::new_engine(
-            raft_path.to_str().unwrap(),
-            None,
-            engine_traits::CF_DEFAULT,
-            None,
-        )
-        .unwrap(),
+        crate::raft::new_engine(raft_path.to_str().unwrap(), None).unwrap(),
     )
 }

@@ -6,6 +6,14 @@
 //! handling of the commands is similar. We therefore have a single type (Prewriter) to handle both
 //! kinds of prewrite.
 
+use std::mem;
+
+use engine_traits::CF_WRITE;
+use kvproto::kvrpcpb::{AssertionLevel, ExtraOp};
+use tikv_kv::SnapshotExt;
+use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
+
+use super::ReaderWithStats;
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
@@ -24,13 +32,6 @@ use crate::storage::{
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
-use engine_traits::CF_WRITE;
-use kvproto::kvrpcpb::{AssertionLevel, ExtraOp};
-use std::mem;
-use tikv_kv::SnapshotExt;
-use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
-
-use super::ReaderWithStats;
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -791,19 +792,29 @@ pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
 
 #[cfg(test)]
 mod tests {
+    use concurrency_manager::ConcurrencyManager;
+    use engine_rocks::ReadPerfInstant;
+    use engine_traits::CF_WRITE;
+    use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
+    use txn_types::{Key, Mutation, TimeStamp};
+
     use super::*;
-    use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
-    use crate::storage::txn::actions::tests::{
-        must_pessimistic_prewrite_put_async_commit, must_prewrite_delete, must_prewrite_put,
-        must_prewrite_put_async_commit,
-    };
-    use crate::storage::txn::commands::check_txn_status::tests::must_success as must_check_txn_status;
     use crate::storage::{
         mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{
-            commands::test_util::prewrite_command,
-            commands::test_util::{
-                commit, pessimistic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
+            actions::{
+                acquire_pessimistic_lock::tests::must_pessimistic_locked,
+                tests::{
+                    must_pessimistic_prewrite_put_async_commit, must_prewrite_delete,
+                    must_prewrite_put, must_prewrite_put_async_commit,
+                },
+            },
+            commands::{
+                check_txn_status::tests::must_success as must_check_txn_status,
+                test_util::{
+                    commit, pessimistic_prewrite_with_cm, prewrite, prewrite_command,
+                    prewrite_with_cm, rollback,
+                },
             },
             tests::{
                 must_acquire_pessimistic_lock, must_acquire_pessimistic_lock_err, must_commit,
@@ -814,10 +825,6 @@ mod tests {
         types::TxnStatus,
         DummyLockManager, Engine, Snapshot, Statistics, TestEngineBuilder,
     };
-    use concurrency_manager::ConcurrencyManager;
-    use engine_traits::CF_WRITE;
-    use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
-    use txn_types::{Key, Mutation, TimeStamp};
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
         let mut mutations = Vec::default();
@@ -939,9 +946,9 @@ mod tests {
 
     #[test]
     fn test_prewrite_skip_too_many_tombstone() {
-        use crate::server::gc_worker::gc_by_compact;
-        use crate::storage::kv::PerfStatisticsInstant;
         use engine_rocks::{set_perf_level, PerfLevel};
+
+        use crate::server::gc_worker::gc_by_compact;
         let mut mutations = Vec::default();
         let pri_key_number = 0;
         let pri_key = &[pri_key_number];
@@ -969,7 +976,7 @@ mod tests {
         // seek write cf.
         gc_by_compact(&engine, pri_key, 101);
         set_perf_level(PerfLevel::EnableTimeExceptForMutex);
-        let perf = PerfStatisticsInstant::new();
+        let perf = ReadPerfInstant::new();
         let mut statistic = Statistics::default();
         while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
             mutations.pop();
@@ -985,7 +992,7 @@ mod tests {
         .unwrap();
         let d = perf.delta();
         assert_eq!(1, statistic.write.seek);
-        assert_eq!(d.0.internal_delete_skipped_count, 0);
+        assert_eq!(d.internal_delete_skipped_count, 0);
     }
 
     #[test]
@@ -1344,10 +1351,11 @@ mod tests {
 
     #[test]
     fn test_out_of_sync_max_ts() {
-        use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
         use engine_test::kv::KvTestEngineIterator;
         use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
+
+        use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
         #[derive(Clone)]
         struct MockSnapshot;
 

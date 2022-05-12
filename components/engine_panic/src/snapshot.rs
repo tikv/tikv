@@ -1,11 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::db_vector::PanicDBVector;
-use crate::engine::PanicEngine;
+use std::ops::Deref;
+
 use engine_traits::{
     IterOptions, Iterable, Iterator, Peekable, ReadOptions, Result, SeekKey, Snapshot,
 };
-use std::ops::Deref;
+
+use crate::{db_vector::PanicDBVector, engine::PanicEngine};
 
 #[derive(Clone, Debug)]
 pub struct PanicSnapshot;

@@ -1,28 +1,31 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::encoded::RawEncodeSnapshot;
-use super::raw_mvcc::RawMvccSnapshot;
+use std::{marker::PhantomData, time::Duration};
 
-use crate::storage::kv::Result;
-use crate::storage::kv::{Cursor, ScanMode, Snapshot};
-use crate::storage::Statistics;
-
-use api_version::{ApiV1Ttl, ApiV2};
+use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::{ApiVersion, KeyRange};
-use std::time::Duration;
 use tikv_util::time::Instant;
 use txn_types::{Key, KvPair};
 use yatp::task::future::reschedule;
+
+use super::{encoded::RawEncodeSnapshot, raw_mvcc::RawMvccSnapshot};
+use crate::{
+    coprocessor::checksum_crc64_xor,
+    storage::{
+        kv::{Cursor, Result, ScanMode, Snapshot},
+        Statistics,
+    },
+};
 
 const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
 const MAX_BATCH_SIZE: usize = 1024;
 
 // TODO: refactor to utilize generic type `KvFormat` and eliminate matching `api_version`.
 pub enum RawStore<S: Snapshot> {
-    V1(RawStoreInner<S>),
-    V1Ttl(RawStoreInner<RawEncodeSnapshot<S, ApiV1Ttl>>),
-    V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, ApiV2>>),
+    V1(RawStoreInner<S, ApiV1>),
+    V1Ttl(RawStoreInner<RawEncodeSnapshot<S, ApiV1Ttl>, ApiV1Ttl>),
+    V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, ApiV2>, ApiV2>),
 }
 
 impl<'a, S: Snapshot> RawStore<S> {
@@ -148,13 +151,17 @@ impl<'a, S: Snapshot> RawStore<S> {
     }
 }
 
-pub struct RawStoreInner<S: Snapshot> {
+pub struct RawStoreInner<S: Snapshot, F: KvFormat> {
     snapshot: S,
+    _phantom: PhantomData<F>,
 }
 
-impl<'a, S: Snapshot> RawStoreInner<S> {
+impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
     pub fn new(snapshot: S) -> Self {
-        RawStoreInner { snapshot }
+        RawStoreInner {
+            snapshot,
+            _phantom: PhantomData,
+        }
     }
 
     pub fn raw_get_key_value(
@@ -287,7 +294,8 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
     ) -> Result<(u64, u64, u64)> {
         let mut total_bytes = 0;
         let mut total_kvs = 0;
-        let mut digest = crc64fast::Digest::new();
+        let digest = crc64fast::Digest::new();
+        let mut checksum: u64 = 0;
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
         for r in ranges {
@@ -307,16 +315,17 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     }
                     row_count = 0;
                 }
-                let k = cursor.key(cf_stats);
+                // Calculate checksum on user key, as timestamp is not visible on client side.
                 let v = cursor.value(cf_stats);
-                digest.write(k);
-                digest.write(v);
+                let (raw_key, _) =
+                    F::decode_raw_key_owned(Key::from_encoded_slice(cursor.key(cf_stats)), true)?;
+                checksum = checksum_crc64_xor(checksum, digest.clone(), &raw_key, v);
                 total_kvs += 1;
-                total_bytes += k.len() + v.len();
+                total_bytes += raw_key.len() + v.len();
                 cursor.next(cf_stats);
             }
             statistics.push(stats);
         }
-        Ok((digest.sum64(), total_kvs, total_bytes as u64))
+        Ok((checksum, total_kvs, total_bytes as u64))
     }
 }

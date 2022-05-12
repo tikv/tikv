@@ -13,8 +13,7 @@ use external_storage_export::{
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
 use kvproto::brpb::{AzureBlobStorage, Bucket, CloudDynamic, Gcs, StorageBackend, S3};
-use structopt::clap::arg_enum;
-use structopt::StructOpt;
+use structopt::{clap::arg_enum, StructOpt};
 use tikv_util::stream::block_on_external_io;
 use tokio::runtime::Runtime;
 

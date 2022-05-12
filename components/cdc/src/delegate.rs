@@ -1,39 +1,47 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::mem;
-use std::string::String;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    mem,
+    string::String,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use causal_ts::Resolver as RawKvResolver;
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
-use kvproto::cdcpb::{
-    ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
-    EventRowOpType, Event_oneof_event,
+use kvproto::{
+    cdcpb::{
+        ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
+        EventRowOpType, Event_oneof_event,
+    },
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb::{Region, RegionEpoch},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
+    },
 };
-use kvproto::kvrpcpb::ApiVersion;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{Region, RegionEpoch};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
+use raftstore::{
+    coprocessor::{Cmd, CmdBatch, ObserveHandle},
+    store::util::compare_region_epoch,
+    Error as RaftStoreError,
 };
-use raftstore::coprocessor::{Cmd, CmdBatch, ObserveHandle};
-use raftstore::store::util::compare_region_epoch;
-use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver as TxnKvResolver;
-use tikv::storage::txn::TxnEntry;
-use tikv::storage::Statistics;
+use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
-use crate::channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES};
-use crate::initializer::KvEntry;
-use crate::metrics::*;
-use crate::old_value::{OldValueCache, OldValueCallback};
-use crate::service::ConnID;
-use crate::{Error, Result};
+use crate::{
+    channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
+    initializer::KvEntry,
+    metrics::*,
+    old_value::{OldValueCache, OldValueCallback},
+    service::ConnID,
+    Error, Result,
+};
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -243,7 +251,6 @@ pub struct Delegate {
     failed: bool,
 
     id_map: HashMap<DownstreamID, ChangeDataRequestKvApi>,
-    api_version: ApiVersion,
 }
 
 impl Delegate {
@@ -266,8 +273,11 @@ impl Delegate {
             txn_extra_op,
             failed: false,
             id_map: HashMap::default(),
-            api_version,
         }
+    }
+
+    pub fn has_resolver(&self) -> bool {
+        self.has_resolver
     }
 
     /// Let downstream subscribe the delegate.
@@ -276,6 +286,9 @@ impl Delegate {
         if self.region.is_some() {
             // Check if the downstream is out dated.
             self.check_epoch_on_ready(&downstream)?;
+        }
+        if downstream.kv_api == ChangeDataRequestKvApi::TiDb {
+            self.has_resolver = true;
         }
         self.add_downstream(downstream);
         Ok(())
@@ -566,7 +579,7 @@ impl Delegate {
         region_id: u64,
         request_id: u64,
         entries: Vec<Option<KvEntry>>,
-    ) -> Vec<CdcEvent> {
+    ) -> Result<Vec<CdcEvent>> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
@@ -574,8 +587,7 @@ impl Delegate {
             match entry {
                 Some(KvEntry::RawKvEntry(kv_pair)) => {
                     let mut row = EventRow::default();
-                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row);
-
+                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row)?;
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                         rows.push(Vec::with_capacity(entries_len));
@@ -651,7 +663,8 @@ impl Delegate {
             }
         }
 
-        rows.into_iter()
+        let rows = rows
+            .into_iter()
             .filter(|rs| !rs.is_empty())
             .map(|rs| {
                 let event_entries = EventEntries {
@@ -665,7 +678,8 @@ impl Delegate {
                     ..Default::default()
                 })
             })
-            .collect()
+            .collect();
+        Ok(rows)
     }
 
     fn sink_data(
@@ -687,7 +701,7 @@ impl Delegate {
 
         let mut rawkv_max_ts: u64 = 0;
         let mut txn_rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
-        let mut raw_rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
+        let mut raw_rows: Vec<EventRow> = Vec::new();
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => {
@@ -712,7 +726,11 @@ impl Delegate {
         }
 
         if !txn_rows.is_empty() {
-            self.sink_downstream(txn_rows, index, ChangeDataRequestKvApi::TiDb)?;
+            let mut rows = Vec::with_capacity(txn_rows.len());
+            for (_, v) in txn_rows {
+                rows.push(v);
+            }
+            self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
         }
 
         if !raw_rows.is_empty() {
@@ -734,14 +752,10 @@ impl Delegate {
 
     fn sink_downstream(
         &mut self,
-        rows: HashMap<Vec<u8>, EventRow>,
+        entries: Vec<EventRow>,
         index: u64,
         kv_api: ChangeDataRequestKvApi,
     ) -> Result<()> {
-        let mut entries = Vec::with_capacity(rows.len());
-        for (_, v) in rows {
-            entries.push(v);
-        }
         let event_entries = EventEntries {
             entries: entries.into(),
             ..Default::default()
@@ -753,7 +767,9 @@ impl Delegate {
             ..Default::default()
         };
         let send = move |downstream: &Downstream| {
-            // No ready downstream or a dowsream that does not match the kv_api type, will be ignored.
+            // No ready downstream or a downstream that does not match the kv_api type, will be ignored.
+            // There will be one region that contains both Txn & Raw entries.
+            // The judgement here is for sending entries to downstreams with correct kv_api.
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
             }
@@ -776,12 +792,11 @@ impl Delegate {
         put: PutRequest,
         is_one_pc: bool,
         txn_rows: &mut HashMap<Vec<u8>, EventRow>,
-        raw_rows: &mut HashMap<Vec<u8>, EventRow>,
+        raw_rows: &mut Vec<EventRow>,
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
         rawkv_max_ts: &mut u64,
     ) -> Result<()> {
         let key_mode = ApiV2::parse_key_mode(put.get_key());
-        if self.api_version == ApiVersion::V2 && key_mode == KeyMode::Raw {
             self.sink_raw_put(put, raw_rows, rawkv_max_ts)
         } else {
             self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
@@ -795,21 +810,14 @@ impl Delegate {
         rawkv_max_ts: &mut u64,
     ) -> Result<()> {
         let mut row = EventRow::default();
-        decode_rawkv(put.take_key(), put.take_value(), &mut row);
+        decode_rawkv(put.take_key(), put.take_value(), &mut row)?;
 
         if row.commit_ts > *rawkv_max_ts {
             *rawkv_max_ts = row.commit_ts;
         }
 
-        match rows.get_mut(&row.key) {
-            Some(row_with_value) => {
-                row.value = mem::take(&mut row_with_value.value);
-                *row_with_value = row;
-            }
-            None => {
-                rows.insert(row.key.clone(), row);
-            }
-        }
+        rows.push(row);
+
         Ok(())
     }
 
@@ -1111,9 +1119,9 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     false
 }
 
-fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
-    let (decoded_key, ts) = ApiV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
-    let decoded_value = ApiV2::decode_raw_value_owned(value).unwrap();
+fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) -> Result<()> {
+    let (decoded_key, ts) = ApiV2::decode_raw_key_owned(Key::from_encoded(key), true)?;
+    let decoded_value = ApiV2::decode_raw_value_owned(value)?;
 
     row.start_ts = ts.unwrap().into_inner();
     row.commit_ts = row.start_ts;
@@ -1130,6 +1138,7 @@ fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
         row.op_type = EventRowOpType::Put;
     }
     set_event_row_type(row, EventLogType::Committed);
+    Ok(())
 }
 
 fn decode_default(value: Vec<u8>, row: &mut EventRow) {
@@ -1140,13 +1149,13 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use api_version::RawValue;
-    use futures::executor::block_on;
-    use futures::stream::StreamExt;
-    use kvproto::errorpb::Error as ErrorHeader;
-    use kvproto::metapb::Region;
     use std::cell::Cell;
+
+    use api_version::RawValue;
+    use futures::{executor::block_on, stream::StreamExt};
+    use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
+
+    use super::*;
 
     #[test]
     fn test_error() {
@@ -1384,9 +1393,9 @@ mod tests {
                 is_delete,
             };
             let encoded_value = ApiV2::encode_raw_value_owned(raw_value);
-            decode_rawkv(key_with_ts, encoded_value, &mut row);
-
+            decode_rawkv(key_with_ts, encoded_value, &mut row).unwrap();
             assert_eq!(row.start_ts, start_ts);
+            assert_eq!(row.commit_ts, start_ts);
             assert_eq!(row.key, key);
             assert_eq!(row.value, value);
 

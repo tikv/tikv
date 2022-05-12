@@ -1,17 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{sync::Arc, thread, time::Duration};
 
 use engine_traits::CF_LOCK;
 use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
-
 use raftstore::store::LocksStatus;
 use test_raftstore::*;
-use tikv::storage::kv::{SnapContext, SnapshotExt};
-use tikv::storage::{Engine, Snapshot};
+use tikv::storage::{
+    kv::{SnapContext, SnapshotExt},
+    Engine, Snapshot,
+};
 use tikv_util::config::*;
 use txn_types::{Key, PessimisticLock};
 

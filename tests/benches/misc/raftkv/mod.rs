@@ -3,26 +3,30 @@
 use std::sync::Arc;
 
 use crossbeam::channel::TrySendError;
-use engine_rocks::raw::DB;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{raw::DB, RocksEngine, RocksSnapshot};
 use engine_traits::{ALL_CFS, CF_DEFAULT};
-use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp};
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
-use kvproto::raft_serverpb::RaftMessage;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter};
-use raftstore::store::{
-    cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter,
-    RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, SignificantRouter,
-    StoreMsg, StoreRouter, WriteResponse,
+use kvproto::{
+    kvrpcpb::{Context, ExtraOp as TxnExtraOp},
+    metapb::Region,
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response},
+    raft_serverpb::RaftMessage,
 };
-use raftstore::Result;
+use raftstore::{
+    router::{LocalReadRouter, RaftStoreRouter},
+    store::{
+        cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter,
+        RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg,
+        SignificantRouter, StoreMsg, StoreRouter, WriteResponse,
+    },
+    Result,
+};
 use tempfile::{Builder, TempDir};
-use tikv::storage::kv::{Callback as EngineCallback, Modify, WriteData};
-use tikv::storage::Engine;
 use tikv::{
     server::raftkv::{CmdRes, RaftKv},
-    storage::kv::SnapContext,
+    storage::{
+        kv::{Callback as EngineCallback, Modify, SnapContext, WriteData},
+        Engine,
+    },
 };
 use tikv_util::time::ThreadReadId;
 use txn_types::Key;

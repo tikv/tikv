@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::RocksEngine;
-use crate::util;
+use std::cmp;
+
 use engine_traits::{CFNamesExt, CompactExt, Result};
 use rocksdb::{CompactOptions, CompactionOptions, DBCompressionType};
-use std::cmp;
+
+use crate::{engine::RocksEngine, util};
 
 impl CompactExt for RocksEngine {
     type CompactedEvent = crate::compact_listener::RocksCompactedEvent;
@@ -136,12 +137,16 @@ impl CompactExt for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use crate::raw_util::{new_engine, CFOptions};
-    use crate::Compat;
+    use std::sync::Arc;
+
     use engine_traits::CompactExt;
     use rocksdb::{ColumnFamilyOptions, Writable};
-    use std::sync::Arc;
     use tempfile::Builder;
+
+    use crate::{
+        raw_util::{new_engine, CFOptions},
+        Compat,
+    };
 
     #[test]
     fn test_compact_files_in_range() {
