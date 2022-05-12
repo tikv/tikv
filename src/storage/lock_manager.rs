@@ -4,7 +4,10 @@ use crate::server::lock_manager::waiter_manager;
 use crate::server::lock_manager::waiter_manager::Callback;
 use crate::storage::{txn::ProcessResult, types::StorageCallback};
 use kvproto::kvrpcpb::LockInfo;
+use kvproto::metapb::RegionEpoch;
+use std::num::NonZeroU64;
 use std::time::Duration;
+use tidb_query_common::error::StorageError;
 use txn_types::{Key, TimeStamp};
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -67,6 +70,12 @@ impl From<u64> for WaitTimeout {
     }
 }
 
+pub struct KeyLockWaitInfo {
+    pub key: Key,
+    pub lock_digest: LockDigest,
+    pub lock_info: LockInfo,
+}
+
 /// `LockManager` manages transactions waiting for locks held by other transactions.
 /// It has responsibility to handle deadlocks between transactions.
 pub trait LockManager: Clone + Send + 'static {
@@ -78,14 +87,23 @@ pub trait LockManager: Clone + Send + 'static {
     /// If the lock is the first lock the transaction waits for, it won't result in deadlock.
     fn wait_for(
         &self,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        term: NonZeroU64,
         start_ts: TimeStamp,
-        cb: StorageCallback,
-        pr: ProcessResult,
-        lock: LockDigest,
+        wait_info: Vec<KeyLockWaitInfo>,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
+        cancel_callback: Box<dyn FnOnce(StorageError)>,
         diag_ctx: DiagnosticContext,
     );
+
+    fn update_wait_for() {
+        unimplemented!()
+    }
+    fn clean_up_wait_for() {
+        unimplemented!()
+    }
 
     /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
     fn wake_up(
@@ -113,12 +131,14 @@ pub struct DummyLockManager;
 impl LockManager for DummyLockManager {
     fn wait_for(
         &self,
+        _region_id: u64,
+        _region_epoch: RegionEpoch,
+        _term: NonZeroU64,
         _start_ts: TimeStamp,
-        _cb: StorageCallback,
-        _pr: ProcessResult,
-        _lock: LockDigest,
+        _wait_info: Vec<KeyLockWaitInfo>,
         _is_first_lock: bool,
-        _wait_timeout: Option<WaitTimeout>,
+        _timeout: Option<WaitTimeout>,
+        _cancel_callback: Box<dyn FnOnce(StorageError)>,
         _diag_ctx: DiagnosticContext,
     ) {
     }

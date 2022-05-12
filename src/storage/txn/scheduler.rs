@@ -1414,8 +1414,7 @@ impl PartialPessimisticLockRequestContext {
                 .1
                 .fetch_sub(first_batch_size, Ordering::SeqCst);
             if prev == first_batch_size {
-                let inner = ctx.shared_states.0.lock().take().unwrap();
-                Self::finish_request(inner);
+                ctx.finish_request(None);
             }
         }))
     }
@@ -1428,23 +1427,39 @@ impl PartialPessimisticLockRequestContext {
         move |res| {
             // TODO: Handle error.
             if let Err(e) = ctx.tx.send((index, res)) {
-                info!("sending partial pessimistic lock result to closed channel, maybe the request is already cancelled due to error.";
+                info!("sending partial pessimistic lock result to closed channel, maybe the request is already cancelled due to error";
                     "start_ts" => ctx.start_ts,
                     "for_update_ts" => ctx.for_update_ts,
-                    "err" => ?e,
+                    "err" => ?e
                 );
                 return;
             }
             let prev = ctx.shared_states.1.fetch_sub(1, Ordering::SeqCst);
             if prev == 1 {
                 // All keys are finished.
-                let inner = ctx.shared_states.0.lock().take().unwrap();
-                Self::finish_request(inner);
+                ctx.finish_request(None);
             }
         }
     }
 
-    fn finish_request(ctx_inner: PartialPessimisticLockRequestContextInner) {
+    fn get_callback_for_cancellation(&self) -> impl FnOnce(StorageError) {
+        let ctx = self.clone();
+        move |e| {
+            ctx.finish_request(Some(e));
+        }
+    }
+
+    fn finish_request(&self, external_error: Option<StorageError>) {
+        let ctx_inner = if let Some(inner) = self.shared_states.0.lock().take() {
+            inner
+        } else {
+            info!("shared state for partial pessimistic lock already taken, perhaps due to error";
+                "start_ts" => ctx.start_ts,
+                "for_update_ts" => ctx.for_update_ts
+            );
+            return;
+        };
+
         let results = match ctx_inner.pr {
             ProcessResult::PessimisticLockRes {
                 res: Ok(PessimisticLockResults(ref mut v)),
@@ -1456,6 +1471,15 @@ impl PartialPessimisticLockRequestContext {
             match msg {
                 Ok(lock_key_res) => results[index] = lock_key_res,
                 Err(e) => results[index] = PessimisticLockKeyResult::Failed(e), // ???
+            }
+        }
+
+        if let Some(e) = external_error {
+            let e = Arc::new(e);
+            for r in results {
+                if matches!(r, PessimisticLockKeyResult::Waiting) {
+                    *r = PessimisticLockKeyResult::Failed(e.clone());
+                }
             }
         }
 

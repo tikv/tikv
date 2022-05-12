@@ -441,6 +441,7 @@ impl Scheduler {
     }
 
     pub fn detect(&self, txn_ts: TimeStamp, lock: LockDigest, diag_ctx: DiagnosticContext) {
+        // TODO: Support detect many keys in a batch
         self.notify_scheduler(Task::Detect {
             tp: DetectType::Detect,
             txn_ts,
@@ -824,7 +825,7 @@ where
         &self,
         tp: DetectType,
         txn_ts: TimeStamp,
-        lock: LockDigest,
+        lock_digest: LockDigest,
         diag_ctx: DiagnosticContext,
     ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
@@ -832,24 +833,29 @@ where
             DetectType::Detect => {
                 if let Some((deadlock_key_hash, mut wait_chain)) = detect_table.detect(
                     txn_ts,
-                    lock.ts,
-                    lock.hash,
+                    lock_digest.ts,
+                    lock_digest.hash,
                     &diag_ctx.key,
                     &diag_ctx.resource_group_tag,
                 ) {
                     let mut last_entry = WaitForEntry::default();
                     last_entry.set_txn(txn_ts.into_inner());
-                    last_entry.set_wait_for_txn(lock.ts.into_inner());
-                    last_entry.set_key_hash(lock.hash);
-                    last_entry.set_key(diag_ctx.key);
+                    last_entry.set_wait_for_txn(lock_digest.ts.into_inner());
+                    last_entry.set_key_hash(lock_digest.hash);
+                    last_entry.set_key(diag_ctx.key.clone());
                     last_entry.set_resource_group_tag(diag_ctx.resource_group_tag);
                     wait_chain.push(last_entry);
-                    self.waiter_mgr_scheduler
-                        .deadlock(txn_ts, lock, deadlock_key_hash, wait_chain);
+                    self.waiter_mgr_scheduler.deadlock(
+                        txn_ts,
+                        diag_ctx.key,
+                        lock_digest,
+                        deadlock_key_hash,
+                        wait_chain,
+                    );
                 }
             }
             DetectType::CleanUpWaitFor => {
-                detect_table.clean_up_wait_for(txn_ts, lock.ts, lock.hash)
+                detect_table.clean_up_wait_for(txn_ts, lock_digest.ts, lock_digest.hash)
             }
             DetectType::CleanUp => detect_table.clean_up(txn_ts),
         }

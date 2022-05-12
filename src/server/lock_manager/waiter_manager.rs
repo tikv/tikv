@@ -3,7 +3,7 @@
 use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
-use crate::storage::lock_manager::{DiagnosticContext, LockDigest, WaitTimeout};
+use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockDigest, WaitTimeout};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
@@ -14,6 +14,7 @@ use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::num::NonZeroU64;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{
@@ -98,12 +99,14 @@ pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 #[allow(clippy::large_enum_variant)]
 pub enum Task {
     WaitFor {
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        term: NonZeroU64,
         // which txn waits for the lock
         start_ts: TimeStamp,
-        cb: StorageCallback,
-        pr: ProcessResult,
-        lock: LockDigest,
+        wait_info: Vec<KeyLockWaitInfo>,
         timeout: WaitTimeout,
+        cancel_callback: Box<dyn FnOnce(StorageError)>,
         diag_ctx: DiagnosticContext,
     },
     WakeUp {
@@ -118,6 +121,7 @@ pub enum Task {
     Deadlock {
         // Which txn causes deadlock
         start_ts: TimeStamp,
+        key: Vec<u8>,
         lock: LockDigest,
         deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
@@ -141,8 +145,19 @@ impl Debug for Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::WaitFor { start_ts, lock, .. } => {
-                write!(f, "txn:{} waiting for {}:{}", start_ts, lock.ts, lock.hash)
+            Task::WaitFor {
+                start_ts,
+                wait_info,
+                ..
+            } => {
+                write!(
+                    f,
+                    "txn:{} waiting for {}:{} and another {} locks",
+                    start_ts,
+                    wait_info[0].lock_digest.ts,
+                    wait_info[0].lock_digest.hash,
+                    wait_info.len() - 1
+                )
             }
             Task::WakeUp { lock_ts, .. } => write!(f, "waking up txns waiting for {}", lock_ts),
             Task::Dump { .. } => write!(f, "dump"),
@@ -165,15 +180,12 @@ impl Display for Task {
 /// has a timeout. Transaction will be notified when the lock is released
 /// or the corresponding waiter times out.
 pub(crate) struct Waiter {
+    region_id: u64,
+    region_epoch: RegionEpoch,
+    term: NonZeroU64,
     pub(crate) start_ts: TimeStamp,
-    pub(crate) cb: StorageCallback,
-    /// The result of `Command::AcquirePessimisticLock`.
-    ///
-    /// It contains a `KeyIsLocked` error at the beginning. It will be changed
-    /// to `WriteConflict` error if the lock is released or `Deadlock` error if
-    /// it causes deadlock.
-    pub(crate) pr: ProcessResult,
-    pub(crate) lock: LockDigest,
+    pub(crate) wait_info: Vec<KeyLockWaitInfo>,
+    pub(crate) cancel_callback: Box<dyn FnOnce(StorageError)>,
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
     _lifetime_timer: HistogramTimer,
@@ -181,18 +193,22 @@ pub(crate) struct Waiter {
 
 impl Waiter {
     fn new(
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        term: NonZeroU64,
         start_ts: TimeStamp,
-        cb: StorageCallback,
-        pr: ProcessResult,
-        lock: LockDigest,
+        wait_info: Vec<KeyLockWaitInfo>,
+        cancel_callback: Box<dyn FnOnce(StorageError)>,
         deadline: Instant,
         diag_ctx: DiagnosticContext,
     ) -> Self {
         Self {
+            region_id,
+            region_epoch,
+            term,
             start_ts,
-            cb,
-            pr,
-            lock,
+            wait_info,
+            cancel_callback,
             delay: Delay::new(deadline),
             diag_ctx,
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
@@ -218,65 +234,87 @@ impl Waiter {
 
     /// `Notify` consumes the `Waiter` to notify the corresponding transaction
     /// going on.
-    fn notify(self) {
+    fn cancel(self, error: StorageError) {
         // Cancel the delay timer to prevent removing the same `Waiter` earlier.
         self.delay.cancel();
-        self.cb.execute(self.pr);
+        (self.cancel_callback)(error);
     }
 
-    /// Changes the `ProcessResult` to `WriteConflict`.
-    /// It may be invoked more than once.
-    fn conflict_with(&mut self, lock_ts: TimeStamp, commit_ts: TimeStamp) {
-        let (key, primary) = self.extract_key_info();
-        let mvcc_err = MvccError::from(MvccErrorInner::WriteConflict {
-            start_ts: self.start_ts,
-            conflict_start_ts: lock_ts,
-            conflict_commit_ts: commit_ts,
-            key,
-            primary,
-        });
-        self.pr = ProcessResult::Failed {
-            err: StorageError::from(TxnError::from(mvcc_err)),
-        };
+    fn cancel_for_timeout(mut self) {
+        let lock_info = self.wait_info.swap_remove(0).lock_info;
+        let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
+        self.cancel(StorageError::from(error));
     }
 
-    /// Changes the `ProcessResult` to `Deadlock`.
-    fn deadlock_with(&mut self, deadlock_key_hash: u64, wait_chain: Vec<WaitForEntry>) {
-        let (key, _) = self.extract_key_info();
-        let mvcc_err = MvccError::from(MvccErrorInner::Deadlock {
+    fn cancel_for_deadlock(
+        self,
+        lock_digest: LockDigest,
+        key: Vec<u8>,
+        wait_chain: Vec<WaitForEntry>,
+    ) {
+        let e = MvccError::from(MvccErrorInner::Deadlock {
             start_ts: self.start_ts,
-            lock_ts: self.lock.ts,
+            lock_ts: lock_digest.ts,
             lock_key: key,
-            deadlock_key_hash,
+            deadlock_key_hash: lock_digest.hash,
             wait_chain,
         });
-        self.pr = ProcessResult::Failed {
-            err: StorageError::from(TxnError::from(mvcc_err)),
-        };
+        self.cancel(StorageError::from(e));
     }
 
-    /// Extracts key and primary key from `ProcessResult`.
-    fn extract_key_info(&mut self) -> (Vec<u8>, Vec<u8>) {
-        match &mut self.pr {
-            ProcessResult::PessimisticLockRes { res } => match res {
-                Err(StorageError(box StorageErrorInner::Txn(TxnError(
-                    box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))),
-                )))) => (info.take_key(), info.take_primary_lock()),
-                _ => panic!("unexpected mvcc error"),
-            },
-            ProcessResult::Failed { err } => match err {
-                StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
-                    MvccError(box MvccErrorInner::WriteConflict {
-                        ref mut key,
-                        ref mut primary,
-                        ..
-                    }),
-                )))) => (std::mem::take(key), std::mem::take(primary)),
-                _ => panic!("unexpected mvcc error"),
-            },
-            _ => panic!("unexpected progress result"),
-        }
-    }
+    // /// Changes the `ProcessResult` to `WriteConflict`.
+    // /// It may be invoked more than once.
+    // fn conflict_with(&mut self, lock_ts: TimeStamp, commit_ts: TimeStamp) {
+    //     let (key, primary) = self.extract_key_info();
+    //     let mvcc_err = MvccError::from(MvccErrorInner::WriteConflict {
+    //         start_ts: self.start_ts,
+    //         conflict_start_ts: lock_ts,
+    //         conflict_commit_ts: commit_ts,
+    //         key,
+    //         primary,
+    //     });
+    //     self.pr = ProcessResult::Failed {
+    //         err: StorageError::from(TxnError::from(mvcc_err)),
+    //     };
+    // }
+
+    // /// Changes the `ProcessResult` to `Deadlock`.
+    // fn deadlock_with(&mut self, deadlock_key_hash: u64, wait_chain: Vec<WaitForEntry>) {
+    //     let (key, _) = self.extract_key_info();
+    //     let mvcc_err = MvccError::from(MvccErrorInner::Deadlock {
+    //         start_ts: self.start_ts,
+    //         lock_ts: self.lock.ts,
+    //         lock_key: key,
+    //         deadlock_key_hash,
+    //         wait_chain,
+    //     });
+    //     self.pr = ProcessResult::Failed {
+    //         err: StorageError::from(TxnError::from(mvcc_err)),
+    //     };
+    // }
+
+    // /// Extracts key and primary key from `ProcessResult`.
+    // fn extract_key_info(&mut self) -> (Vec<u8>, Vec<u8>) {
+    //     match &mut self.pr {
+    //         ProcessResult::PessimisticLockRes { res } => match res {
+    //             Err(StorageError(box StorageErrorInner::Txn(TxnError(
+    //                 box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))),
+    //             )))) => (info.take_key(), info.take_primary_lock()),
+    //             _ => panic!("unexpected mvcc error"),
+    //         },
+    //         ProcessResult::Failed { err } => match err {
+    //             StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+    //                 MvccError(box MvccErrorInner::WriteConflict {
+    //                     ref mut key,
+    //                     ref mut primary,
+    //                     ..
+    //                 }),
+    //             )))) => (std::mem::take(key), std::mem::take(primary)),
+    //             _ => panic!("unexpected mvcc error"),
+    //         },
+    //         _ => panic!("unexpected progress result"),
+    //     }
+    // }
 }
 
 // NOTE: Now we assume `Waiters` is not very long.
@@ -393,8 +431,12 @@ impl Scheduler {
     fn notify_scheduler(&self, task: Task) -> bool {
         if let Err(Stopped(task)) = self.0.schedule(task) {
             error!("failed to send task to waiter_manager"; "task" => %task);
-            if let Task::WaitFor { cb, pr, .. } = task {
-                cb.execute(pr);
+            if let Task::WaitFor {
+                cancel_callback, ..
+            } = task
+            {
+                // TODO: Pass proper error for the scheduling error.
+                cancel_callback();
             }
             return false;
         }
@@ -403,19 +445,23 @@ impl Scheduler {
 
     pub fn wait_for(
         &self,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        term: NonZeroU64,
         start_ts: TimeStamp,
-        cb: StorageCallback,
-        pr: ProcessResult,
-        lock: LockDigest,
+        wait_info: Vec<KeyLockWaitInfo>,
         timeout: WaitTimeout,
+        cancel_callback: Box<dyn FnOnce(StorageError)>,
         diag_ctx: DiagnosticContext,
     ) {
         self.notify_scheduler(Task::WaitFor {
+            region_id,
+            region_epoch,
+            term,
             start_ts,
-            cb,
-            pr,
-            lock,
+            wait_info,
             timeout,
+            cancel_callback,
             diag_ctx,
         });
     }
@@ -435,12 +481,14 @@ impl Scheduler {
     pub fn deadlock(
         &self,
         txn_ts: TimeStamp,
+        key: Vec<u8>,
         lock: LockDigest,
         deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
     ) {
         self.notify_scheduler(Task::Deadlock {
             start_ts: txn_ts,
+            key,
             lock,
             deadlock_key_hash,
             wait_chain,
@@ -503,11 +551,11 @@ impl WaiterManager {
         let f = waiter.on_timeout(move || {
             if let Some(waiter) = wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
                 detector_scheduler.clean_up_wait_for(waiter.start_ts, waiter.lock);
-                waiter.notify();
+                waiter.cancel();
             }
         });
         if let Some(old) = self.wait_table.borrow_mut().add_waiter(waiter) {
-            old.notify();
+            old.cancel();
         };
         spawn_local(f);
     }
@@ -526,7 +574,7 @@ impl WaiterManager {
                 self.detector_scheduler
                     .clean_up_wait_for(oldest.start_ts, oldest.lock);
                 oldest.conflict_with(lock_ts, commit_ts);
-                oldest.notify();
+                oldest.cancel();
                 // Others will be waked up after `wake_up_delay_duration`.
                 //
                 // NOTE: Actually these waiters are waiting for an unknown transaction.
@@ -551,13 +599,15 @@ impl WaiterManager {
     fn handle_deadlock(
         &mut self,
         waiter_ts: TimeStamp,
+        key: Vec<u8>,
         lock: LockDigest,
         deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
     ) {
         if let Some(mut waiter) = self.wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
-            waiter.deadlock_with(deadlock_key_hash, wait_chain);
-            waiter.notify();
+            // waiter.deadlock_with(deadlock_key_hash, wait_chain);
+            // waiter.cancel();
+            waiter.cancel_for_deadlock(key, deadlock_key_hash, wait_chain);
         }
     }
 
@@ -584,18 +634,22 @@ impl FutureRunnable<Task> for WaiterManager {
     fn run(&mut self, task: Task) {
         match task {
             Task::WaitFor {
+                region_id,
+                region_epoch,
+                term,
                 start_ts,
-                cb,
-                pr,
-                lock,
+                wait_info,
                 timeout,
+                cancel_callback,
                 diag_ctx,
             } => {
                 let waiter = Waiter::new(
+                    region_id,
+                    region_epoch,
+                    term,
                     start_ts,
-                    cb,
-                    pr,
-                    lock,
+                    wait_info,
+                    cancel_callback,
                     self.normalize_deadline(timeout),
                     diag_ctx,
                 );
@@ -616,11 +670,12 @@ impl FutureRunnable<Task> for WaiterManager {
             }
             Task::Deadlock {
                 start_ts,
+                key,
                 lock,
                 deadlock_key_hash,
                 wait_chain,
             } => {
-                self.handle_deadlock(start_ts, lock, deadlock_key_hash, wait_chain);
+                self.handle_deadlock(start_ts, key, lock, deadlock_key_hash, wait_chain);
             }
             Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
             #[cfg(any(test, feature = "testexport"))]
@@ -880,7 +935,7 @@ pub mod tests {
     #[test]
     fn test_waiter_notify() {
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
-        waiter.notify();
+        waiter.cancel();
         expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info);
 
         // A waiter can conflict with other transactions more than once.
@@ -893,7 +948,7 @@ pub mod tests {
                 waiter.conflict_with(*lock_ts.incr(), *conflict_commit_ts.incr());
                 lock_info.set_lock_version(lock_ts.into_inner());
             }
-            waiter.notify();
+            waiter.cancel();
             expect_write_conflict(
                 block_on(f).unwrap(),
                 waiter_ts,
@@ -906,7 +961,7 @@ pub mod tests {
         let waiter_ts = TimeStamp::new(10);
         let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
         waiter.deadlock_with(111, vec![]);
-        waiter.notify();
+        waiter.cancel();
         expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111, &[]);
 
         // Conflict then deadlock.
@@ -914,7 +969,7 @@ pub mod tests {
         let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
         waiter.conflict_with(20.into(), 30.into());
         waiter.deadlock_with(111, vec![]);
-        waiter.notify();
+        waiter.cancel();
         expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111, &[]);
     }
 
@@ -933,7 +988,7 @@ pub mod tests {
         waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
-        waiter.notify();
+        waiter.cancel();
         assert_elapsed(|| block_on(f), 0, 200);
         rx.try_recv().unwrap_err();
     }

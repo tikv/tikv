@@ -12,6 +12,7 @@ pub use self::waiter_manager::Scheduler as WaiterMgrScheduler;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -23,11 +24,11 @@ use crate::server::{Error, Result};
 use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{
     lock_manager::{LockDigest, LockManager as LockManagerTrait, WaitTimeout},
-    ProcessResult, StorageCallback,
+    Error as StorageError, ProcessResult, StorageCallback,
 };
 use raftstore::coprocessor::CoprocessorHost;
 
-use crate::storage::lock_manager::DiagnosticContext;
+use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo};
 use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_traits::KvEngine;
@@ -240,12 +241,14 @@ impl LockManager {
 impl LockManagerTrait for LockManager {
     fn wait_for(
         &self,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        term: NonZeroU64,
         start_ts: TimeStamp,
-        cb: StorageCallback,
-        pr: ProcessResult,
-        lock: LockDigest,
+        wait_info: Vec<KeyLockWaitInfo>,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
+        cancel_callback: Box<dyn FnOnce(StorageError)>,
         diag_ctx: DiagnosticContext,
     ) {
         let timeout = match timeout {
@@ -259,8 +262,16 @@ impl LockManagerTrait for LockManager {
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
-        self.waiter_mgr_scheduler
-            .wait_for(start_ts, cb, pr, lock, timeout, diag_ctx.clone());
+        self.waiter_mgr_scheduler.wait_for(
+            region_id,
+            region_epoch,
+            term,
+            start_ts,
+            wait_info,
+            timeout,
+            cancel_callback,
+            diag_ctx.clone(),
+        );
 
         // If it is the first lock the transaction tries to lock, it won't cause deadlock.
         if !is_first_lock {
