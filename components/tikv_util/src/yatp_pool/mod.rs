@@ -216,7 +216,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn before_stop<F>(&mut self, f: F) -> &mut Self
+    pub(crate) fn before_stop<F>(&mut self, f: F) -> &mut Self
     where
         F: Fn() + Send + Sync + 'static,
     {
@@ -224,7 +224,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn after_start<F>(&mut self, f: F) -> &mut Self
+    pub(crate) fn after_start<F>(&mut self, f: F) -> &mut Self
     where
         F: Fn() + Send + Sync + 'static,
     {
