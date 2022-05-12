@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, marker::PhantomData, ops::Deref};
+use std::{fmt, marker::PhantomData};
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
