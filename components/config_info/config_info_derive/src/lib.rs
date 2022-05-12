@@ -175,7 +175,7 @@ fn build_filed_constructer(
     } = attrs;
     let convert_field = |l: Lit| match l {
         Lit::Str(s) => {
-            quote!(core::convert::TryInto::try_into(#s).unwrap())
+            quote!(FromStr::from_str(#s).unwrap())
         }
         s => quote!(Into::into(#s)),
     };

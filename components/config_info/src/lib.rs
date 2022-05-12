@@ -22,10 +22,13 @@ use serde::Serialize;
 /// # Field Type(#[config_info(type= "..")])
 ///
 /// this attribue the value type in the config file, all valid options are:
-/// - Number. Represent a numeric value, auto-assigned for all primitive numerics types.
+/// - Number. Represent a numeric value, auto-assigned for all primitive numeric types. Other custom
+///           defined type should implement `From<T>` in which T is one of the primitive numeric types.
 /// - Array. Represent the array type. auto-assigned for `[T, N]` and `Vec<T>` types.
 /// - Stirng. Represent string type. auto-assigned for `String`, `ReadableSize` and `ReadableDuration`.
-/// - Boolean. Represent the bool type. auto-assigned for `bool`.
+///           The generated code always use `FromStr::from_str` to convert str to target type.
+/// - Boolean. Represent the bool type. auto-assigned for `bool`. Custom defined type should implement
+///            `From<bool>` trait.
 /// - Map. Represent the map type. auto-assigned for `HashMap` and `BTreeMap`.
 ///
 /// NOTE: The `type` attribute should be explicitly set if target field type is not build-in supported。

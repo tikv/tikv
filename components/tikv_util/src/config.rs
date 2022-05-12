@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    convert::TryFrom,
     error::Error,
     fmt::{self, Write},
     fs,
@@ -200,13 +199,6 @@ impl FromStr for ReadableSize {
     }
 }
 
-impl<'a> TryFrom<&'a str> for ReadableSize {
-    type Error = String;
-    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-        FromStr::from_str(value)
-    }
-}
-
 impl<'de> Deserialize<'de> for ReadableSize {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -383,13 +375,6 @@ impl FromStr for ReadableDuration {
         let secs = dur as u64 / SECOND as u64;
         let micros = (dur as u64 % SECOND as u64) as u32 * 1_000;
         Ok(ReadableDuration(Duration::new(secs, micros)))
-    }
-}
-
-impl<'a> TryFrom<&'a str> for ReadableDuration {
-    type Error = String;
-    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-        FromStr::from_str(value)
     }
 }
 
