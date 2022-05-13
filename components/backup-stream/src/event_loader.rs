@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{marker::PhantomData, time::Duration};
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use futures::executor::block_on;
@@ -17,6 +17,7 @@ use tikv::storage::{
     Snapshot, Statistics,
 };
 use tikv_util::{box_err, time::Instant, warn, worker::Scheduler};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -32,6 +33,34 @@ use crate::{
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 3;
+
+#[derive(Clone)]
+pub struct PendingMemoryQuota(Arc<Semaphore>);
+
+impl std::fmt::Debug for PendingMemoryQuota {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingMemoryQuota")
+            .field("remain", &self.0.available_permits())
+            .field("total", &self.0)
+            .finish()
+    }
+}
+
+pub struct PendingMemory(OwnedSemaphorePermit);
+
+impl PendingMemoryQuota {
+    pub fn new(quota: usize) -> Self {
+        Self(Arc::new(Semaphore::new(quota)))
+    }
+
+    pub fn pending(&self, size: usize) -> PendingMemory {
+        PendingMemory(
+            tokio::runtime::Handle::current()
+                .block_on(self.0.clone().acquire_many_owned(size as _))
+                .expect("BUG: the semaphore is closed unexpectedly."),
+        )
+    }
+}
 
 /// EventLoader transforms data from the snapshot into ApplyEvent.
 pub struct EventLoader<S: Snapshot> {
@@ -132,6 +161,8 @@ pub struct InitialDataLoader<E, R, RT> {
     sink: Router,
     tracing: SubscriptionTracer,
     scheduler: Scheduler<Task>,
+    quota: PendingMemoryQuota,
+    handle: tokio::runtime::Handle,
 
     _engine: PhantomData<E>,
 }
@@ -148,6 +179,8 @@ where
         sink: Router,
         tracing: SubscriptionTracer,
         sched: Scheduler<Task>,
+        quota: PendingMemoryQuota,
+        handle: tokio::runtime::Handle,
     ) -> Self {
         Self {
             router,
@@ -156,6 +189,8 @@ where
             tracing,
             scheduler: sched,
             _engine: PhantomData,
+            quota,
+            handle,
         }
     }
 
@@ -287,14 +322,19 @@ where
                 return Ok(stats.stat);
             }
             stats.add_statistics(&stat);
+            let region_id = region.get_id();
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
+            let permit = self.quota.pending(event_size);
+            debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
             join_handles.push(tokio::spawn(async move {
                 utils::handle_on_event_result(&sched, sink.on_events(events).await);
                 metrics::HEAP_MEMORY.sub(event_size as _);
+                debug!("apply event done"; "size" => %event_size, "region" => %region_id);
+                drop(permit);
             }));
         }
     }
@@ -305,6 +345,7 @@ where
         start_ts: TimeStamp,
         snap: impl Snapshot,
     ) -> Result<Statistics> {
+        let _guard = self.handle.enter();
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
         let tr = self.tracing.clone();
@@ -317,7 +358,7 @@ where
         // TODO: use an `WaitGroup` with asynchronous support.
         tokio::spawn(async move {
             for h in join_handles {
-                if let Err(err) = tokio::join!(h).0 {
+                if let Err(err) = h.await {
                     warn!("failed to join task."; "err" => %err);
                 }
             }
@@ -330,7 +371,6 @@ where
                     region_id
                 ));
             }
-            debug!("phase one done."; "region_id" => %region_id);
         });
         stats
     }
