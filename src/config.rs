@@ -2332,6 +2332,7 @@ impl Default for BackupConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct BackupStreamConfig {
+    pub max_flush_interval: ReadableDuration,
     pub num_threads: usize,
     #[online_config(skip)]
     pub enable: bool,
@@ -2352,6 +2353,7 @@ impl Default for BackupStreamConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::cpu_cores_quota();
         Self {
+            max_flush_interval: ReadableDuration::minutes(5),
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             enable: false,

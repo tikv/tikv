@@ -19,7 +19,7 @@ use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 use futures::io::Cursor;
 use kvproto::{
-    brpb::{DataFileInfo, FileType, Metadata},
+    brpb::{DataFileInfo, FileType, Metadata, StreamBackupTaskInfo},
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
@@ -238,11 +238,17 @@ pub struct Router(Arc<RouterInner>);
 
 impl Router {
     /// Create a new router with the temporary folder.
-    pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>, temp_file_size_limit: u64) -> Self {
+    pub fn new(
+        prefix: PathBuf,
+        scheduler: Scheduler<Task>,
+        temp_file_size_limit: u64,
+        max_flush_interval: Duration,
+    ) -> Self {
         Self(Arc::new(RouterInner::new(
             prefix,
             scheduler,
             temp_file_size_limit,
+            max_flush_interval,
         )))
     }
 }
@@ -278,6 +284,8 @@ pub struct RouterInner {
     scheduler: Scheduler<Task>,
     /// The size limit of temporary file per task.
     temp_file_size_limit: u64,
+    /// The max duration the local data can be pending.
+    max_flush_interval: Duration,
 }
 
 impl std::fmt::Debug for RouterInner {
@@ -291,13 +299,19 @@ impl std::fmt::Debug for RouterInner {
 }
 
 impl RouterInner {
-    pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>, temp_file_size_limit: u64) -> Self {
+    pub fn new(
+        prefix: PathBuf,
+        scheduler: Scheduler<Task>,
+        temp_file_size_limit: u64,
+        max_flush_interval: Duration,
+    ) -> Self {
         RouterInner {
             ranges: SyncRwLock::new(SegmentMap::default()),
             tasks: Mutex::new(HashMap::default()),
             prefix,
             scheduler,
             temp_file_size_limit,
+            max_flush_interval,
         }
     }
 
@@ -350,7 +364,7 @@ impl RouterInner {
 
         // register task info
         let prefix_path = self.prefix.join(&task_name);
-        let stream_task = StreamTaskInfo::new(prefix_path, task).await?;
+        let stream_task = StreamTaskInfo::new(prefix_path, task, self.max_flush_interval).await?;
         self.tasks
             .lock()
             .await
@@ -362,14 +376,15 @@ impl RouterInner {
         Ok(())
     }
 
-    pub async fn unregister_task(&self, task_name: &str) {
-        if self.tasks.lock().await.remove(task_name).is_some() {
+    pub async fn unregister_task(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
+        self.tasks.lock().await.remove(task_name).map(|t| {
             info!(
                 "backup stream unregister task";
                 "task" => task_name,
             );
             self.unregister_ranges(task_name);
-        }
+            t.task.info.clone()
+        })
     }
 
     /// get the task name by a key.
@@ -607,7 +622,7 @@ impl TempFileKey {
 }
 
 pub struct StreamTaskInfo {
-    task: StreamTask,
+    pub(crate) task: StreamTask,
     /// support external storage. eg local/s3.
     pub(crate) storage: Arc<dyn ExternalStorage>,
     /// The parent directory of temporary files.
@@ -648,7 +663,11 @@ impl std::fmt::Debug for StreamTaskInfo {
 
 impl StreamTaskInfo {
     /// Create a new temporary file set at the `temp_dir`.
-    pub async fn new(temp_dir: PathBuf, task: StreamTask) -> Result<Self> {
+    pub async fn new(
+        temp_dir: PathBuf,
+        task: StreamTask,
+        flush_interval: Duration,
+    ) -> Result<Self> {
         tokio::fs::create_dir_all(&temp_dir).await?;
         let storage = Arc::from(create_storage(
             task.info.get_storage(),
@@ -662,9 +681,7 @@ impl StreamTaskInfo {
             files: SlotMap::default(),
             flushing_files: RwLock::default(),
             last_flush_time: AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))),
-            // TODO make this config set by config or task?
-            // Keep `0.2 * FLUSH_STORAGE_INTERVAL` for doing flushing.
-            flush_interval: Duration::from_secs((FLUSH_STORAGE_INTERVAL as f64 * 0.8).round() as _),
+            flush_interval,
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
             flush_fail_count: AtomicUsize::new(0),
@@ -765,7 +782,10 @@ impl StreamTaskInfo {
     }
 
     pub fn should_flush(&self) -> bool {
-        self.get_last_flush_time().saturating_elapsed() >= self.flush_interval
+        // When it doesn't flush since 0.8x of auto-flush interval, we get ready to start flushing.
+        // So that we will get a buffer for the cost of actual flushing.
+        self.get_last_flush_time().saturating_elapsed_secs()
+            >= self.flush_interval.as_secs_f64() * 0.8
     }
 
     pub fn is_flushing(&self) -> bool {
@@ -891,11 +911,6 @@ impl StreamTaskInfo {
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["generate_metadata"])
                 .observe(sw.lap().as_secs_f64());
-
-            // There is no file to flush, don't write the meta file.
-            if metadata_info.files.is_empty() {
-                return Ok(rts);
-            }
 
             // flush log file to storage.
             self.flush_log().await?;
@@ -1222,7 +1237,7 @@ mod tests {
     #[test]
     fn test_register() {
         let (tx, _) = dummy_scheduler();
-        let router = RouterInner::new(PathBuf::new(), tx, 1024);
+        let router = RouterInner::new(PathBuf::new(), tx, 1024, Duration::from_secs(300));
         // -----t1.start-----t1.end-----t2.start-----t2.end------
         // --|------------|----------|------------|-----------|--
         // case1        case2      case3        case4       case5
@@ -1308,7 +1323,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&tmp).await?;
         let (tx, rx) = dummy_scheduler();
-        let router = RouterInner::new(tmp.clone(), tx, 32);
+        let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
         let (stream_task, storage_path) = task("dummy".to_owned()).await?;
         must_register_table(&router, stream_task, 1).await;
 
@@ -1464,7 +1479,12 @@ mod tests {
         test_util::init_log_for_test();
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-        let router = Arc::new(RouterInner::new(tmp.clone(), tx, 1));
+        let router = Arc::new(RouterInner::new(
+            tmp.clone(),
+            tx,
+            1,
+            Duration::from_secs(300),
+        ));
         let (task, _path) = task("error_prone".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
         router
@@ -1491,7 +1511,7 @@ mod tests {
         test_util::init_log_for_test();
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-        let router = RouterInner::new(tmp.clone(), tx, 32);
+        let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
         let mut stream_task = StreamBackupTaskInfo::default();
         stream_task.set_name("nothing".to_string());
         stream_task.set_storage(create_noop_storage_backend());
@@ -1518,7 +1538,12 @@ mod tests {
         test_util::init_log_for_test();
         let (tx, rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-        let router = Arc::new(RouterInner::new(tmp.clone(), tx, 1));
+        let router = Arc::new(RouterInner::new(
+            tmp.clone(),
+            tx,
+            1,
+            Duration::from_secs(300),
+        ));
         let (task, _path) = task("flush_failure".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
         router
