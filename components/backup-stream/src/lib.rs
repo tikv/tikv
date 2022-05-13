@@ -10,7 +10,7 @@ mod event_loader;
 pub mod metadata;
 mod metrics;
 pub mod observer;
-mod router;
+pub mod router;
 mod subscription_track;
 mod utils;
 

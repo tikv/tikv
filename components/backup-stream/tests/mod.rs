@@ -12,6 +12,7 @@ use std::{
 use backup_stream::{
     metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
     observer::BackupStreamObserver,
+    router::Router,
     Endpoint, Task,
 };
 use futures::{executor::block_on, Future};
@@ -168,6 +169,11 @@ impl Suite {
         for id in 1..=(n as u64) {
             suite.start_endpoint(id);
         }
+        // TODO: The current mock metastore (slash_etc) doesn't supports multi-version.
+        //       We must wait until the endpoints get ready to watching the metastore, or some modifies may be lost.
+        //       Either make Endpoint::with_client wait until watch did start or make slash_etc support multi-version,
+        //       then we can get rid of this sleep.
+        std::thread::sleep(Duration::from_secs(1));
         suite
     }
 
@@ -190,6 +196,8 @@ impl Suite {
             )],
         ))
         .unwrap();
+        let name = name.to_owned();
+        self.wait_with(move |r| block_on(r.get_task_info(&name)).is_ok())
     }
 
     async fn write_records(&mut self, from: usize, n: usize, for_table: i64) -> HashSet<Vec<u8>> {
@@ -419,14 +427,24 @@ impl Suite {
     }
 
     pub fn sync(&self) {
+        self.wait_with(|_| true)
+    }
+
+    pub fn wait_with(&self, cond: impl FnMut(&Router) -> bool + Send + 'static + Clone) {
         self.endpoints
             .iter()
-            .map(|(_, wkr)| {
-                let (tx, rx) = channel();
-                wkr.scheduler()
-                    .schedule(Task::Sync(Box::new(move || tx.send(()).unwrap())))
-                    .unwrap();
-                rx
+            .map({
+                let cond = cond.clone();
+                move |(_, wkr)| {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    wkr.scheduler()
+                        .schedule(Task::Sync(
+                            Box::new(move || tx.send(()).unwrap()),
+                            Box::new(cond.clone()),
+                        ))
+                        .unwrap();
+                    rx
+                }
             })
             .for_each(|rx| rx.recv().unwrap())
     }
@@ -477,6 +495,7 @@ mod test {
             // write data before the task starting, for testing incremental scanning.
             let round1 = suite.write_records(0, 128, 1).await;
             suite.must_register_task(1, "test_basic");
+            suite.sync();
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_basic");
             suite.wait_for_flush();
@@ -513,6 +532,7 @@ mod test {
         test_util::init_log_for_test();
         let mut suite = super::Suite::new("leader_down", 4);
         suite.must_register_task(1, "test_leader_down");
+        suite.sync();
         let round1 = run_async_test(suite.write_records(0, 128, 1));
         let leader = suite.cluster.leader_of_region(1).unwrap().get_store_id();
         suite.cluster.stop_node(leader);
@@ -534,6 +554,7 @@ mod test {
         let mut suite = super::Suite::new("async_commit", 3);
         run_async_test(async {
             suite.must_register_task(1, "test_async_commit");
+            suite.sync();
             suite.write_records(0, 128, 1).await;
             let ts = suite.just_async_commit_prewrite(256, 1);
             suite.write_records(258, 128, 1).await;

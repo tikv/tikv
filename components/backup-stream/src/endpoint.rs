@@ -508,6 +508,7 @@ where
     }
 
     pub fn on_unregister(&self, task: &str) {
+        info!("unregistering a task"; "task" => %task);
         let router = self.range_router.clone();
 
         // for now, we support one concurrent task only.
@@ -761,13 +762,24 @@ where
     fn start_observe(&self, region: Region, needs_initial_scanning: bool) {
         let handle = ObserveHandle::new();
         let result = if needs_initial_scanning {
-            let for_task = self.find_task_by_region(&region).unwrap_or_else(|| {
-                panic!(
-                    "BUG: the region {:?} is register to no task but being observed (start_key = {}; end_key = {}; task_stat = {:?})",
-                    region, utils::redact(&region.get_start_key()), utils::redact(&region.get_end_key()), self.range_router
-                )
-            });
-            self.observe_over_with_initial_data_from_checkpoint(&region, for_task, handle.clone())
+            match self.find_task_by_region(&region) {
+                None => {
+                    warn!(
+                        "the region {:?} is register to no task but being observed (start_key = {}; end_key = {}; task_stat = {:?}): maybe stale, aborting",
+                        region,
+                        utils::redact(&region.get_start_key()),
+                        utils::redact(&region.get_end_key()),
+                        self.range_router
+                    );
+                    return;
+                }
+
+                Some(for_task) => self.observe_over_with_initial_data_from_checkpoint(
+                    &region,
+                    for_task,
+                    handle.clone(),
+                ),
+            }
         } else {
             self.observe_over(&region, handle.clone())
         };
@@ -843,7 +855,17 @@ where
             Task::ChangeConfig(_) => {
                 warn!("change config online isn't supported for now.")
             }
-            Task::Sync(cb) => cb(),
+            Task::Sync(cb, mut cond) => {
+                if cond(&self.range_router) {
+                    cb()
+                } else {
+                    let sched = self.scheduler.clone();
+                    self.pool.spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        sched.schedule(Task::Sync(cb, cond)).unwrap();
+                    });
+                }
+            }
         }
     }
 
@@ -887,7 +909,12 @@ pub enum Task {
     /// FatalError pauses the task and set the error.
     FatalError(String, Box<Error>),
     /// Run the callback when see this message.
-    Sync(Box<dyn FnOnce() + Send>),
+    Sync(
+        // Run the closure if ...
+        Box<dyn FnOnce() + Send>,
+        // This returns `true`.
+        Box<dyn FnMut(&Router) -> bool + Send>,
+    ),
 }
 
 #[derive(Debug)]
@@ -938,7 +965,7 @@ impl fmt::Debug for Task {
             Self::FatalError(task, err) => {
                 f.debug_tuple("FatalError").field(task).field(err).finish()
             }
-            Self::Sync(_) => f.debug_tuple("Sync").finish(),
+            Self::Sync(..) => f.debug_tuple("Sync").finish(),
         }
     }
 }
