@@ -632,16 +632,16 @@ fn test_node_split_region_after_reboot_with_config_change() {
     let pd_client = Arc::clone(&cluster.pd_client);
 
     let mut range = 1..;
-    put_till_size(&mut cluster, region_max_size/2, &mut range);
+    put_till_size(&mut cluster, region_max_size / 2, &mut range);
 
     // there should be 1 region
     sleep_ms(200);
     assert_eq!(pd_client.get_split_count(), 0);
 
     // change the config to make the region splittable
-    cluster.cfg.coprocessor.region_max_size = ReadableSize(region_max_size/3);
-    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size/3);
-    cluster.cfg.coprocessor.region_bucket_size = ReadableSize(region_split_size/3);
+    cluster.cfg.coprocessor.region_max_size = ReadableSize(region_max_size / 3);
+    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size / 3);
+    cluster.cfg.coprocessor.region_bucket_size = ReadableSize(region_split_size / 3);
     cluster.stop_node(1);
     cluster.run_node(1).unwrap();
 
