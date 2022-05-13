@@ -1,7 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO(youjiali1995): fix lint
-#![allow(unused)]
 // Bytes as map key
 #![allow(clippy::mutable_key_type)]
 

@@ -1,7 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::time::Instant;
 
 use engine_traits::{
@@ -59,7 +57,7 @@ impl RaftEngineReadOnly for RfEngine {
         Ok(buf.len() - old_len)
     }
 
-    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
+    fn get_all_entries_to(&self, _region_id: u64, _buf: &mut Vec<Entry>) -> Result<()> {
         unreachable!("todo")
     }
 }

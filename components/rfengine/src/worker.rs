@@ -2,7 +2,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    fs, mem,
+    fs,
     path::{Path, PathBuf},
     sync::{mpsc::Receiver, Arc},
     time::Instant,
