@@ -251,22 +251,42 @@ where
 
     pub fn with_resolver<T: 'static>(
         &self,
-        region_id: u64,
+        region: &Region,
         f: impl FnOnce(&mut TwoPhaseResolver) -> Result<T>,
     ) -> Result<T> {
-        Self::with_resolver_by(&self.tracing, region_id, f)
+        Self::with_resolver_by(&self.tracing, region, f)
     }
 
     pub fn with_resolver_by<T: 'static>(
         tracing: &SubscriptionTracer,
-        region_id: u64,
+        region: &Region,
         f: impl FnOnce(&mut TwoPhaseResolver) -> Result<T>,
     ) -> Result<T> {
-        f(tracing
+        let region_id = region.get_id();
+        let mut v = tracing
             .get_subscription_of(region_id)
-            .ok_or_else(|| Error::Other(box_err!("observer for region {} canceled", region_id)))?
-            .value_mut()
-            .resolver())
+            .ok_or_else(|| Error::Other(box_err!("observer for region {} canceled", region_id)))
+            .and_then(|v| {
+                raftstore::store::util::compare_region_epoch(
+                    region.get_region_epoch(),
+                    &v.value().meta,
+                    // No need for checking conf version because conf change won't cancel the observation.
+                    false,
+                    true,
+                    false,
+                )?;
+                Ok(v)
+            })
+            .map_err(|err| Error::Contextual {
+                // Both when we cannot find the region in the track and
+                // the epoch has changed means that we should cancel the current turn of initial scanning.
+                inner_error: Box::new(Error::ObserveCanceled(
+                    region_id,
+                    region.get_region_epoch().clone(),
+                )),
+                context: format!("{}", err),
+            })?;
+        f(v.value_mut().resolver())
     }
 
     fn scan_and_async_send(
@@ -279,9 +299,8 @@ where
         let start = Instant::now();
         loop {
             let mut events = ApplyEvents::with_capacity(1024, region.id);
-            let stat = self.with_resolver(region.get_id(), |r| {
-                event_loader.scan_batch(1024, &mut events, r)
-            })?;
+            let stat =
+                self.with_resolver(&region, |r| event_loader.scan_batch(1024, &mut events, r))?;
             if events.len() == 0 {
                 metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
                 return Ok(stats.stat);
@@ -315,16 +334,18 @@ where
 
         // we should mark phase one as finished whether scan successed.
         // TODO: use an `WaitGroup` with asynchronous support.
+        let r = region.clone();
         tokio::spawn(async move {
             for h in join_handles {
                 if let Err(err) = tokio::join!(h).0 {
                     warn!("failed to join task."; "err" => %err);
                 }
             }
-            if let Err(err) = Self::with_resolver_by(&tr, region_id, |r| {
+            let result = Self::with_resolver_by(&tr, &r, |r| {
                 r.phase_one_done();
                 Ok(())
-            }) {
+            });
+            if let Err(err) = result {
                 err.report(format_args!(
                     "failed to finish phase 1 for region {:?}",
                     region_id

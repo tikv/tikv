@@ -6,7 +6,7 @@ use std::{
 
 use error_code::ErrorCodeExt;
 use etcd_client::Error as EtcdError;
-use kvproto::errorpb::Error as StoreError;
+use kvproto::{errorpb::Error as StoreError, metapb::*};
 use pd_client::Error as PdError;
 use protobuf::ProtobufError;
 use raftstore::Error as RaftStoreError;
@@ -24,6 +24,8 @@ pub enum Error {
     Protobuf(#[from] ProtobufError),
     #[error("No such task {task_name:?}")]
     NoSuchTask { task_name: String },
+    #[error("Observe have already canceled for region {0} (version = {1:?})")]
+    ObserveCanceled(u64, RegionEpoch),
     #[error("Malformed metadata {0}")]
     MalformedMetadata(String),
     #[error("I/O Error: {0}")]
@@ -63,6 +65,7 @@ impl ErrorCodeExt for Error {
             Error::Contextual { inner_error, .. } => inner_error.error_code(),
             Error::Other(_) => OTHER,
             Error::RaftStore(_) => RAFTSTORE,
+            Error::ObserveCanceled(..) => OBSERVE_CANCELED,
         }
     }
 }

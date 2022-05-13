@@ -5,7 +5,8 @@
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
-    sync::Arc,
+    sync::{mpsc::channel, Arc},
+    time::Duration,
 };
 
 use backup_stream::{
@@ -416,6 +417,38 @@ impl Suite {
                 TikvClient::new(channel)
             })
     }
+
+    pub fn sync(&self) {
+        self.endpoints
+            .iter()
+            .map(|(_, wkr)| {
+                let (tx, rx) = channel();
+                wkr.scheduler()
+                    .schedule(Task::Sync(Box::new(move || tx.send(()).unwrap())))
+                    .unwrap();
+                rx
+            })
+            .for_each(|rx| rx.recv().unwrap())
+    }
+
+    pub fn wait_for_flush(&self) {
+        use std::ffi::OsString;
+        for _ in 0..10 {
+            if !walkdir::WalkDir::new(&self.temp_files)
+                .into_iter()
+                .any(|x| x.unwrap().path().extension() == Some(&OsString::from("log")))
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        let v = walkdir::WalkDir::new(&self.temp_files)
+            .into_iter()
+            .collect::<Vec<_>>();
+        if !v.is_empty() {
+            panic!("the temp isn't empty after the deadline ({:?})", v)
+        }
+    }
 }
 
 fn run_async_test<T>(test: impl Future<Output = T>) -> T {
@@ -446,7 +479,7 @@ mod test {
             suite.must_register_task(1, "test_basic");
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_basic");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.wait_for_flush();
             suite.check_for_write_records(
                 suite.flushed_files.path(),
                 round1.union(&round2).map(Vec::as_slice),
@@ -465,7 +498,7 @@ mod test {
             suite.must_register_task(1, "test_with_split");
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_with_split");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.wait_for_flush();
             suite.check_for_write_records(
                 suite.flushed_files.path(),
                 round1.union(&round2).map(Vec::as_slice),
@@ -485,7 +518,7 @@ mod test {
         suite.cluster.stop_node(leader);
         let round2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("test_leader_down");
-        std::thread::sleep(Duration::from_secs(4));
+        suite.wait_for_flush();
         suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(Vec::as_slice),
@@ -515,7 +548,7 @@ mod test {
             );
             suite.just_commit_a_key(make_record_key(1, 256), TimeStamp::new(256), ts);
             suite.force_flush_files("test_async_commit");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.wait_for_flush();
             let cp = cli
                 .global_progress_of_task("test_async_commit")
                 .await
@@ -530,7 +563,7 @@ mod test {
         test_util::init_log_for_test();
         let suite = super::Suite::new("fatal_error", 3);
         suite.must_register_task(1, "test_fatal_error");
-        std::thread::sleep(Duration::from_secs(2));
+        suite.sync();
         let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
         endpoint
             .scheduler()
@@ -540,8 +573,7 @@ mod test {
             ))
             .unwrap();
         let meta_cli = suite.get_meta_cli();
-        // NOTE: maybe implement some message like `Sync` for get rid of those magic wait?
-        std::thread::sleep(Duration::from_secs(2));
+        suite.sync();
         let err = run_async_test(meta_cli.get_last_error("test_fatal_error", *victim))
             .unwrap()
             .unwrap();
