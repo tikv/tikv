@@ -515,8 +515,6 @@ where
                             "region_id" => region.get_id(),
                         );
                     }
-                    let region_id = region.get_id();
-                    let _ = self.router.send(region_id, CasualMessage::ClearRegionSize);
                 }
             }
             #[cfg(any(test, feature = "testexport"))]
