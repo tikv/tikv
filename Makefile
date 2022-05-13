@@ -55,12 +55,9 @@ endif
 
 ifeq ($(TIKV_FRAME_POINTER),1)
 # Enable frame pointers for stable CPU Profiling.
-ENABLE_FEATURES += pprof-fp
 export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
 export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
 export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
-else
-ENABLE_FEATURES += pprof-dwarf
 endif
 
 # Pick an allocator
@@ -180,6 +177,11 @@ dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build: export TIKV_PROFILE=debug
+ifeq ($(TIKV_FRAME_POINTER),1)
+build: ENABLE_FEATURES += pprof-fp
+else
+build: ENABLE_FEATURES += pprof-dwarf
+endif
 ifeq ($(TIKV_BUILD_STD),1)
 build:
 	rustup component add rust-src
@@ -204,6 +206,11 @@ endif
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release: export TIKV_PROFILE=release
+ifeq ($(TIKV_FRAME_POINTER),1)
+release: ENABLE_FEATURES += pprof-fp
+else
+release: ENABLE_FEATURES += pprof-dwarf
+endif
 ifeq ($(TIKV_BUILD_STD),1)
 release:
 	rustup component add rust-src
@@ -406,6 +413,11 @@ endif
 
 export X_CARGO_ARGS:=${CARGO_ARGS}
 
+ifeq ($(TIKV_FRAME_POINTER),1)
+x-build-dist: ENABLE_FEATURES += pprof-fp
+else
+x-build-dist: ENABLE_FEATURES += pprof-dwarf
+endif
 x-build-dist: export X_CARGO_CMD=build
 x-build-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-dist: export X_CARGO_RELEASE=1
