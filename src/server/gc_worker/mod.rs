@@ -5,6 +5,7 @@ mod compaction_filter;
 mod config;
 mod gc_manager;
 mod gc_worker;
+mod rawkv_compaction_filter;
 
 // TODO: Use separated error type for GCWorker instead.
 #[cfg(any(test, feature = "failpoints"))]
@@ -14,6 +15,7 @@ pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 use engine_traits::MvccProperties;
 pub use gc_manager::AutoGcConfig;
 pub use gc_worker::{sync_gc, GcSafePointProvider, GcTask, GcWorker, GC_MAX_EXECUTING_TASKS};
+pub use rawkv_compaction_filter::RawCompactionFilterFactory;
 use txn_types::TimeStamp;
 
 pub use crate::storage::{Callback, Error, ErrorInner, Result};
