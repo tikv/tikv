@@ -568,8 +568,8 @@ where
     /// Approximate keys of the region.
     pub approximate_keys: Option<u64>,
     /// Whether this region has scheduled a split check task. If we just splitted
-    ///  the region or ingested one file which may be overlapped with the existed data, 
-    /// reset the flag so that the region can be splitted again. 
+    ///  the region or ingested one file which may be overlapped with the existed data,
+    /// reset the flag so that the region can be splitted again.
     pub may_skip_split_check: bool,
 
     /// The state for consistency check.

@@ -4880,8 +4880,8 @@ where
         // should work even if we change the region max size.
         // If peer says should update approximate size, update region size and check
         // whether the region should split.
-        // We assume that `may_skip_split_check` is only set true after the split check task is 
-        // scheduled. 
+        // We assume that `may_skip_split_check` is only set true after the split check task is
+        // scheduled.
         if self.fsm.peer.may_skip_split_check
             && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
@@ -4937,7 +4937,7 @@ where
         self.fsm.peer.size_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
         // the task is scheduled, next tick may skip it.
-        self.fsm.peer.may_skip_split_check = true;  
+        self.fsm.peer.may_skip_split_check = true;
     }
 
     fn on_prepare_split_region(
