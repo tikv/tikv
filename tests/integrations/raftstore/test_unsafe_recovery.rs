@@ -246,6 +246,7 @@ fn test_unsafe_recovery_already_in_joint_state() {
         region.get_id(),
         new_learner_peer(nodes[2], peer_on_store2.get_id()),
     );
+    // Wait the new learner to be initialized.
     sleep_ms(100);
     pd_client.must_joint_confchange(
         region.get_id(),
@@ -260,10 +261,9 @@ fn test_unsafe_recovery_already_in_joint_state() {
             ),
         ],
     );
-    // Sleep 100 ms to wait for the new learner to be initialized.
-    sleep_ms(100);
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
+    cluster.must_wait_for_leader_expire(nodes[0], region.get_id());
 
     confirm_quorum_is_lost(&mut cluster, &region);
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
