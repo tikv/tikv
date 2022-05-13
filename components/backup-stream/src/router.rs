@@ -19,7 +19,7 @@ use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 use futures::io::Cursor;
 use kvproto::{
-    brpb::{DataFileInfo, FileType, Metadata},
+    brpb::{DataFileInfo, FileType, Metadata, StreamBackupTaskInfo},
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
@@ -376,14 +376,15 @@ impl RouterInner {
         Ok(())
     }
 
-    pub async fn unregister_task(&self, task_name: &str) {
-        if self.tasks.lock().await.remove(task_name).is_some() {
+    pub async fn unregister_task(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
+        self.tasks.lock().await.remove(task_name).map(|t| {
             info!(
                 "backup stream unregister task";
                 "task" => task_name,
             );
             self.unregister_ranges(task_name);
-        }
+            t.task.info.clone()
+        })
     }
 
     /// get the task name by a key.
@@ -621,7 +622,7 @@ impl TempFileKey {
 }
 
 pub struct StreamTaskInfo {
-    task: StreamTask,
+    pub(crate) task: StreamTask,
     /// support external storage. eg local/s3.
     pub(crate) storage: Arc<dyn ExternalStorage>,
     /// The parent directory of temporary files.

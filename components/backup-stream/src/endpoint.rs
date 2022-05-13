@@ -5,7 +5,11 @@ use std::{convert::AsRef, fmt, marker::PhantomData, path::PathBuf, sync::Arc, ti
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use kvproto::{brpb::StreamBackupError, metapb::Region};
+use futures::{Future, FutureExt};
+use kvproto::{
+    brpb::{StreamBackupError, StreamBackupTaskInfo},
+    metapb::Region,
+};
 use online_config::ConfigChange;
 use pd_client::PdClient;
 use raft::StateRole;
@@ -218,22 +222,18 @@ where
 
     fn on_fatal_error(&self, task: String, err: Box<Error>) {
         // Let's pause the task locally first.
-        self.on_unregister(&task);
+        let start_ts = self.unload_task(&task).map(|task| task.start_ts);
         err.report(format_args!("fatal for task {}", err));
 
         let meta_cli = self.get_meta_client();
         let store_id = self.store_id;
         let sched = self.scheduler.clone();
+        let register_safepoint = self
+            .register_service_safepoint(task.clone(), TimeStamp::new(start_ts.unwrap_or_default()));
         self.pool.block_on(async move {
             // TODO: also pause the task using the meta client.
             let err_fut = async {
-                self.pd_client
-                    .update_service_safe_point(
-                        format!("{}-pause-guard", task),
-                        self.subs.safepoint(),
-                        ReadableDuration::hours(24).0,
-                    )
-                    .await?;
+                register_safepoint.await?;
                 meta_cli.pause(&task).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(err.error_code().code.to_owned());
@@ -411,7 +411,7 @@ where
                 self.on_unregister(&task_name);
             }
             TaskOp::PauseTask(task_name) => {
-                self.unload_task(&task_name);
+                self.on_pause(&task_name);
             }
             TaskOp::ResumeTask(task) => {
                 self.load_task(task);
@@ -478,7 +478,18 @@ where
                 "register backup stream task";
                 "task" => ?task,
             );
-
+            // clean the safepoint created at pause(if there is)
+            self.pool.spawn(
+                self.pd_client
+                    .update_service_safe_point(
+                        format!("{}-pause-guard", task.info.name),
+                        TimeStamp::zero(),
+                        Duration::new(0, 0),
+                    )
+                    .map(|r| {
+                        r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
+                    }),
+            );
             self.pool.block_on(async move {
                 let task_name = task.info.get_name();
                 match cli.ranges_of_task(task_name).await {
@@ -529,26 +540,56 @@ where
         };
     }
 
-    pub fn on_unregister(&self, task: &str) {
-        self.unload_task(task);
+    fn register_service_safepoint(
+        &self,
+        task_name: String,
+        // hint for make optimized safepoint when we cannot get that from `SubscriptionTracker`
+        start_ts: TimeStamp,
+    ) -> impl Future<Output = Result<()>> + Send + 'static {
+        self.pd_client
+            .update_service_safe_point(
+                format!("{}-pause-guard", task_name),
+                self.subs.safepoint().max(start_ts),
+                ReadableDuration::hours(24).0,
+            )
+            .map(|r| r.map_err(|err| err.into()))
+    }
 
-        // reset the checkpoint ts of the task so it won't
+    pub fn on_pause(&self, task: &str) {
+        let t = self.unload_task(task);
+
+        if let Some(task) = t {
+            self.pool.spawn(
+                self.register_service_safepoint(task.name, TimeStamp::new(task.start_ts))
+                    .map(|r| {
+                        r.map_err(|err| err.report("during setting service safepoint for task"))
+                    }),
+            );
+        }
+    }
+
+    pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
+        let info = self.unload_task(task);
+
+        // reset the checkpoint ts of the task so it won't mislead the metrics.
         metrics::STORE_CHECKPOINT_TS
             .with_label_values(&[task])
             .set(0);
+        info
     }
 
     /// unload a task from memory: this would stop observe the changes required by the task temporarily.
-    fn unload_task(&self, task: &str) {
+    fn unload_task(&self, task: &str) -> Option<StreamBackupTaskInfo> {
         let router = self.range_router.clone();
 
-        self.pool.block_on(async move {
-            router.unregister_task(task).await;
-        });
+        let info = self
+            .pool
+            .block_on(async move { router.unregister_task(task).await });
         // for now, we support one concurrent task only.
         // so simply clear all info would be fine.
         self.subs.clear();
         self.observer.ranges.wl().clear();
+        info
     }
 
     /// try advance the resolved ts by the pd tso.
