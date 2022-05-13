@@ -1149,6 +1149,7 @@ where
     fn on_clear_region_size(&mut self) {
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
+        self.fsm.peer.may_skip_split_check = false;
         self.register_split_region_check_tick();
     }
 
@@ -4860,7 +4861,6 @@ where
     }
 
     fn register_split_region_check_tick(&mut self) {
-        self.fsm.peer.may_skip_split_check = false;
         self.schedule_tick(PeerTick::SplitRegionCheck)
     }
 
