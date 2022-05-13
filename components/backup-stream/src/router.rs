@@ -1007,8 +1007,7 @@ impl MetadataInfo {
 
     fn path_to_meta(&self) -> String {
         format!(
-            // "/v1/backupmeta/{:012}-{}.meta",
-            "v1_backupmeta_{:012}-{}.meta",
+            "v1/backupmeta/{:012}-{}.meta",
             self.min_resolved_ts.unwrap_or_default(),
             uuid::Uuid::new_v4()
         )
@@ -1379,7 +1378,7 @@ mod tests {
             let entry = entry.unwrap();
             let filename = entry.file_name();
             println!("walking {}", entry.path().display());
-            if filename.to_str().unwrap().contains("v1_backupmeta") {
+            if entry.path().extension() == Some(OsStr::new("meta")) {
                 meta_count += 1;
             } else if entry.path().extension() == Some(OsStr::new("log")) {
                 log_count += 1;

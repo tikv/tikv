@@ -5176,7 +5176,7 @@ where
             meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
             region_buckets.meta = Arc::new(meta);
         } else {
-            info!(
+            debug!(
                 "refresh_region_buckets re-generates buckets";
                 "region_id" => self.fsm.region_id(),
             );
@@ -5212,7 +5212,7 @@ where
                 self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
             ));
         }
-        info!(
+        debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
             "buckets count" => buckets_count,
