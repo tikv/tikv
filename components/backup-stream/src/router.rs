@@ -50,7 +50,7 @@ use crate::{
     endpoint::Task,
     errors::{ContextualResultExt, Error},
     metadata::StreamTask,
-    metrics::SKIP_KV_COUNTER,
+    metrics::{HANDLE_KV_HISTOGRAM, SKIP_KV_COUNTER},
     subscription_track::TwoPhaseResolver,
     try_send,
     utils::{self, SegmentMap, Slot, SlotMap, StopWatch},
@@ -122,7 +122,11 @@ impl ApplyEvents {
                                 utils::redact(&value)
                             )
                         }) {
-                            Ok(lock) => resolver.track_lock(lock.ts, key),
+                            Ok(lock) => {
+                                if utils::should_track_lock(&lock) {
+                                    resolver.track_lock(lock.ts, key)
+                                }
+                            }
                             Err(err) => err.report(format!("region id = {}", region_id)),
                         }
                     }
@@ -446,6 +450,7 @@ impl RouterInner {
 
     pub async fn on_events(&self, kv: ApplyEvents) -> Vec<(String, Result<()>)> {
         use futures::FutureExt;
+        HANDLE_KV_HISTOGRAM.observe(kv.len() as _);
         let partitioned_events = kv.partition_by_range(&self.ranges.rl());
         let tasks = partitioned_events
             .into_iter()
