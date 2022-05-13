@@ -2,6 +2,7 @@
 
 use std::{sync::mpsc, thread, time::Duration};
 
+use api_version::{test_kv_format_impl, KvFormat};
 use cdc::{recv_timeout, OldValueCache, Task, Validate};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
@@ -14,9 +15,14 @@ use crate::{new_event_feed, ClientReceiver, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_double_scan_deregister() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_double_scan_deregister_impl<ApiV1 ApiV2>);
+}
 
-    let (k, v) = (b"key1".to_vec(), b"value".to_vec());
+fn test_cdc_double_scan_deregister_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
+
+    // If tikv enable ApiV2, txn key needs to start with 'x';
+    let (k, v) = (b"xkey1".to_vec(), b"value".to_vec());
     // Prewrite
     let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
@@ -72,9 +78,13 @@ fn test_cdc_double_scan_deregister() {
 
 #[test]
 fn test_cdc_double_scan_io_error() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_double_scan_io_error_impl<ApiV1 ApiV2>);
+}
 
-    let (k, v) = (b"key1".to_vec(), b"value".to_vec());
+fn test_cdc_double_scan_io_error_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
+
+    let (k, v) = (b"xkey1".to_vec(), b"value".to_vec());
     // Prewrite
     let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
@@ -162,11 +172,15 @@ fn test_cdc_double_scan_io_error() {
 #[test]
 #[ignore = "TODO: support continue scan after region split"]
 fn test_cdc_scan_continues_after_region_split() {
+    test_kv_format_impl!(test_cdc_scan_continues_after_region_split_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_scan_continues_after_region_split_impl<F: KvFormat>() {
     fail::cfg("cdc_after_incremental_scan_blocks_regional_errors", "pause").unwrap();
 
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, F::TAG);
 
-    let (k, v) = (b"key1".to_vec(), b"value".to_vec());
+    let (k, v) = (b"xkey1".to_vec(), b"value".to_vec());
     // Prewrite
     let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
@@ -187,8 +201,8 @@ fn test_cdc_scan_continues_after_region_split() {
     // wait for the first connection to start incremental scan
     sleep_ms(1000);
 
-    let region = suite.cluster.get_region(b"key1");
-    suite.cluster.must_split(&region, b"key2");
+    let region = suite.cluster.get_region(b"xkey1");
+    suite.cluster.must_split(&region, b"xkey2");
 
     // wait for region split to be processed
     sleep_ms(1000);
@@ -204,7 +218,7 @@ fn test_cdc_scan_continues_after_region_split() {
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
             assert_eq!(e.start_ts, start_ts1.into_inner(), "{:?}", es);
             assert_eq!(e.commit_ts, commit_ts1.into_inner(), "{:?}", es);
-            assert_eq!(e.key, b"key1", "{:?}", es);
+            assert_eq!(e.key, b"xkey1", "{:?}", es);
             assert_eq!(e.value, b"value", "{:?}", es);
 
             let e = &es.entries[1];
