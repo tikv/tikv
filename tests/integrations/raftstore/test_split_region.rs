@@ -611,9 +611,9 @@ fn test_node_split_region_diff_check() {
 }
 
 // Test steps
-// set max region size/split size 2000 and put data till 100
+// set max region size/split size 2000 and put data till 1000
 // set max region size/split size < 1000 and reboot
-// verify the region has splitted.
+// verify the region is splitted.
 #[test]
 fn test_node_split_region_after_reboot_with_config_change() {
     let count = 1;
@@ -645,8 +645,17 @@ fn test_node_split_region_after_reboot_with_config_change() {
     cluster.stop_node(1);
     cluster.run_node(1).unwrap();
 
-    sleep_ms(200);
-    assert!(pd_client.get_split_count() > 0);
+    let mut try_cnt = 0;
+    loop {
+        sleep_ms(20);
+        if pd_client.get_split_count() > 0 {
+            break;
+        }
+        try_cnt += 1;
+        if try_cnt == 50 {
+            panic!("expect get_split_count > 0 after 1s");
+        }
+    }
 }
 
 fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
