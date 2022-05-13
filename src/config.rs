@@ -2333,6 +2333,8 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct BackupStreamConfig {
     #[online_config(skip)]
+    pub max_flush_interval: ReadableDuration,
+    #[online_config(skip)]
     pub num_threads: usize,
     #[online_config(skip)]
     pub io_threads: usize,
@@ -2361,6 +2363,7 @@ impl Default for BackupStreamConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
+            max_flush_interval: ReadableDuration::minutes(5),
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             io_threads: 2,

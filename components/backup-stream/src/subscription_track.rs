@@ -58,6 +58,17 @@ impl RegionSubscription {
 }
 
 impl SubscriptionTracer {
+    /// get the current safe point: data before this ts have already be flushed and be able to be GCed.
+    pub fn safepoint(&self) -> TimeStamp {
+        // use the current resolved_ts is safe because it is only advanced when flushing.
+        self.0
+            .iter()
+            .map(|r| r.resolver.resolved_ts())
+            .min()
+            // NOTE: Maybe use the current timestamp?
+            .unwrap_or(TimeStamp::zero())
+    }
+
     /// clear the current `SubscriptionTracer`.
     pub fn clear(&self) {
         self.0.retain(|_, v| {
