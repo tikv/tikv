@@ -10,9 +10,9 @@ use engine_traits::{
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 
-use crate::{metrics::*, RFEngine, WriteBatch};
+use crate::{metrics::*, RfEngine, WriteBatch};
 
-impl RaftEngineReadOnly for RFEngine {
+impl RaftEngineReadOnly for RfEngine {
     fn get_raft_state(&self, _raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         panic!()
     }
@@ -64,7 +64,7 @@ impl RaftEngineReadOnly for RFEngine {
     }
 }
 
-impl RaftEngine for RFEngine {
+impl RaftEngine for RfEngine {
     type LogBatch = WriteBatch;
 
     fn log_batch(&self, _capacity: usize) -> Self::LogBatch {

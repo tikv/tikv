@@ -23,7 +23,7 @@ use thiserror::Error as ThisError;
 use crate::{metrics::*, *};
 
 #[derive(Clone)]
-pub struct RFEngine {
+pub struct RfEngine {
     pub dir: PathBuf,
     pub(crate) writer: Arc<Mutex<WALWriter>>,
 
@@ -256,7 +256,7 @@ impl RaftLogOp {
     }
 }
 
-impl RFEngine {
+impl RfEngine {
     pub fn open(dir: &Path, wal_size: usize) -> Result<Self> {
         maybe_create_dir(dir)?;
         let mut epoches = read_epoches(dir)?;
@@ -893,7 +893,7 @@ mod tests {
         init_logger();
         let tmp_dir = tempfile::tempdir().unwrap();
         let wal_size = 128 * 1024_usize;
-        let mut engine = RFEngine::open(tmp_dir.path(), wal_size).unwrap();
+        let mut engine = RfEngine::open(tmp_dir.path(), wal_size).unwrap();
         let mut wb = WriteBatch::new();
         for region_id in 1..=10_u64 {
             let (key, val) = make_state_kv(2, 1);
@@ -926,7 +926,7 @@ mod tests {
         assert_eq!(old_entries_map.len(), 10);
         engine.stop_worker();
         for _ in 0..2 {
-            let engine = RFEngine::open(tmp_dir.path(), wal_size).unwrap();
+            let engine = RfEngine::open(tmp_dir.path(), wal_size).unwrap();
             engine.iterate_all_states(false, |region_id, key, _| {
                 let old_region_data = old_entries_map.get(&region_id).unwrap();
                 assert!(old_region_data.get_state(key).is_some());

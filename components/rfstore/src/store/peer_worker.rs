@@ -328,7 +328,7 @@ impl ApplyWorker {
 }
 
 pub(crate) struct IOWorker {
-    engine: rfengine::RFEngine,
+    engine: rfengine::RfEngine,
     receiver: Receiver<IOTask>,
     router: RaftRouter,
     trans: Box<dyn Transport>,
@@ -336,7 +336,7 @@ pub(crate) struct IOWorker {
 
 impl IOWorker {
     pub(crate) fn new(
-        engine: rfengine::RFEngine,
+        engine: rfengine::RfEngine,
         router: RaftRouter,
         trans: Box<dyn Transport>,
     ) -> (Self, Sender<IOTask>) {

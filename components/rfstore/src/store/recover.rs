@@ -19,12 +19,12 @@ use crate::store::{
 
 #[derive(Clone)]
 pub struct RecoverHandler {
-    rf_engine: rfengine::RFEngine,
+    rf_engine: rfengine::RfEngine,
     store_id: u64,
 }
 
 impl RecoverHandler {
-    pub fn new(rf_engine: rfengine::RFEngine) -> Self {
+    pub fn new(rf_engine: rfengine::RfEngine) -> Self {
         let store_id = match load_store_ident(&rf_engine) {
             Some(ident) => ident.store_id,
             None => 0,
@@ -90,7 +90,7 @@ impl RecoverHandler {
     }
 }
 
-fn load_store_ident(rf_engine: &rfengine::RFEngine) -> Option<raft_serverpb::StoreIdent> {
+fn load_store_ident(rf_engine: &rfengine::RfEngine) -> Option<raft_serverpb::StoreIdent> {
     let val = rf_engine.get_state(0, STORE_IDENT_KEY);
     val.as_ref()?;
     let mut ident = raft_serverpb::StoreIdent::new();

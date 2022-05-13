@@ -80,7 +80,7 @@ pub struct StatusServer {
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
     kvengine: kvengine::Engine,
-    rfengine: rfengine::RFEngine,
+    rfengine: rfengine::RfEngine,
 }
 
 impl StatusServer {
@@ -91,7 +91,7 @@ impl StatusServer {
         router: RaftRouter,
         store_path: PathBuf,
         kvengine: kvengine::Engine,
-        rfengine: rfengine::RFEngine,
+        rfengine: rfengine::RfEngine,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -386,7 +386,7 @@ impl StatusServer {
 
     async fn dump_rfengine_stats(
         req: Request<Body>,
-        engine: rfengine::RFEngine,
+        engine: rfengine::RfEngine,
     ) -> hyper::Result<Response<Body>> {
         let path = req.uri().path();
         let last = get_last_path_segment(path);
