@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use dashmap::{mapref::one::RefMut, DashMap};
 use kvproto::metapb::Region;
@@ -58,6 +58,17 @@ impl RegionSubscription {
 }
 
 impl SubscriptionTracer {
+    /// get the current safe point: data before this ts have already be flushed and be able to be GCed.
+    pub fn safepoint(&self) -> TimeStamp {
+        // use the current resolved_ts is safe because it is only advanced when flushing.
+        self.0
+            .iter()
+            .map(|r| r.resolver.resolved_ts())
+            .min()
+            // NOTE: Maybe use the current timestamp?
+            .unwrap_or(TimeStamp::zero())
+    }
+
     /// clear the current `SubscriptionTracer`.
     pub fn clear(&self) {
         self.0.retain(|_, v| {
@@ -101,18 +112,21 @@ impl SubscriptionTracer {
 
     #[inline(always)]
     pub fn warn_if_gap_too_huge(&self, ts: TimeStamp) {
-        if TimeStamp::physical_now() - ts.physical() >= 10 * 60 * 1000
+        let gap = TimeStamp::physical_now() - ts.physical();
+        if gap >= 10 * 60 * 1000
         /* 10 mins */
         {
             let far_resolver = self
                 .0
                 .iter()
                 .min_by_key(|r| r.value().resolver.resolved_ts());
-            warn!("stream backup resolver ts advancing too slow";
+            warn!("log backup resolver ts advancing too slow";
             "far_resolver" => %{match far_resolver {
                 Some(r) => format!("{:?}", r.value().resolver),
                 None => "BUG[NoResolverButResolvedTSDoesNotAdvance]".to_owned()
-            }});
+            }},
+            "gap" => ?Duration::from_millis(gap),
+            );
         }
     }
 
