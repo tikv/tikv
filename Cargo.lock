@@ -500,6 +500,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "yatp",
 ]
 
 [[package]]
