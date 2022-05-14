@@ -434,6 +434,9 @@ pub enum CasualMessage<EK: KvEngine> {
 
     // Snapshot is applied
     SnapshotApplied,
+
+    // Trigger raft to campaign which is used after exiting force leader
+    Campaign,
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -492,6 +495,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RefreshRegionBuckets { .. } => write!(fmt, "RefreshRegionBuckets"),
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
             CasualMessage::SnapshotApplied => write!(fmt, "SnapshotApplied"),
+            CasualMessage::Campaign => write!(fmt, "Campaign"),
         }
     }
 }

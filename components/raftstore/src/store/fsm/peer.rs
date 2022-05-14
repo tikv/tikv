@@ -1017,6 +1017,10 @@ where
             CasualMessage::SnapshotApplied => {
                 self.fsm.has_ready = true;
             }
+            CasualMessage::Campaign => {
+                let _ = self.fsm.peer.raft_group.campaign();
+                self.fsm.has_ready = true;
+            }
         }
     }
 
@@ -1511,8 +1515,11 @@ where
         self.fsm.peer.raft_group.raft.set_check_quorum(true);
         self.fsm.peer.raft_group.raft.pre_vote = true;
         if self.fsm.peer.raft_group.raft.promotable() {
-            // let it trigger election immediately.
-            let _ = self.fsm.peer.raft_group.campaign();
+            // Do not campaign directly here, otherwise on_role_changed() won't called for follower state
+            let _ = self.ctx.router.send(
+                self.region_id(),
+                PeerMsg::CasualMessage(CasualMessage::Campaign),
+            );
         }
         self.fsm.has_ready = true;
     }
