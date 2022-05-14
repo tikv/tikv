@@ -5,7 +5,11 @@ use std::{convert::AsRef, fmt, marker::PhantomData, path::PathBuf, sync::Arc, ti
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use kvproto::{brpb::StreamBackupError, metapb::Region};
+use futures::{Future, FutureExt};
+use kvproto::{
+    brpb::{StreamBackupError, StreamBackupTaskInfo},
+    metapb::Region,
+};
 use online_config::ConfigChange;
 use pd_client::PdClient;
 use raft::StateRole;
@@ -16,7 +20,9 @@ use raftstore::{
 };
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
-    box_err, debug, error, info,
+    box_err,
+    config::ReadableDuration,
+    debug, error, info,
     time::Instant,
     warn,
     worker::{Runnable, Scheduler},
@@ -28,12 +34,13 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
+use yatp::task::callback::Handle as YatpHandle;
 
-use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
+use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
 use crate::{
     annotate,
     errors::{Error, Result},
-    event_loader::InitialDataLoader,
+    event_loader::{InitialDataLoader, PendingMemoryQuota},
     metadata::{
         store::{EtcdStore, MetaStore},
         MetadataClient, MetadataEvent, StreamTask,
@@ -61,6 +68,8 @@ pub struct Endpoint<S: MetaStore + 'static, R, E, RT, PDC> {
     pd_client: Arc<PDC>,
     subs: SubscriptionTracer,
     concurrency_manager: ConcurrencyManager,
+    initial_scan_memory_quota: PendingMemoryQuota,
+    scan_pool: ScanPool,
 }
 
 impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
@@ -82,8 +91,10 @@ where
         pd_client: Arc<PDC>,
         cm: ConcurrencyManager,
     ) -> Self {
-        let pool = create_tokio_runtime(config.num_threads, "br-stream")
+        // Always use 2 threads for I/O tasks.
+        let pool = create_tokio_runtime(config.io_threads, "br-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
+        let scan_pool = create_scan_pool(config.num_threads);
 
         // TODO consider TLS?
         let meta_client = Some(cli);
@@ -91,6 +102,7 @@ where
             PathBuf::from(config.temp_path.clone()),
             scheduler.clone(),
             config.temp_file_size_limit_per_task.0,
+            config.max_flush_interval.0,
         );
 
         if let Some(meta_client) = meta_client.as_ref() {
@@ -107,7 +119,8 @@ where
             });
             pool.spawn(Self::starts_flush_ticks(range_router.clone()));
         }
-
+        let initial_scan_memory_quota =
+            PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
         info!("the endpoint of backup stream started"; "path" => %config.temp_path);
         Endpoint {
             meta_client,
@@ -122,6 +135,8 @@ where
             pd_client,
             subs: Default::default(),
             concurrency_manager: cm,
+            initial_scan_memory_quota,
+            scan_pool,
         }
     }
 }
@@ -145,8 +160,9 @@ where
         concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<EtcdStore, R, E, RT, PDC> {
         crate::metrics::STREAM_ENABLED.inc();
-        let pool = create_tokio_runtime(config.num_threads, "backup-stream")
+        let pool = create_tokio_runtime(config.io_threads, "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
+        let scan_pool = create_scan_pool(config.num_threads);
 
         // TODO consider TLS?
         let meta_client = match pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
@@ -164,6 +180,7 @@ where
             PathBuf::from(config.temp_path.clone()),
             scheduler.clone(),
             config.temp_file_size_limit_per_task.0,
+            config.max_flush_interval.0,
         );
 
         if let Some(meta_client) = meta_client.as_ref() {
@@ -182,6 +199,8 @@ where
             pool.spawn(Self::starts_flush_ticks(range_router.clone()));
         }
 
+        let initial_scan_memory_quota =
+            PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         Endpoint {
             meta_client,
@@ -196,6 +215,8 @@ where
             pd_client,
             subs: Default::default(),
             concurrency_manager,
+            initial_scan_memory_quota,
+            scan_pool,
         }
     }
 }
@@ -214,15 +235,18 @@ where
 
     fn on_fatal_error(&self, task: String, err: Box<Error>) {
         // Let's pause the task locally first.
-        self.on_unregister(&task);
+        let start_ts = self.unload_task(&task).map(|task| task.start_ts);
         err.report(format_args!("fatal for task {}", err));
 
         let meta_cli = self.get_meta_client();
         let store_id = self.store_id;
         let sched = self.scheduler.clone();
+        let register_safepoint = self
+            .register_service_safepoint(task.clone(), TimeStamp::new(start_ts.unwrap_or_default()));
         self.pool.block_on(async move {
             // TODO: also pause the task using the meta client.
             let err_fut = async {
+                register_safepoint.await?;
                 meta_cli.pause(&task).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(err.error_code().code.to_owned());
@@ -369,7 +393,6 @@ where
             utils::handle_on_event_result(&sched, router.on_events(kvs).await);
             metrics::HEAP_MEMORY
                 .sub(total_size as _);
-            HANDLE_KV_HISTOGRAM.observe(kv_count as _);
             let time_cost = sw.lap().as_secs_f64();
             if time_cost > SLOW_EVENT_THRESHOLD {
                 warn!("write to temp file too slow."; "time_cost" => ?time_cost, "region_id" => %region_id, "len" => %kv_count);
@@ -388,6 +411,8 @@ where
             self.range_router.clone(),
             self.subs.clone(),
             self.scheduler.clone(),
+            self.initial_scan_memory_quota.clone(),
+            self.pool.handle().clone(),
         )
     }
 
@@ -400,10 +425,10 @@ where
                 self.on_unregister(&task_name);
             }
             TaskOp::PauseTask(task_name) => {
-                self.on_unregister(&task_name);
+                self.on_pause(&task_name);
             }
             TaskOp::ResumeTask(task) => {
-                self.on_register(task);
+                self.load_task(task);
             }
         }
     }
@@ -428,7 +453,7 @@ where
                 "end_key" => utils::redact(&end_key),
             );
         }
-        tokio::task::spawn_blocking(move || {
+        self.spawn_at_scan_pool(move || {
             let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
             match range_init_result {
                 Ok(()) => {
@@ -447,6 +472,17 @@ where
 
     // register task ranges
     pub fn on_register(&self, task: StreamTask) {
+        let name = task.info.name.clone();
+        let start_ts = task.info.start_ts;
+        self.load_task(task);
+
+        metrics::STORE_CHECKPOINT_TS
+            .with_label_values(&[name.as_str()])
+            .set(start_ts as _);
+    }
+
+    /// Load the task into memory: this would make the endpint start to observe.
+    fn load_task(&self, task: StreamTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
             let init = self.make_initial_loader();
@@ -456,7 +492,18 @@ where
                 "register backup stream task";
                 "task" => ?task,
             );
-
+            // clean the safepoint created at pause(if there is)
+            self.pool.spawn(
+                self.pd_client
+                    .update_service_safe_point(
+                        format!("{}-pause-guard", task.info.name),
+                        TimeStamp::zero(),
+                        Duration::new(0, 0),
+                    )
+                    .map(|r| {
+                        r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
+                    }),
+            );
             self.pool.block_on(async move {
                 let task_name = task.info.get_name();
                 match cli.ranges_of_task(task_name).await {
@@ -507,18 +554,57 @@ where
         };
     }
 
-    pub fn on_unregister(&self, task: &str) {
-        info!("unregistering a task"; "task" => %task);
+    fn register_service_safepoint(
+        &self,
+        task_name: String,
+        // hint for make optimized safepoint when we cannot get that from `SubscriptionTracker`
+        start_ts: TimeStamp,
+    ) -> impl Future<Output = Result<()>> + Send + 'static {
+        self.pd_client
+            .update_service_safe_point(
+                format!("{}-pause-guard", task_name),
+                self.subs.safepoint().max(start_ts),
+                ReadableDuration::hours(24).0,
+            )
+            .map(|r| r.map_err(|err| err.into()))
+    }
+
+    pub fn on_pause(&self, task: &str) {
+        let t = self.unload_task(task);
+
+        if let Some(task) = t {
+            self.pool.spawn(
+                self.register_service_safepoint(task.name, TimeStamp::new(task.start_ts))
+                    .map(|r| {
+                        r.map_err(|err| err.report("during setting service safepoint for task"))
+                    }),
+            );
+        }
+    }
+
+    pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
+        let info = self.unload_task(task);
+
+        // reset the checkpoint ts of the task so it won't mislead the metrics.
+        metrics::STORE_CHECKPOINT_TS
+            .with_label_values(&[task])
+            .set(0);
+        info
+    }
+
+    /// unload a task from memory: this would stop observe the changes required by the task temporarily.
+    fn unload_task(&self, task: &str) -> Option<StreamBackupTaskInfo> {
         let router = self.range_router.clone();
 
         // for now, we support one concurrent task only.
         // so simply clear all info would be fine.
         self.observer.ranges.wl().clear();
         self.subs.clear();
+        let info = self
+            .pool
+            .block_on(async move { router.unregister_task(task).await });
 
-        self.pool.block_on(async move {
-            router.unregister_task(task).await;
-        });
+        info
     }
 
     /// try advance the resolved ts by the pd tso.
@@ -659,10 +745,15 @@ where
         })?;
         let region = region.clone();
 
-        self.pool.spawn_blocking(move || {
+        // we should not spawn initial scanning tasks to the tokio blocking pool
+        // beacuse it is also used for converting sync File I/O to async. (for now!)
+        // In that condition, if we blocking for some resouces(for example, the `MemoryQuota`)
+        // at the block threads, we may meet some ghosty deadlock.
+        self.spawn_at_scan_pool(move || {
+            let begin = Instant::now_coarse();
             match init.do_initial_scan(&region, last_checkpoint, snap) {
                 Ok(stat) => {
-                    info!("initial scanning of leader transforming finished!"; "statistics" => ?stat, "region" => %region.get_id(), "from_ts" => %last_checkpoint);
+                    info!("initial scanning of leader transforming finished!"; "takes" => ?begin.saturating_elapsed(), "region" => %region.get_id(), "from_ts" => %last_checkpoint);
                     utils::record_cf_stat("lock", &stat.lock);
                     utils::record_cf_stat("write", &stat.write);
                     utils::record_cf_stat("default", &stat.data);
@@ -671,6 +762,16 @@ where
             }
         });
         Ok(())
+    }
+
+    // spawn a task at the scan pool.
+    fn spawn_at_scan_pool(&self, task: impl FnOnce() + Send + 'static) {
+        self.scan_pool.spawn(move |_: &mut YatpHandle<'_>| {
+            tikv_alloc::add_thread_memory_accessor();
+            let _io_guard = file_system::WithIOType::new(file_system::IOType::Replication);
+            task();
+            tikv_alloc::remove_thread_memory_accessor();
+        })
     }
 
     fn find_task_by_region(&self, r: &Region) -> Option<String> {
@@ -686,7 +787,12 @@ where
             ObserveOp::Start {
                 region,
                 needs_initial_scanning,
-            } => self.start_observe(region, needs_initial_scanning),
+            } => {
+                self.start_observe(region, needs_initial_scanning);
+                metrics::INITIAL_SCAN_REASON
+                    .with_label_values(&["leader-changed"])
+                    .inc();
+            }
             ObserveOp::Stop { ref region } => {
                 self.subs.deregister_region(region, |_, _| true);
             }
@@ -716,6 +822,9 @@ where
                                 region
                             )
                         });
+                        metrics::INITIAL_SCAN_REASON
+                            .with_label_values(&["region-changed"])
+                            .inc();
                         if let Err(e) = self.observe_over_with_initial_data_from_checkpoint(
                             region,
                             for_task,
@@ -839,6 +948,9 @@ where
                 .inc();
             return Ok(());
         }
+        metrics::INITIAL_SCAN_REASON
+            .with_label_values(&["retry"])
+            .inc();
         self.start_observe(region, true);
         Ok(())
     }
@@ -876,14 +988,24 @@ where
     }
 }
 
+type ScanPool = yatp::ThreadPool<yatp::task::callback::TaskCell>;
+
+/// Create a yatp pool for doing initial scanning.
+fn create_scan_pool(num_threads: usize) -> ScanPool {
+    yatp::Builder::new("log-backup-scan")
+        .max_thread_count(num_threads)
+        .build_callback_pool()
+}
+
 /// Create a standard tokio runtime
 /// (which allows io and time reactor, involve thread memory accessor),
 fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .thread_name(thread_name)
         // Maybe make it more configurable?
-        // currently, blocking threads would be used for incremental scanning.
-        .max_blocking_threads(thread_count)
+        // currently, blocking threads would be used for tokio local I/O.
+        // (`File` API in `tokio::io` would use this pool.)
+        .max_blocking_threads(thread_count * 8)
         .worker_threads(thread_count)
         .enable_io()
         .enable_time()

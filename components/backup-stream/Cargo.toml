@@ -54,6 +54,7 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] } 
 txn_types = { path = "../txn_types", default-features = false }
 uuid = "0.8"
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 async-trait = "0.1"
