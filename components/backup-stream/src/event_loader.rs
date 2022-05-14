@@ -275,7 +275,14 @@ where
                 region.get_id()
             ))?;
         let snap = block_on(fut)
-            .expect("BUG: channel of paired_future_callback canceled.")
+            .map_err(|err| {
+                annotate!(
+                    err,
+                    "message 'CaptureChange' dropped for region {}",
+                    region.id
+                )
+            })
+            .flatten()
             .context(format_args!(
                 "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
                 region.get_id(),
@@ -336,7 +343,7 @@ where
             let mut events = ApplyEvents::with_capacity(1024, region.id);
             let stat =
                 self.with_resolver(region, |r| event_loader.scan_batch(1024, &mut events, r))?;
-            if events.len() == 0 {
+            if events.is_empty() {
                 metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
                 return Ok(stats.stat);
             }

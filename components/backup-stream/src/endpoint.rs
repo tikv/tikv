@@ -370,11 +370,15 @@ where
                 return;
             }
         };
+        if batch.pitr_id != resolver.value().handle.id {
+            warn!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
+            return;
+        }
         let sched = self.scheduler.clone();
 
         let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver());
         drop(resolver);
-        if kvs.len() == 0 {
+        if kvs.is_empty() {
             return;
         }
 
