@@ -5,7 +5,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
-    sync::{mpsc::channel, Arc},
+    sync::Arc,
     time::Duration,
 };
 
@@ -434,7 +434,6 @@ impl Suite {
         self.endpoints
             .iter()
             .map({
-                let cond = cond.clone();
                 move |(_, wkr)| {
                     let (tx, rx) = std::sync::mpsc::channel();
                     wkr.scheduler()

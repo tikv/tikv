@@ -335,7 +335,7 @@ where
         loop {
             let mut events = ApplyEvents::with_capacity(1024, region.id);
             let stat =
-                self.with_resolver(&region, |r| event_loader.scan_batch(1024, &mut events, r))?;
+                self.with_resolver(region, |r| event_loader.scan_batch(1024, &mut events, r))?;
             if events.len() == 0 {
                 metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
                 return Ok(stats.stat);

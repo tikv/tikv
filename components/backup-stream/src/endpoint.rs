@@ -600,11 +600,7 @@ where
         // so simply clear all info would be fine.
         self.observer.ranges.wl().clear();
         self.subs.clear();
-        let info = self
-            .pool
-            .block_on(async move { router.unregister_task(task).await });
-
-        info
+        self.pool.block_on(router.unregister_task(task))
     }
 
     /// try advance the resolved ts by the pd tso.
