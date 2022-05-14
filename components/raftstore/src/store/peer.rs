@@ -488,6 +488,7 @@ pub enum ForceLeaderState {
         failed_stores: HashSet<u64>,
     },
     ForceLeader {
+        time: TiInstant,
         failed_stores: HashSet<u64>,
     },
 }
@@ -500,12 +501,12 @@ pub enum ForceLeaderState {
 //            -> broadcast wait-apply commands
 //            -> wait for all the peers' apply indices meet their targets
 //            -> broadcast fill out report commands
-//            -> wait for all the peers fill out the reports for themsleves
+//            -> wait for all the peers fill out the reports for themselves
 //            -> send a store report (through store heartbeat)
 //     2. force leader phase
 //            dispatch force leader commands
-//            -> wait for all the peers that recived the command become force leader
-//            -> start_unsafe_recovry_report
+//            -> wait for all the peers that received the command become force leader
+//            -> start_unsafe_recovery_report
 //     3. plan execution phase
 //            dispatch recovery plans
 //            -> wait for all the creates, deletes and demotes to finish, for the demotes,
@@ -517,7 +518,7 @@ pub enum ForceLeaderState {
 
 // Intends to use RAII to sync unsafe recovery procedures between peers, in addition to that,
 // it uses a closure to avoid having a raft router as a member variable, which is statically
-// dispatched, thus needs to propage the generics everywhere.
+// dispatched, thus needs to propagate the generics everywhere.
 pub struct InvokeClosureOnDrop(Box<dyn Fn() + Send + Sync>);
 
 impl fmt::Debug for InvokeClosureOnDrop {
@@ -1909,7 +1910,7 @@ where
 
     pub fn maybe_force_forward_commit_index(&mut self) -> bool {
         let failed_stores = match &self.force_leader {
-            Some(ForceLeaderState::ForceLeader { failed_stores }) => failed_stores,
+            Some(ForceLeaderState::ForceLeader { failed_stores, .. }) => failed_stores,
             _ => unreachable!(),
         };
 

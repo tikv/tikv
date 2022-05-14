@@ -1484,7 +1484,10 @@ where
         // make sure it's not hibernated
         self.reset_raft_tick(GroupState::Ordered);
 
-        self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader { failed_stores });
+        self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader {
+            time: TiInstant::now_coarse(),
+            failed_stores,
+        });
         self.fsm.has_ready = true;
     }
 
@@ -5476,6 +5479,14 @@ where
 
         if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
             return;
+        }
+
+        if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
+            // If the force leader state lasts a long time, it probably means PD recovery process aborts for some reasons.
+            // So just exit to avoid blocking the read and write requests for this peer.
+            if time.saturating_elapsed() > self.ctx.cfg.peer_stale_state_check_interval.0 {
+                self.on_exit_force_leader();
+            }
         }
 
         if self.ctx.cfg.hibernate_regions {
