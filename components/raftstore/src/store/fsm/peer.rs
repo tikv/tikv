@@ -1149,7 +1149,7 @@ where
     fn on_clear_region_size(&mut self) {
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
-        self.fsm.peer.has_calculated_region_size = false;
+        self.fsm.peer.may_skip_split_check = false;
         self.register_split_region_check_tick();
     }
 
@@ -3418,7 +3418,7 @@ where
         self.fsm.peer.post_split();
 
         // It's not correct anymore, so set it to false to schedule a split check task.
-        self.fsm.peer.has_calculated_region_size = false;
+        self.fsm.peer.may_skip_split_check = false;
 
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
@@ -4875,14 +4875,14 @@ where
             return;
         }
 
-        // When restart, the has_calculated_region_size will be false. The split check will first
+        // When restart, the may_skip_split_check will be false. The split check will first
         // check the region size, and then check whether the region should split. This
         // should work even if we change the region max size.
         // If peer says should update approximate size, update region size and check
         // whether the region should split.
-        // We assume that `has_calculated_region_size` is only set true when receives an
-        // accurate value sent from split-check thread.
-        if self.fsm.peer.has_calculated_region_size
+        // We assume that `may_skip_split_check` is only set true after the split check task is
+        // scheduled.
+        if self.fsm.peer.may_skip_split_check
             && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
         {
@@ -4936,6 +4936,8 @@ where
         }
         self.fsm.peer.size_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
+        // the task is scheduled, next tick may skip it.
+        self.fsm.peer.may_skip_split_check = true;
     }
 
     fn on_prepare_split_region(
@@ -5048,7 +5050,6 @@ where
 
     fn on_approximate_region_size(&mut self, size: u64) {
         self.fsm.peer.approximate_size = Some(size);
-        self.fsm.peer.has_calculated_region_size = true;
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
         fail_point!("on_approximate_region_size");
@@ -5593,7 +5594,7 @@ where
             Some(self.fsm.peer.approximate_keys.unwrap_or_default() + keys);
         // The ingested file may be overlapped with the data in engine, so we need to check it
         // again to get the accurate value.
-        self.fsm.peer.has_calculated_region_size = false;
+        self.fsm.peer.may_skip_split_check = false;
         if self.fsm.peer.is_leader() {
             self.on_pd_heartbeat_tick();
             self.register_split_region_check_tick();

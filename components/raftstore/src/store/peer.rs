@@ -567,10 +567,10 @@ where
     pub approximate_size: Option<u64>,
     /// Approximate keys of the region.
     pub approximate_keys: Option<u64>,
-    /// Whether this region has calculated region size by split-check thread. If we just splitted
-    ///  the region or ingested one file which may be overlapped with the existed data, the
-    /// `approximate_size` is not very accurate.
-    pub has_calculated_region_size: bool,
+    /// Whether this region has scheduled a split check task. If we just splitted
+    ///  the region or ingested one file which may be overlapped with the existed data,
+    /// reset the flag so that the region can be splitted again.
+    pub may_skip_split_check: bool,
 
     /// The state for consistency check.
     pub consistency_state: ConsistencyState,
@@ -736,7 +736,7 @@ where
             delete_keys_hint: 0,
             approximate_size: None,
             approximate_keys: None,
-            has_calculated_region_size: false,
+            may_skip_split_check: false,
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
