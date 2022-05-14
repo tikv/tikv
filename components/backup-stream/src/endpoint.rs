@@ -370,8 +370,17 @@ where
                 return;
             }
         };
+        // Stale data is accpetable, while stale locks may block the checkpoint advancing.
+        // Let L be the instant some key locked, U be the instant it unlocked,
+        // +---------*-------L-----------U--*-------------+
+        //           ^   ^----(1)----^      ^ We get the snapshot for initial scanning at here.
+        //           +- If we issue refresh resolver at here, and the cmd batch (1) is the last cmd batch of the first observing.
+        //              ...the background initial scanning may keep running, and the lock would be sent to the scanning.
+        //              ...note that (1) is the last cmd batch of first observing, so the unlock event would never be sent to us.
+        //              ...then the lock would get an eternal life in the resolver :|
+        //                 (Before we refreshing the resolver for this region again)
         if batch.pitr_id != resolver.value().handle.id {
-            warn!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
+            debug!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
             return;
         }
         let sched = self.scheduler.clone();
@@ -1030,7 +1039,9 @@ pub enum Task {
     ForceFlush(String),
     /// FatalError pauses the task and set the error.
     FatalError(String, Box<Error>),
-    /// Run the callback when see this message.
+    /// Run the callback when see this message. Only for test usage.
+    /// NOTE: Those messages for testing are not guared by `#[cfg(test)]` for now, because
+    ///       the integration test would not enable test config when compiling (why?)
     Sync(
         // Run the closure if ...
         Box<dyn FnOnce() + Send>,
