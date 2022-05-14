@@ -1,7 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{borrow::Cow, fmt, sync::Arc};
+#[cfg(any(test, feature = "testexport"))]
+use std::sync::Arc;
+use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
