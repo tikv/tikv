@@ -1,5 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-/*
+
 #![cfg(test)]
 
 use std::{
@@ -437,7 +437,7 @@ mod test {
 
     #[test]
     fn basic() {
-        test_util::init_log_for_test();
+        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("basic", 4);
 
         run_async_test(async {
@@ -457,7 +457,7 @@ mod test {
 
     #[test]
     fn with_split() {
-        test_util::init_log_for_test();
+        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("with_split", 4);
         run_async_test(async {
             let round1 = suite.write_records(0, 128, 1).await;
@@ -477,7 +477,7 @@ mod test {
     #[test]
     /// This case tests whether the backup can continue when the leader failes.
     fn leader_down() {
-        test_util::init_log_for_test();
+        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("leader_down", 4);
         suite.must_register_task(1, "test_leader_down");
         let round1 = run_async_test(suite.write_records(0, 128, 1));
@@ -497,7 +497,7 @@ mod test {
     /// This case tests whehter the checkpoint ts (next backup ts) can be advanced correctly
     /// when async commit is enabled.
     fn async_commit() {
-        test_util::init_log_for_test();
+        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("async_commit", 3);
         run_async_test(async {
             suite.must_register_task(1, "test_async_commit");
@@ -527,7 +527,7 @@ mod test {
 
     #[test]
     fn fatal_error() {
-        test_util::init_log_for_test();
+        // test_util::init_log_for_test();
         let suite = super::Suite::new("fatal_error", 3);
         suite.must_register_task(1, "test_fatal_error");
         std::thread::sleep(Duration::from_secs(2));
@@ -553,4 +553,3 @@ mod test {
         assert!(paused)
     }
 }
-*/
