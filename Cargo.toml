@@ -75,6 +75,7 @@ chrono = "0.4"
 codec = { path = "components/codec", default-features = false }
 collections = { path = "components/collections" }
 concurrency_manager = { path = "components/concurrency_manager", default-features = false }
+config_info = { path = "components/config_info" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 crc32fast = "1.2"
 crc64fast = "0.1"

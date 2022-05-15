@@ -10,5 +10,6 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1"
 quote = "1"
+rand = "0.8"
 serde = "1.0"
 syn = { version = "1", features = ["extra-traits", "full"] }

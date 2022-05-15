@@ -17,27 +17,32 @@ use serde::Serialize;
 /// - options. A list of value that define the set of all valid values.
 /// - skip. Skip generate config info for this field.
 /// - submodule. This field is a submodule.
-///
+/// - description. The field **can not** be set via `config_info` attribute but is extracted from the
+///   field document attribute(with `#[doc = '..']` or `/// ...`). If the doc attributes is not found,
+///   a compile error will be raised.
 ///
 /// # Field Type(#[config_info(type= "..")])
 ///
 /// this attribue the value type in the config file, all valid options are:
-/// - Number. Represent a numeric value, auto-assigned for all primitive numeric types. Other custom
-///           defined type should implement `From<T>` in which T is one of the primitive numeric types.
+/// - Number. Represent a numeric value, auto-assigned for all primitive numeric types.
 /// - Array. Represent the array type. auto-assigned for `[T, N]` and `Vec<T>` types.
 /// - Stirng. Represent string type. auto-assigned for `String`, `ReadableSize` and `ReadableDuration`.
-///           The generated code always use `FromStr::from_str` to convert str to target type.
 /// - Boolean. Represent the bool type. auto-assigned for `bool`. Custom defined type should implement
 ///            `From<bool>` trait.
 /// - Map. Represent the map type. auto-assigned for `HashMap` and `BTreeMap`.
 ///
-/// NOTE: The `type` attribute should be explicitly set if target field type is not build-in supported。
+/// NOTE:
+/// 1. The `type` attribute should be explicitly set if target field type is not build-in supported.
+/// 2. The generated code will use the same `Serialize` and `Deserialize` implement as the corresponding
+///    field, so the data type for `min`, `max` and `options` attributes should be the same as they are
+///    in the config file.
 ///
 ///
 /// # Field Value Bound (#config_info(min = .., max = ..))
 ///
 /// The `min` and `max` attribue define the lower and upper bound of target field. The provide literal
-/// value must be the same type with target field or can be converted to target type with `TryInto::try_into`.
+/// value must be value that can be deserialized to target type by `Deserialize::deserialize` or the
+/// target func provide by `#[serde(with = ..)` or `#[serde(deserialize_with)`.
 ///
 ///
 /// # Field Value Bound Description(#config_info(default_desc="..", min_desc = "...", max_desc = "..."))
@@ -51,9 +56,12 @@ use serde::Serialize;
 /// This same rule also applies for the `min_desc` and `max_desc`.
 ///
 ///
-/// # Config Value Options(#[config_info(opitons= [ .., .. ])])
+/// # Config Value Options(#[config_info(opitons= "[ .., .. ]")])
 /// The `options` attribue define the set of all valid valid for target field. The value of each element
-/// must be either the same type with target field or can be converted to target type with `TryInto::try_into`.
+/// must be value that can be deserialized to target type by `Deserialize::deserialize` or the target
+/// func provide by `#[serde(with = ..)` or `#[serde(deserialize_with)`.
+///
+/// NOTE: The value of `options` is a literal string due to the restriction of rust syntax.
 ///
 ///
 /// Example:
@@ -69,9 +77,8 @@ pub trait ConfigInfo {
 // this is the stub Serialize stuct for each config field
 #[doc(hidden)]
 #[derive(Serialize)]
-#[serde(default)]
 #[serde(rename_all = "PascalCase")]
-pub struct FieldInfo<T: Serialize> {
+pub struct FieldInfo<T> {
     #[serde(rename = "Type")]
     field_type: FieldCfgType,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,7 +94,7 @@ pub struct FieldInfo<T: Serialize> {
     description: String,
 }
 
-impl<T: Serialize> FieldInfo<T> {
+impl<T> FieldInfo<T> {
     pub fn new(
         field_type: FieldCfgType,
         default_value: Option<ConfigValue<T>>,
@@ -123,7 +130,7 @@ impl<T: Serialize> FieldInfo<T> {
 
 #[derive(Serialize)]
 #[serde(untagged)]
-pub enum ConfigValue<T: Serialize> {
+pub enum ConfigValue<T> {
     // a concrete value of type T
     Concrete(T),
     // a string description.
@@ -178,8 +185,9 @@ mod tests {
         /// e is a custom type with 2 string options.
         #[config_info(options = r#"["1MB", "10KB"]"#)]
         e: ReadableSize,
-        #[config_info(type = "Number", min = 1, max = 100)]
-        /// a custom field with manually assigned type and manually implement of `From`
+        /// a custom field with custom serde impl
+        #[config_info(type = "String", min = "1", max = "100")]
+        #[serde(with = "new_type_srede")]
         f: NewType,
         /// This is a field that it's value bound depend on other field or the env variable.
         #[config_info(
@@ -235,9 +243,49 @@ mod tests {
         }
     }
 
-    impl From<i32> for NewType {
-        fn from(v: i32) -> Self {
-            Self(v)
+    mod new_type_srede {
+        use std::fmt;
+
+        use serde::{
+            de::{self, Unexpected, Visitor},
+            Deserializer, Serializer,
+        };
+
+        use super::NewType;
+
+        #[allow(clippy::trivially_copy_pass_by_ref)]
+        pub(super) fn serialize<S>(v: &NewType, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_str(&format!("{}", v.0))
+        }
+
+        pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<NewType, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            struct NewTypeVisitor;
+
+            impl<'de> Visitor<'de> for NewTypeVisitor {
+                type Value = NewType;
+
+                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    write!(formatter, "valid numeric string")
+                }
+
+                fn visit_str<E>(self, s: &str) -> Result<NewType, E>
+                where
+                    E: de::Error,
+                {
+                    match s.parse::<i32>() {
+                        Ok(v) => Ok(NewType(v)),
+                        Err(_) => Err(E::invalid_value(Unexpected::Str(s), &self)),
+                    }
+                }
+            }
+
+            deserializer.deserialize_str(NewTypeVisitor)
         }
     }
 
@@ -301,11 +349,11 @@ mod tests {
                 "Description": "e is a custom type with 2 string options."
             },
             "f": {
-                "Type": "Number",
-                "MinValue": 1,
-                "MaxValue": 100,
-                "DefaultValue": 3,
-                "Description": "a custom field with manually assigned type and manually implement of `From`"
+                "Type": "String",
+                "MinValue": "1",
+                "MaxValue": "100",
+                "DefaultValue": "3",
+                "Description": "a custom field with custom serde impl"
             },
             "g": {
                 "Type": "Number",
