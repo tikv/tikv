@@ -6,7 +6,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    thread,
 };
 
 use futures::executor::block_on;
@@ -130,7 +129,7 @@ pub struct BatchTsoProvider<C: PdClient> {
     pd_client: Arc<C>,
     batch: Arc<RwLock<TsoBatch>>,
     batch_min_size: u32,
-    periodical_renew_worker: Worker,
+    renew_worker: Worker,
     renew_interval: Duration,
     renew_request_tx: mpsc::Sender<RenewRequest>,
 }
@@ -155,7 +154,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
             pd_client: pd_client.clone(),
             batch: Arc::new(RwLock::new(TsoBatch::default())),
             batch_min_size,
-            periodical_renew_worker: WorkerBuilder::new("causal-ts-periodical-worker").create(),
+            renew_worker: WorkerBuilder::new("causal_ts_batch_tso_worker").create(),
             renew_interval,
             renew_request_tx,
         };
@@ -297,21 +296,13 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     }
 
     async fn init(&self, renew_request_rx: Receiver<RenewRequest>) -> Result<()> {
-        // Create renew thread.
+        // Spawn renew thread.
         let pd_client = self.pd_client.clone();
         let tso_batch = self.batch.clone();
         let batch_min_size = self.batch_min_size;
-        thread::Builder::new()
-            .name("causal-ts-renew-worker".into())
-            .spawn(move || {
-                block_on(Self::renew_thread(
-                    pd_client,
-                    tso_batch,
-                    batch_min_size,
-                    renew_request_rx,
-                ))
-            })
-            .expect("unable to create causal_ts renew thread");
+        self.renew_worker.remote().spawn(async move {
+            Self::renew_thread(pd_client, tso_batch, batch_min_size, renew_request_rx).await;
+        });
 
         self.renew_tso_batch(true, TSO_BATCH_RENEW_ON_INITIALIZE)
             .await?;
@@ -331,7 +322,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
 
         // Duration::ZERO means never renew automatically. For test purpose ONLY.
         if self.renew_interval > Duration::ZERO {
-            self.periodical_renew_worker
+            self.renew_worker
                 .spawn_interval_async_task(self.renew_interval, task);
         }
         Ok(())
