@@ -1,5 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-
+/*
 #![cfg(test)]
 
 use std::{
@@ -426,7 +426,6 @@ fn run_async_test<T>(test: impl Future<Output = T>) -> T {
         .block_on(test)
 }
 
-/*
 mod test {
     use std::time::Duration;
 
