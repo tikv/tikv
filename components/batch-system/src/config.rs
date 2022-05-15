@@ -1,17 +1,24 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use config_info::ConfigInfo;
 use online_config::OnlineConfig;
 use serde::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    /// Specifies the maximum number of Raft state machines that can process the requests in one batch.
+    #[config_info(min = 1, max = 10240)]
     pub max_batch_size: Option<usize>,
+    /// The thread pool size
+    #[config_info(min = 1, max_desc = "CPU * 10")]
     pub pool_size: usize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub reschedule_duration: ReadableDuration,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub low_priority_pool_size: usize,
 }

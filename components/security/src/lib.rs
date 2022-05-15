@@ -12,6 +12,7 @@ use std::{
 };
 
 use collections::HashSet;
+use config_info::ConfigInfo;
 use encryption::EncryptionConfig;
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, CheckResult,
@@ -19,19 +20,30 @@ use grpcio::{
     ServerCredentialsFetcher,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct SecurityConfig {
     // SSL configs.
+    /// The path of the CA file.
     pub ca_path: String,
+    /// The path of the Privacy Enhanced Mail (PEM) file that contains the X.509 certificate.
     pub cert_path: String,
+    /// The path of the PEM file that contains the X.509 key.
     pub key_path: String,
     // Test purpose only.
+    #[config_info(skip)]
     #[serde(skip)]
     pub override_ssl_target: String,
+    /// A list of acceptable X.509 Common Names in certificates presented by clients. Requests are permitted
+    /// only when the presented Common Name is an exact match with one of the entries in the list.
+    #[config_info(type = "Array")]
     pub cert_allowed_cn: HashSet<String>,
+    /// This configuration item enables or disables log redaction. If the configuration value is set to
+    /// `true`, all user data in the log will be replaced by ?.
     pub redact_info_log: Option<bool>,
+    /// test
+    #[config_info(submodule)]
     pub encryption: EncryptionConfig,
 }
 

@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 collections = { path = "../collections" }
+config_info = { path = "../config_info" }
 encryption = { path = "../encryption", default-features = false }
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 serde = "1.0"

@@ -34,6 +34,7 @@ byteorder = "1.2"
 bytes = "1.0"
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
+config_info = { path = "../config_info" }
 crc32fast = "1.2"
 crossbeam = "0.8"
 derivative = "2"

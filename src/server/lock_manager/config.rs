@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use config_info::ConfigInfo;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 use tikv_util::config::ReadableDuration;
@@ -16,12 +17,19 @@ use super::{
     deadlock::Scheduler as DeadlockScheduler, waiter_manager::Scheduler as WaiterMgrScheduler,
 };
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    /// The longest time that a pessimistic transaction in TiKV waits for other transactions to release the lock.
+    /// If the time is out, an error is returned to TiDB, and TiDB retries to add a lock. The lock wait timeout
+    /// is set by `innodb_lock_wait_timeout`.
     #[serde(deserialize_with = "readable_duration_or_u64")]
+    #[config_info(min = "1ms")]
     pub wait_for_lock_timeout: ReadableDuration,
+    /// When pessimistic transactions release the lock, among all the transactions waiting for lock, only the
+    /// transaction with the smallest `start_ts` is woken up. Other transactions will be woken up after
+    /// `wake-up-delay-duration`.
     #[serde(deserialize_with = "readable_duration_or_u64")]
     pub wake_up_delay_duration: ReadableDuration,
     /// Whether to enable the pipelined pessimistic lock feature.

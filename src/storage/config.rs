@@ -4,6 +4,7 @@
 
 use std::{cmp::max, error::Error};
 
+use config_info::ConfigInfo;
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use file_system::{IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use kvproto::kvrpcpb::ApiVersion;
@@ -30,40 +31,60 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    #[config_info(skip)]
     #[online_config(skip)]
     pub data_dir: String,
     // Replaced by `GcConfig.ratio_threshold`. Keep it for backward compatibility.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub gc_ratio_threshold: f64,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub max_key_size: usize,
+    /// A built-in memory lock mechanism to prevent simultaneous operations on a key.
+    /// Each key has a hash in a different slot.
+    #[config_info(min = 1)]
     #[online_config(skip)]
     pub scheduler_concurrency: usize,
+    /// The number of threads in the Scheduler thread pool.
+    #[config_info(min = 1, max_desc = "MAX(4, CPU)")]
     pub scheduler_worker_pool_size: usize,
     #[online_config(skip)]
+    /// The maximum size of the write queue. A `Server Is Busy` error is returned for a new
+    /// write to TiKV when this value is exceeded.
     pub scheduler_pending_write_threshold: ReadableSize,
     #[online_config(skip)]
-    // Reserve disk space to make tikv would have enough space to compact when disk is full.
+    /// Reserve disk space to make tikv would have enough space to compact when disk is full.
+    /// Set to "0MB" disables this feature.
     pub reserve_space: ReadableSize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub api_version: u8,
+    /// TTL is short for "Time to live". If this item is enabled, TiKV automatically deletes
+    /// data that reaches its TTL.
     #[online_config(skip)]
     pub enable_ttl: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub background_error_recovery_window: ReadableDuration,
-    /// Interval to check TTL for all SSTs,
+    /// The interval of checking data to reclaim physical spaces. If data reaches its TTL,
+    /// TiKV forcibly reclaims its physical space during the check.
     pub ttl_check_poll_interval: ReadableDuration,
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
+    #[config_info(submodule)]
     pub io_rate_limit: IORateLimitConfig,
 }
 
@@ -158,17 +179,34 @@ impl Config {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct FlowControlConfig {
+    /// Determines whether to enable the flow control mechanism. After it is enabled,
+    /// TiKV automatically disables the write stall mechanism of KvDB and the write
+    /// stall mechanism of RaftDB (excluding memtable).
     pub enable: bool,
+    /// When the pending compaction bytes in KvDB reach this threshold, the flow control
+    /// mechanism starts to reject some write requests and reports the `ServerIsBusy` error.
+    /// When enable is set to `true`, this configuration item overrides
+    /// `rocksdb.(defaultcf|writecf|lockcf).soft-pending-compaction-bytes-limit`.
     #[online_config(skip)]
     pub soft_pending_compaction_bytes_limit: ReadableSize,
+    /// When the pending compaction bytes in KvDB reach this threshold, the flow control
+    /// mechanism rejects all write requests and reports the ServerIsBusy error. When enable
+    /// is set to `true`, this configuration item overrides
+    /// `rocksdb.(defaultcf|writecf|lockcf).hard-pending-compaction-bytes-limit`.
     #[online_config(skip)]
     pub hard_pending_compaction_bytes_limit: ReadableSize,
+    /// When the number of kvDB memtables reaches this threshold, the flow control mechanism
+    /// starts to work. When enable is set to true, this configuration item overrides
+    /// `rocksdb.(defaultcf|writecf|lockcf).max-write-buffer-number`.
     #[online_config(skip)]
     pub memtables_threshold: u64,
+    /// When the number of kvDB L0 files reaches this threshold, the flow control mechanism
+    /// starts to work. When enable is set to `true`, this configuration item overrides
+    /// `rocksdb.(defaultcf|writecf|lockcf).level0-slowdown-writes-trigger`.
     #[online_config(skip)]
     pub l0_files_threshold: u64,
 }
@@ -185,19 +223,26 @@ impl Default for FlowControlConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct BlockCacheConfig {
+    /// Enables or disables the sharing of block cache.
     #[online_config(skip)]
     pub shared: bool,
+    /// The size of the shared block cache.
+    #[config_info(default_desc = "Memory * 0.45")]
     pub capacity: Option<ReadableSize>,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub num_shard_bits: i32,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub strict_capacity_limit: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub high_pri_pool_ratio: f64,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub memory_allocator: Option<String>,
 }
@@ -275,29 +320,46 @@ impl BlockCacheConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct IORateLimitConfig {
+    /// Limits the maximum I/O bytes that a server can write to or read from the disk (determined
+    /// by the `mode` configuration item below) in one second. default value means no limit.
     pub max_bytes_per_sec: ReadableSize,
+    /// Determines which types of I/O operations are counted and restrained below the max-bytes-per-sec
+    /// threshold. Currently, only the write-only mode is supported.
+    #[config_info(type = "String", options = r#"[ "write-only" ]"#)]
     #[online_config(skip)]
     pub mode: IORateLimitMode,
     /// When this flag is off, high-priority IOs are counted but not limited. Default
     /// set to false because the optimal throughput target provided by user might not be
     /// the maximum available bandwidth. For multi-tenancy use case, this flag should be
     /// turned on.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub strict: bool,
+    #[config_info(skip)]
     pub foreground_read_priority: IOPriority,
+    #[config_info(skip)]
     pub foreground_write_priority: IOPriority,
+    #[config_info(skip)]
     pub flush_priority: IOPriority,
+    #[config_info(skip)]
     pub level_zero_compaction_priority: IOPriority,
+    #[config_info(skip)]
     pub compaction_priority: IOPriority,
+    #[config_info(skip)]
     pub replication_priority: IOPriority,
+    #[config_info(skip)]
     pub load_balance_priority: IOPriority,
+    #[config_info(skip)]
     pub gc_priority: IOPriority,
+    #[config_info(skip)]
     pub import_priority: IOPriority,
+    #[config_info(skip)]
     pub export_priority: IOPriority,
+    #[config_info(skip)]
     pub other_priority: IOPriority,
 }
 

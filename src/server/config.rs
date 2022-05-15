@@ -3,6 +3,7 @@
 use std::{cmp, i32, isize, sync::Arc, time::Duration};
 
 use collections::HashMap;
+use config_info::ConfigInfo;
 use engine_traits::{perf_level_serde, PerfLevel};
 use grpcio::CompressionAlgorithms;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
@@ -54,112 +55,163 @@ pub enum GrpcCompressionType {
 }
 
 /// OnlineConfig for the `server` module.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    #[config_info(skip)]
     #[serde(skip)]
     #[online_config(skip)]
     pub cluster_id: u64,
 
     // Server listening address.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub addr: String,
 
     // Server advertise listening address for outer communication.
     // If not set, we will use listening address instead.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub advertise_addr: String,
 
     // These are related to TiKV status.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub status_addr: String,
 
     // Status server's advertise listening address for outer communication.
     // If not set, the status server's listening address will be used.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub advertise_status_addr: String,
 
+    #[config_info(skip)]
     #[online_config(skip)]
     pub status_thread_pool_size: usize,
 
+    /// Sets the maximum length of a gRPC message that can be sent.
+    #[config_info(max = 2147483647)]
     #[online_config(skip)]
     pub max_grpc_send_msg_len: i32,
 
     // When merge raft messages into a batch message, leave a buffer.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub raft_client_grpc_send_msg_buffer: usize,
 
+    /// Specifies the queue size of the Raft messages in TiKV.
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
 
+    #[config_info(skip)]
     #[online_config(skip)]
     pub raft_msg_max_batch_size: usize,
 
+    /// The compression algorithm for gRPC messages
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
+    #[config_info(type = "String", options = r#"[ "none", "deflate", "gzip" ]"#)]
     #[online_config(skip)]
     pub grpc_compression_type: GrpcCompressionType,
+    /// The number of gRPC worker threads. When you modify the size of the gRPC thread pool.
+    #[config_info(min = 1)]
     #[online_config(skip)]
     pub grpc_concurrency: usize,
     #[online_config(skip)]
+    /// The maximum number of concurrent requests allowed in a gRPC stream.
+    #[config_info(min = 1)]
     pub grpc_concurrent_stream: i32,
+    /// The maximum number of links among TiKV nodes for Raft communication
+    #[config_info(min = 1)]
     #[online_config(skip)]
     pub grpc_raft_conn_num: usize,
+    /// Limits the memory size that can be used by gRPC. default value means no limit.
     #[online_config(skip)]
     pub grpc_memory_pool_quota: ReadableSize,
+    /// The window size of the gRPC stream
     #[online_config(skip)]
+    #[config_info(min = "1KiB")]
     pub grpc_stream_initial_window_size: ReadableSize,
+    /// The time interval at which that gRPC sends `keepalive` Ping messages
+    #[config_info(min = "1s")]
     #[online_config(skip)]
     pub grpc_keepalive_time: ReadableDuration,
+    /// Disables the timeout for gRPC streams.
+    #[config_info(min = "1s")]
     #[online_config(skip)]
     pub grpc_keepalive_timeout: ReadableDuration,
     /// How many snapshots can be sent concurrently.
+    #[config_info(min = 1)]
     pub concurrent_send_snap_limit: usize,
     /// How many snapshots can be recv concurrently.
+    #[config_info(min = 1)]
     pub concurrent_recv_snap_limit: usize,
+    /// The maximum number of recursive levels allowed when TiKV decodes the Coprocessor DAG expression.
+    #[config_info(min = 1)]
     #[online_config(skip)]
     pub end_point_recursion_limit: u32,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub end_point_stream_channel_size: usize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub end_point_batch_row_limit: usize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub end_point_stream_batch_row_limit: usize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub end_point_enable_batch_if_possible: bool,
+    /// The longest duration allowed for a TiDB's push down request to TiKV for processing tasks
+    #[config_info(min = "1s")]
     #[online_config(skip)]
     pub end_point_request_max_handle_duration: ReadableDuration,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub end_point_max_concurrency: usize,
+    #[config_info(skip)]
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
+    /// The maximum allowable disk bandwidth when processing snapshots
+    #[config_info(min = "1KiB")]
     pub snap_max_write_bytes_per_sec: ReadableSize,
+    #[config_info(skip)]
     pub snap_max_total_size: ReadableSize,
+    #[config_info(skip)]
     pub max_snapshot_file_raw_size: ReadableSize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub stats_concurrency: usize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub heavy_load_threshold: usize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub heavy_load_wait_duration: Option<ReadableDuration>,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub enable_request_batch: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub background_thread_count: usize,
+    /// The time threshold for a TiDB's push-down request to output slow log.
     // If handle time is larger than the threshold, it will print slow log in end point.
     #[online_config(skip)]
     pub end_point_slow_log_threshold: ReadableDuration,
     /// Max connections per address for forwarding request.
+    /// #[config_info(skip)]
     #[online_config(skip)]
     pub forward_max_connections_per_address: usize,
 
     // Test only.
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub raft_client_backoff_step: ReadableDuration,
 
+    #[config_info(skip)]
     #[doc(hidden)]
     #[online_config(skip)]
     /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
@@ -174,22 +226,26 @@ pub struct Config {
     pub reject_messages_on_memory_ratio: f64,
 
     // Server labels to specify some attributes about this server.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub labels: HashMap<String, String>,
 
     // deprecated. use readpool.coprocessor.xx_concurrency.
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub end_point_concurrency: Option<usize>,
 
     // deprecated. use readpool.coprocessor.stack_size.
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub end_point_stack_size: Option<ReadableSize>,
 
     // deprecated. use readpool.coprocessor.max_tasks_per_worker_xx.
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]

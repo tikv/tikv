@@ -1,26 +1,40 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use config_info::ConfigInfo;
 use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct EncryptionConfig {
     // Encryption configs.
+    /// The encryption method for data files.
+    #[config_info(
+        type = "String",
+        options = r#"["plaintext", "aes128-ctr", "aes192-ctr", "aes256-ctr"]"#
+    )]
     #[serde(with = "encryption_method_serde")]
     #[online_config(skip)]
     pub data_encryption_method: EncryptionMethod,
+    /// Specifies how often TiKV rotates the data encryption key.
     #[online_config(skip)]
     pub data_key_rotation_period: ReadableDuration,
+    /// Enables the optimization to reduce I/O and mutex contention when TiKV manages the encryption metadata.
     #[online_config(skip)]
     pub enable_file_dictionary_log: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub file_dictionary_rewrite_threshold: u64,
+    /// Specifies the master key if encryption is enabled. To learn how to configure a master key.
+    // TODO: how to add config_info for this
+    #[config_info(skip)]
     #[online_config(skip)]
     pub master_key: MasterKeyConfig,
+    /// Specifies the old master key when rotating the new master key.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub previous_master_key: MasterKeyConfig,
 }

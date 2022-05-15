@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use config_info::ConfigInfo;
 use engine_traits::{perf_level_serde, PerfLevel};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,7 @@ use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
 use super::Result;
 use crate::store::SplitCheckTask;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -18,38 +19,54 @@ pub struct Config {
 
     /// For once split check, there are several split_key produced for batch.
     /// batch_split_limit limits the number of produced split-key for one batch.
+    #[config_info(min = 1)]
     pub batch_split_limit: u64,
 
+    /// The maximum size of a Region. When the value is exceeded, the Region splits into many.
+    ///
     /// When region [a,e) size meets region_max_size, it will be split into
     /// several regions [a,b), [b,c), [c,d), [d,e). And the size of [a,b),
     /// [b,c), [c,d) will be region_split_size (maybe a little larger).
+    #[config_info(min_desc = "value of `region-split-size`")]
     pub region_max_size: ReadableSize,
+    /// The size of the newly split Region. This value is an estimate.
     pub region_split_size: ReadableSize,
 
+    /// The maximum allowable number of keys in a Region. When this value is exceeded,
+    /// the Region splits into many.
+    ///
     /// When the number of keys in region [a,e) meets the region_max_keys,
     /// it will be split into two several regions [a,b), [b,c), [c,d), [d,e).
     /// And the number of keys in [a,b), [b,c), [c,d) will be region_split_keys.
+    #[config_info(min_desc = "value of `region-split-keys`")]
     pub region_max_keys: u64,
+    /// The number of keys in the newly split Region. This value is an estimate.
     pub region_split_keys: u64,
 
     /// ConsistencyCheckMethod can not be chanaged dynamically.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub consistency_check_method: ConsistencyCheckMethod,
 
     // Deprecated. Perf level is not applicable to the raftstore coprocessor.
     // It was mistakenly used to refer to the perf level of the TiKV coprocessor
     // and should be replaced with `server.end-point-perf-level`.
+    #[config_info(skip)]
     #[serde(with = "perf_level_serde", skip_serializing)]
     #[online_config(skip)]
     pub perf_level: PerfLevel,
 
     // enable subsplit ranges (aka bucket) within the region
+    #[config_info(skip)]
     pub enable_region_bucket: bool,
+    #[config_info(skip)]
     pub region_bucket_size: ReadableSize,
     // region size threshold for using approximate size instead of scan
+    #[config_info(skip)]
     pub region_size_threshold_for_approximate: ReadableSize,
     // ratio of region_bucket_size. (0, 0.5)
     // The region_bucket_merge_size_ratio * region_bucket_size is threshold to merge with its left neighbor bucket
+    #[config_info(skip)]
     pub region_bucket_merge_size_ratio: f64,
 }
 

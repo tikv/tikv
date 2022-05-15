@@ -18,6 +18,7 @@ use std::{
 
 use api_version::ApiV1Ttl;
 use causal_ts::Config as CausalTsConfig;
+use config_info::ConfigInfo;
 use encryption_export::DataKeyManager;
 use engine_rocks::{
     config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel},
@@ -112,33 +113,56 @@ fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSi
     ReadableSize::mb(size as u64 / MIB)
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanCfConfig {
+    /// The smallest value stored in a Blob file. Values smaller than the specified size are stored in the LSM-Tree.
     #[online_config(skip)]
     pub min_blob_size: ReadableSize,
+    /// The compression algorithm used in a Blob file.
+    #[config_info(
+        type = "String",
+        options = r#"["no", "snappy", "zlib", "bzip2", "lz4", "lz4hc", "zstd"]"#
+    )]
     #[online_config(skip)]
     pub blob_file_compression: CompressionType,
+    /// The cache size of a Blob file.
     #[online_config(skip)]
     pub blob_cache_size: ReadableSize,
+    /// The minimum total size of Blob files required to perform GC for one time.
     #[online_config(skip)]
     pub min_gc_batch_size: ReadableSize,
+    /// The maximum total size of Blob files allowed to perform GC for one time.
     #[online_config(skip)]
     pub max_gc_batch_size: ReadableSize,
+    /// The ratio at which GC is triggered for Blob files. The Blob file can be selected for GC only
+    /// if the proportion of the invalid values in a Blob file exceeds this ratio.
+    #[config_info(min = 0.0, max = 1.0)]
     #[online_config(skip)]
     pub discardable_ratio: f64,
+    /// The ratio of (data read from a Blob file/the entire Blob file) when sampling the file during GC.
+    #[config_info(min = 0.0, max = 1.0)]
     #[online_config(skip)]
     pub sample_ratio: f64,
+    /// When the size of a Blob file is smaller than this value, the Blob file might still be selected
+    /// for GC. In this situation, `discardable-ratio` is ignored.
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
+    /// Specifies the running mode of Titan.
+    #[config_info(type = "String", options = r#"["normal", "read_only", "fallback"]"#)]
     pub blob_run_mode: BlobRunMode,
+    /// Determines whether to optimize the read performance. When `level-merge` is enabled, there is more write amplification.
     #[online_config(skip)]
     pub level_merge: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub range_merge: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub max_sorted_runs: i32,
+    /// Determines whether to use the merge operator to write back blob indexes for Titan GC. When `gc-merge-rewrite`
+    /// is enabled, it reduces the effect of Titan GC on the writes in the foreground.
     #[online_config(skip)]
     pub gc_merge_rewrite: bool,
 }
@@ -243,80 +267,135 @@ fn get_background_job_limits(defaults: &BackgroundJobLimits) -> BackgroundJobLim
 
 macro_rules! cf_config {
     ($name:ident) => {
-        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
+            /// The default size of a RocksDB block.
+            #[config_info(min = "1KiB")]
             #[online_config(skip)]
             pub block_size: ReadableSize,
+            /// The cache size of a RocksDB block.
             pub block_cache_size: ReadableSize,
+            /// Enables or disables block cache.
             #[online_config(skip)]
             pub disable_block_cache: bool,
+            /// Enables or disables caching index and filter.
             #[online_config(skip)]
             pub cache_index_and_filter_blocks: bool,
+            /// Determines whether to pin the index and filter blocks of the level 0 SST files in memory.
             #[online_config(skip)]
             pub pin_l0_filter_and_index_blocks: bool,
+            /// Enables or disables bloom filter.
             #[online_config(skip)]
             pub use_bloom_filter: bool,
+            /// Determines whether to optimize the hit ratio of filters.
             #[online_config(skip)]
             pub optimize_filters_for_hits: bool,
+            /// Determines whether to put the entire key to bloom filter.
             #[online_config(skip)]
             pub whole_key_filtering: bool,
+            /// The length that bloom filter reserves for each key.
             #[online_config(skip)]
             pub bloom_filter_bits_per_key: i32,
+            /// Determines whether each block creates a bloom filter.
             #[online_config(skip)]
             pub block_based_bloom_filter: bool,
+            /// Enables or disables statistics of read amplification. set to `0` disable this feature.
             #[online_config(skip)]
             pub read_amp_bytes_per_bit: u32,
+            /// The default compression algorithm for each level.
+            #[config_info(options =r#"["no", "snappy", "zlib", "bzip2", "lz4", "lz4hc", "zstd"]"#)]
             #[serde(with = "rocks_config::compression_type_level_serde")]
             #[online_config(skip)]
             pub compression_per_level: [DBCompressionType; 7],
+            /// Memtable size.
             pub write_buffer_size: ReadableSize,
+            /// The maximum number of memtables. When `storage.flow-control.enable` is set to `true`,
+            /// `storage.flow-control.memtables-threshold` overrides this configuration item.
             pub max_write_buffer_number: i32,
+            /// The minimum number of memtables required to trigger flush.
             #[online_config(skip)]
             pub min_write_buffer_number_to_merge: i32,
+            /// The maximum number of bytes at base level (L1). Generally, it is set to 4 times the size of a memtable.
             pub max_bytes_for_level_base: ReadableSize,
+            /// The size of the target file at base level. This value is overridden by `compaction-guard-max-output-file-size`
+            /// when the `enable-compaction-guard` value is true.
             pub target_file_size_base: ReadableSize,
+            /// The maximum number of files at L0 that trigger compaction.
             pub level0_file_num_compaction_trigger: i32,
+            /// The maximum number of files at L0 that trigger write stall. When `storage.flow-control.enable` is set to
+            /// `true`, `storage.flow-control.l0-files-threshold` overrides this configuration item.
             pub level0_slowdown_writes_trigger: i32,
+            /// The maximum number of files at L0 required to completely block write.
             pub level0_stop_writes_trigger: i32,
+            /// The maximum number of bytes written into disk per compaction.
             pub max_compaction_bytes: ReadableSize,
+            /// The priority type of compaction
+            #[config_info(type = "String", options = r#"["by-compensated-size", "oldest-largest-seq-first", "oldest-smallest-seq-first", "min-overlapping-ratio"]"#)]
             #[serde(with = "rocks_config::compaction_pri_serde")]
             #[online_config(skip)]
             pub compaction_pri: CompactionPriority,
+            /// Determines whether to optimize dynamic level bytes.
             #[online_config(skip)]
             pub dynamic_level_bytes: bool,
+            /// The maximum number of levels in a RocksDB file.
             #[online_config(skip)]
             pub num_levels: i32,
+            /// The default amplification multiple for each layer.
             pub max_bytes_for_level_multiplier: i32,
+            /// Compaction method.
+            #[config_info(type = "String", options = r#"["level", "universal", "fifo"]"#)]
             #[serde(with = "rocks_config::compaction_style_serde")]
             #[online_config(skip)]
             pub compaction_style: DBCompactionStyle,
+            /// Determines whether to disable auto compaction.
             pub disable_auto_compactions: bool,
+            #[config_info(skip)]
             pub disable_write_stall: bool,
+            /// The soft limit on the pending compaction bytes. When `storage.flow-control.enable` is set to `true`,
+            /// `storage.flow-control.soft-pending-compaction-bytes-limit` overrides this configuration item.
             pub soft_pending_compaction_bytes_limit: ReadableSize,
+            /// The hard limit on the pending compaction bytes. When `storage.flow-control.enable` is set to `true`,
+            /// `storage.flow-control.hard-pending-compaction-bytes-limit` overrides this configuration item.
             pub hard_pending_compaction_bytes_limit: ReadableSize,
+            #[config_info(skip)]
             #[online_config(skip)]
             pub force_consistency_checks: bool,
+            #[config_info(skip)]
             #[online_config(skip)]
             pub prop_size_index_distance: u64,
+            #[config_info(skip)]
             #[online_config(skip)]
             pub prop_keys_index_distance: u64,
+            #[config_info(skip)]
             #[online_config(skip)]
             pub enable_doubly_skiplist: bool,
+            /// Enables or disables the compaction guard, which is an optimization to split SST files at TiKV Region boundaries.
             #[online_config(skip)]
             pub enable_compaction_guard: bool,
+            /// The minimum SST file size when the compaction guard is enabled. This configuration prevents SST files
+            /// from being too small when the compaction guard is enabled.
             #[online_config(skip)]
             pub compaction_guard_min_output_file_size: ReadableSize,
+            /// The maximum SST file size when the compaction guard is enabled. The configuration prevents SST files from being
+            /// too large when the compaction guard is enabled. This configuration overrides `target-file-size-base` for the
+            /// same column family.
             #[online_config(skip)]
             pub compaction_guard_max_output_file_size: ReadableSize,
+            /// Sets the compression algorithm of the bottommost layer. This configurationitem overrides
+            /// the `compression-per-level` setting.
+            #[config_info(type = "String", options = r#"["no", "snappy", "zlib", "bzip2", "lz4", "lz4hc", "zstd"]"#)]
             #[serde(with = "rocks_config::compression_type_serde")]
             #[online_config(skip)]
             pub bottommost_level_compression: DBCompressionType,
+            #[config_info(skip)]
             #[online_config(skip)]
             pub bottommost_zstd_compression_dict_size: i32,
+            #[config_info(skip)]
             #[online_config(skip)]
             pub bottommost_zstd_compression_sample_size: i32,
+            #[config_info(skip)]
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -884,17 +963,22 @@ impl RaftCfConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 // Note that Titan is still an experimental feature. Once enabled, it can't fall back.
 // Forced fallback may result in data loss.
 pub struct TitanDBConfig {
+    /// Enables or disables Titan.
     pub enabled: bool,
+    /// The directory in which the Titan Blob file is stored.
     pub dirname: String,
+    /// Determines whether to disable Garbage Collection (GC) that Titan performs to Blob files.
     pub disable_gc: bool,
+    /// The maximum number of GC threads in Titan.
     pub max_background_gc: i32,
     // The value of this field will be truncated to seconds.
+    #[config_info(skip)]
     pub purge_obsolete_files_period: ReadableDuration,
 }
 
@@ -925,78 +1009,132 @@ impl TitanDBConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
+    #[config_info(skip)]
     #[online_config(skip)]
     pub info_log_level: LogLevel,
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[online_config(skip)]
+    /// WAL recovery mode
+    #[config_info(
+        type = "String",
+        options = r#"["tolerate-corrupted-tail-records", "absolute-consistency", "point-in-time", "skip-any-corrupted-records"]"#
+    )]
     pub wal_recovery_mode: DBRecoveryMode,
     #[online_config(skip)]
+    /// The directory in which WAL files are stored.
     pub wal_dir: String,
     #[online_config(skip)]
+    /// The living time(in seconds) of the archived WAL files. When the value is exceeded,
+    /// the system deletes these files.
+    #[config_info(min = 0)]
     pub wal_ttl_seconds: u64,
+    /// The size limit of the archived WAL files. When the value is exceeded, the system deletes these files.
+    #[config_info(min = "0kiB")]
     #[online_config(skip)]
     pub wal_size_limit: ReadableSize,
+    #[config_info(skip)]
     pub max_total_wal_size: ReadableSize,
+    /// The number of background threads in RocksDB.
+    #[config_info(min = 2, default_desc = "max(2, min(CPU - 1, 9))")]
     pub max_background_jobs: i32,
+    /// The maximum number of concurrent background memtable flush jobs.
+    #[config_info(min = 1, default_desc = "(`max-background-jobs` + 3) / 4")]
     pub max_background_flushes: i32,
     #[online_config(skip)]
+    /// The maximum size of a RocksDB Manifest file.
+    #[config_info(min = "0KiB")]
     pub max_manifest_file_size: ReadableSize,
     #[online_config(skip)]
+    /// Determines whether to automatically create a DB switch.
     pub create_if_missing: bool,
+    /// The total number of files that RocksDB can open
+    #[config_info(min = -1)]
     pub max_open_files: i32,
     #[online_config(skip)]
+    /// Determines whether to enable the statistics of RocksDB.
     pub enable_statistics: bool,
+    /// The interval at which statistics are output to the log.
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
+    /// Enables the readahead feature during RocksDB compaction and specifies the size of readahead data.
     pub compaction_readahead_size: ReadableSize,
+    /// The maximum size of Info log.
     #[online_config(skip)]
     pub info_log_max_size: ReadableSize,
+    /// The time interval at which Info logs are truncated. If the value is `0s`, logs are not truncated.
     #[online_config(skip)]
     pub info_log_roll_time: ReadableDuration,
+    /// The maximum number of kept log files.
     #[online_config(skip)]
     pub info_log_keep_log_file_num: u64,
+    /// The directory in which logs are stored.
     #[online_config(skip)]
     pub info_log_dir: String,
+    /// The maximum rate permitted by RocksDB's compaction rate limiter.
     pub rate_bytes_per_sec: ReadableSize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub rate_limiter_refill_period: ReadableDuration,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
+    /// RocksDB's compaction rate limiter mode.
+    #[config_info(type = "String", options = r#"["read-only", "write-only", "all-io"]"#)]
     #[online_config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
     // deprecated. use rate_limiter_auto_tuned.
+    #[config_info(skip)]
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub auto_tuned: Option<bool>,
+    /// Determines whether to automatically optimize the configuration of the RocksDB's compaction
+    /// rate limiter based on recent workload. When this configuration is enabled, compaction
+    /// pending bytes will be slightly higher than usual.
     pub rate_limiter_auto_tuned: bool,
+    /// The rate at which OS incrementally synchronizes files to disk while these files are being written asynchronously.
     pub bytes_per_sync: ReadableSize,
+    /// The rate at which OS incrementally synchronizes WAL files to disk while the WAL files are being written.
     pub wal_bytes_per_sync: ReadableSize,
     #[online_config(skip)]
+    /// The number of sub-compaction operations performed concurrently in RocksDB
+    #[config_info(min = 1)]
     pub max_sub_compactions: u32,
+    /// The maximum buffer size used in WritableFileWrite.
     pub writable_file_max_buffer_size: ReadableSize,
     #[online_config(skip)]
+    /// Determines whether to use O_DIRECT for both reads and writes in the background flush and compactions.
+    /// The performance impact of this option: enabling O_DIRECT bypasses and prevents contamination of the
+    /// OS buffer cache, but the subsequent file reads require re-reading the contents to the buffer cache.
     pub use_direct_io_for_flush_and_compaction: bool,
+    /// Controls whether to enable Pipelined Write. When this configuration is enabled, the previous Pipelined
+    /// Write is used. When this configuration is disabled, the new Pipelined Commit mechanism is used.
     #[online_config(skip)]
     pub enable_pipelined_write: bool,
     // deprecated. TiKV will use a new write mode when set `enable_pipelined_write` false and fall
     // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of multi-batch-write
     // in RocksDB has been removed.
+    #[config_info(skip)]
     #[online_config(skip)]
     pub enable_multi_batch_write: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub enable_unordered_write: bool,
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub defaultcf: DefaultCfConfig,
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub writecf: WriteCfConfig,
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub lockcf: LockCfConfig,
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub raftcf: RaftCfConfig,
+    #[config_info(submodule)]
     #[online_config(skip)]
     pub titan: TitanDBConfig,
 }
@@ -1251,57 +1389,87 @@ impl RaftDefaultCfConfig {
 // When construct Options, options.env is set to same singleton Env::Default() object.
 // So total max_background_jobs = max(rocksdb.max_background_jobs, raftdb.max_background_jobs)
 // But each instance will limit their background jobs according to their own max_background_jobs
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
+    #[config_info(skip)]
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[online_config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
+    /// The directory in which WAL files are stored.
     #[online_config(skip)]
     pub wal_dir: String,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub wal_ttl_seconds: u64,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub wal_size_limit: ReadableSize,
+    #[config_info(skip)]
     pub max_total_wal_size: ReadableSize,
+    /// The number of background threads in RocksDB. When you modify the size of the RocksDB thread pool.
+    #[config_info(min = 2)]
     pub max_background_jobs: i32,
+    #[config_info(skip)]
     pub max_background_flushes: i32,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub max_manifest_file_size: ReadableSize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub create_if_missing: bool,
+    #[config_info(skip)]
     pub max_open_files: i32,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub enable_statistics: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
+    #[config_info(skip)]
     pub compaction_readahead_size: ReadableSize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub info_log_max_size: ReadableSize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub info_log_roll_time: ReadableDuration,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub info_log_keep_log_file_num: u64,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub info_log_dir: String,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub info_log_level: LogLevel,
+    /// The number of concurrent sub-compaction operations performed in RocksDB.
+    #[config_info(min = 1)]
     #[online_config(skip)]
     pub max_sub_compactions: u32,
+    #[config_info(skip)]
     pub writable_file_max_buffer_size: ReadableSize,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub use_direct_io_for_flush_and_compaction: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub enable_pipelined_write: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub enable_unordered_write: bool,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub allow_concurrent_memtable_write: bool,
+    #[config_info(skip)]
     pub bytes_per_sync: ReadableSize,
+    #[config_info(skip)]
     pub wal_bytes_per_sync: ReadableSize,
+    #[config_info(skip)]
     #[online_config(submodule)]
     pub defaultcf: RaftDefaultCfConfig,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub titan: TitanDBConfig,
 }
@@ -1409,10 +1577,13 @@ impl RaftDbConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, ConfigInfo)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct RaftEngineConfig {
+    /// Determines whether to use Raft Engine to store Raft logs. When it is enabled,
+    /// configurations of `raftdb` are ignored.
     pub enable: bool,
+    #[config_info(skip)]
     #[serde(flatten)]
     config: RawRaftEngineConfig,
 }
@@ -1710,15 +1881,31 @@ pub mod log_level_serde {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct UnifiedReadPoolConfig {
+    /// The minimal working thread count of the unified read pool.
+    #[config_info(min = 1, max_desc = "<= `max-thread-count`")]
     #[online_config(skip)]
     pub min_thread_count: usize,
+    /// The maximum working thread count of the unified read pool or the UnifyReadPool thread pool.
+    #[config_info(
+        default_desc = "MAX(4, CPU)",
+        min_desc = ">= `min-thread-count`",
+        max_desc = "MAX(4, CPU)"
+    )]
     pub max_thread_count: usize,
+    /// The stack size of the threads in the unified thread pool.
+    #[config_info(
+        min = "2MiB",
+        max_desc = "the number of Kbytes in result of `ulimit -sH` command"
+    )]
     #[online_config(skip)]
     pub stack_size: ReadableSize,
+    /// The maximum number of tasks allowed for a single thread in the unified read pool.
+    /// Server Is Busy is returned when the value is exceeded.
+    #[config_info(min = 2)]
     #[online_config(skip)]
     pub max_tasks_per_worker: usize,
     // FIXME: Add more configs when they are effective in yatp
@@ -1840,18 +2027,39 @@ mod unified_read_pool_tests {
 }
 
 macro_rules! readpool_config {
-    ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {
-        #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
+    ($struct_name:ident, $test_mod_name:ident, $display_name:expr, $default_desc:expr) => {
+        #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug, ConfigInfo)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $struct_name {
+            /// Determines whether to use the unified thread pool (configured in `readpool.unified`) for storage
+            /// requests. If the value of this parameter is `false`, a separate thread pool is used, which is configured
+            /// through the rest parameters in this section (`readpool.storage`).
+            #[config_info(default_desc = "true if all `readpool.storea.*` are not set else false")]
             pub use_unified_pool: Option<bool>,
+            /// The allowable number of concurrent threads that handle high-priority `read` requests.
+            #[config_info(default_desc = $default_desc, min = 1)]
             pub high_concurrency: usize,
+            /// The allowable number of concurrent threads that handle normal-priority `read` requests.
+            #[config_info(default_desc = $default_desc, min = 1)]
             pub normal_concurrency: usize,
+            /// The allowable number of concurrent threads that handle low-priority `read` requests.
+            #[config_info(default_desc = $default_desc, min = 1)]
             pub low_concurrency: usize,
+            /// The maximum number of tasks allowed for a single thread in a high-priority thread pool.
+            /// `Server Is Busy` is returned when the value is exceeded.
+            #[config_info(min = 2)]
             pub max_tasks_per_worker_high: usize,
+            /// The maximum number of tasks allowed for a single thread in a normal-priority thread pool.
+            /// `Server Is Busy` is returned when the value is exceeded.
+            #[config_info(min = 2)]
             pub max_tasks_per_worker_normal: usize,
+            /// The maximum number of tasks allowed for a single thread in a low-priority thread pool.
+            /// `Server Is Busy` is returned when the value is exceeded.
+            #[config_info(min = 2)]
             pub max_tasks_per_worker_low: usize,
+            /// The stack size of threads in the Storage read thread pool.
+            #[config_info(min = "2MiB", max_desc = "the number of Kbytes in result of `ulimit -sH` command")]
             pub stack_size: ReadableSize,
         }
 
@@ -2038,7 +2246,12 @@ const DEFAULT_READPOOL_MAX_TASKS_PER_WORKER: usize = 2 * 1000;
 const MIN_READPOOL_STACK_SIZE_MB: u64 = 2;
 const DEFAULT_READPOOL_STACK_SIZE_MB: u64 = 10;
 
-readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
+readpool_config!(
+    StorageReadPoolConfig,
+    storage_read_pool_test,
+    "storage",
+    "MAX(4, MIN(8, CPU/2))"
+);
 
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
@@ -2064,7 +2277,8 @@ const DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY: usize = 2;
 readpool_config!(
     CoprReadPoolConfig,
     coprocessor_read_pool_test,
-    "coprocessor"
+    "coprocessor",
+    "CPU * 0.8"
 );
 
 impl Default for CoprReadPoolConfig {
@@ -2085,14 +2299,17 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub unified: UnifiedReadPoolConfig,
+    #[config_info(submodule)]
     #[online_config(skip)]
     pub storage: StorageReadPoolConfig,
+    #[config_info(submodule)]
     #[online_config(skip)]
     pub coprocessor: CoprReadPoolConfig,
 }
@@ -2273,20 +2490,31 @@ pub struct HadoopConfig {
     pub linux_user: String,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct BackupConfig {
+    /// The number of worker threads to process backup.
+    #[config_info(default_desc = "MIN(CPU * 0.5, 8)", min = 1, max_desc = "CPU")]
     pub num_threads: usize,
+    #[config_info(skip)]
     pub batch_size: usize,
+    #[config_info(skip)]
     pub sst_max_size: ReadableSize,
+    /// Controls whether to limit the resources used by backup tasks to reduce the impact
+    /// on the cluster when the cluster resource utilization is high.
     pub enable_auto_tune: bool,
+    #[config_info(skip)]
     pub auto_tune_remain_threads: usize,
+    #[config_info(skip)]
     pub auto_tune_refresh_interval: ReadableDuration,
+    #[config_info(skip)]
     pub io_thread_size: usize,
     // Do not expose this config to user.
     // It used to debug s3 503 error.
+    #[config_info(skip)]
     pub s3_multi_part_size: ReadableSize,
+    #[config_info(skip)]
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
@@ -2362,16 +2590,21 @@ impl Default for BackupStreamConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
+    /// The interval at which Resolved TS is calculated and forwarded.
     pub min_ts_interval: ReadableDuration,
+    #[config_info(skip)]
     pub hibernate_regions_compatible: bool,
+    /// The number of threads for the task of incrementally scanning historical data.
     // TODO(hi-rustin): Consider resizing the thread pool based on `incremental_scan_threads`.
     #[online_config(skip)]
     pub incremental_scan_threads: usize,
+    /// The maximum number of concurrent executions for the tasks of incrementally scanning historical data.
     pub incremental_scan_concurrency: usize,
+    /// The maximum speed at which historical data is incrementally scanned.
     pub incremental_scan_speed_limit: ReadableSize,
     /// `TsFilter` can increase speed and decrease resource usage when incremental content is much
     /// less than total content. However in other cases, `TsFilter` can make performance worse
@@ -2379,10 +2612,14 @@ pub struct CdcConfig {
     ///
     /// `TsFilter` will be enabled if `incremental/total <= incremental_scan_ts_filter_ratio`.
     /// Set `incremental_scan_ts_filter_ratio` to 0 will disable it.
+    #[config_info(skip)]
     pub incremental_scan_ts_filter_ratio: f64,
+    /// The upper limit of memory usage by TiCDC data change events.
     pub sink_memory_quota: ReadableSize,
+    /// The upper limit of memory usage by TiCDC old values.
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
+    #[config_info(skip)]
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -2438,13 +2675,17 @@ impl CdcConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ResolvedTsConfig {
+    /// Determines whether to maintain the Resolved TS for all Regions.
     #[online_config(skip)]
     pub enable: bool,
+    /// The interval at which Resolved TS is calculated and forwarded.
     pub advance_ts_interval: ReadableDuration,
+    /// The number of threads that TiKV uses to scan the MVCC (multi-version concurrency control) lock
+    /// data when initializing the Resolved TS.
     #[online_config(skip)]
     pub scan_lock_pool_size: usize,
 }
@@ -2471,15 +2712,25 @@ impl Default for ResolvedTsConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct File {
+    /// The log file. If this configuration item is not set, logs are output to "stderr" by default.
+    /// If this configuration item is set, logs are output to the corresponding file.
     pub filename: String,
-    // The unit is MB
+    /// The maximum size of a single log file. When the file size is larger than the value set
+    /// by this configuration item, the system automatically splits the single file into multiple files.
+    /// The unit is MB
+    #[config_info(min = 0, max = 4096)]
     pub max_size: u64,
-    // The unit is Day
+    /// The maximum number of days that TiKV keeps log files. Set to `0`(default value) means TiKV
+    /// does not clean log files.
+    #[config_info(min = 0)]
     pub max_days: u64,
+    /// The maximum number of log files that TiKV keeps. Set to `0`(default value)  means TiKV
+    /// keeps all log files.
+    #[config_info(min = 0)]
     pub max_backups: usize,
 }
 
@@ -2494,14 +2745,23 @@ impl Default for File {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct LogConfig {
+    /// The log level
+    #[config_info(
+        type = "String",
+        options = r#"["debug", "info", "warn", "error", "fatal"]"#
+    )]
     #[serde(with = "log_level_serde")]
     pub level: slog::Level,
+    /// The log format
+    #[config_info(type = "String", options = r#"[ "json", "text" ]"#)]
     pub format: LogFormat,
+    /// Determines whether to enable or disable the timestamp in the log
     pub enable_timestamp: bool,
+    #[config_info(submodule)]
     pub file: File,
 }
 
@@ -2525,13 +2785,24 @@ impl LogConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct QuotaConfig {
+    /// The soft limit on the CPU resources used by TiKV foreground to process read and write requests.
+    /// Set to `0` means no limit.
+    #[config_info(min = 0)]
     pub foreground_cpu_time: usize,
+    /// The soft limit on the bandwidth with which transactions write data.
+    /// Set to `0KiB` means no limit.
+    #[config_info(min = "0KiB")]
     pub foreground_write_bandwidth: ReadableSize,
+    /// The soft limit on the bandwidth with which transactions and the Coprocessor read data.
+    /// Set to `0KiB` means no limit.
+    #[config_info(min = "0KiB")]
     pub foreground_read_bandwidth: ReadableSize,
+    /// The maximum time that a single read or write request is forced to wait before it is processed in the foreground.
+    #[config_info(min = "0s")]
     pub max_delay_duration: ReadableDuration,
 }
 
@@ -2558,10 +2829,11 @@ impl QuotaConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(hidden)]
@@ -2569,120 +2841,158 @@ pub struct TiKvConfig {
 
     // Deprecated! These configuration has been moved to LogConfig.
     // They are preserved for compatibility check.
+    #[config_info(skip)]
     #[doc(hidden)]
     #[online_config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
+    #[config_info(skip)]
     #[doc(hidden)]
     #[online_config(skip)]
     pub log_file: String,
+    #[config_info(skip)]
     #[doc(hidden)]
     #[online_config(skip)]
     pub log_format: LogFormat,
+    #[config_info(skip)]
     #[online_config(skip)]
     pub log_rotation_timespan: ReadableDuration,
+    #[config_info(skip)]
     #[doc(hidden)]
     #[online_config(skip)]
     pub log_rotation_size: ReadableSize,
 
+    /// The file that stores slow logs.
     #[online_config(skip)]
     pub slow_log_file: String,
 
+    /// The threshold for outputing slow logs. If the processing time is longer
+    /// than this threshold, slow logs are output.
     #[online_config(skip)]
     pub slow_log_threshold: ReadableDuration,
 
+    #[config_info(skip)]
     #[online_config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
 
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub enable_io_snoop: bool,
 
+    /// Sets whether to call `abort()` to exit the process when TiKV panics. This
+    /// option affects whether TiKV allows the system to generate core dump files.
     #[online_config(skip)]
     pub abort_on_panic: bool,
 
+    #[config_info(skip)]
     #[doc(hidden)]
     #[online_config(skip)]
     pub memory_usage_limit: Option<ReadableSize>,
 
+    #[config_info(skip)]
     #[doc(hidden)]
     #[online_config(skip)]
     pub memory_usage_high_water: f64,
 
+    #[config_info(submodule)]
     #[online_config(skip)]
     pub log: LogConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub quota: QuotaConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub readpool: ReadPoolConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub server: ServerConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub storage: StorageConfig,
 
+    #[config_info(skip)]
     #[online_config(skip)]
     pub pd: PdConfig,
 
+    #[config_info(skip)]
     #[online_config(hidden)]
     pub metric: MetricConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub coprocessor: CopConfig,
 
+    #[config_info(skip)]
     #[online_config(skip)]
     pub coprocessor_v2: CoprocessorV2Config,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub rocksdb: DbConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub raftdb: RaftDbConfig,
 
+    #[config_info(submodule)]
     #[online_config(skip)]
     pub raft_engine: RaftEngineConfig,
 
+    #[config_info(submodule)]
     #[online_config(skip)]
     pub security: SecurityConfig,
 
+    #[config_info(submodule)]
     #[online_config(skip)]
     pub import: ImportConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub backup: BackupConfig,
 
+    #[config_info(skip)]
     #[online_config(submodule)]
     // The term "log-backup" and "backup-stream" points to the same object.
     // But the product name is `log-backup`.
     #[serde(rename = "log-backup")]
     pub backup_stream: BackupStreamConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub gc: GcConfig,
 
+    #[config_info(skip)]
     #[online_config(submodule)]
     pub split: SplitConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub cdc: CdcConfig,
 
+    #[config_info(submodule)]
     #[online_config(submodule)]
     pub resolved_ts: ResolvedTsConfig,
 
+    #[config_info(skip)]
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
 
+    #[config_info(skip)]
     #[online_config(skip)]
     pub causal_ts: CausalTsConfig,
 }

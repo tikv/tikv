@@ -3,6 +3,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration, u64};
 
 use batch_system::Config as BatchSystemConfig;
+use config_info::ConfigInfo;
 use engine_traits::{perf_level_serde, PerfLevel};
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
@@ -33,127 +34,200 @@ lazy_static! {
 
 with_prefix!(prefix_apply "apply-");
 with_prefix!(prefix_store "store-");
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    /// Enables or disables prevote. Enabling this feature helps reduce jitter on
+    /// the system after recovery from network partition.
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[online_config(skip)]
     pub prevote: bool,
+    /// The path to the Raft library. Empty value means use `storage.data-dir/raft`.
     #[online_config(skip)]
     pub raftdb_path: String,
 
-    // store capacity. 0 means no limit.
+    /// The storage capacity, which is the maximum size allowed to store data. 0 means no limit.
     #[online_config(skip)]
     pub capacity: ReadableSize,
 
-    // raft_base_tick_interval is a base tick interval (ms).
+    /// The time interval at which the Raft state machine ticks
     #[online_config(hidden)]
+    #[config_info(min_desc = ">0s")]
     pub raft_base_tick_interval: ReadableDuration,
     #[online_config(hidden)]
+    /// The number of passed ticks when the heartbeat is sent. This means that a heartbeat is sent
+    /// at the time interval of `raft-base-tick-interval * raft-heartbeat-ticks`.
+    #[config_info(min = 1)]
     pub raft_heartbeat_ticks: usize,
+    /// The number of passed ticks when Raft election is initiated. This means that if Raft group
+    /// is missing the leader, a leader election is initiated approximately after the time
+    /// interval of `raft-base-tick-interval * raft-election-timeout-ticks`.
+    #[config_info(min_desc = "value of `raft-heartbeat-ticks`")]
     #[online_config(hidden)]
     pub raft_election_timeout_ticks: usize,
+    /// The minimum number of ticks during which the Raft election is initiated. If the number is 0,
+    /// the value of raft-election-timeout-ticks is used. The value of this parameter must be greater
+    /// than or equal to `raft-election-timeout-ticks`.
+    #[config_info(min = 0)]
     #[online_config(hidden)]
     pub raft_min_election_timeout_ticks: usize,
+    /// The maximum number of ticks during which the Raft election is initiated. If the number is 0,
+    /// the value of `raft-election-timeout-ticks * 2` is used.
+    #[config_info(min = 0)]
     #[online_config(hidden)]
     pub raft_max_election_timeout_ticks: usize,
+    /// The soft limit on the size of a single message packet.
+    #[config_info(min_desc = ">0", max = "3GiB")]
     pub raft_max_size_per_msg: ReadableSize,
+    /// The number of Raft logs to be confirmed. If this number is exceeded, the Raft state machine
+    /// slows down log sending.
+    #[config_info(min_desc = ">0", max = 16384)]
     pub raft_max_inflight_msgs: usize,
-    // When the entry exceed the max size, reject to propose it.
+    /// The hard limit on the maximum size of a single log.
+    #[config_info(min = "0KB")]
     #[online_config(hidden)]
     pub raft_entry_max_size: ReadableSize,
-
-    // Interval to compact unnecessary raft log.
+    /// The time interval to compact unnecessary Raft logs
+    #[config_info(min = "0s")]
     pub raft_log_compact_sync_interval: ReadableDuration,
-    // Interval to gc unnecessary raft log.
+    /// The time interval at which the polling task of deleting Raft logs is scheduled.
+    /// 0 means that this feature is disabled.
+    #[config_info(min = "0s")]
     pub raft_log_gc_tick_interval: ReadableDuration,
-    // A threshold to gc stale raft log, must >= 1.
+    /// The soft limit on the maximum allowable count of residual Raft logs.
+    #[config_info(min = 1)]
     pub raft_log_gc_threshold: u64,
-    // When entry count exceed this value, gc will be forced trigger.
+    /// The hard limit on the allowable number of residual Raft logs.
+    #[config_info(min = 0)]
     pub raft_log_gc_count_limit: u64,
-    // When the approximate size of raft log entries exceed this value,
-    // gc will be forced trigger.
+    /// When the approximate size of raft log entries exceed this value,
+    /// gc will be forced trigger.
+    #[config_info(min_desc = ">0KB")]
     pub raft_log_gc_size_limit: ReadableSize,
     // Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
     // GC them after ticks `raft_log_reserve_max_ticks` times.
+    #[config_info(skip)]
     #[doc(hidden)]
     #[online_config(hidden)]
     pub raft_log_reserve_max_ticks: usize,
     // Old logs in Raft engine needs to be purged peridically.
+    #[config_info(skip)]
     pub raft_engine_purge_interval: ReadableDuration,
-    // When a peer is not responding for this time, leader will not keep entry cache for it.
+    /// The maximum remaining time allowed for the log cache in memory.
+    #[config_info(min = "0s")]
     pub raft_entry_cache_life_time: ReadableDuration,
     // Deprecated! The configuration has no effect.
     // They are preserved for compatibility check.
     // When a peer is newly added, reject transferring leader to the peer for a while.
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub raft_reject_transfer_leader_duration: ReadableDuration,
 
-    // Interval (ms) to check region whether need to be split or not.
+    /// Specifies the interval at which to check whether the Region split is needed.
+    /// `0` means that this feature is disabled.
+    #[config_info(min = "0s")]
     pub split_region_check_tick_interval: ReadableDuration,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
+    #[config_info(min = "0KiB")]
     pub region_split_check_diff: ReadableSize,
-    /// Interval (ms) to check whether start compaction for a region.
+    /// The time interval at which to check whether it is necessary to manually trigger RocksDB
+    /// compaction. `0` means that this feature is disabled.
+    #[config_info(min = "0s")]
     pub region_compact_check_interval: ReadableDuration,
-    /// Number of regions for each time checking.
+    /// The number of Regions checked at one time for each round of manual compaction.
+    #[config_info(min = 0)]
     pub region_compact_check_step: u64,
     /// Minimum number of tombstones to trigger manual compaction.
+    #[config_info(min = 0)]
     pub region_compact_min_tombstones: u64,
     /// Minimum percentage of tombstones to trigger manual compaction.
     /// Should between 1 and 100.
+    #[config_info(min = 1, max = 100)]
     pub region_compact_tombstones_percent: u64,
+    /// The time interval at which a Region's heartbeat to PD is triggered. `0` means that this feature is disabled.
+    #[config_info(min = "0s")]
     pub pd_heartbeat_tick_interval: ReadableDuration,
+    /// The time interval at which a store's heartbeat to PD is triggered. `0` means that this feature is disabled.
+    #[config_info(min = "0s")]
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
+    /// The time interval at which the recycle of expired snapshot files is triggered. `0` means that this feature is disabled.
+    #[config_info(min = "0s")]
     pub snap_mgr_gc_tick_interval: ReadableDuration,
+    /// The longest time for which a snapshot file is saved.
+    #[config_info(min = "0s")]
     pub snap_gc_timeout: ReadableDuration,
+    /// The time interval at which TiKV triggers a manual compaction for the Lock Column Family.
+    #[config_info(min = "0s")]
     pub lock_cf_compact_interval: ReadableDuration,
+    /// The size out of which TiKV triggers a manual compaction for the Lock Column Family.
+    #[config_info(min = "0KB")]
     pub lock_cf_compact_bytes_threshold: ReadableSize,
 
+    /// The longest length of the Region message queue.
+    #[config_info(min = 0)]
     #[online_config(skip)]
     pub notify_capacity: usize,
+    /// The maximum number of messages processed per batch
+    #[config_info(min = 0)]
     pub messages_per_tick: usize,
 
-    /// When a peer is not active for max_peer_down_duration,
-    /// the peer is considered to be down and is reported to PD.
+    /// The longest inactive duration allowed for a peer. A peer with timeout is marked as
+    /// `down`, and PD tries to delete it later.
+    #[config_info(
+        min_desc = "0s if `hibernate-regions` is false else `peer-stale-state-check-interval * 2`"
+    )]
     pub max_peer_down_duration: ReadableDuration,
 
     /// If the leader of a peer is missing for longer than max_leader_missing_duration,
     /// the peer would ask pd to confirm whether it is valid in any region.
     /// If the peer is stale and is not valid in any region, it will destroy itself.
+    #[config_info(min_desc = ">`abnormal-leader-missing-duration`")]
     pub max_leader_missing_duration: ReadableDuration,
-    /// Similar to the max_leader_missing_duration, instead it will log warnings and
-    /// try to alert monitoring systems, if there is any.
+    /// The longest duration allowed for a peer to be in the state where a Raft group is missing the leader.
+    #[config_info(min_desc = ">`peer-stale-state-check-interval`")]
     pub abnormal_leader_missing_duration: ReadableDuration,
+    /// The time interval to trigger the check for whether a peer is in the state where a Raft group is missing the leader.
+    #[config_info(min_desc = ">`election-timeout * 2`")]
     pub peer_stale_state_check_interval: ReadableDuration,
 
+    /// The maximum number of missing logs allowed for the transferee during a Raft leader transfer
+    #[config_info(min = 10)]
     #[online_config(hidden)]
     pub leader_transfer_max_log_lag: u64,
 
+    /// The memory cache size required when the imported snapshot file is written into the disk.
+    #[config_info(min = "0KiB")]
     #[online_config(skip)]
     pub snap_apply_batch_size: ReadableSize,
 
-    // Interval (ms) to check region whether the data is consistent.
+    /// Interval to check region whether the data is consistent. `0` means that this feature is disabled.
+    #[config_info(min = "0s")]
     pub consistency_check_interval: ReadableDuration,
 
+    #[config_info(skip)]
     #[online_config(hidden)]
     pub report_region_flow_interval: ReadableDuration,
 
-    // The lease provided by a successfully proposed and applied entry.
+    /// The lease provided by a successfully proposed and applied entry.
+    #[config_info(min = "0s")]
     pub raft_store_max_leader_lease: ReadableDuration,
 
     // Interval of scheduling a tick to check the leader lease.
     // It will be set to raft_store_max_leader_lease/4 by default.
+    #[config_info(skip)]
     pub check_leader_lease_interval: ReadableDuration,
 
     // Check if leader lease will expire at `current_time + renew_leader_lease_advance_duration`.
     // It will be set to raft_store_max_leader_lease/4 by default.
+    #[config_info(skip)]
     pub renew_leader_lease_advance_duration: ReadableDuration,
 
     // Right region derive origin region id when split.
+    #[config_info(skip)]
     #[online_config(hidden)]
     pub right_derive_when_split: bool,
 
@@ -162,55 +236,76 @@ pub struct Config {
     /// is not leader. That means we always need to check if it's working as expected
     /// when a leader applies a self-remove conf change. Keep the configuration only
     /// for convenient test.
+    #[config_info(skip)]
     #[cfg(any(test, feature = "testexport"))]
     pub allow_remove_leader: bool,
 
     /// Max log gap allowed to propose merge.
+    #[config_info(min_desc = ">`raft-log-gc-count-limit`")]
     #[online_config(hidden)]
     pub merge_max_log_gap: u64,
     /// Interval to re-propose merge.
+    #[config_info(min_desc = ">0s")]
     pub merge_check_tick_interval: ReadableDuration,
 
+    /// Determines whether to delete data from the `rocksdb delete_range` interface
     #[online_config(hidden)]
     pub use_delete_range: bool,
 
+    /// Configures the size of the snap-generator thread pool.
+    #[config_info(min = 1)]
     #[online_config(skip)]
     pub snap_generator_pool_size: usize,
 
+    /// The time interval at which the expired SST file is checked. `0` means that this feature is disabled.
+    #[config_info(min = "0s")]
     pub cleanup_import_sst_interval: ReadableDuration,
 
     /// Maximum size of every local read task batch.
+    #[config_info(min = 1)]
     pub local_read_batch_size: u64,
 
     #[online_config(submodule)]
     #[serde(flatten, with = "prefix_apply")]
+    #[config_info(skip)]
     pub apply_batch_system: BatchSystemConfig,
 
     #[online_config(submodule)]
     #[serde(flatten, with = "prefix_store")]
+    #[config_info(skip)]
     pub store_batch_system: BatchSystemConfig,
 
-    /// If it is 0, it means io tasks are handled in store threads.
+    /// The allowable number of threads that process Raft I/O tasks, which is the size
+    /// of the StoreWriter thread pool. If it is 0, it means io tasks are handled in store threads.
+    #[config_info(min = 0)]
     #[online_config(skip)]
     pub store_io_pool_size: usize,
 
+    #[config_info(skip)]
     #[online_config(skip)]
     pub store_io_notify_capacity: usize,
 
+    /// The allowable number of threads that drive `future`.
+    #[config_info(min = 1)]
     #[online_config(skip)]
     pub future_poll_size: usize,
+    /// Enables or disables Hibernate Region.
     #[online_config(skip)]
     pub hibernate_regions: bool,
+    #[config_info(skip)]
     #[doc(hidden)]
     #[online_config(hidden)]
     pub dev_assert: bool,
+    #[config_info(skip)]
     #[online_config(hidden)]
     pub apply_yield_duration: ReadableDuration,
 
+    #[config_info(skip)]
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub perf_level: PerfLevel,
 
+    #[config_info(skip)]
     #[doc(hidden)]
     #[online_config(skip)]
     /// Disable this feature by set to 0, logic will be removed in other pr.
@@ -225,23 +320,31 @@ pub struct Config {
     // * system=32G, memory_usage_limit=24G, evict=4.8G
     pub evict_cache_on_memory_ratio: f64,
 
+    /// Controls whether to enable batch processing of the requests. When it is enabled, the
+    /// write performance is significantly improved.
     pub cmd_batch: bool,
 
     /// When the count of concurrent ready exceeds this value, command will not be proposed
     /// until the previous ready has been persisted.
     /// If `cmd_batch` is 0, this config will have no effect.
     /// If it is 0, it means no limit.
+    #[config_info(skip)]
     pub cmd_batch_concurrent_ready_max_count: usize,
 
     /// When the size of raft db writebatch exceeds this value, write will be triggered.
+    #[config_info(min = "0KiB")]
     pub raft_write_size_limit: ReadableSize,
 
+    #[config_info(skip)]
     pub waterfall_metrics: bool,
 
+    #[config_info(skip)]
     pub io_reschedule_concurrent_max_count: usize,
+    #[config_info(skip)]
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
     // Deprecated! Batch is done in raft client.
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
@@ -249,32 +352,40 @@ pub struct Config {
 
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub region_max_size: ReadableSize,
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub region_split_size: ReadableSize,
     // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number.
+    #[config_info(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
 
-    // Interval to inspect the latency of raftstore for slow store detection.
+    /// Interval to inspect the latency of raftstore for slow store detection.
+    #[config_info(min = "1ms")]
     pub inspect_interval: ReadableDuration,
 
     // Interval to report min resolved ts, if it is zero, it means disabled.
+    #[config_info(skip)]
     pub report_min_resolved_ts_interval: ReadableDuration,
 
     /// Interval to check whether to reactivate in-memory pessimistic lock after being disabled
     /// before transferring leader.
+    #[config_info(skip)]
     pub reactive_memory_lock_tick_interval: ReadableDuration,
     /// Max tick count before reactivating in-memory pessimistic lock.
+    #[config_info(skip)]
     pub reactive_memory_lock_timeout_tick: usize,
     // Interval of scheduling a tick to report region buckets.
+    #[config_info(skip)]
     pub report_region_buckets_tick_interval: ReadableDuration,
 }
 

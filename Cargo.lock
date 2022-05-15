@@ -513,6 +513,7 @@ name = "batch-system"
 version = "0.1.0"
 dependencies = [
  "collections",
+ "config_info",
  "criterion",
  "crossbeam",
  "derive_more",
@@ -1001,6 +1002,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "rand 0.8.3",
  "serde",
  "syn",
 ]
@@ -1411,6 +1413,7 @@ dependencies = [
  "async-trait",
  "byteorder",
  "bytes",
+ "config_info",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -4154,6 +4157,7 @@ dependencies = [
  "bytes",
  "collections",
  "concurrency_manager",
+ "config_info",
  "crc32fast",
  "crossbeam",
  "derivative",
@@ -4827,6 +4831,7 @@ name = "security"
 version = "0.0.1"
 dependencies = [
  "collections",
+ "config_info",
  "encryption",
  "grpcio",
  "serde",
@@ -5254,6 +5259,7 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "api_version",
+ "config_info",
  "crc32fast",
  "dashmap",
  "encryption",
@@ -5984,6 +5990,7 @@ dependencies = [
  "codec",
  "collections",
  "concurrency_manager",
+ "config_info",
  "coprocessor_plugin_api",
  "crc32fast",
  "crc64fast",

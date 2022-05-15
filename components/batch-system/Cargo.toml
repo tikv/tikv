@@ -9,6 +9,7 @@ test-runner = ["derive_more"]
 
 [dependencies]
 collections = { path = "../collections" }
+config_info = { path = "../config_info" }
 crossbeam = "0.8"
 derive_more = { version = "0.99", optional = true }
 fail = "0.5"

@@ -2,17 +2,21 @@
 
 use std::{error::Error, result::Result};
 
+use config_info::ConfigInfo;
 use tikv_util::config::ReadableDuration;
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    /// The number of threads to process RPC requests.
     pub num_threads: usize,
+    #[config_info(skip)]
     pub stream_channel_window: usize,
     /// The timeout for going back into normal mode from import mode.
     ///
     /// Default is 10m.
+    #[config_info(skip)]
     pub import_mode_timeout: ReadableDuration,
 }
 

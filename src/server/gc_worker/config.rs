@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use config_info::ConfigInfo;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use tikv_util::config::{ReadableSize, VersionTrack};
 
@@ -10,16 +11,21 @@ pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, ConfigInfo)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct GcConfig {
+    #[config_info(skip)]
     pub ratio_threshold: f64,
+    #[config_info(skip)]
     pub batch_keys: usize,
+    #[config_info(skip)]
     pub max_write_bytes_per_sec: ReadableSize,
+    /// Controls whether to enable the GC in Compaction Filter feature.
     pub enable_compaction_filter: bool,
     /// By default compaction_filter can only works if `cluster_version` is greater than 5.0.0.
     /// Change `compaction_filter_skip_version_check` can enable it by force.
+    #[config_info(skip)]
     pub compaction_filter_skip_version_check: bool,
 }
 
