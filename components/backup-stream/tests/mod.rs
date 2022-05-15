@@ -426,6 +426,7 @@ fn run_async_test<T>(test: impl Future<Output = T>) -> T {
         .block_on(test)
 }
 
+/*
 mod test {
     use std::time::Duration;
 
@@ -553,3 +554,4 @@ mod test {
         assert!(paused)
     }
 }
+*/
