@@ -3714,7 +3714,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        server::{ttl::TtlCheckerTask, config::ServerConfigManager},
+        server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
             config_manager::StorageConfigManger, lock_manager::DummyLockManager,
             txn::flow_controller::FlowController, Storage, TestStorageBuilder,
