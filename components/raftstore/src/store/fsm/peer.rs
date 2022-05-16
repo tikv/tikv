@@ -838,6 +838,12 @@ where
                         demote_after_exit: false,
                     });
             }
+        } else {
+            warn!(
+                "Unsafe recovery, no need to demote failed voters";
+                "region" => ?self.region(),
+                "failed_voters" => ?failed_voters,
+            );
         }
     }
 
@@ -2004,19 +2010,21 @@ where
                             failed_voters_clone,
                         );
                     } else {
-                        info!("Unsafe recovery, exiting joint state."; "region" => ?self.region());
-                        self.propose_raft_command_internal(
-                            exit_joint_request(self.region(), &self.fsm.peer.peer),
-                            Callback::<EK::Snapshot>::write(Box::new(|resp| {
-                                if resp.response.get_header().has_error() {
-                                    error!(
-                                        "Unsafe recovery, fail to exit joint state";
-                                        "err" => ?resp.response.get_header().get_error(),
-                                    );
-                                }
-                            })),
-                            DiskFullOpt::AllowedOnAlmostFull,
-                        );
+                        if self.fsm.peer.in_joint_state() {
+                            info!("Unsafe recovery, exiting joint state"; "region" => ?self.region());
+                            self.propose_raft_command_internal(
+                                exit_joint_request(self.region(), &self.fsm.peer.peer),
+                                Callback::<EK::Snapshot>::write(Box::new(|resp| {
+                                    if resp.response.get_header().has_error() {
+                                        error!(
+                                            "Unsafe recovery, fail to exit joint state";
+                                            "err" => ?resp.response.get_header().get_error(),
+                                        );
+                                    }
+                                })),
+                                DiskFullOpt::AllowedOnAlmostFull,
+                            );
+                        }
 
                         self.fsm.peer.unsafe_recovery_state = None;
                     }

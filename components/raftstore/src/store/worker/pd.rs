@@ -1187,7 +1187,7 @@ where
                                 router.clone(),
                             );
                             for region in plan.get_force_leader().get_enter_force_leaders() {
-                                info!("Unsafe recovery, forcely assign the peer in this store to be the leader"; "region" => region);
+                                info!("Unsafe recovery, forcibly assign the peer in this store to be the leader"; "region" => region);
                                 if let Err(e) = router.significant_send(
                                     *region,
                                     SignificantMsg::EnterForceLeaderState {
@@ -1211,7 +1211,7 @@ where
                                         create,
                                     })
                                 {
-                                    error!("fail to send creat peer message for recovery"; "err" => ?e);
+                                    error!("fail to send create peer message for recovery"; "err" => ?e);
                                 }
                             }
                             for delete in plan.take_tombstones().into_iter() {
