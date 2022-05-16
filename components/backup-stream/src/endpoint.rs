@@ -737,16 +737,28 @@ where
         region: &Region,
         task: String,
         handle: ObserveHandle,
+        need_roll_back_safepoint: bool,
     ) -> Result<()> {
         let init = self.make_initial_loader();
 
-        let meta_cli = self.meta_client.as_ref().unwrap().clone();
+        let meta_cli = self.get_meta_client();
         let last_checkpoint = TimeStamp::new(
             self.pool
                 .block_on(meta_cli.global_progress_of_task(&task))?,
         );
         self.subs
             .register_region(region, handle.clone(), Some(last_checkpoint));
+        if need_roll_back_safepoint {
+            // Maybe block_on here or we may override the checkpoint if there are concurrent unexpectlly?
+            self.pool.spawn(async move {
+                if let Err(err) = meta_cli
+                    .step_task(&task, last_checkpoint.into_inner())
+                    .await
+                {
+                    err.report("during rolling back safepoint")
+                }
+            });
+        }
 
         let region_id = region.get_id();
         let snap = init.observe_over_with_retry(region, move || {
@@ -838,6 +850,7 @@ where
                             region,
                             for_task,
                             handle.clone(),
+                            false,
                         ) {
                             try_send!(
                                 self.scheduler,
@@ -896,6 +909,7 @@ where
                     &region,
                     for_task,
                     handle.clone(),
+                    true,
                 ),
             }
         } else {
