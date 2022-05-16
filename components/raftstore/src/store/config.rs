@@ -369,7 +369,7 @@ impl Default for Config {
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
-            max_snapshot_file_raw_size: ReadableSize::mb(0),
+            max_snapshot_file_raw_size: ReadableSize::mb(100),
         }
     }
 }
