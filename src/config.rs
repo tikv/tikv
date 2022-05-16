@@ -4918,6 +4918,8 @@ mod tests {
         default_cfg.readpool.storage.adjust_use_unified_pool();
         default_cfg.readpool.coprocessor.adjust_use_unified_pool();
         default_cfg.security.redact_info_log = Some(false);
+        default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
+        default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.

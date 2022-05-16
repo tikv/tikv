@@ -100,12 +100,12 @@ impl Default for Config {
 impl Config {
     pub fn region_max_keys(&self) -> u64 {
         self.region_max_keys
-            .unwrap_or(self.region_split_keys * 2 / 3)
+            .unwrap_or(self.region_split_keys / 2 * 3)
     }
 
     pub fn region_max_size(&self) -> ReadableSize {
         self.region_max_size
-            .unwrap_or(self.region_split_size * 2 / 3)
+            .unwrap_or(self.region_split_size / 2 * 3)
     }
 
     pub fn validate(&mut self) -> Result<()> {
