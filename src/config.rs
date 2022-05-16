@@ -2965,6 +2965,13 @@ impl TiKvConfig {
             );
         }
 
+        #[cfg(not(any(test, feature = "textexport")))]
+        self.raft_log_gc_limit_adjust();
+
+        Ok(())
+    }
+
+    pub fn raft_log_gc_limit_adjust(&mut self) {
         // Raft log gc limit must be 75% region size at least;
         if self.raft_store.raft_log_gc_size_limit < self.coprocessor.region_split_size * 3 / 4 {
             info!(
@@ -2980,8 +2987,6 @@ impl TiKvConfig {
             );
             self.raft_store.raft_log_gc_count_limit = self.coprocessor.region_split_keys * 3 / 4;
         }
-
-        Ok(())
     }
 
     // As the init of `logger` is very early, this adjust needs to be separated and called
