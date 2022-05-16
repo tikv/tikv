@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
 use engine_traits::{
@@ -609,21 +610,38 @@ fn test_coprocessor() {
 
 #[test]
 fn test_split_region() {
-    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    test_split_region_impl::<ApiV1>(false);
+    test_split_region_impl::<ApiV2>(false);
+    test_split_region_impl::<ApiV1>(true);
+    test_split_region_impl::<ApiV1Ttl>(true); // APIV1TTL for RawKV only.
+    test_split_region_impl::<ApiV2>(true);
+}
+
+fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
+    let encode_key = |k: &[u8]| -> Vec<u8> {
+        if !is_raw_kv || F::TAG == ApiVersion::V2 {
+            Key::from_raw(k).into_encoded()
+        } else {
+            k.to_vec()
+        }
+    };
+
+    let (mut cluster, leader, mut ctx) =
+        must_new_and_configure_cluster(|cluster| cluster.cfg.storage.set_api_version(F::TAG));
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+    ctx.set_api_version(F::CLIENT_TAG);
 
     // Split region commands
     let key = b"b";
     let mut req = SplitRegionRequest::default();
     req.set_context(ctx);
+    req.set_is_raw_kv(is_raw_kv);
     req.set_split_key(key.to_vec());
     let resp = client.split_region(&req).unwrap();
-    assert_eq!(
-        Key::from_encoded(resp.get_left().get_end_key().to_vec())
-            .into_raw()
-            .unwrap()
-            .as_slice(),
-        key
-    );
+    assert_eq!(resp.get_left().get_end_key().to_vec(), encode_key(key));
     assert_eq!(
         resp.get_left().get_end_key(),
         resp.get_right().get_start_key()
@@ -638,21 +656,21 @@ fn test_split_region() {
     ctx.set_region_epoch(resp.get_right().get_region_epoch().to_owned());
     let mut req = SplitRegionRequest::default();
     req.set_context(ctx);
+    req.set_is_raw_kv(is_raw_kv);
     let split_keys = vec![b"e".to_vec(), b"c".to_vec(), b"d".to_vec()];
     req.set_split_keys(split_keys.into());
     let resp = client.split_region(&req).unwrap();
     let result_split_keys: Vec<_> = resp
         .get_regions()
         .iter()
-        .map(|x| {
-            Key::from_encoded(x.get_start_key().to_vec())
-                .into_raw()
-                .unwrap()
-        })
+        .map(|x| x.get_start_key().to_vec())
         .collect();
     assert_eq!(
         result_split_keys,
-        vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec(), b"e".to_vec()]
+        vec![b"b", b"c", b"d", b"e",]
+            .into_iter()
+            .map(|k| encode_key(&k[..]))
+            .collect::<Vec<_>>()
     );
 }
 
