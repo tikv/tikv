@@ -15,7 +15,7 @@ use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
 use tikv::storage::CfStatistics;
 use tikv_util::{box_err, time::Instant, warn, worker::Scheduler, Either};
 use tokio::sync::{Mutex, RwLock};
-use txn_types::Key;
+use txn_types::{Key, Lock, LockType};
 
 use crate::{
     errors::{Error, Result},
@@ -387,6 +387,17 @@ pub fn handle_on_event_result(doom_messenger: &Scheduler<Task>, result: Vec<(Str
                 )
             );
         }
+    }
+}
+
+/// tests whether the lock should be tracked or skipped.
+pub fn should_track_lock(l: &Lock) -> bool {
+    match l.lock_type {
+        LockType::Put | LockType::Delete => true,
+        // Lock or Pessimistic lock won't commit more data,
+        // (i.e. won't break the integration of data between [Lock.start_ts, get_ts()))
+        // it is safe for ignoring them and advancing resolved_ts.
+        LockType::Lock | LockType::Pessimistic => false,
     }
 }
 
