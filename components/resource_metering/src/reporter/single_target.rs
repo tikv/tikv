@@ -1,20 +1,30 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::error::Result;
-use crate::metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM};
-use crate::reporter::data_sink::DataSink;
-use crate::reporter::data_sink_reg::{DataSinkGuard, DataSinkRegHandle};
-
-use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{ResourceUsageAgentClient, ResourceUsageRecord};
-use tikv_util::warn;
-use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, Scheduler};
+use tikv_util::{
+    warn,
+    worker::{Builder as WorkerBuilder, LazyWorker, Runnable, Scheduler},
+};
+
+use crate::{
+    error::Result,
+    metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM},
+    reporter::{
+        data_sink::DataSink,
+        data_sink_reg::{DataSinkGuard, DataSinkRegHandle},
+    },
+};
 
 impl Runnable for SingleTargetDataSink {
     type Task = Task;

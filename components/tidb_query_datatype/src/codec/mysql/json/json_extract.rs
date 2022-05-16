@@ -1,10 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::super::Result;
-use super::path_expr::{
-    PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK,
+use super::{
+    super::Result,
+    path_expr::{PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK},
+    Json, JsonRef, JsonType,
 };
-use super::{Json, JsonRef, JsonType};
 
 impl<'a> JsonRef<'a> {
     /// `extract` receives several path expressions as arguments, matches them in j, and returns
@@ -96,12 +96,15 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<Jso
 
 #[cfg(test)]
 mod tests {
-    use super::super::path_expr::{
-        PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
-        PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK,
-    };
-    use super::*;
     use std::str::FromStr;
+
+    use super::{
+        super::path_expr::{
+            PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
+            PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK,
+        },
+        *,
+    };
 
     #[test]
     fn test_json_extract() {

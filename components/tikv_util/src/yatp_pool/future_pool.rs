@@ -3,10 +3,12 @@
 //! This mod implemented a wrapped future pool that supports `on_tick()` which
 //! is invoked no less than the specific interval.
 
-use std::future::Future;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    future::Future,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use fail::fail_point;
@@ -213,18 +215,21 @@ impl std::error::Error for Full {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::sync::mpsc;
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            mpsc, Mutex,
+        },
+        thread,
+        time::Duration,
     };
-    use std::thread;
-    use std::time::Duration;
 
-    use super::super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL};
     use futures::executor::block_on;
+
+    use super::{
+        super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL},
+        *,
+    };
 
     fn spawn_future_and_wait(pool: &FuturePool, duration: Duration) {
         block_on(

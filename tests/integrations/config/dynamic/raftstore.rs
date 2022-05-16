@@ -1,27 +1,35 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::FromIterator;
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
-
-use engine_rocks::RocksEngine;
-use kvproto::raft_serverpb::RaftMessage;
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::config::{Config, RaftstoreConfigManager};
-use raftstore::store::fsm::StoreMeta;
-use raftstore::store::fsm::*;
-use raftstore::store::{AutoSplitController, SnapManager, StoreMsg, Transport};
-use raftstore::Result;
-use tikv::config::{ConfigController, Module, TiKvConfig};
-use tikv::import::SSTImporter;
+use std::{
+    iter::FromIterator,
+    sync::{mpsc, Arc, Mutex},
+    time::Duration,
+};
 
 use concurrency_manager::ConcurrencyManager;
+use engine_rocks::RocksEngine;
 use engine_traits::{Engines, ALL_CFS};
+use kvproto::raft_serverpb::RaftMessage;
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{
+        config::{Config, RaftstoreConfigManager},
+        fsm::{StoreMeta, *},
+        AutoSplitController, SnapManager, StoreMsg, Transport,
+    },
+    Result,
+};
 use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
-use tikv_util::config::{ReadableSize, VersionTrack};
-use tikv_util::worker::{dummy_scheduler, LazyWorker, Worker};
+use tikv::{
+    config::{ConfigController, Module, TiKvConfig},
+    import::SstImporter,
+};
+use tikv_util::{
+    config::{ReadableSize, VersionTrack},
+    worker::{dummy_scheduler, LazyWorker, Worker},
+};
 
 #[derive(Clone)]
 struct MockTransport;
@@ -81,7 +89,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SSTImporter::new(&cfg.import, &p, None, cfg.storage.api_version()).unwrap())
+        Arc::new(SstImporter::new(&cfg.import, &p, None, cfg.storage.api_version()).unwrap())
     };
     let snap_mgr = {
         let p = dir
@@ -115,6 +123,7 @@ fn start_raftstore(
             Arc::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
+            None,
         )
         .unwrap();
 

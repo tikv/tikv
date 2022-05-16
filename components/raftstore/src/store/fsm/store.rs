@@ -1,96 +1,111 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::cell::Cell;
-use std::cmp::{Ord, Ordering as CmpOrdering};
-use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use std::{mem, u64};
+use std::{
+    cell::Cell,
+    cmp::{Ord, Ordering as CmpOrdering},
+    collections::{
+        BTreeMap,
+        Bound::{Excluded, Included, Unbounded},
+    },
+    mem,
+    ops::{Deref, DerefMut},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+    u64,
+};
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
     HandlerBuilder, PollHandler, Priority,
 };
+use collections::{HashMap, HashMapEntry, HashSet};
+use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
-use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    CompactedEvent, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine, RaftLogBatch,
+    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+};
 use fail::fail_point;
-use futures::compat::Future01CompatExt;
-use futures::FutureExt;
-use kvproto::import_sstpb::SstMeta;
-use kvproto::import_sstpb::SwitchMode;
-use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::QueryStats;
-use kvproto::pdpb::StoreStats;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
-use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
-use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
+use futures::{compat::Future01CompatExt, FutureExt};
+use grpcio_health::HealthService;
+use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use kvproto::{
+    import_sstpb::{SstMeta, SwitchMode},
+    metapb::{self, Region, RegionEpoch},
+    pdpb::{QueryStats, StoreStats},
+    raft_cmdpb::{AdminCmdType, AdminRequest},
+    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
+    replication_modepb::{ReplicationMode, ReplicationStatus},
+};
+use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
-use time::{self, Timespec};
-
-use collections::HashMap;
-use engine_traits::CompactedEvent;
-use engine_traits::{RaftEngine, RaftLogBatch, WriteOptions};
-use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::{FeatureGate, PdClient};
-use sst_importer::SSTImporter;
+use resource_metering::CollectorRegHandle;
+use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::disk::{get_disk_status, DiskUsage};
-use tikv_util::time::{duration_to_sec, Instant as TiInstant};
-use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::{
-    box_err, box_try, debug, defer, error, info, is_zero_duration, slow_log, sys as sys_util, warn,
+    box_err, box_try,
+    config::{Tracker, VersionTrack},
+    debug, defer, error,
+    future::poll_future_notify,
+    info, is_zero_duration,
+    mpsc::{self, LooseBoundedSender, Receiver},
+    slow_log, sys as sys_util,
+    sys::disk::{get_disk_status, DiskUsage},
+    time::{duration_to_sec, Instant as TiInstant},
+    timer::SteadyTimer,
+    warn,
+    worker::{LazyWorker, Scheduler, Worker},
     Either, RingQueue,
 };
+use time::{self, Timespec};
 
-use crate::bytes_capacity;
-use crate::coprocessor::split_observer::SplitObserver;
-use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
-use crate::store::async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg};
-use crate::store::config::Config;
-use crate::store::fsm::metrics::*;
-use crate::store::fsm::peer::{
-    maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
+use crate::{
+    bytes_capacity,
+    coprocessor::{
+        split_observer::SplitObserver, BoxAdminObserver, CoprocessorHost, RegionChangeEvent,
+    },
+    store::{
+        async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+        config::Config,
+        fsm::{
+            create_apply_batch_system,
+            metrics::*,
+            peer::{
+                maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
+            },
+            ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
+            ApplyTaskRes,
+        },
+        local_metrics::{RaftMetrics, RaftReadyMetrics},
+        memory::*,
+        metrics::*,
+        peer_storage,
+        transport::Transport,
+        util,
+        util::{is_initial_msg, RegionReadProgressRegistry},
+        worker::{
+            AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
+            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
+            RaftlogFetchRunner, RaftlogFetchTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate,
+            RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask, SplitCheckTask,
+        },
+        Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
+        PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
+    },
+    Result,
 };
-use crate::store::fsm::ApplyNotifier;
-use crate::store::fsm::ApplyTaskRes;
-use crate::store::fsm::{
-    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
-};
-use crate::store::local_metrics::{RaftMetrics, RaftReadyMetrics};
-use crate::store::memory::*;
-use crate::store::metrics::*;
-use crate::store::peer_storage;
-use crate::store::transport::Transport;
-use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
-use crate::store::worker::{
-    AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
-    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-    RaftlogFetchRunner, RaftlogFetchTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate,
-    RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask, SplitCheckTask,
-};
-use crate::store::{
-    util, Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
-    PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
-};
-use crate::Result;
-use concurrency_manager::ConcurrencyManager;
-use resource_metering::CollectorRegHandle;
-use tikv_util::future::poll_future_notify;
 
 type Key = Vec<u8>;
 
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
+pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
@@ -129,6 +144,8 @@ pub struct StoreMeta {
     pub destroyed_region_for_snap: HashMap<u64, bool>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
+    /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
+    pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
 }
 
 impl StoreMeta {
@@ -145,6 +162,7 @@ impl StoreMeta {
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
+            damaged_ranges: HashMap::default(),
         }
     }
 
@@ -162,6 +180,67 @@ impl StoreMeta {
         }
         let reader = self.readers.get_mut(&region.get_id()).unwrap();
         peer.set_region(host, reader, region);
+    }
+
+    /// Update damaged ranges and return true if overlap exists.
+    ///
+    /// Condition:
+    /// end_key > file.smallestkey
+    /// start_key <= file.largestkey
+    pub fn update_overlap_damaged_ranges(&mut self, fname: &str, start: &[u8], end: &[u8]) -> bool {
+        // `region_ranges` is promised to have no overlap so just check the first region.
+        if let Some((_, id)) = self
+            .region_ranges
+            .range((Excluded(start.to_owned()), Unbounded::<Vec<u8>>))
+            .next()
+        {
+            let region = &self.regions[id];
+            if keys::enc_start_key(region).as_slice() <= end {
+                if let HashMapEntry::Vacant(v) = self.damaged_ranges.entry(fname.to_owned()) {
+                    v.insert((start.to_owned(), end.to_owned()));
+                }
+                return true;
+            }
+        }
+
+        // It's OK to remove the range here before deleting real file.
+        let _ = self.damaged_ranges.remove(fname);
+        false
+    }
+
+    /// Get all region ids overlapping damaged ranges.
+    pub fn get_all_damaged_region_ids(&self) -> HashSet<u64> {
+        let mut ids = HashSet::default();
+        for (_fname, (start, end)) in self.damaged_ranges.iter() {
+            for (_, id) in self
+                .region_ranges
+                .range((Excluded(start.clone()), Unbounded::<Vec<u8>>))
+            {
+                let region = &self.regions[id];
+                if &keys::enc_start_key(region) <= end {
+                    ids.insert(*id);
+                } else {
+                    // `region_ranges` is promised to have no overlap.
+                    break;
+                }
+            }
+        }
+        if !ids.is_empty() {
+            warn!(
+                "detected damaged regions overlapping damaged file ranges";
+                "id" => ?&ids,
+            );
+        }
+        ids
+    }
+
+    fn overlap_damaged_range(&self, start_key: &Vec<u8>, end_key: &Vec<u8>) -> bool {
+        for (_fname, (file_start, file_end)) in self.damaged_ranges.iter() {
+            if file_end >= start_key && file_start < end_key {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -361,14 +440,14 @@ where
     pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
-    // handle Compact, CleanupSST task
+    // handle Compact, CleanupSst task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
-    pub importer: Arc<SSTImporter>,
+    pub importer: Arc<SstImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub feature_gate: FeatureGate,
     /// region_id -> (peer_id, is_splitting)
@@ -576,7 +655,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
             StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
-            StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
+            StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
         }
         let elapsed = t.saturating_elapsed();
         RAFT_EVENT_DURATION
@@ -603,7 +682,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
-                StoreMsg::ValidateSSTResult { invalid_ssts } => {
+                StoreMsg::ValidateSstResult { invalid_ssts } => {
                     self.on_validate_sst_result(invalid_ssts)
                 }
                 StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
@@ -842,20 +921,48 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
-        let dur = if self.poll_ctx.has_ready {
+        if self.poll_ctx.has_ready {
             // Only enable the fail point when the store id is equal to 3, which is
             // the id of slow store in tests.
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
+        }
+        let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
+        let mut dur = self.timer.saturating_elapsed();
 
-            if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+        for inspector in &mut latency_inspect {
+            inspector.record_store_process(dur);
+        }
+        let write_begin = TiInstant::now();
+        if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+            if self.poll_ctx.has_ready {
                 write_worker.write_to_db(false);
+
+                for mut inspector in latency_inspect {
+                    inspector.record_store_write(write_begin.saturating_elapsed());
+                    inspector.finish();
+                }
 
                 for peer in peers.iter_mut().flatten() {
                     PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
                 }
+            } else {
+                for inspector in latency_inspect {
+                    inspector.finish();
+                }
             }
-
-            let dur = self.timer.saturating_elapsed();
+        } else {
+            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
+            if let Err(err) =
+                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+                    send_time: write_begin,
+                    inspector: latency_inspect,
+                })
+            {
+                warn!("send latency inspecting to write workers failed"; "err" => ?err);
+            }
+        }
+        dur = self.timer.saturating_elapsed();
+        if self.poll_ctx.has_ready {
             if !self.poll_ctx.store_stat.is_busy {
                 let election_timeout = Duration::from_millis(
                     self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
@@ -889,40 +996,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     .snapshot
                     .saturating_sub(self.previous_metrics.snapshot),
             );
-            dur
-        } else {
-            self.timer.saturating_elapsed()
-        };
+        }
 
         self.poll_ctx.current_time = None;
         self.poll_ctx
             .raft_metrics
             .process_ready
             .observe(duration_to_sec(dur));
-
-        if !self.poll_ctx.pending_latency_inspect.is_empty() {
-            let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
-            for inspector in &mut latency_inspect {
-                inspector.record_store_process(dur);
-            }
-            if self.poll_ctx.sync_write_worker.is_some() {
-                for mut inspector in latency_inspect {
-                    inspector.record_store_write(dur);
-                    inspector.finish();
-                }
-            } else {
-                let now = TiInstant::now();
-                let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-                if let Err(err) =
-                    self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
-                        send_time: now,
-                        inspector: latency_inspect,
-                    })
-                {
-                    warn!("send latency inspecting to write workers failed"; "err" => ?err);
-                }
-            }
-        }
     }
 
     fn pause(&mut self) {
@@ -955,7 +1035,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
-    pub importer: Arc<SSTImporter>,
+    pub importer: Arc<SstImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     snap_mgr: SnapManager,
@@ -1316,13 +1396,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<EK>,
-        importer: Arc<SSTImporter>,
+        importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         background_worker: Worker,
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1351,6 +1432,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cfg.value().snap_generator_pool_size,
             workers.coprocessor_host.clone(),
             self.router(),
+            Some(Arc::clone(&pd_client)),
         );
         let region_scheduler = workers
             .region_worker
@@ -1390,7 +1472,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
 
         let compact_runner = CompactRunner::new(engines.kv.clone());
-        let cleanup_sst_runner = CleanupSSTRunner::new(
+        let cleanup_sst_runner = CleanupSstRunner::new(
             meta.get_id(),
             self.router.clone(),
             Arc::clone(&importer),
@@ -1446,6 +1528,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pd_client,
             collector_reg_handle,
             region_read_progress,
+            health_service,
         )?;
         Ok(())
     }
@@ -1461,6 +1544,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         pd_client: Arc<C>,
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1539,6 +1623,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             workers.pd_worker.remote(),
             collector_reg_handle,
             region_read_progress,
+            health_service,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
@@ -1922,6 +2007,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             // because of the `StoreMeta` lock.
         }
 
+        if meta.overlap_damaged_range(
+            &data_key(msg.get_start_key()),
+            &data_end_key(msg.get_end_key()),
+        ) {
+            warn!(
+                "Damaged region overlapped and reject to create peer";
+                "peer_id" => ?target,
+                "region_id" => &region_id,
+            );
+            return Ok(false);
+        }
+
         let mut is_overlapped = false;
         let mut regions_to_destroy = vec![];
         for (_, id) in meta.region_ranges.range((
@@ -2162,6 +2259,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
+
+            if !meta.damaged_ranges.is_empty() {
+                let damaged_regions_id = meta.get_all_damaged_region_ids().into_iter().collect();
+                stats.set_damaged_regions_id(damaged_regions_id);
+            }
         }
 
         let snap_stats = self.ctx.snap_mgr.stats();
@@ -2327,6 +2429,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_snap_mgr_gc(&mut self) {
+        // refresh multi_snapshot_files enable flag
+        self.ctx.snap_mgr.set_enable_multi_snapshot_files(
+            self.ctx
+                .feature_gate
+                .can_enable(MULTI_FILES_SNAPSHOT_FEATURE),
+        );
+
         if let Err(e) = self.handle_snap_mgr_gc() {
             error!(?e;
                 "handle gc snap failed";
@@ -2397,7 +2506,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if ssts.is_empty() || self.ctx.importer.get_mode() == SwitchMode::Import {
             return;
         }
-        // A stale peer can still ingest a stale SST before it is
+        // A stale peer can still ingest a stale Sst before it is
         // destroyed. We need to make sure that no stale peer exists.
         let mut delete_ssts = Vec::new();
         {
@@ -2412,11 +2521,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             return;
         }
 
-        let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
+        let task = CleanupSstTask::DeleteSst { ssts: delete_ssts };
         if let Err(e) = self
             .ctx
             .cleanup_scheduler
-            .schedule(CleanupTask::CleanupSST(task))
+            .schedule(CleanupTask::CleanupSst(task))
         {
             error!(
                 "schedule to delete ssts failed";
@@ -2451,11 +2560,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
 
         if !delete_ssts.is_empty() {
-            let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
+            let task = CleanupSstTask::DeleteSst { ssts: delete_ssts };
             if let Err(e) = self
                 .ctx
                 .cleanup_scheduler
-                .schedule(CleanupTask::CleanupSST(task))
+                .schedule(CleanupTask::CleanupSst(task))
             {
                 error!(
                     "schedule to delete ssts failed";
@@ -2469,13 +2578,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         //  split from the origin region because the apply thread is so busy that it can not apply
         //  SplitRequest as soon as possible. So we can not delete this sst file.
         if !validate_ssts.is_empty() && self.ctx.importer.get_mode() != SwitchMode::Import {
-            let task = CleanupSSTTask::ValidateSST {
+            let task = CleanupSstTask::ValidateSst {
                 ssts: validate_ssts,
             };
             if let Err(e) = self
                 .ctx
                 .cleanup_scheduler
-                .schedule(CleanupTask::CleanupSST(task))
+                .schedule(CleanupTask::CleanupSst(task))
             {
                 error!(
                    "schedule to validate ssts failed";
@@ -2560,7 +2669,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn register_cleanup_import_sst_tick(&self) {
         self.ctx.schedule_store_tick(
-            StoreTick::CleanupImportSST,
+            StoreTick::CleanupImportSst,
             self.ctx.cfg.cleanup_import_sst_interval.0,
         )
     }
@@ -2733,9 +2842,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
 #[cfg(test)]
 mod tests {
-    use engine_rocks::RangeOffsets;
-    use engine_rocks::RangeProperties;
-    use engine_rocks::RocksCompactedEvent;
+    use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};
 
     use super::*;
 

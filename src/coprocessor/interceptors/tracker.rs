@@ -1,12 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
 use pin_project::pin_project;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 use crate::coprocessor::tracker::Tracker as CopTracker;
-use crate::storage::kv::PerfStatisticsInstant;
 
 pub fn track<'a, F: Future + 'a>(
     fut: F,
@@ -44,12 +46,10 @@ where
         let this = self.project();
 
         this.cop_tracker.on_begin_item();
-        let perf_statistics_instant = PerfStatisticsInstant::new();
 
         let res = this.fut.poll(cx);
 
-        let perf_statistics = perf_statistics_instant.delta();
-        this.cop_tracker.on_finish_item(None, perf_statistics);
+        this.cop_tracker.on_finish_item(None);
 
         res
     }

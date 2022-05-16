@@ -1,14 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::BTreeMap;
-use std::convert::TryInto;
-use std::{f64, str};
+use std::{collections::BTreeMap, convert::TryInto, f64, str};
 
-use super::constants::*;
-use super::{Json, JsonRef, JsonType};
+use codec::{number::NumberCodec, prelude::*};
+
+use super::{constants::*, Json, JsonRef, JsonType};
 use crate::codec::{Error, Result};
-use codec::number::NumberCodec;
-use codec::prelude::*;
 
 impl<'a> JsonRef<'a> {
     fn encoded_len(&self) -> usize {

@@ -6,6 +6,14 @@
 //! handling of the commands is similar. We therefore have a single type (Prewriter) to handle both
 //! kinds of prewrite.
 
+use std::mem;
+
+use engine_traits::CF_WRITE;
+use kvproto::kvrpcpb::{AssertionLevel, ExtraOp};
+use tikv_kv::SnapshotExt;
+use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
+
+use super::ReaderWithStats;
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
@@ -24,13 +32,6 @@ use crate::storage::{
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
-use engine_traits::CF_WRITE;
-use kvproto::kvrpcpb::{AssertionLevel, ExtraOp};
-use std::mem;
-use tikv_kv::SnapshotExt;
-use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
-
-use super::ReaderWithStats;
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -537,12 +538,11 @@ impl<K: PrewriteKind> Prewriter<K> {
                     txn.guards = Vec::new();
                     final_min_commit_ts = TimeStamp::zero();
                 }
-                e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                    locks.push(
-                        e.map(|_| ())
-                            .map_err(Error::from)
-                            .map_err(StorageError::from),
-                    );
+                Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
+                    match check_committed_record_on_err(prewrite_result, txn, reader, &key) {
+                        Ok(res) => return Ok(res),
+                        Err(e) => locks.push(Err(e.into())),
+                    }
                 }
                 Err(e @ MvccError(box MvccErrorInner::AssertionFailed { .. })) => {
                     if assertion_failure.is_none() {
@@ -792,19 +792,29 @@ pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
 
 #[cfg(test)]
 mod tests {
+    use concurrency_manager::ConcurrencyManager;
+    use engine_rocks::ReadPerfInstant;
+    use engine_traits::CF_WRITE;
+    use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
+    use txn_types::{Key, Mutation, TimeStamp};
+
     use super::*;
-    use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
-    use crate::storage::txn::actions::tests::{
-        must_pessimistic_prewrite_put_async_commit, must_prewrite_delete, must_prewrite_put,
-        must_prewrite_put_async_commit,
-    };
-    use crate::storage::txn::commands::check_txn_status::tests::must_success as must_check_txn_status;
     use crate::storage::{
         mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{
-            commands::test_util::prewrite_command,
-            commands::test_util::{
-                commit, pessimistic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
+            actions::{
+                acquire_pessimistic_lock::tests::must_pessimistic_locked,
+                tests::{
+                    must_pessimistic_prewrite_put_async_commit, must_prewrite_delete,
+                    must_prewrite_put, must_prewrite_put_async_commit,
+                },
+            },
+            commands::{
+                check_txn_status::tests::must_success as must_check_txn_status,
+                test_util::{
+                    commit, pessimistic_prewrite_with_cm, prewrite, prewrite_command,
+                    prewrite_with_cm, rollback,
+                },
             },
             tests::{
                 must_acquire_pessimistic_lock, must_acquire_pessimistic_lock_err, must_commit,
@@ -815,10 +825,6 @@ mod tests {
         types::TxnStatus,
         DummyLockManager, Engine, Snapshot, Statistics, TestEngineBuilder,
     };
-    use concurrency_manager::ConcurrencyManager;
-    use engine_traits::CF_WRITE;
-    use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
-    use txn_types::{Key, Mutation, TimeStamp};
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
         let mut mutations = Vec::default();
@@ -854,7 +860,7 @@ mod tests {
         )
         .err()
         .unwrap();
-        assert_eq!(2, statistic.write.seek);
+        assert_eq!(3, statistic.write.seek);
         match e {
             Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))) => (),
             _ => panic!("error type not match"),
@@ -867,7 +873,7 @@ mod tests {
             102,
         )
         .unwrap();
-        assert_eq!(2, statistic.write.seek);
+        assert_eq!(3, statistic.write.seek);
         let e = prewrite(
             &engine,
             &mut statistic,
@@ -940,9 +946,9 @@ mod tests {
 
     #[test]
     fn test_prewrite_skip_too_many_tombstone() {
-        use crate::server::gc_worker::gc_by_compact;
-        use crate::storage::kv::PerfStatisticsInstant;
         use engine_rocks::{set_perf_level, PerfLevel};
+
+        use crate::server::gc_worker::gc_by_compact;
         let mut mutations = Vec::default();
         let pri_key_number = 0;
         let pri_key = &[pri_key_number];
@@ -970,7 +976,7 @@ mod tests {
         // seek write cf.
         gc_by_compact(&engine, pri_key, 101);
         set_perf_level(PerfLevel::EnableTimeExceptForMutex);
-        let perf = PerfStatisticsInstant::new();
+        let perf = ReadPerfInstant::new();
         let mut statistic = Statistics::default();
         while mutations.len() > FORWARD_MIN_MUTATIONS_NUM + 1 {
             mutations.pop();
@@ -986,7 +992,7 @@ mod tests {
         .unwrap();
         let d = perf.delta();
         assert_eq!(1, statistic.write.seek);
-        assert_eq!(d.0.internal_delete_skipped_count, 0);
+        assert_eq!(d.internal_delete_skipped_count, 0);
     }
 
     #[test]
@@ -1345,10 +1351,11 @@ mod tests {
 
     #[test]
     fn test_out_of_sync_max_ts() {
-        use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
         use engine_test::kv::KvTestEngineIterator;
         use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
+
+        use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
         #[derive(Clone)]
         struct MockSnapshot;
 
@@ -2184,5 +2191,54 @@ mod tests {
             err,
             MvccError(box MvccErrorInner::AssertionFailed { .. })
         ));
+    }
+
+    #[test]
+    fn test_prewrite_committed_encounter_newer_lock() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut statistics = Statistics::default();
+
+        let k1 = b"k1";
+        let v1 = b"v1";
+        let v2 = b"v2";
+
+        must_prewrite_put_async_commit(&engine, k1, v1, k1, &Some(vec![]), 5, 10);
+        // This commit may actually come from a ResolveLock command
+        must_commit(&engine, k1, 5, 15);
+
+        // Another transaction prewrites
+        must_prewrite_put(&engine, k1, v2, k1, 20);
+
+        // A retried prewrite of the first transaction should be idempotent.
+        let prewrite_cmd = Prewrite::new(
+            vec![Mutation::make_put(Key::from_raw(k1), v1.to_vec())],
+            k1.to_vec(),
+            5.into(),
+            2000,
+            false,
+            1,
+            5.into(),
+            1000.into(),
+            Some(vec![]),
+            false,
+            AssertionLevel::Off,
+            Context::default(),
+        );
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: ConcurrencyManager::new(20.into()),
+            extra_op: ExtraOp::Noop,
+            statistics: &mut statistics,
+            async_apply_prewrite: false,
+        };
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let res = prewrite_cmd.cmd.process_write(snap, context).unwrap();
+        match res.pr {
+            ProcessResult::PrewriteResult { result } => {
+                assert!(result.locks.is_empty(), "{:?}", result);
+                assert_eq!(result.min_commit_ts, 15.into(), "{:?}", result);
+            }
+            _ => panic!("unexpected result {:?}", res.pr),
+        }
     }
 }

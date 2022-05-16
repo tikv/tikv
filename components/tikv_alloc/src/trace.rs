@@ -16,12 +16,14 @@
 //! macro constructs every node as a `MemoryTrace` which implements `MemoryTrace` trait.
 //! We can also define a specified tree node by implementing `MemoryTrace` trait.
 
-use std::fmt::{self, Debug, Display, Formatter};
-use std::num::NonZeroU64;
-use std::ops::{Add, Deref, DerefMut};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    fmt::{self, Debug, Display, Formatter},
+    num::NonZeroU64,
+    ops::{Add, Deref, DerefMut},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 type HashMap<K, V> =

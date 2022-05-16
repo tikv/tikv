@@ -6,21 +6,19 @@ pub mod fixture;
 pub mod scan_bencher;
 pub mod store;
 
-pub use self::fixture::FixtureBuilder;
+use std::{marker::PhantomData, sync::Arc};
 
-use criterion::black_box;
-use criterion::measurement::Measurement;
-
+use criterion::{black_box, measurement::Measurement};
 use kvproto::coprocessor::KeyRange;
+use test_coprocessor::*;
+use tikv::{
+    coprocessor::RequestHandler,
+    storage::{RocksEngine, Store as TxnStore},
+};
+use tikv_util::quota_limiter::QuotaLimiter;
 use tipb::Executor as PbExecutor;
 
-use test_coprocessor::*;
-use tikv::coprocessor::RequestHandler;
-use tikv::storage::{RocksEngine, Store as TxnStore};
-use tikv_util::quota_limiter::QuotaLimiter;
-
-use std::marker::PhantomData;
-use std::sync::Arc;
+pub use self::fixture::FixtureBuilder;
 
 /// Gets the value of `TIKV_BENCH_LEVEL`. The larger value it is, the more comprehensive benchmarks
 /// will be.

@@ -1,14 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::*;
+use prometheus::{exponential_buckets, *};
 use prometheus_static_metric::*;
-
-use crate::storage::ErrorHeaderKind;
-use prometheus::exponential_buckets;
 
 pub use crate::storage::kv::metrics::{
     GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
 };
+use crate::storage::ErrorHeaderKind;
 
 make_auto_flush_static_metric! {
     pub label_enum GrpcTypeKind {
@@ -62,6 +60,7 @@ make_auto_flush_static_metric! {
     pub label_enum GcCommandKind {
         gc,
         gc_keys,
+        raw_gc_keys,
         unsafe_destroy_range,
         physical_scan_lock,
         validate_config,

@@ -1,13 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::Write;
-use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use kvproto::import_sstpb::{DuplicateDetectResponse, KvPair};
 use sst_importer::{Error, Result};
 use tikv_kv::{Iterator as kvIterator, Snapshot};
 use tikv_util::keybuilder::KeyBuilder;
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+
+use crate::storage::mvcc::Write;
 
 #[cfg(test)]
 const MAX_SCAN_BATCH_COUNT: usize = 256;
@@ -232,18 +232,22 @@ fn from_txn_types_error(e: txn_types::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::lock_manager::{DummyLockManager, LockManager};
-    use crate::storage::txn::commands;
-    use crate::storage::{Storage, TestStorageBuilderApiV1};
-    use api_version::APIVersion;
-    use kvproto::kvrpcpb::Context;
     use std::sync::mpsc::channel;
+
+    use api_version::KvFormat;
+    use kvproto::kvrpcpb::Context;
     use tikv_kv::Engine;
     use txn_types::Mutation;
 
-    fn prewrite_data<E: Engine, L: LockManager, Api: APIVersion>(
-        storage: &Storage<E, L, Api>,
+    use super::*;
+    use crate::storage::{
+        lock_manager::{DummyLockManager, LockManager},
+        txn::commands,
+        Storage, TestStorageBuilderApiV1,
+    };
+
+    fn prewrite_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         primary: Vec<u8>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         start_ts: u64,
@@ -274,8 +278,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn rollback_data<E: Engine, L: LockManager, Api: APIVersion>(
-        storage: &Storage<E, L, Api>,
+    fn rollback_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         data: Vec<Vec<u8>>,
         start_ts: u64,
     ) {
@@ -297,8 +301,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn write_data<E: Engine, L: LockManager, Api: APIVersion>(
-        storage: &Storage<E, L, Api>,
+    fn write_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         ts: u64,
     ) {

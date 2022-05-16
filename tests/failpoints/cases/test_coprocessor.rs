@@ -1,14 +1,25 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use std::sync::Arc;
+
+use futures::executor::block_on;
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::{
+    kvrpcpb::{Context, IsolationLevel},
+    tikvpb::TikvClient,
+};
 use more_asserts::{assert_ge, assert_le};
 use protobuf::Message;
-use tipb::SelectResponse;
-
 use test_coprocessor::*;
+use test_raftstore::{must_get_equal, new_peer, new_server_cluster};
 use test_storage::*;
-use tidb_query_datatype::codec::{datum, Datum};
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{
+    codec::{datum, Datum},
+    expr::EvalContext,
+};
+use tikv_util::HandyRwLock;
+use tipb::SelectResponse;
+use txn_types::{Key, Lock, LockType};
 
 #[test]
 fn test_deadline() {
@@ -365,4 +376,62 @@ fn test_paging_scan_multi_ranges() {
         assert_eq!(res_start_key, start_key);
         assert_eq!(res_end_key, end_key.get_start(), "{}", desc);
     }
+}
+
+#[test]
+fn test_read_index_lock_checking_on_follower() {
+    let mut cluster = new_server_cluster(0, 2);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(rid, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    // Transfer leader to store 1
+    let r1 = cluster.get_region(b"k1");
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // Connect to store 2, the follower.
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(2));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(r1.get_id());
+    ctx.set_region_epoch(r1.get_region_epoch().clone());
+    ctx.set_peer(new_peer(2, 2));
+    ctx.set_replica_read(true);
+
+    let product = ProductTable::new();
+    let mut req = DAGSelect::from(&product).build();
+    req.set_context(ctx);
+    req.set_start_ts(100);
+
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(1);
+    let lock = Lock::new(
+        LockType::Put,
+        b"k1".to_vec(),
+        10.into(),
+        20000,
+        None,
+        10.into(),
+        1,
+        20.into(),
+    )
+    .use_async_commit(vec![]);
+    // Set a memory lock which is in the coprocessor query range on the leader
+    let locked_key = req.get_ranges()[0].get_start();
+    let guard = block_on(leader_cm.lock_key(&Key::from_raw(locked_key)));
+    guard.with_lock(|l| *l = Some(lock.clone()));
+
+    let resp = client.coprocessor(&req).unwrap();
+    assert_eq!(
+        &lock.into_lock_info(locked_key.to_vec()),
+        resp.get_locked(),
+        "{:?}",
+        resp
+    );
 }
