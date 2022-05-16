@@ -174,6 +174,10 @@ impl ApplyEvents {
         self.events.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     fn group_by<T: std::hash::Hash + Clone + Eq, R: Borrow<T>>(
         self,
         mut partition_fn: impl FnMut(&ApplyEvent) -> Option<R>,

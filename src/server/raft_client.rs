@@ -235,7 +235,7 @@ impl Buffer for BatchMessageBuffer {
     #[inline]
     fn push(&mut self, msg: RaftMessage) {
         let msg_size = Self::message_size(&msg);
-        // try refrech config before check
+        // try refresh config before check
         if let Some(new_cfg) = self.cfg_tracker.any_new() {
             self.cfg = new_cfg.clone();
         }
