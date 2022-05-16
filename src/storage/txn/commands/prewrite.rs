@@ -2182,7 +2182,7 @@ mod tests {
         );
         assert!(matches!(
             err,
-            MvccError(box MvccErrorInner::AssertionFailed { .. })
+            MvccError(box MvccErrorInner::WriteConflict { .. })
         ));
     }
 }

@@ -499,17 +499,25 @@ impl<'a> PrewriteMutation<'a> {
             MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC.write_loaded.inc();
         }
 
-        match (self.assertion, write) {
+        let assertion_err = match (self.assertion, write) {
             (Assertion::Exist, None) => {
-                self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())?
+                self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())
             }
             (Assertion::Exist, Some((w, commit_ts))) if w.write_type == WriteType::Delete => {
-                self.assertion_failed_error(w.start_ts, *commit_ts)?;
+                self.assertion_failed_error(w.start_ts, *commit_ts)
             }
             (Assertion::NotExist, Some((w, commit_ts))) if w.write_type == WriteType::Put => {
-                self.assertion_failed_error(w.start_ts, *commit_ts)?;
+                self.assertion_failed_error(w.start_ts, *commit_ts)
             }
-            _ => (),
+            _ => Ok(()),
+        };
+
+        // Assertion error can be caused by a rollback. So make up a constraint check if the check was skipped before.
+        if assertion_err.is_err() {
+            if self.skip_constraint_check() {
+                self.check_for_newer_version(reader)?;
+            }
+            assertion_err?;
         }
 
         Ok((reloaded_write, reloaded))
