@@ -1001,6 +1001,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "rand 0.8.3",
  "serde",
  "syn",
 ]
@@ -5984,6 +5985,7 @@ dependencies = [
  "codec",
  "collections",
  "concurrency_manager",
+ "config_info",
  "coprocessor_plugin_api",
  "crc32fast",
  "crc64fast",
