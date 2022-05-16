@@ -1476,7 +1476,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The number of Regions on each TiKV instance",
+          "description": "The number of Regions and Buckets on each TiKV instance",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -1531,6 +1531,14 @@
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
               "refId": "A",
+              "step": 10
+            },
+            {
+              "expr": "sum(tikv_raftstore_region_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"buckets\"}) by (instance)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}} - buckets",
+              "refId": "B",
               "step": 10
             }
           ],
