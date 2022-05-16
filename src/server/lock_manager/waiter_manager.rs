@@ -3,13 +3,15 @@
 use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
-use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockDigest, WaitTimeout};
+use crate::storage::lock_manager::{
+    DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken, WaitTimeout,
+};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
 };
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 
 use std::cell::RefCell;
@@ -23,11 +25,14 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use crate::storage::mvcc::reader_tests::RegionEngine;
 use futures::compat::Compat01As03;
 use futures::compat::Future01CompatExt;
 use futures::future::Future;
 use futures::task::{Context, Poll};
 use kvproto::deadlock::WaitForEntry;
+use kvproto::metapb::RegionEpoch;
+use pd_client::RegionStat;
 use prometheus::HistogramTimer;
 use tikv_util::config::ReadableDuration;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -99,6 +104,7 @@ pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 #[allow(clippy::large_enum_variant)]
 pub enum Task {
     WaitFor {
+        token: LockWaitToken,
         region_id: u64,
         region_epoch: RegionEpoch,
         term: NonZeroU64,
@@ -246,6 +252,15 @@ impl Waiter {
         self.cancel(StorageError::from(error));
     }
 
+    pub(super) fn cancel_no_timeout(
+        mut wait_info: Vec<KeyLockWaitInfo>,
+        cancel_callback: Box<dyn FnOnce(StorageError)>,
+    ) {
+        let lock_info = wait_info.swap_remove(0).lock_info;
+        let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
+        cancel_callback(StorageError::from(error))
+    }
+
     fn cancel_for_deadlock(
         self,
         lock_digest: LockDigest,
@@ -315,15 +330,61 @@ impl Waiter {
     //         _ => panic!("unexpected progress result"),
     //     }
     // }
+
+    fn check_region_state(&self, region_state: &RegionState) -> CheckRegionStateResult {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+
+        if self.term < region_state.term
+            || self.region_epoch.version < region_state.region_epoch.version
+            || self.region_epoch.conf_ver < region_state.region_epoch.conf_ver
+        {
+            return CheckRegionStateResult::RegionStateExpired;
+        } else if self.term > region_state.term
+            || self.region_epoch.version > region_state.region_epoch.version
+            || self.region_epoch.conf_ver > region_state.region_epoch.conf_ver
+        {
+            return CheckRegionStateResult::WaiterExpired;
+        }
+
+        assert_eq!(self.term, region_state.term);
+        assert_eq!(self.region_epoch.version, region_state.region_epoch.version);
+        assert_eq!(
+            self.region_epoch.conf_ver,
+            region_state.region_epoch.conf_ver
+        );
+
+        CheckRegionStateResult::Ok
+    }
 }
 
 // NOTE: Now we assume `Waiters` is not very long.
 // Maybe needs to use `BinaryHeap` or sorted `VecDeque` instead.
-type Waiters = Vec<Waiter>;
+// type Waiters = Vec<Waiter>;
+
+struct RegionState {
+    region_epoch: RegionEpoch,
+    term: NonZeroU64,
+}
+
+impl RegionState {
+    fn new(region_epoch: RegionEngine, term: NonZeroU64) -> Self {
+        Self { region_epoch, term }
+    }
+}
+
+enum CheckRegionStateResult {
+    Ok,
+    RegionStateExpired,
+    WaiterExpired,
+}
 
 struct WaitTable {
     // Map lock hash to waiters.
-    wait_table: HashMap<u64, Waiters>,
+    // For compatibility.
+    wait_table: HashMap<(u64, TimeStamp), LockWaitToken>,
+    // Map region id to waiters belonging to this region, along with other meta of the region.
+    region_waiters: HashMap<u64, (RegionState, HashSet<LockWaitToken>)>,
+    waiter_pool: HashMap<LockWaitToken, Waiter>,
     waiter_count: Arc<AtomicUsize>,
 }
 
@@ -331,75 +392,146 @@ impl WaitTable {
     fn new(waiter_count: Arc<AtomicUsize>) -> Self {
         Self {
             wait_table: HashMap::default(),
+            region_waiters: HashMap::default(),
+            waiter_pool: HashMap::default(),
             waiter_count,
         }
     }
 
     #[cfg(test)]
     fn count(&self) -> usize {
-        self.wait_table.iter().map(|(_, v)| v.len()).sum()
+        self.waiter_pool.len()
     }
 
     fn is_empty(&self) -> bool {
-        self.wait_table.is_empty()
+        self.waiter_pool.is_empty()
     }
 
     /// Returns the duplicated `Waiter` if there is.
-    fn add_waiter(&mut self, waiter: Waiter) -> Option<Waiter> {
-        let waiters = self.wait_table.entry(waiter.lock.hash).or_insert_with(|| {
-            WAIT_TABLE_STATUS_GAUGE.locks.inc();
-            Waiters::default()
-        });
-        let old_idx = waiters.iter().position(|w| w.start_ts == waiter.start_ts);
-        waiters.push(waiter);
-        if let Some(old_idx) = old_idx {
-            let old = waiters.swap_remove(old_idx);
-            self.waiter_count.fetch_sub(1, Ordering::SeqCst);
-            Some(old)
-        } else {
-            WAIT_TABLE_STATUS_GAUGE.txns.inc();
-            None
+    fn add_waiter(&mut self, token: LockWaitToken, waiter: Waiter) -> bool {
+        // Map region id to the waiter.
+        let mut entry = self
+            .region_waiters
+            .entry(waiter.region_id)
+            .or_insert_with(|| {
+                (
+                    RegionState::new(waiter.region_epoch, waiter.term),
+                    HashSet::default(),
+                )
+            });
+        match waiter.check_region_state(&entry.0) {
+            CheckRegionStateResult::RegionStateExpired => {
+                self.cancel_region(waiter.region_id);
+                entry = self
+                    .region_waiters
+                    .entry(waiter.region_id)
+                    .insert_entry((
+                        RegionState::new(waiter.region_epoch, waiter.term),
+                        HashSet::default(),
+                    ))
+                    .get_mut();
+            }
+            CheckRegionStateResult::WaiterExpired => {
+                self.waiter_count.fetch_sub(1, Ordering::SeqCst);
+                waiter.cancel_for_timeout();
+                return false;
+            }
+            CheckRegionStateResult::Ok => {}
         }
+
+        for waiting_item in &waiter.wait_info {
+            // Add to old wait_table for compatibility. Replace on duplicated.
+            // let waiters = self.wait_table.entry(waiting_item.lock_digest.hash).or_insert_with(|| {
+            //     // WAIT_TABLE_STATUS_GAUGE.locks.inc();
+            //     Vec::default()
+            // });
+            // let waiter_pool = &mut self.waiter_pool;
+            // let _old_idx = waiters
+            //     .iter()
+            //     .position(|w| waiter_pool.get(w).unwrap().start_ts == waiter.start_ts);
+            // waiters.push(token);
+            self.wait_table
+                .insert((waiting_item.lock_digest.hash, waiter.start_ts), token);
+        }
+
+        waiter_pool.insert(token, waiter).unwrap();
+
+        // if let Some(old_idx) = old_idx {
+        //     let _old = waiters.swap_remove(old_idx);
+        //     self.waiter_count.fetch_sub(1, Ordering::SeqCst);
+        //     // Some(old)
+        // } else {
+        //     // WAIT_TABLE_STATUS_GAUGE.txns.inc();
+        //     // None
+        // }
         // Here we don't increase waiter_count because it's already updated in LockManager::wait_for()
+
+        true
     }
 
-    /// Removes all waiters waiting for the lock.
-    fn remove(&mut self, lock: LockDigest) {
-        self.wait_table.remove(&lock.hash);
-        WAIT_TABLE_STATUS_GAUGE.locks.dec();
-    }
-
-    fn remove_waiter(&mut self, lock: LockDigest, waiter_ts: TimeStamp) -> Option<Waiter> {
-        let waiters = self.wait_table.get_mut(&lock.hash)?;
-        let idx = waiters
-            .iter()
-            .position(|waiter| waiter.start_ts == waiter_ts)?;
-        let waiter = waiters.swap_remove(idx);
-        self.waiter_count.fetch_sub(1, Ordering::SeqCst);
-        WAIT_TABLE_STATUS_GAUGE.txns.dec();
-        if waiters.is_empty() {
-            self.remove(lock);
+    fn cancel_region(&mut self, region_id: u64) {
+        let (_, tokens) = self.region_waiters.remove(&region_id).unwrap();
+        let count = tokens.len();
+        for token in tokens {
+            let waiter = self.waiter_pool.remove(&token).unwrap();
+            for waiting_item in waiter.wait_info {
+                self.wait_table
+                    .remove(&(waiting_item.lock_digest.hash, waiter.start_ts));
+            }
+            // TODO: Cancel for region error.
+            waiter.cancel_for_timeout();
         }
+        self.waiter_count.fetch_sub(count, Ordering::SeqCst);
+    }
+
+    // /// Removes all waiters waiting for the lock.
+    // fn remove(&mut self, lock: LockDigest) {
+    //     self.wait_table.remove(&lock.hash);
+    //     WAIT_TABLE_STATUS_GAUGE.locks.dec();
+    // }
+
+    fn take_waiter(&mut self, token: LockWaitToken) -> Option<Waiter> {
+        let waiter = self.waiter_pool.remove(&token)?;
+        self.waiter_count.fetch_sub(1, Ordering::SeqCst);
+        for waiting_item in &waiter.wait_info {
+            self.wait_table
+                .remove(&(waiting_item.lock_digest.hash, waiter.start_ts));
+        }
+        let region_waiters = self.region_waiters.get_mut(&waiter.region_id).unwrap();
+        assert!(region_waiters.1.remove(&token));
+        if region_waiters.1.is_empty() {
+            self.region_waiters.remove(&waiter.region_id);
+        }
+        // WAIT_TABLE_STATUS_GAUGE.txns.dec();
         Some(waiter)
     }
 
-    /// Removes the `Waiter` with the smallest start ts and returns it with remaining waiters.
-    ///
-    /// NOTE: Due to the borrow checker, it doesn't remove the entry in the `WaitTable`
-    /// even if there is no remaining waiter.
-    fn remove_oldest_waiter(&mut self, lock: LockDigest) -> Option<(Waiter, &mut Waiters)> {
-        let waiters = self.wait_table.get_mut(&lock.hash)?;
-        let oldest_idx = waiters
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, w)| w.start_ts)
-            .unwrap()
-            .0;
-        let oldest = waiters.swap_remove(oldest_idx);
-        self.waiter_count.fetch_sub(1, Ordering::SeqCst);
-        WAIT_TABLE_STATUS_GAUGE.txns.dec();
-        Some((oldest, waiters))
+    fn take_waiter_by_lock_digest(
+        &mut self,
+        lock: LockDigest,
+        waiter_ts: TimeStamp,
+    ) -> Option<Waiter> {
+        let token = self.wait_table.get(&(lock.hash, waiter_ts))?;
+        self.take_waiter(*token)
     }
+
+    // /// Removes the `Waiter` with the smallest start ts and returns it with remaining waiters.
+    // ///
+    // /// NOTE: Due to the borrow checker, it doesn't remove the entry in the `WaitTable`
+    // /// even if there is no remaining waiter.
+    // fn remove_oldest_waiter(&mut self, lock: LockDigest) -> Option<(Waiter, &mut Waiters)> {
+    //     let waiters = self.wait_table.get_mut(&lock.hash)?;
+    //     let oldest_idx = waiters
+    //         .iter()
+    //         .enumerate()
+    //         .min_by_key(|(_, w)| w.start_ts)
+    //         .unwrap()
+    //         .0;
+    //     let oldest = waiters.swap_remove(oldest_idx);
+    //     self.waiter_count.fetch_sub(1, Ordering::SeqCst);
+    //     WAIT_TABLE_STATUS_GAUGE.txns.dec();
+    //     Some((oldest, waiters))
+    // }
 
     fn to_wait_for_entries(&self) -> Vec<WaitForEntry> {
         self.wait_table
@@ -445,6 +577,7 @@ impl Scheduler {
 
     pub fn wait_for(
         &self,
+        token: LockWaitToken,
         region_id: u64,
         region_epoch: RegionEpoch,
         term: NonZeroU64,
@@ -455,6 +588,7 @@ impl Scheduler {
         diag_ctx: DiagnosticContext,
     ) {
         self.notify_scheduler(Task::WaitFor {
+            token,
             region_id,
             region_epoch,
             term,
@@ -543,23 +677,28 @@ impl WaiterManager {
             + timeout.into_duration_with_ceiling(self.default_wait_for_lock_timeout.as_millis())
     }
 
-    fn handle_wait_for(&mut self, waiter: Waiter) {
+    fn handle_wait_for(&mut self, token: LockWaitToken, waiter: Waiter) {
         let (waiter_ts, lock) = (waiter.start_ts, waiter.lock);
         let wait_table = self.wait_table.clone();
         let detector_scheduler = self.detector_scheduler.clone();
         // Remove the waiter from wait table when it times out.
         let f = waiter.on_timeout(move || {
-            if let Some(waiter) = wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
+            if let Some(waiter) = wait_table
+                .borrow_mut()
+                .take_waiter_by_lock_digest(lock, waiter_ts)
+            {
                 detector_scheduler.clean_up_wait_for(waiter.start_ts, waiter.lock);
-                waiter.cancel();
+                waiter.cancel_for_timeout();
             }
         });
-        if let Some(old) = self.wait_table.borrow_mut().add_waiter(waiter) {
-            old.cancel();
+        if let Some(_old) = self.wait_table.borrow_mut().add_waiter(token, waiter) {
+            // old.cancel();
+            // TODO: Is it ok to drop it directly?
         };
         spawn_local(f);
     }
 
+    // TODO: Change this to cleaning up entries from memory only.
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
         let mut wait_table = self.wait_table.borrow_mut();
         if wait_table.is_empty() {
@@ -573,8 +712,8 @@ impl WaiterManager {
                 // Notify the oldest one immediately.
                 self.detector_scheduler
                     .clean_up_wait_for(oldest.start_ts, oldest.lock);
-                oldest.conflict_with(lock_ts, commit_ts);
-                oldest.cancel();
+                // oldest.conflict_with(lock_ts, commit_ts);
+                // oldest.cancel();
                 // Others will be waked up after `wake_up_delay_duration`.
                 //
                 // NOTE: Actually these waiters are waiting for an unknown transaction.
@@ -601,13 +740,17 @@ impl WaiterManager {
         waiter_ts: TimeStamp,
         key: Vec<u8>,
         lock: LockDigest,
-        deadlock_key_hash: u64,
+        _deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
     ) {
-        if let Some(mut waiter) = self.wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
+        if let Some(mut waiter) = self
+            .wait_table
+            .borrow_mut()
+            .take_waiter_by_lock_digest(lock, waiter_ts)
+        {
             // waiter.deadlock_with(deadlock_key_hash, wait_chain);
             // waiter.cancel();
-            waiter.cancel_for_deadlock(key, deadlock_key_hash, wait_chain);
+            waiter.cancel_for_deadlock(lock, key, wait_chain);
         }
     }
 
@@ -634,6 +777,7 @@ impl FutureRunnable<Task> for WaiterManager {
     fn run(&mut self, task: Task) {
         match task {
             Task::WaitFor {
+                token,
                 region_id,
                 region_epoch,
                 term,
@@ -653,7 +797,7 @@ impl FutureRunnable<Task> for WaiterManager {
                     self.normalize_deadline(timeout),
                     diag_ctx,
                 );
-                self.handle_wait_for(waiter);
+                self.handle_wait_for(token, waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
             }
             Task::WakeUp {
@@ -1015,7 +1159,9 @@ pub mod tests {
         assert_eq!(wait_table.count(), waiter_info.len());
 
         for (waiter_ts, lock) in waiter_info {
-            let waiter = wait_table.remove_waiter(lock, waiter_ts).unwrap();
+            let waiter = wait_table
+                .take_waiter_by_lock_digest(lock, waiter_ts)
+                .unwrap();
             assert_eq!(waiter.start_ts, waiter_ts);
             assert_eq!(waiter.lock, lock);
         }
@@ -1023,7 +1169,7 @@ pub mod tests {
         assert!(wait_table.wait_table.is_empty());
         assert!(
             wait_table
-                .remove_waiter(
+                .take_waiter_by_lock_digest(
                     LockDigest {
                         ts: TimeStamp::zero(),
                         hash: 0
@@ -1099,10 +1245,16 @@ pub mod tests {
         wait_table.add_waiter(dummy_waiter(1.into(), lock.ts, lock.hash));
         assert_eq!(waiter_count.load(Ordering::SeqCst), 1);
         // Remove the waiter.
-        wait_table.remove_waiter(lock, 1.into()).unwrap();
+        wait_table
+            .take_waiter_by_lock_digest(lock, 1.into())
+            .unwrap();
         assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
         // Removing a non-existed waiter shouldn't decrease waiter count.
-        assert!(wait_table.remove_waiter(lock, 1.into()).is_none());
+        assert!(
+            wait_table
+                .take_waiter_by_lock_digest(lock, 1.into())
+                .is_none()
+        );
         assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
 
         wait_table.add_waiter(dummy_waiter(1.into(), lock.ts, lock.hash));

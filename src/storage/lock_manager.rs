@@ -76,6 +76,9 @@ pub struct KeyLockWaitInfo {
     pub lock_info: LockInfo,
 }
 
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub struct LockWaitToken(Option<u64>);
+
 /// `LockManager` manages transactions waiting for locks held by other transactions.
 /// It has responsibility to handle deadlocks between transactions.
 pub trait LockManager: Clone + Send + 'static {
@@ -96,7 +99,7 @@ pub trait LockManager: Clone + Send + 'static {
         timeout: Option<WaitTimeout>,
         cancel_callback: Box<dyn FnOnce(StorageError)>,
         diag_ctx: DiagnosticContext,
-    );
+    ) -> LockWaitToken;
 
     fn update_wait_for() {
         unimplemented!()

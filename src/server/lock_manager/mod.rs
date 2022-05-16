@@ -13,7 +13,7 @@ pub use self::waiter_manager::Scheduler as WaiterMgrScheduler;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -28,7 +28,8 @@ use crate::storage::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 
-use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo};
+use crate::server::lock_manager::waiter_manager::Waiter;
+use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockWaitToken};
 use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_traits::KvEngine;
@@ -62,6 +63,8 @@ pub struct LockManager {
     /// Record transactions which have sent requests to detect deadlock.
     detected: Arc<[CachePadded<Mutex<HashSet<TimeStamp>>>]>,
 
+    token_allocator: Arc<AtomicU64>,
+
     pipelined: Arc<AtomicBool>,
 
     in_memory: Arc<AtomicBool>,
@@ -76,6 +79,7 @@ impl Clone for LockManager {
             detector_scheduler: self.detector_scheduler.clone(),
             waiter_count: self.waiter_count.clone(),
             detected: self.detected.clone(),
+            token_allocator: self.token_allocator.clone(),
             pipelined: self.pipelined.clone(),
             in_memory: self.in_memory.clone(),
         }
@@ -96,6 +100,7 @@ impl LockManager {
             detector_worker: Some(detector_worker),
             waiter_count: Arc::new(AtomicUsize::new(0)),
             detected: detected.into(),
+            token_allocator: Arc::new(AtomicU64::new(0)),
             pipelined: Arc::new(AtomicBool::new(cfg.pipelined)),
             in_memory: Arc::new(AtomicBool::new(cfg.in_memory)),
         }
@@ -236,6 +241,10 @@ impl LockManager {
         let mut detected = self.detected[detected_slot_idx(txn_ts)].lock();
         detected.remove(&txn_ts)
     }
+
+    fn allocate_waiter_token(&self) -> LockWaitToken {
+        LockWaitToken(Some(self.token_allocator.fetch_add(1, Ordering::SeqCst)))
+    }
 }
 
 impl LockManagerTrait for LockManager {
@@ -250,19 +259,21 @@ impl LockManagerTrait for LockManager {
         timeout: Option<WaitTimeout>,
         cancel_callback: Box<dyn FnOnce(StorageError)>,
         diag_ctx: DiagnosticContext,
-    ) {
+    ) -> LockWaitToken {
         let timeout = match timeout {
             Some(t) => t,
             None => {
-                cb.execute(pr);
-                return;
+                Waiter::cancel_no_timeout(wait_info, cancel_callback);
+                return LockWaitToken(None);
             }
         };
 
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
+        let token = self.allocate_waiter_token();
         self.waiter_mgr_scheduler.wait_for(
+            token,
             region_id,
             region_epoch,
             term,
@@ -278,6 +289,7 @@ impl LockManagerTrait for LockManager {
             self.add_to_detected(start_ts);
             self.detector_scheduler.detect(start_ts, lock, diag_ctx);
         }
+        token
     }
 
     fn wake_up(
