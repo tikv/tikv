@@ -842,7 +842,6 @@ where
             warn!(
                 "Unsafe recovery, no need to demote failed voters";
                 "region" => ?self.region(),
-                "failed_voters" => ?failed_voters,
             );
         }
     }
