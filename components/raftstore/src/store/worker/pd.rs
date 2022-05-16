@@ -253,6 +253,58 @@ pub struct PeerStat {
     pub approximate_size: u64,
 }
 
+#[derive(Default)]
+pub struct ReportBucket {
+    current_stat: BucketStat,
+    last_report_stat: Option<BucketStat>,
+    last_report_ts: UnixSecs,
+}
+
+impl ReportBucket {
+    fn new(current_stat: BucketStat) -> Self {
+        Self {
+            current_stat,
+            ..Default::default()
+        }
+    }
+
+    fn new_report(&mut self, report_ts: UnixSecs) -> BucketStat {
+        self.last_report_ts = report_ts;
+        match self.last_report_stat.replace(self.current_stat.clone()) {
+            Some(last) => {
+                let mut delta = BucketStat::new(
+                    self.current_stat.meta.clone(),
+                    pd_client::new_bucket_stats(&self.current_stat.meta),
+                );
+                // Buckets may be changed, recalculate last stats according to current meta.
+                merge_bucket_stats(
+                    &delta.meta.keys,
+                    &mut delta.stats,
+                    &last.meta.keys,
+                    &last.stats,
+                );
+                for i in 0..delta.meta.keys.len() - 1 {
+                    delta.stats.write_bytes[i] =
+                        self.current_stat.stats.write_bytes[i] - delta.stats.write_bytes[i];
+                    delta.stats.write_keys[i] =
+                        self.current_stat.stats.write_keys[i] - delta.stats.write_keys[i];
+                    delta.stats.write_qps[i] =
+                        self.current_stat.stats.write_qps[i] - delta.stats.write_qps[i];
+
+                    delta.stats.read_bytes[i] =
+                        self.current_stat.stats.read_bytes[i] - delta.stats.read_bytes[i];
+                    delta.stats.read_keys[i] =
+                        self.current_stat.stats.read_keys[i] - delta.stats.read_keys[i];
+                    delta.stats.read_qps[i] =
+                        self.current_stat.stats.read_qps[i] - delta.stats.read_qps[i];
+                }
+                delta
+            }
+            None => self.current_stat.clone(),
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 struct PeerCmpReadStat {
     pub region_id: u64,
@@ -774,7 +826,7 @@ where
     pd_client: Arc<T>,
     router: RaftRouter<EK, ER>,
     region_peers: HashMap<u64, PeerStat>,
-    region_buckets: HashMap<u64, BucketStat>,
+    region_buckets: HashMap<u64, ReportBucket>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
     // Records the boot time.
@@ -1609,9 +1661,11 @@ where
         let f = async move {
             match resp.await {
                 Ok(Some((region, leader))) => {
-                    let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
-                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                        error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                    if leader.get_store_id() != 0 {
+                        let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
+                        if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                            error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                        }
                     }
                 }
                 Ok(None) => {}
@@ -1648,19 +1702,25 @@ where
     fn handle_report_region_buckets(&mut self, region_buckets: BucketStat) {
         let region_id = region_buckets.meta.region_id;
         self.merge_buckets(region_buckets);
-        let buckets = self.region_buckets.get_mut(&region_id).unwrap();
-        let now = TiInstant::now();
-        let period = now.duration_since(buckets.last_report_time);
-        buckets.last_report_time = now;
-        let meta = buckets.meta.clone();
-        let resp = self.pd_client.report_region_buckets(buckets, period);
+        let report_buckets = self.region_buckets.get_mut(&region_id).unwrap();
+        let last_report_ts = if report_buckets.last_report_ts.is_zero() {
+            self.start_ts
+        } else {
+            report_buckets.last_report_ts
+        };
+        let now = UnixSecs::now();
+        let interval_second = now.into_inner() - last_report_ts.into_inner();
+        let delta = report_buckets.new_report(now);
+        let resp = self
+            .pd_client
+            .report_region_buckets(&delta, Duration::from_secs(interval_second));
         let f = async move {
             if let Err(e) = resp.await {
                 debug!(
                     "failed to send buckets";
                     "region_id" => region_id,
-                    "version" => meta.version,
-                    "region_epoch" => ?meta.region_epoch,
+                    "version" => delta.meta.version,
+                    "region_epoch" => ?delta.meta.region_epoch,
                     "err" => ?e
                 );
             }
@@ -1669,13 +1729,12 @@ where
     }
 
     fn merge_buckets(&mut self, mut buckets: BucketStat) {
-        use std::cmp::Ordering;
-
         let region_id = buckets.meta.region_id;
         self.region_buckets
             .entry(region_id)
-            .and_modify(|current| {
-                if current.meta.cmp(&buckets.meta) == Ordering::Less {
+            .and_modify(|report_bucket| {
+                let current = &mut report_bucket.current_stat;
+                if current.meta < buckets.meta {
                     mem::swap(current, &mut buckets);
                 }
 
@@ -1686,7 +1745,7 @@ where
                     &buckets.stats,
                 );
             })
-            .or_insert(buckets);
+            .or_insert_with(|| ReportBucket::new(buckets));
     }
 
     fn update_health_status(&mut self, status: ServingStatus) {
@@ -2191,6 +2250,7 @@ mod tests {
     use std::thread::sleep;
 
     use kvproto::{kvrpcpb, pdpb::QueryKind};
+    use pd_client::{new_bucket_stats, BucketMeta};
 
     use super::*;
 
@@ -2421,6 +2481,60 @@ mod tests {
 
         for region_id in 1..region_num + 1 {
             assert!(*region_cpu_records.get(&region_id).unwrap_or(&0) > 0)
+        }
+    }
+
+    #[test]
+    fn test_report_bucket_stats() {
+        #[allow(clippy::type_complexity)]
+        let cases: &[((Vec<&[_]>, _), (Vec<&[_]>, _), _)] = &[
+            (
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![2, 2, 2, 2]),
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
+                vec![1, 1, 1, 1],
+            ),
+            (
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![2, 2, 2, 2]),
+                (vec![b"k0", b"k6", b"k8"], vec![1, 1]),
+                vec![1, 1, 0, 1],
+            ),
+            (
+                (vec![b"k4", b"k6", b"kb"], vec![5, 5]),
+                (
+                    vec![b"k1", b"k3", b"k5", b"k7", b"k9", b"ka"],
+                    vec![1, 1, 1, 1, 1],
+                ),
+                vec![3, 2],
+            ),
+        ];
+        for (current, last, expected) in cases {
+            let cur_keys = &current.0;
+            let last_keys = &last.0;
+
+            let mut cur_meta = BucketMeta::default();
+            cur_meta.keys = cur_keys.iter().map(|k| k.to_vec()).collect();
+            let mut cur_stats = new_bucket_stats(&cur_meta);
+            cur_stats.set_read_qps(current.1.to_vec());
+
+            let mut last_meta = BucketMeta::default();
+            last_meta.keys = last_keys.iter().map(|k| k.to_vec()).collect();
+            let mut last_stats = new_bucket_stats(&last_meta);
+            last_stats.set_read_qps(last.1.to_vec());
+            let mut bucket = ReportBucket {
+                current_stat: BucketStat {
+                    meta: Arc::new(cur_meta),
+                    stats: cur_stats,
+                    create_time: TiInstant::now(),
+                },
+                last_report_stat: Some(BucketStat {
+                    meta: Arc::new(last_meta),
+                    stats: last_stats,
+                    create_time: TiInstant::now(),
+                }),
+                last_report_ts: UnixSecs::now(),
+            };
+            let report = bucket.new_report(UnixSecs::now());
+            assert_eq!(report.stats.get_read_qps(), expected);
         }
     }
 }

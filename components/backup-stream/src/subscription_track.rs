@@ -17,7 +17,7 @@ pub struct SubscriptionTracer(Arc<DashMap<u64, RegionSubscription>>);
 
 pub struct RegionSubscription {
     pub meta: Region,
-    handle: ObserveHandle,
+    pub(crate) handle: ObserveHandle,
     resolver: TwoPhaseResolver,
 }
 

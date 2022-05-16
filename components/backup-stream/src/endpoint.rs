@@ -370,11 +370,24 @@ where
                 return;
             }
         };
+        // Stale data is accpetable, while stale locks may block the checkpoint advancing.
+        // Let L be the instant some key locked, U be the instant it unlocked,
+        // +---------*-------L-----------U--*-------------+
+        //           ^   ^----(1)----^      ^ We get the snapshot for initial scanning at here.
+        //           +- If we issue refresh resolver at here, and the cmd batch (1) is the last cmd batch of the first observing.
+        //              ...the background initial scanning may keep running, and the lock would be sent to the scanning.
+        //              ...note that (1) is the last cmd batch of first observing, so the unlock event would never be sent to us.
+        //              ...then the lock would get an eternal life in the resolver :|
+        //                 (Before we refreshing the resolver for this region again)
+        if batch.pitr_id != resolver.value().handle.id {
+            debug!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
+            return;
+        }
         let sched = self.scheduler.clone();
 
         let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver());
         drop(resolver);
-        if kvs.len() == 0 {
+        if kvs.is_empty() {
             return;
         }
 
@@ -596,14 +609,11 @@ where
     fn unload_task(&self, task: &str) -> Option<StreamBackupTaskInfo> {
         let router = self.range_router.clone();
 
-        let info = self
-            .pool
-            .block_on(async move { router.unregister_task(task).await });
         // for now, we support one concurrent task only.
         // so simply clear all info would be fine.
-        self.subs.clear();
         self.observer.ranges.wl().clear();
-        info
+        self.subs.clear();
+        self.pool.block_on(router.unregister_task(task))
     }
 
     /// try advance the resolved ts by the pd tso.
@@ -847,6 +857,10 @@ where
                 err,
             } => {
                 info!("retry observe region"; "region" => %region.get_id(), "err" => %err);
+                // No need for retrying observe canceled.
+                if err.error_code() == error_code::backup_stream::OBSERVE_CANCELED {
+                    return;
+                }
                 match self.retry_observe(region, handle) {
                     Ok(()) => {}
                     Err(e) => {
@@ -866,13 +880,24 @@ where
     fn start_observe(&self, region: Region, needs_initial_scanning: bool) {
         let handle = ObserveHandle::new();
         let result = if needs_initial_scanning {
-            let for_task = self.find_task_by_region(&region).unwrap_or_else(|| {
-                panic!(
-                    "BUG: the region {:?} is register to no task but being observed (start_key = {}; end_key = {}; task_stat = {:?})",
-                    region, utils::redact(&region.get_start_key()), utils::redact(&region.get_end_key()), self.range_router
-                )
-            });
-            self.observe_over_with_initial_data_from_checkpoint(&region, for_task, handle.clone())
+            match self.find_task_by_region(&region) {
+                None => {
+                    warn!(
+                        "the region {:?} is register to no task but being observed (start_key = {}; end_key = {}; task_stat = {:?}): maybe stale, aborting",
+                        region,
+                        utils::redact(&region.get_start_key()),
+                        utils::redact(&region.get_end_key()),
+                        self.range_router
+                    );
+                    return;
+                }
+
+                Some(for_task) => self.observe_over_with_initial_data_from_checkpoint(
+                    &region,
+                    for_task,
+                    handle.clone(),
+                ),
+            }
         } else {
             self.observe_over(&region, handle.clone())
         };
@@ -914,11 +939,8 @@ where
                 .inc();
             return Ok(());
         }
-        if new_region_info
-            .as_ref()
-            .map(|r| r.role != StateRole::Leader)
-            .unwrap_or(true)
-        {
+        let new_region_info = new_region_info.unwrap();
+        if new_region_info.role != StateRole::Leader {
             metrics::SKIP_RETRY.with_label_values(&["not-leader"]).inc();
             return Ok(());
         }
@@ -953,6 +975,17 @@ where
             Task::FatalError(task, err) => self.on_fatal_error(task, err),
             Task::ChangeConfig(_) => {
                 warn!("change config online isn't supported for now.")
+            }
+            Task::Sync(cb, mut cond) => {
+                if cond(&self.range_router) {
+                    cb()
+                } else {
+                    let sched = self.scheduler.clone();
+                    self.pool.spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        sched.schedule(Task::Sync(cb, cond)).unwrap();
+                    });
+                }
             }
         }
     }
@@ -1006,6 +1039,15 @@ pub enum Task {
     ForceFlush(String),
     /// FatalError pauses the task and set the error.
     FatalError(String, Box<Error>),
+    /// Run the callback when see this message. Only for test usage.
+    /// NOTE: Those messages for testing are not guared by `#[cfg(test)]` for now, because
+    ///       the integration test would not enable test config when compiling (why?)
+    Sync(
+        // Run the closure if ...
+        Box<dyn FnOnce() + Send>,
+        // This returns `true`.
+        Box<dyn FnMut(&Router) -> bool + Send>,
+    ),
 }
 
 #[derive(Debug)]
@@ -1056,6 +1098,7 @@ impl fmt::Debug for Task {
             Self::FatalError(task, err) => {
                 f.debug_tuple("FatalError").field(task).field(err).finish()
             }
+            Self::Sync(..) => f.debug_tuple("Sync").finish(),
         }
     }
 }
