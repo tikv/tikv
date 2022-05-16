@@ -6,11 +6,13 @@ use std::{
     collections::{HashMap, HashSet},
     path::Path,
     sync::Arc,
+    time::Duration,
 };
 
 use backup_stream::{
     metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
     observer::BackupStreamObserver,
+    router::Router,
     Endpoint, Task,
 };
 use futures::{executor::block_on, Future};
@@ -167,6 +169,11 @@ impl Suite {
         for id in 1..=(n as u64) {
             suite.start_endpoint(id);
         }
+        // TODO: The current mock metastore (slash_etc) doesn't supports multi-version.
+        //       We must wait until the endpoints get ready to watching the metastore, or some modifies may be lost.
+        //       Either make Endpoint::with_client wait until watch did start or make slash_etc support multi-version,
+        //       then we can get rid of this sleep.
+        std::thread::sleep(Duration::from_secs(1));
         suite
     }
 
@@ -189,6 +196,8 @@ impl Suite {
             )],
         ))
         .unwrap();
+        let name = name.to_owned();
+        self.wait_with(move |r| block_on(r.get_task_info(&name)).is_ok())
     }
 
     async fn write_records(&mut self, from: usize, n: usize, for_table: i64) -> HashSet<Vec<u8>> {
@@ -416,6 +425,47 @@ impl Suite {
                 TikvClient::new(channel)
             })
     }
+
+    pub fn sync(&self) {
+        self.wait_with(|_| true)
+    }
+
+    pub fn wait_with(&self, cond: impl FnMut(&Router) -> bool + Send + 'static + Clone) {
+        self.endpoints
+            .iter()
+            .map({
+                move |(_, wkr)| {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    wkr.scheduler()
+                        .schedule(Task::Sync(
+                            Box::new(move || tx.send(()).unwrap()),
+                            Box::new(cond.clone()),
+                        ))
+                        .unwrap();
+                    rx
+                }
+            })
+            .for_each(|rx| rx.recv().unwrap())
+    }
+
+    pub fn wait_for_flush(&self) {
+        use std::ffi::OsString;
+        for _ in 0..10 {
+            if !walkdir::WalkDir::new(&self.temp_files)
+                .into_iter()
+                .any(|x| x.unwrap().path().extension() == Some(&OsString::from("log")))
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        let v = walkdir::WalkDir::new(&self.temp_files)
+            .into_iter()
+            .collect::<Vec<_>>();
+        if !v.is_empty() {
+            panic!("the temp isn't empty after the deadline ({:?})", v)
+        }
+    }
 }
 
 fn run_async_test<T>(test: impl Future<Output = T>) -> T {
@@ -444,9 +494,10 @@ mod test {
             // write data before the task starting, for testing incremental scanning.
             let round1 = suite.write_records(0, 128, 1).await;
             suite.must_register_task(1, "test_basic");
+            suite.sync();
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_basic");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.wait_for_flush();
             suite.check_for_write_records(
                 suite.flushed_files.path(),
                 round1.union(&round2).map(Vec::as_slice),
@@ -465,7 +516,7 @@ mod test {
             suite.must_register_task(1, "test_with_split");
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_with_split");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.wait_for_flush();
             suite.check_for_write_records(
                 suite.flushed_files.path(),
                 round1.union(&round2).map(Vec::as_slice),
@@ -480,12 +531,13 @@ mod test {
         test_util::init_log_for_test();
         let mut suite = super::Suite::new("leader_down", 4);
         suite.must_register_task(1, "test_leader_down");
+        suite.sync();
         let round1 = run_async_test(suite.write_records(0, 128, 1));
         let leader = suite.cluster.leader_of_region(1).unwrap().get_store_id();
         suite.cluster.stop_node(leader);
         let round2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("test_leader_down");
-        std::thread::sleep(Duration::from_secs(4));
+        suite.wait_for_flush();
         suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(Vec::as_slice),
@@ -501,6 +553,7 @@ mod test {
         let mut suite = super::Suite::new("async_commit", 3);
         run_async_test(async {
             suite.must_register_task(1, "test_async_commit");
+            suite.sync();
             suite.write_records(0, 128, 1).await;
             let ts = suite.just_async_commit_prewrite(256, 1);
             suite.write_records(258, 128, 1).await;
@@ -515,7 +568,7 @@ mod test {
             );
             suite.just_commit_a_key(make_record_key(1, 256), TimeStamp::new(256), ts);
             suite.force_flush_files("test_async_commit");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.wait_for_flush();
             let cp = cli
                 .global_progress_of_task("test_async_commit")
                 .await
@@ -530,7 +583,7 @@ mod test {
         test_util::init_log_for_test();
         let suite = super::Suite::new("fatal_error", 3);
         suite.must_register_task(1, "test_fatal_error");
-        std::thread::sleep(Duration::from_secs(2));
+        suite.sync();
         let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
         endpoint
             .scheduler()
@@ -540,8 +593,7 @@ mod test {
             ))
             .unwrap();
         let meta_cli = suite.get_meta_cli();
-        // NOTE: maybe implement some message like `Sync` for get rid of those magic wait?
-        std::thread::sleep(Duration::from_secs(2));
+        suite.sync();
         let err = run_async_test(meta_cli.get_last_error("test_fatal_error", *victim))
             .unwrap()
             .unwrap();
