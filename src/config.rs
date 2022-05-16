@@ -3699,6 +3699,7 @@ mod tests {
     use case_macros::*;
     use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
     use futures::executor::block_on;
+    use grpcio::ResourceQuota;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
@@ -4520,7 +4521,11 @@ mod tests {
         let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
         cfg_controller.register(
             Module::Server,
-            Box::new(ServerConfigManager::new(scheduler, version_tracker.clone())),
+            Box::new(ServerConfigManager::new(
+                scheduler,
+                version_tracker.clone(),
+                ResourceQuota::new(None),
+            )),
         );
 
         let check_cfg = |cfg: &TiKvConfig| {
