@@ -410,7 +410,7 @@ impl ServerCluster {
             .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
             .max_total_size(cfg.server.snap_max_total_size.0)
             .encryption_key_manager(key_manager)
-            .max_per_file_size(cfg.server.max_snapshot_file_raw_size.0)
+            .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
