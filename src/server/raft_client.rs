@@ -37,7 +37,12 @@ use kvproto::{
 use raft::SnapshotStatus;
 use raftstore::{errors::DiscardReason, router::RaftStoreRouter};
 use security::SecurityManager;
-use tikv_util::{config::{Tracker, VersionTrack}, lru::LruCache, timer::GLOBAL_TIMER_HANDLE, worker::Scheduler};
+use tikv_util::{
+    config::{Tracker, VersionTrack},
+    lru::LruCache,
+    timer::GLOBAL_TIMER_HANDLE,
+    worker::Scheduler,
+};
 use yatp::{task::future::TaskCell, ThreadPool};
 
 use crate::server::{
