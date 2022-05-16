@@ -658,6 +658,20 @@ pub struct StreamTaskInfo {
     flush_fail_count: AtomicUsize,
 }
 
+impl Drop for StreamTaskInfo {
+    fn drop(&mut self) {
+        let (success, failed): (Vec<_>, Vec<_>) = self
+            .flushing_files
+            .get_mut()
+            .drain(..)
+            .chain(self.files.get_mut().drain())
+            .map(|(_, f)| f.into_inner().local_path)
+            .map(std::fs::remove_file)
+            .partition(|r| r.is_ok());
+        info!("stream task info dropped, removing temp files"; "success" => %success.len(), "failure" => %failed.len())
+    }
+}
+
 impl std::fmt::Debug for StreamTaskInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StreamTaskInfo")
@@ -1326,16 +1340,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_basic_file() -> Result<()> {
-        test_util::init_log_for_test();
-        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&tmp).await?;
-        let (tx, rx) = dummy_scheduler();
-        let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
-        let (stream_task, storage_path) = task("dummy".to_owned()).await?;
-        must_register_table(&router, stream_task, 1).await;
-
+    async fn write_simple_data(router: &RouterInner) -> u64 {
         let now = TimeStamp::physical_now();
         let mut region1 = KvEventsBuilder::new(1, now);
         let start_ts = TimeStamp::physical_now();
@@ -1348,6 +1353,20 @@ mod tests {
         region1.delete_table(CF_DEFAULT, 1, b"hello");
         let events = region1.flush_events();
         check_on_events_result(&router.on_events(events).await);
+        start_ts
+    }
+
+    #[tokio::test]
+    async fn test_basic_file() -> Result<()> {
+        test_util::init_log_for_test();
+        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&tmp).await?;
+        let (tx, rx) = dummy_scheduler();
+        let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
+        let (stream_task, storage_path) = task("dummy".to_owned()).await?;
+        must_register_table(&router, stream_task, 1).await;
+
+        let start_ts = write_simple_data(&router).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let end_ts = TimeStamp::physical_now();
@@ -1540,6 +1559,48 @@ mod tests {
         let ts = TimeStamp::compose(TimeStamp::physical_now(), 42);
         let rts = router.do_flush("nothing", 1, ts).await.unwrap();
         assert_eq!(ts.into_inner(), rts);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_when_stop() -> Result<()> {
+        test_util::init_log_for_test();
+        let (tx, _rx) = dummy_scheduler();
+        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        let router = Arc::new(RouterInner::new(
+            tmp.clone(),
+            tx,
+            1,
+            Duration::from_secs(300),
+        ));
+        let (task, _path) = task("cleanup_test".to_owned()).await?;
+        must_register_table(&router, task, 1).await;
+        write_simple_data(&router).await;
+        router
+            .get_task_info("cleanup_test")
+            .await?
+            .move_to_flushing_files()
+            .await;
+        write_simple_data(&router).await;
+        let mut w = walkdir::WalkDir::new(&tmp).into_iter();
+        assert!(w.next().is_some(), "the temp files doesn't created");
+        drop(router);
+        let w = walkdir::WalkDir::new(&tmp)
+            .into_iter()
+            .filter_map(|entry| {
+                let e = entry.unwrap();
+                e.path()
+                    .extension()
+                    .filter(|x| x.to_string_lossy() == "log")
+                    .map(|_| e.clone())
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            w.is_empty(),
+            "the temp files should be removed, but it is {:?}",
+            w
+        );
+        Ok(())
     }
 
     #[tokio::test]
