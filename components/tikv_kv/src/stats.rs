@@ -2,11 +2,12 @@
 
 use std::cell::RefCell;
 
-use super::metrics::{GcKeysCF, GcKeysDetail};
 use engine_rocks::PerfContext;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanDetailV2, ScanInfo};
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
+
+use super::metrics::{GcKeysCF, GcKeysDetail};
 
 const STAT_PROCESSED_KEYS: &str = "processed_keys";
 const STAT_GET: &str = "get";

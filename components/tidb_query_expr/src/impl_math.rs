@@ -4,12 +4,16 @@ use std::cell::RefCell;
 
 use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
-
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::{RoundMode, DEFAULT_FSP};
-use tidb_query_datatype::codec::{self, Error};
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{
+    codec::{
+        self,
+        data_type::*,
+        mysql::{RoundMode, DEFAULT_FSP},
+        Error,
+    },
+    expr::EvalContext,
+};
 
 const MAX_I64_DIGIT_LENGTH: i64 = 19;
 const MAX_U64_DIGIT_LENGTH: i64 = 20;
@@ -698,10 +702,9 @@ impl Default for MySQLRng {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-    use std::{f64, i64};
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
+    use std::{f64, i64, str::FromStr};
+
+    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeFlag, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
     use super::*;

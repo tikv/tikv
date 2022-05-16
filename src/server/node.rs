@@ -1,39 +1,46 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
-use super::RaftKv;
-use super::Result;
-use crate::import::SstImporter;
-use crate::read_pool::ReadPoolHandle;
-use crate::server::lock_manager::LockManager;
-use crate::server::Config as ServerConfig;
-use crate::storage::kv::FlowStatsReporter;
-use crate::storage::txn::flow_controller::FlowController;
-use crate::storage::DynamicConfigs as StorageDynamicConfigs;
-use crate::storage::{config::Config as StorageConfig, Storage};
 use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use grpcio_health::HealthService;
-use kvproto::kvrpcpb::ApiVersion;
-use kvproto::metapb;
-use kvproto::raft_serverpb::StoreIdent;
-use kvproto::replication_modepb::ReplicationStatus;
+use kvproto::{
+    kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
+};
 use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
-use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter};
-use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::AutoSplitController;
-use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{GlobalReplicationState, PdTask, RefreshConfigTask, SplitCheckTask};
+use raftstore::{
+    coprocessor::dispatcher::CoprocessorHost,
+    router::{LocalReadRouter, RaftStoreRouter},
+    store::{
+        self,
+        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
+        initial_region, AutoSplitController, Config as StoreConfig, GlobalReplicationState, PdTask,
+        RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
+    },
+};
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
-use tikv_util::config::VersionTrack;
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::worker::{LazyWorker, Scheduler, Worker};
+use tikv_util::{
+    config::VersionTrack,
+    quota_limiter::QuotaLimiter,
+    worker::{LazyWorker, Scheduler, Worker},
+};
+
+use super::{RaftKv, Result};
+use crate::{
+    import::SstImporter,
+    read_pool::ReadPoolHandle,
+    server::{lock_manager::LockManager, Config as ServerConfig},
+    storage::{
+        config::Config as StorageConfig, kv::FlowStatsReporter,
+        txn::flow_controller::FlowController, DynamicConfigs as StorageDynamicConfigs, Storage,
+    },
+};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;

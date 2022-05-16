@@ -2,12 +2,11 @@
 
 #[path = "../mod.rs"]
 mod testsuite;
-pub use testsuite::*;
-
 use futures::executor::block_on;
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::{new_peer, sleep_ms};
+pub use testsuite::*;
 use txn_types::TimeStamp;
 
 #[test]

@@ -1,13 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::key_handle::{KeyHandle, KeyHandleGuard};
-
-use crossbeam_skiplist::SkipMap;
 use std::{
     ops::Bound,
     sync::{Arc, Weak},
 };
+
+use crossbeam_skiplist::SkipMap;
 use txn_types::{Key, Lock};
+
+use super::key_handle::{KeyHandle, KeyHandleGuard};
 
 #[derive(Clone)]
 pub struct LockTable(pub Arc<SkipMap<Key, Weak<KeyHandle>>>);
@@ -121,13 +122,15 @@ impl LockTable {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
+
     use tokio::time::sleep;
     use txn_types::LockType;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_lock_key() {

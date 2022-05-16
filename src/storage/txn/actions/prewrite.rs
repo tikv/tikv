@@ -1,6 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::cmp;
+
+use fail::fail_point;
+use kvproto::kvrpcpb::{Assertion, AssertionLevel};
+use txn_types::{
+    is_short_value, Key, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
+};
+
 use crate::storage::{
     mvcc::{
         metrics::{
@@ -9,17 +17,9 @@ use crate::storage::{
         },
         Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
     },
-    txn::actions::check_data_constraint::check_data_constraint,
-    txn::LockInfo,
+    txn::{actions::check_data_constraint::check_data_constraint, LockInfo},
     Snapshot,
 };
-use fail::fail_point;
-use std::cmp;
-use txn_types::{
-    is_short_value, Key, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
-};
-
-use kvproto::kvrpcpb::{Assertion, AssertionLevel};
 
 /// Prewrite a single mutation by creating and storing a lock and value.
 pub fn prewrite<S: Snapshot>(
@@ -499,17 +499,25 @@ impl<'a> PrewriteMutation<'a> {
             MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC.write_loaded.inc();
         }
 
-        match (self.assertion, write) {
+        let assertion_err = match (self.assertion, write) {
             (Assertion::Exist, None) => {
-                self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())?
+                self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())
             }
             (Assertion::Exist, Some((w, commit_ts))) if w.write_type == WriteType::Delete => {
-                self.assertion_failed_error(w.start_ts, *commit_ts)?;
+                self.assertion_failed_error(w.start_ts, *commit_ts)
             }
             (Assertion::NotExist, Some((w, commit_ts))) if w.write_type == WriteType::Put => {
-                self.assertion_failed_error(w.start_ts, *commit_ts)?;
+                self.assertion_failed_error(w.start_ts, *commit_ts)
             }
-            _ => (),
+            _ => Ok(()),
+        };
+
+        // Assertion error can be caused by a rollback. So make up a constraint check if the check was skipped before.
+        if assertion_err.is_err() {
+            if self.skip_constraint_check() {
+                self.check_for_newer_version(reader)?;
+            }
+            assertion_err?;
         }
 
         Ok((reloaded_write, reloaded))
@@ -659,6 +667,16 @@ fn amend_pessimistic_lock<S: Snapshot>(
 }
 
 pub mod tests {
+    #[cfg(test)]
+    use std::sync::Arc;
+
+    use concurrency_manager::ConcurrencyManager;
+    use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use rand::{Rng, SeedableRng};
+    #[cfg(test)]
+    use txn_types::OldValue;
+
     use super::*;
     #[cfg(test)]
     use crate::storage::{
@@ -666,14 +684,6 @@ pub mod tests {
         txn::{commands::prewrite::fallback_1pc_locks, tests::*},
     };
     use crate::storage::{mvcc::tests::*, Engine};
-    use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::Context;
-    #[cfg(test)]
-    use rand::{Rng, SeedableRng};
-    #[cfg(test)]
-    use std::sync::Arc;
-    #[cfg(test)]
-    use txn_types::OldValue;
 
     fn optimistic_txn_props(primary: &[u8], start_ts: TimeStamp) -> TransactionProperties<'_> {
         TransactionProperties {

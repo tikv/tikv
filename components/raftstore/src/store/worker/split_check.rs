@@ -1,27 +1,29 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::fmt::{self, Display, Formatter};
-use std::mem;
+use std::{
+    cmp::Ordering,
+    collections::BinaryHeap,
+    fmt::{self, Display, Formatter},
+    mem,
+};
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
-use kvproto::metapb::{Region, RegionEpoch};
-use kvproto::pdpb::CheckPolicy;
-
-#[cfg(any(test, feature = "testexport"))]
-use crate::coprocessor::Config;
-use crate::coprocessor::CoprocessorHost;
-use crate::coprocessor::SplitCheckerHost;
-use crate::store::{Callback, CasualMessage, CasualRouter};
-use crate::Result;
 use file_system::{IOType, WithIOType};
+use kvproto::{
+    metapb::{Region, RegionEpoch},
+    pdpb::CheckPolicy,
+};
 use online_config::{ConfigChange, OnlineConfig};
-use tikv_util::keybuilder::KeyBuilder;
-use tikv_util::worker::Runnable;
-use tikv_util::{box_err, debug, error, info, warn};
+use tikv_util::{box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable};
 
 use super::metrics::*;
+#[cfg(any(test, feature = "testexport"))]
+use crate::coprocessor::Config;
+use crate::{
+    coprocessor::{CoprocessorHost, SplitCheckerHost},
+    store::{Callback, CasualMessage, CasualRouter},
+    Result,
+};
 
 #[derive(PartialEq, Eq)]
 pub struct KeyEntry {
@@ -428,6 +430,12 @@ where
                 || bucket_range_list.is_empty() && !skip_check_bucket
             {
                 buckets.push(bucket);
+                // in case some range's data in bucket_range_list is deleted
+                if buckets.len() < bucket_range_list.len() {
+                    let mut deleted_buckets =
+                        vec![Bucket::default(); bucket_range_list.len() - buckets.len()];
+                    buckets.append(&mut deleted_buckets);
+                }
                 if !bucket_range_list.is_empty() {
                     assert_eq!(buckets.len(), bucket_range_list.len());
                 }

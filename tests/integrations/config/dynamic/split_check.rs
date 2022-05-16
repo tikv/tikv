@@ -1,17 +1,22 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::sync::mpsc::{self, sync_channel};
-use std::sync::Arc;
-use std::time::Duration;
-
-use engine_rocks::raw::DB;
-use engine_rocks::Compat;
-use raftstore::coprocessor::{
-    config::{Config, SplitCheckConfigManager},
-    CoprocessorHost,
+use std::{
+    path::Path,
+    sync::{
+        mpsc::{self, sync_channel},
+        Arc,
+    },
+    time::Duration,
 };
-use raftstore::store::{SplitCheckRunner as Runner, SplitCheckTask as Task};
+
+use engine_rocks::{raw::DB, Compat};
+use raftstore::{
+    coprocessor::{
+        config::{Config, SplitCheckConfigManager},
+        CoprocessorHost,
+    },
+    store::{SplitCheckRunner as Runner, SplitCheckTask as Task},
+};
 use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 

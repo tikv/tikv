@@ -97,11 +97,14 @@ impl Default for MasterKeyConfig {
 }
 
 mod encryption_method_serde {
-    use super::EncryptionMethod;
     use std::fmt;
 
-    use serde::de::{self, Unexpected, Visitor};
-    use serde::{Deserializer, Serializer};
+    use serde::{
+        de::{self, Unexpected, Visitor},
+        Deserializer, Serializer,
+    };
+
+    use super::EncryptionMethod;
 
     const UNKNOWN: &str = "unknown";
     const PLAINTEXT: &str = "plaintext";

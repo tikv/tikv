@@ -11,34 +11,33 @@ mod actions;
 mod latch;
 mod store;
 
-use std::error::Error as StdError;
-use std::io::Error as IoError;
-
-use kvproto::kvrpcpb::LockInfo;
-use thiserror::Error;
+use std::{error::Error as StdError, io::Error as IoError};
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::kvrpcpb::LockInfo;
+use thiserror::Error;
 use txn_types::{Key, TimeStamp, Value};
 
+pub use self::{
+    actions::{
+        acquire_pessimistic_lock::acquire_pessimistic_lock,
+        cleanup::cleanup,
+        commit::commit,
+        gc::gc,
+        prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
+    },
+    commands::{Command, RESOLVE_LOCK_BATCH_SIZE},
+    latch::{Latches, Lock},
+    scheduler::Scheduler,
+    store::{
+        EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
+        TxnEntryScanner, TxnEntryStore,
+    },
+};
 use crate::storage::{
     mvcc::Error as MvccError,
     types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
     Error as StorageError, Result as StorageResult,
-};
-
-pub use self::actions::{
-    acquire_pessimistic_lock::acquire_pessimistic_lock,
-    cleanup::cleanup,
-    commit::commit,
-    gc::gc,
-    prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
-};
-pub use self::commands::{Command, RESOLVE_LOCK_BATCH_SIZE};
-pub use self::latch::{Latches, Lock};
-pub use self::scheduler::Scheduler;
-pub use self::store::{
-    EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
-    TxnEntryScanner, TxnEntryStore,
 };
 
 /// Process result of a command.
@@ -225,24 +224,27 @@ impl ErrorCodeExt for Error {
 }
 
 pub mod tests {
+    pub use actions::{
+        acquire_pessimistic_lock::tests::{
+            must_err as must_acquire_pessimistic_lock_err,
+            must_err_return_value as must_acquire_pessimistic_lock_return_value_err,
+            must_pessimistic_locked, must_succeed as must_acquire_pessimistic_lock,
+            must_succeed_for_large_txn as must_acquire_pessimistic_lock_for_large_txn,
+            must_succeed_impl as must_acquire_pessimistic_lock_impl,
+            must_succeed_return_value as must_acquire_pessimistic_lock_return_value,
+            must_succeed_with_ttl as must_acquire_pessimistic_lock_with_ttl,
+        },
+        cleanup::tests::{
+            must_cleanup_with_gc_fence, must_err as must_cleanup_err, must_succeed as must_cleanup,
+        },
+        commit::tests::{must_err as must_commit_err, must_succeed as must_commit},
+        gc::tests::must_succeed as must_gc,
+        prewrite::tests::{
+            try_pessimistic_prewrite_check_not_exists, try_prewrite_check_not_exists,
+            try_prewrite_insert,
+        },
+        tests::*,
+    };
+
     use super::*;
-    pub use actions::acquire_pessimistic_lock::tests::{
-        must_err as must_acquire_pessimistic_lock_err,
-        must_err_return_value as must_acquire_pessimistic_lock_return_value_err,
-        must_pessimistic_locked, must_succeed as must_acquire_pessimistic_lock,
-        must_succeed_for_large_txn as must_acquire_pessimistic_lock_for_large_txn,
-        must_succeed_impl as must_acquire_pessimistic_lock_impl,
-        must_succeed_return_value as must_acquire_pessimistic_lock_return_value,
-        must_succeed_with_ttl as must_acquire_pessimistic_lock_with_ttl,
-    };
-    pub use actions::cleanup::tests::{
-        must_cleanup_with_gc_fence, must_err as must_cleanup_err, must_succeed as must_cleanup,
-    };
-    pub use actions::commit::tests::{must_err as must_commit_err, must_succeed as must_commit};
-    pub use actions::gc::tests::must_succeed as must_gc;
-    pub use actions::prewrite::tests::{
-        try_pessimistic_prewrite_check_not_exists, try_prewrite_check_not_exists,
-        try_prewrite_insert,
-    };
-    pub use actions::tests::*;
 }

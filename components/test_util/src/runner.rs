@@ -4,9 +4,9 @@
 //!
 //! See https://doc.rust-lang.org/unstable-book/language-features/custom-test-frameworks.html.
 
+use std::{cell::RefCell, env};
+
 use crate::test::*;
-use std::cell::RefCell;
-use std::env;
 
 /// A runner function for running general tests.
 pub fn run_tests(cases: &[&TestDescAndFn]) {

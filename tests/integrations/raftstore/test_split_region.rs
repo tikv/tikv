@@ -1,25 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc::channel;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{fs, thread};
-
-use kvproto::metapb;
-use kvproto::pdpb;
-use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::RaftMessage;
-use raft::eraftpb::MessageType;
+use std::{
+    fs,
+    sync::{mpsc::channel, Arc},
+    thread,
+    time::Duration,
+};
 
 use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable, CF_WRITE};
 use keys::data_key;
+use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
-use raftstore::store::{Bucket, BucketRange, Callback, WriteResponse};
-use raftstore::Result;
+use raft::eraftpb::MessageType;
+use raftstore::{
+    store::{Bucket, BucketRange, Callback, WriteResponse},
+    Result,
+};
 use test_raftstore::*;
-use tikv::storage::kv::SnapshotExt;
-use tikv::storage::Snapshot;
+use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::config::*;
 use txn_types::{Key, PessimisticLock};
 
@@ -609,6 +608,54 @@ fn test_node_split_region_diff_check() {
     let count = 1;
     let mut cluster = new_node_cluster(0, count);
     test_split_region_diff_check(&mut cluster);
+}
+
+// Test steps
+// set max region size/split size 2000 and put data till 1000
+// set max region size/split size < 1000 and reboot
+// verify the region is splitted.
+#[test]
+fn test_node_split_region_after_reboot_with_config_change() {
+    let count = 1;
+    let mut cluster = new_server_cluster(0, count);
+    let region_max_size = 2000;
+    let region_split_size = 2000;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(20);
+    cluster.cfg.coprocessor.enable_region_bucket = true;
+    cluster.cfg.coprocessor.region_max_size = ReadableSize(region_max_size);
+    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
+    cluster.cfg.coprocessor.region_bucket_size = ReadableSize(region_split_size);
+
+    cluster.run();
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+
+    let mut range = 1..;
+    put_till_size(&mut cluster, region_max_size / 2, &mut range);
+
+    // there should be 1 region
+    sleep_ms(200);
+    assert_eq!(pd_client.get_split_count(), 0);
+
+    // change the config to make the region splittable
+    cluster.cfg.coprocessor.region_max_size = ReadableSize(region_max_size / 3);
+    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size / 3);
+    cluster.cfg.coprocessor.region_bucket_size = ReadableSize(region_split_size / 3);
+    cluster.stop_node(1);
+    cluster.run_node(1).unwrap();
+
+    let mut try_cnt = 0;
+    loop {
+        sleep_ms(20);
+        if pd_client.get_split_count() > 0 {
+            break;
+        }
+        try_cnt += 1;
+        if try_cnt == 50 {
+            panic!("expect get_split_count > 0 after 1s");
+        }
+    }
 }
 
 fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {

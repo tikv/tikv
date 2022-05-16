@@ -1,16 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Result;
-use crate::store::SplitCheckTask;
-
-use engine_traits::perf_level_serde;
-use engine_traits::PerfLevel;
+use engine_traits::{perf_level_serde, PerfLevel};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
+use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
 
-use tikv_util::box_err;
-use tikv_util::config::ReadableSize;
-use tikv_util::worker::Scheduler;
+use super::Result;
+use crate::store::SplitCheckTask;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -40,7 +36,10 @@ pub struct Config {
     #[online_config(skip)]
     pub consistency_check_method: ConsistencyCheckMethod,
 
-    #[serde(with = "perf_level_serde")]
+    // Deprecated. Perf level is not applicable to the raftstore coprocessor.
+    // It was mistakenly used to refer to the perf level of the TiKV coprocessor
+    // and should be replaced with `server.end-point-perf-level`.
+    #[serde(with = "perf_level_serde", skip_serializing)]
     #[online_config(skip)]
     pub perf_level: PerfLevel,
 
@@ -87,7 +86,7 @@ impl Default for Config {
             region_split_keys: SPLIT_KEYS,
             region_max_keys: SPLIT_KEYS / 2 * 3,
             consistency_check_method: ConsistencyCheckMethod::Mvcc,
-            perf_level: PerfLevel::EnableCount,
+            perf_level: PerfLevel::Uninitialized,
             enable_region_bucket: false,
             region_bucket_size: DEFAULT_BUCKET_SIZE,
             region_size_threshold_for_approximate: DEFAULT_BUCKET_SIZE * 4,

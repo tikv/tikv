@@ -1,90 +1,106 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::borrow::Cow;
-use std::cell::Cell;
-use std::collections::Bound::{Excluded, Unbounded};
-use std::collections::VecDeque;
-use std::iter::Iterator;
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-use std::time::Instant;
-use std::{cmp, mem, u64};
+use std::{
+    borrow::Cow,
+    cell::Cell,
+    cmp,
+    collections::{
+        Bound::{Excluded, Unbounded},
+        VecDeque,
+    },
+    iter::Iterator,
+    mem,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Instant,
+    u64,
+};
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
 use engine_traits::{
-    Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatch, WriteBatchExt, WriteOptions,
+    Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatch, WriteBatchExt, WriteOptions, CF_LOCK,
+    CF_RAFT,
 };
-use engine_traits::{CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use keys::{self, enc_end_key, enc_start_key};
-use kvproto::errorpb;
-use kvproto::import_sstpb::SwitchMode;
-use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
-    StatusCmdType, StatusResponse,
+use kvproto::{
+    errorpb,
+    import_sstpb::SwitchMode,
+    kvrpcpb::DiskFullOpt,
+    metapb::{self, Region, RegionEpoch},
+    pdpb::CheckPolicy,
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
+        StatusCmdType, StatusResponse,
+    },
+    raft_serverpb::{
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
+        RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+    },
+    replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
-use kvproto::raft_serverpb::{
-    ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-    RaftSnapshotData, RaftTruncatedState, RegionLocalState,
-};
-use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
 use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
-use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{
-    self, GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX,
-    NO_LIMIT,
+    self,
+    eraftpb::{self, ConfChangeType, MessageType},
+    GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::sys::disk::DiskUsage;
-use tikv_util::sys::memory_usage_reaches_high_water;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant};
-use tikv_util::worker::{ScheduleError, Scheduler};
-use tikv_util::{box_err, debug, defer, error, info, trace, warn};
-use tikv_util::{escape, is_zero_duration, Either};
+use tikv_util::{
+    box_err, debug, defer, error, escape, info, is_zero_duration,
+    mpsc::{self, LooseBoundedSender, Receiver},
+    sys::{disk::DiskUsage, memory_usage_reaches_high_water},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    trace, warn,
+    worker::{ScheduleError, Scheduler},
+    Either,
+};
 use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
-use crate::coprocessor::RegionChangeEvent;
-use crate::store::cmd_resp::{bind_term, new_error};
-use crate::store::fsm::store::{PollContext, StoreMeta};
-use crate::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
-    ExecResult,
-};
-use crate::store::hibernate_state::{GroupState, HibernateState};
-use crate::store::local_metrics::RaftMetrics;
-use crate::store::memory::*;
-use crate::store::metrics::*;
-use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
-use crate::store::peer::{
-    ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-    UnsafeRecoveryState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
-};
-use crate::store::peer_storage::write_peer_state;
-use crate::store::transport::Transport;
-use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
-use crate::store::worker::{
-    Bucket, BucketRange, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate,
-    ReadProgress, RegionTask, SplitCheckTask,
-};
-use crate::store::PdTask;
 #[cfg(any(test, feature = "testexport"))]
 use crate::store::PeerInternalStat;
-use crate::store::RaftlogFetchResult;
-use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
-    RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
+use crate::{
+    coprocessor::RegionChangeEvent,
+    store::{
+        cmd_resp::{bind_term, new_error},
+        fsm::{
+            apply,
+            store::{PollContext, StoreMeta},
+            ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
+            ExecResult,
+        },
+        hibernate_state::{GroupState, HibernateState},
+        local_metrics::RaftMetrics,
+        memory::*,
+        metrics::*,
+        msg::{Callback, ExtCallback, InspectedRaftMessage},
+        peer::{
+            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
+            UnsafeRecoveryState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+        },
+        peer_storage::write_peer_state,
+        transport::Transport,
+        util,
+        util::{is_learner, KeysInfoFormatter, LeaseState},
+        worker::{
+            Bucket, BucketRange, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask,
+            ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
+        },
+        AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
+        PeerTick, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, SignificantMsg, SnapKey,
+        StoreMsg,
+    },
+    Error, Result,
 };
-use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DelayDestroy {
@@ -1133,7 +1149,7 @@ where
     fn on_clear_region_size(&mut self) {
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
-        self.fsm.peer.has_calculated_region_size = false;
+        self.fsm.peer.may_skip_split_check = false;
         self.register_split_region_check_tick();
     }
 
@@ -3402,7 +3418,7 @@ where
         self.fsm.peer.post_split();
 
         // It's not correct anymore, so set it to false to schedule a split check task.
-        self.fsm.peer.has_calculated_region_size = false;
+        self.fsm.peer.may_skip_split_check = false;
 
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
@@ -4859,14 +4875,14 @@ where
             return;
         }
 
-        // When restart, the has_calculated_region_size will be false. The split check will first
+        // When restart, the may_skip_split_check will be false. The split check will first
         // check the region size, and then check whether the region should split. This
         // should work even if we change the region max size.
         // If peer says should update approximate size, update region size and check
         // whether the region should split.
-        // We assume that `has_calculated_region_size` is only set true when receives an
-        // accurate value sent from split-check thread.
-        if self.fsm.peer.has_calculated_region_size
+        // We assume that `may_skip_split_check` is only set true after the split check task is
+        // scheduled.
+        if self.fsm.peer.may_skip_split_check
             && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
         {
@@ -4920,6 +4936,8 @@ where
         }
         self.fsm.peer.size_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
+        // the task is scheduled, next tick may skip it.
+        self.fsm.peer.may_skip_split_check = true;
     }
 
     fn on_prepare_split_region(
@@ -5032,7 +5050,6 @@ where
 
     fn on_approximate_region_size(&mut self, size: u64) {
         self.fsm.peer.approximate_size = Some(size);
-        self.fsm.peer.has_calculated_region_size = true;
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
         fail_point!("on_approximate_region_size");
@@ -5160,7 +5177,7 @@ where
             meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
             region_buckets.meta = Arc::new(meta);
         } else {
-            info!(
+            debug!(
                 "refresh_region_buckets re-generates buckets";
                 "region_id" => self.fsm.region_id(),
             );
@@ -5196,7 +5213,7 @@ where
                 self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
             ));
         }
-        info!(
+        debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
             "buckets count" => buckets_count,
@@ -5238,7 +5255,7 @@ where
                 (
                     &b.meta.keys,
                     &b.stats,
-                    region_buckets.last_report_time != b.last_report_time,
+                    region_buckets.create_time != b.create_time,
                 )
             })
             .unwrap_or((&empty_last_keys, &empty_last_stats, false));
@@ -5577,7 +5594,7 @@ where
             Some(self.fsm.peer.approximate_keys.unwrap_or_default() + keys);
         // The ingested file may be overlapped with the data in engine, so we need to check it
         // again to get the accurate value.
-        self.fsm.peer.has_calculated_region_size = false;
+        self.fsm.peer.may_skip_split_check = false;
         if self.fsm.peer.is_leader() {
             self.on_pd_heartbeat_tick();
             self.register_split_region_check_tick();
@@ -5849,8 +5866,9 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
 }
 
 mod memtrace {
-    use super::*;
     use memory_trace_macros::MemoryTraceHelper;
+
+    use super::*;
 
     /// Heap size for Raft internal `ReadOnly`.
     #[derive(MemoryTraceHelper, Default, Debug)]
@@ -5891,11 +5909,10 @@ mod memtrace {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    use crate::store::local_metrics::RaftMetrics;
-    use crate::store::msg::{Callback, ExtCallback, RaftCommand};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     use engine_test::kv::KvTestEngine;
     use kvproto::raft_cmdpb::{
@@ -5906,6 +5923,10 @@ mod tests {
     use tikv_util::config::ReadableSize;
 
     use super::*;
+    use crate::store::{
+        local_metrics::RaftMetrics,
+        msg::{Callback, ExtCallback, RaftCommand},
+    };
 
     #[test]
     fn test_batch_raft_cmd_request_builder() {

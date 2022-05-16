@@ -3,23 +3,25 @@
 mod file_log;
 mod formatter;
 
-use std::env;
-use std::fmt;
-use std::io::{self, BufWriter};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
-use std::thread;
+use std::{
+    env, fmt,
+    io::{self, BufWriter},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
+    thread,
+};
 
 use log::{self, SetLoggerError};
 use slog::{self, slog_o, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
+pub use slog::{FilterFn, Level};
 use slog_async::{Async, AsyncGuard, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
 use self::file_log::{RotateBySize, RotatingFileLogger, RotatingFileLoggerBuilder};
 use crate::config::{ReadableDuration, ReadableSize};
-
-pub use slog::{FilterFn, Level};
 
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.
@@ -645,15 +647,14 @@ impl<'a> slog::Serializer for Serializer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{cell::RefCell, io, io::Write, str::from_utf8};
+
     use chrono::DateTime;
     use regex::Regex;
     use slog::{slog_debug, slog_info, slog_warn};
     use slog_term::PlainSyncDecorator;
-    use std::cell::RefCell;
-    use std::io;
-    use std::io::Write;
-    use std::str::from_utf8;
+
+    use super::*;
 
     // Due to the requirements of `Logger::root*` on a writer with a 'static lifetime
     // we need to make a Thread Local,

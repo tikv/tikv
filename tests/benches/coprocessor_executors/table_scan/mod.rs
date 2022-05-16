@@ -5,9 +5,7 @@ mod util;
 
 use criterion::measurement::Measurement;
 
-use crate::util::scan_bencher::ScanBencher;
-use crate::util::store::*;
-use crate::util::BenchCase;
+use crate::util::{scan_bencher::ScanBencher, store::*, BenchCase};
 
 const ROWS: usize = 5000;
 

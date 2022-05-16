@@ -1,14 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{sync::Arc, thread, time::Duration};
 
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::*;
-use kvproto::metapb::{Peer, Region};
-use kvproto::tikvpb::TikvClient;
-
+use kvproto::{
+    kvrpcpb::*,
+    metapb::{Peer, Region},
+    tikvpb::TikvClient,
+};
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 

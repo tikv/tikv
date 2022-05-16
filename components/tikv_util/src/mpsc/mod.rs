@@ -9,13 +9,18 @@ supports closed detection and try operations.
 */
 pub mod batch;
 
+use std::{
+    cell::Cell,
+    sync::{
+        atomic::{AtomicBool, AtomicIsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
 };
-use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
 
 struct State {
     sender_cnt: AtomicIsize,
@@ -287,10 +292,11 @@ pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::time::Instant;
+    use std::{thread, time::Duration};
+
     use crossbeam::channel::*;
-    use std::thread;
-    use std::time::Duration;
+
+    use crate::time::Instant;
 
     #[test]
     fn test_bounded() {

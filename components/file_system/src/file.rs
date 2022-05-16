@@ -1,17 +1,19 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{get_io_rate_limiter, get_io_type, IOOp, IORateLimiter};
-
-use std::fmt::{self, Debug, Formatter};
-use std::fs;
-use std::io::{self, Read, Seek, Write};
-use std::path::Path;
-use std::sync::Arc;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    fmt::{self, Debug, Formatter},
+    fs,
+    io::{self, Read, Seek, Write},
+    path::Path,
+    sync::Arc,
+};
 
 // Extention Traits
 use fs2::FileExt;
-#[cfg(target_os = "linux")]
-use std::os::unix::fs::OpenOptionsExt;
+
+use super::{get_io_rate_limiter, get_io_type, IOOp, IORateLimiter};
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
 pub struct File {
@@ -251,8 +253,7 @@ impl OpenOptionsExt for OpenOptions {
 mod tests {
     use tempfile::Builder;
 
-    use super::super::*;
-    use super::*;
+    use super::{super::*, *};
 
     #[test]
     fn test_instrumented_file() {

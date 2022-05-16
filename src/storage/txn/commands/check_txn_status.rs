@@ -3,16 +3,20 @@
 // #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, SnapshotReader};
-use crate::storage::txn::actions::check_txn_status::*;
-use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
-    WriteCommand, WriteContext, WriteResult,
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{MvccTxn, SnapshotReader},
+    txn::{
+        actions::check_txn_status::*,
+        commands::{
+            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+            WriteCommand, WriteContext, WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Snapshot, TxnStatus,
 };
-use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot, TxnStatus};
 
 command! {
     /// Check the status of a transaction. This is usually invoked by a transaction that meets
@@ -137,20 +141,24 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 
 #[cfg(test)]
 pub mod tests {
-    use super::TxnStatus::*;
-    use super::*;
-    use crate::storage::kv::Engine;
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::commands::{pessimistic_rollback, WriteCommand, WriteContext};
-    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
-    use crate::storage::txn::tests::*;
-    use crate::storage::{types::TxnStatus, ProcessResult, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use tikv_util::deadline::Deadline;
-    use txn_types::Key;
-    use txn_types::WriteType;
+    use txn_types::{Key, WriteType};
+
+    use super::{TxnStatus::*, *};
+    use crate::storage::{
+        kv::Engine,
+        lock_manager::DummyLockManager,
+        mvcc::tests::*,
+        txn::{
+            commands::{pessimistic_rollback, WriteCommand, WriteContext},
+            scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
+            tests::*,
+        },
+        types::TxnStatus,
+        ProcessResult, TestEngineBuilder,
+    };
 
     pub fn must_success<E: Engine>(
         engine: &E,

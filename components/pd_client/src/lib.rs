@@ -10,30 +10,25 @@ mod util;
 
 mod config;
 pub mod errors;
-pub use self::client::{DummyPdClient, RpcClient};
-pub use self::config::Config;
-pub use self::errors::{Error, Result};
-pub use self::feature_gate::{Feature, FeatureGate};
-pub use self::util::PdConnector;
-pub use self::util::REQUEST_RECONNECT_INTERVAL;
-pub use self::util::{merge_bucket_stats, new_bucket_stats};
-
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{cmp::Ordering, collections::HashMap, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
-use kvproto::metapb;
-use kvproto::pdpb;
-use kvproto::replication_modepb::{
-    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+use kvproto::{
+    metapb, pdpb,
+    replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
 use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
+
+pub use self::{
+    client::{DummyPdClient, RpcClient},
+    config::Config,
+    errors::{Error, Result},
+    feature_gate::{Feature, FeatureGate},
+    util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
+};
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
@@ -131,13 +126,13 @@ impl BucketMeta {
 pub struct BucketStat {
     pub meta: Arc<BucketMeta>,
     pub stats: metapb::BucketStats,
-    pub last_report_time: Instant,
+    pub create_time: Instant,
 }
 
 impl Default for BucketStat {
     fn default() -> Self {
         Self {
-            last_report_time: Instant::now(),
+            create_time: Instant::now(),
             meta: Arc::default(),
             stats: metapb::BucketStats::default(),
         }
@@ -149,7 +144,7 @@ impl BucketStat {
         Self {
             meta,
             stats,
-            last_report_time: Instant::now(),
+            create_time: Instant::now(),
         }
     }
 
@@ -417,6 +412,16 @@ pub trait PdClient: Send + Sync {
     /// Return a timestamp with (physical, logical), indicating that timestamps allocated are:
     /// [Timestamp(physical, logical - count + 1), Timestamp(physical, logical)]
     fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
+        unimplemented!()
+    }
+
+    /// Set a service safe point.
+    fn update_service_safe_point(
+        &self,
+        _name: String,
+        _safepoint: TimeStamp,
+        _ttl: Duration,
+    ) -> PdFuture<()> {
         unimplemented!()
     }
 
