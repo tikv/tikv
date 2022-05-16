@@ -74,7 +74,6 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let (fp_tx, fp_rx) = sync_channel(1);
     // sleep a while between getting max ts and store the lock in memory
     fail::cfg_callback("before-set-lock-in-memory", move || {
-        thread::sleep(Duration::from_millis(200));
         fp_tx.send(()).unwrap();
         thread::sleep(Duration::from_millis(200));
     })
