@@ -20,7 +20,7 @@ use tikv_util::{
 use time::Duration as TimeDuration;
 
 use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
-use crate::{coprocessor, Result};
+use crate::{Error, Result};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -71,10 +71,10 @@ pub struct Config {
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
     // When entry count exceed this value, gc will be forced trigger.
-    pub raft_log_gc_count_limit: u64,
+    pub raft_log_gc_count_limit: Option<u64>,
     // When the approximate size of raft log entries exceed this value,
     // gc will be forced trigger.
-    pub raft_log_gc_size_limit: ReadableSize,
+    pub raft_log_gc_size_limit: Option<ReadableSize>,
     // Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
     // GC them after ticks `raft_log_reserve_max_ticks` times.
     #[doc(hidden)]
@@ -96,7 +96,7 @@ pub struct Config {
     pub split_region_check_tick_interval: ReadableDuration,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
-    pub region_split_check_diff: ReadableSize,
+    pub region_split_check_diff: Option<ReadableSize>,
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
     /// Number of regions for each time checking.
@@ -280,7 +280,6 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
             prevote: true,
             raftdb_path: String::new(),
@@ -296,15 +295,14 @@ impl Default for Config {
             raft_log_compact_sync_interval: ReadableDuration::secs(2),
             raft_log_gc_tick_interval: ReadableDuration::secs(3),
             raft_log_gc_threshold: 50,
-            // Assume the average size of entries is 1k.
-            raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),
-            raft_log_gc_size_limit: split_size * 3 / 4,
+            raft_log_gc_count_limit: None,
+            raft_log_gc_size_limit: None,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
-            region_split_check_diff: split_size / 16,
+            region_split_check_diff: None,
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
@@ -395,6 +393,47 @@ impl Config {
         TimeDuration::from_std(self.renew_leader_lease_advance_duration.0).unwrap()
     }
 
+    pub fn raft_log_gc_count_limit(&self) -> u64 {
+        self.raft_log_gc_count_limit.unwrap()
+    }
+
+    pub fn raft_log_gc_size_limit(&self) -> ReadableSize {
+        self.raft_log_gc_size_limit.unwrap()
+    }
+
+    pub fn region_split_check_diff(&self) -> ReadableSize {
+        self.region_split_check_diff.unwrap()
+    }
+
+    pub fn validate_raft_log_gc_limit(&self) -> Result<()> {
+        match (
+            self.raft_log_gc_count_limit,
+            self.raft_log_gc_size_limit,
+            self.region_split_check_diff,
+        ) {
+            (None, ..) | (_, None, _) | (_, _, None) => {
+                return Err(Error::RaftLogGcLimitNotSet);
+            }
+            (Some(count_limit), Some(size_limit), Some(split_check_diff)) => {
+                if self.merge_max_log_gap >= count_limit {
+                    return Err(box_err!(
+                        "merge log gap {} should be less than log gc limit {}.",
+                        self.merge_max_log_gap,
+                        count_limit
+                    ));
+                }
+                if size_limit.0 == 0 {
+                    return Err(box_err!("raft log gc size limit should large than 0."));
+                }
+                if split_check_diff.0 == 0 {
+                    return Err(box_err!("region split check diff should large than 0."));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     #[cfg(any(test, feature = "testexport"))]
     pub fn allow_remove_leader(&self) -> bool {
         self.allow_remove_leader
@@ -463,9 +502,6 @@ impl Config {
                 self.raft_log_gc_threshold
             ));
         }
-        if self.raft_log_gc_size_limit.0 == 0 {
-            return Err(box_err!("raft log gc size limit should large than 0."));
-        }
 
         let election_timeout =
             self.raft_base_tick_interval.as_millis() * self.raft_election_timeout_ticks as u64;
@@ -485,14 +521,6 @@ impl Config {
                 lease,
                 election_timeout,
                 tick
-            ));
-        }
-
-        if self.merge_max_log_gap >= self.raft_log_gc_count_limit {
-            return Err(box_err!(
-                "merge log gap {} should be less than log gc limit {}.",
-                self.merge_max_log_gap,
-                self.raft_log_gc_count_limit
             ));
         }
 
@@ -624,7 +652,7 @@ impl Config {
             self.renew_leader_lease_advance_duration = self.raft_store_max_leader_lease / 4;
         }
 
-        Ok(())
+        self.validate_raft_log_gc_limit()
     }
 
     pub fn write_into_metrics(&self) {
@@ -671,10 +699,10 @@ impl Config {
             .set(self.raft_log_gc_threshold as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_count_limit"])
-            .set(self.raft_log_gc_count_limit as f64);
+            .set(self.raft_log_gc_count_limit.unwrap_or_default() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_size_limit"])
-            .set(self.raft_log_gc_size_limit.0 as f64);
+            .set(self.raft_log_gc_size_limit.unwrap_or_default().0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_reserve_max_ticks"])
             .set(self.raft_log_reserve_max_ticks as f64);
@@ -690,7 +718,7 @@ impl Config {
             .set(self.split_region_check_tick_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_split_check_diff"])
-            .set(self.region_split_check_diff.0 as f64);
+            .set(self.region_split_check_diff.unwrap_or_default().0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_check_interval"])
             .set(self.region_compact_check_interval.as_secs_f64());
@@ -947,7 +975,11 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.raft_log_gc_size_limit = ReadableSize(0);
+        cfg.raft_log_gc_size_limit = Some(ReadableSize(0));
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_log_gc_size_limit = None;
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
@@ -957,8 +989,12 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.raft_log_gc_count_limit = 100;
+        cfg.raft_log_gc_count_limit = Some(100);
         cfg.merge_max_log_gap = 110;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_log_gc_count_limit = None;
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();

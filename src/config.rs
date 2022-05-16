@@ -2862,7 +2862,6 @@ impl TiKvConfig {
         self.raftdb.validate()?;
         self.raft_engine.validate()?;
         self.server.validate()?;
-        self.raft_store.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
         self.security.validate()?;
@@ -2876,6 +2875,14 @@ impl TiKvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+
+        match self.raft_store.validate() {
+            Err(raftstore::Error::RaftLogGcLimitNotSet) => {
+                self.raft_log_gc_limit_adjust();
+            }
+            Ok(_) => (),
+            Err(e) => return Err(e.into()),
+        }
 
         if self.storage.flow_control.enable {
             // using raftdb write stall to control memtables as a safety net
@@ -2979,27 +2986,21 @@ impl TiKvConfig {
             );
         }
 
-        #[cfg(not(any(test, feature = "textexport")))]
-        self.raft_log_gc_limit_adjust();
-
         Ok(())
     }
 
     pub fn raft_log_gc_limit_adjust(&mut self) {
-        // Raft log gc limit must be 75% region size at least;
-        if self.raft_store.raft_log_gc_size_limit < self.coprocessor.region_split_size * 3 / 4 {
-            info!(
-                "raft_log_gc_size_limit:{:?} < 75% * region_split_size:{:?}, adjust raft_log_gc_size_limit automatically",
-                self.raft_store.raft_log_gc_size_limit, self.coprocessor.region_split_size,
-            );
-            self.raft_store.raft_log_gc_size_limit = self.coprocessor.region_split_size * 3 / 4;
+        if self.raft_store.raft_log_gc_size_limit.is_none() {
+            self.raft_store.raft_log_gc_size_limit =
+                Some(self.coprocessor.region_split_size * 3 / 4);
         }
-        if self.raft_store.raft_log_gc_count_limit < self.coprocessor.region_split_keys * 3 / 4 {
-            info!(
-                "raft_log_gc_count_limit:{} < 75% * region_split_keys:{}, adjust raft_log_gc_count_limit automatically",
-                self.raft_store.raft_log_gc_count_limit, self.coprocessor.region_split_keys,
-            );
-            self.raft_store.raft_log_gc_count_limit = self.coprocessor.region_split_keys * 3 / 4;
+        if self.raft_store.raft_log_gc_count_limit.is_none() {
+            // Assume the average size of entries is 1k.
+            self.raft_store.raft_log_gc_count_limit =
+                Some(self.coprocessor.region_split_size * 3 / 4 / ReadableSize::kb(1));
+        }
+        if self.raft_store.region_split_check_diff.is_none() {
+            self.raft_store.region_split_check_diff = Some(self.coprocessor.region_split_size / 16);
         }
     }
 
@@ -4672,11 +4673,13 @@ mod tests {
     #[test]
     fn test_validate_tikv_config() {
         let mut cfg = TiKvConfig::default();
-        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff.0;
-        cfg.raft_store.region_split_check_diff.0 += 1;
+        assert!(cfg.validate().is_ok());
+        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff().0;
+        cfg.raft_store.region_split_check_diff =
+            Some(ReadableSize(cfg.raft_store.region_split_check_diff().0 + 1));
         assert!(cfg.validate().is_ok());
         assert_eq!(
-            cfg.raft_store.region_split_check_diff.0,
+            cfg.raft_store.region_split_check_diff().0,
             default_region_split_check_diff + 1
         );
 
@@ -4934,6 +4937,7 @@ mod tests {
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
+        default_cfg.raft_log_gc_limit_adjust();
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.

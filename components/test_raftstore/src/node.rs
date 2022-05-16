@@ -218,7 +218,7 @@ impl Simulator for NodeCluster {
     fn run_node(
         &mut self,
         node_id: u64,
-        cfg: Config,
+        mut cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
@@ -229,13 +229,12 @@ impl Simulator for NodeCluster {
         let pd_worker = LazyWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
-        let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
+        cfg.validate().unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let mut node = Node::new(
             system,
             &cfg.server,
-            Arc::new(VersionTrack::new(raft_store)),
+            Arc::new(VersionTrack::new(cfg.raft_store.clone())),
             cfg.storage.api_version(),
             Arc::clone(&self.pd_client),
             Arc::default(),

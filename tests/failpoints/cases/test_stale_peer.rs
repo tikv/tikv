@@ -290,7 +290,7 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
 #[test]
 fn test_destroy_clean_up_logs_with_unfinished_log_gc() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 15;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(15);
     cluster.cfg.raft_store.raft_log_gc_threshold = 15;
     let pd_client = cluster.pd_client.clone();
 

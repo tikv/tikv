@@ -270,6 +270,8 @@ impl ServerCluster {
             }
         }
 
+        cfg.validate().unwrap();
+
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
@@ -446,13 +448,11 @@ impl ServerCluster {
 
         let apply_router = system.apply_router();
         // Create node.
-        let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
         let health_service = HealthService::default();
         let mut node = Node::new(
             system,
             &server_cfg.value().clone(),
-            Arc::new(VersionTrack::new(raft_store)),
+            Arc::new(VersionTrack::new(cfg.raft_store.clone())),
             cfg.storage.api_version(),
             Arc::clone(&self.pd_client),
             state,

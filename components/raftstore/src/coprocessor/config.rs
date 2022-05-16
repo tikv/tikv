@@ -199,9 +199,21 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::default();
+        cfg.region_max_size = None;
+        cfg.region_split_size = ReadableSize(20);
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.region_max_size, Some(ReadableSize(25)));
+
+        cfg = Config::default();
         cfg.region_max_keys = Some(10);
         cfg.region_split_keys = 20;
         assert!(cfg.validate().is_err());
+
+        cfg = Config::default();
+        cfg.region_max_keys = None;
+        cfg.region_split_keys = 20;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.region_max_keys, Some(25));
 
         cfg = Config::default();
         cfg.enable_region_bucket = false;

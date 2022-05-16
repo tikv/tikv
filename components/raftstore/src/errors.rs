@@ -128,6 +128,9 @@ pub enum Error {
 
     #[error("Prepare merge is pending due to unapplied proposals")]
     PendingPrepareMerge,
+
+    #[error("Raft log GC limit not set")]
+    RaftLogGcLimitNotSet,
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -296,7 +299,8 @@ impl ErrorCodeExt for Error {
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
             Error::PendingPrepareMerge => error_code::raftstore::PENDING_PREPARE_MERGE,
 
-            Error::Other(_) => error_code::raftstore::UNKNOWN,
+            // Error::RaftLogGcLimitNotSet not expected to be printed.
+            Error::Other(_) | Error::RaftLogGcLimitNotSet => error_code::raftstore::UNKNOWN,
         }
     }
 }
