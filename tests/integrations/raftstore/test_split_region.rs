@@ -152,7 +152,7 @@ fn test_server_split_region_twice() {
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.coprocessor.region_max_size = ReadableSize(REGION_MAX_SIZE);
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(REGION_MAX_SIZE));
     cluster.cfg.coprocessor.region_split_size = ReadableSize(REGION_SPLIT_SIZE);
 
     let check_size_diff = cluster.cfg.raft_store.region_split_check_diff.0;
@@ -558,7 +558,7 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.region_split_check_diff = ReadableSize(10);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(20);
-    cluster.cfg.coprocessor.region_max_size = ReadableSize(region_max_size);
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
     cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
 
     let mut range = 1..;
@@ -765,7 +765,7 @@ fn test_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // length of each key+value
     let item_len = 74;
     // make bucket's size to item_len, which means one row one bucket
-    cluster.cfg.coprocessor.region_max_size = ReadableSize(item_len) * 1024;
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(item_len) * 1024);
     let mut range = 1..;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);

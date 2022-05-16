@@ -3,7 +3,7 @@
 use engine_traits::{perf_level_serde, PerfLevel};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
-use tikv_util::{box_err, config::ReadableSize, info, worker::Scheduler};
+use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
 
 use super::Result;
 use crate::store::SplitCheckTask;
@@ -23,13 +23,15 @@ pub struct Config {
     /// When region [a,e) size meets region_max_size, it will be split into
     /// several regions [a,b), [b,c), [c,d), [d,e). And the size of [a,b),
     /// [b,c), [c,d) will be region_split_size (maybe a little larger).
-    pub region_max_size: ReadableSize,
+    /// by default, region_max_size = region_split_size * 2 / 3.
+    pub region_max_size: Option<ReadableSize>,
     pub region_split_size: ReadableSize,
 
     /// When the number of keys in region [a,e) meets the region_max_keys,
     /// it will be split into two several regions [a,b), [b,c), [c,d), [d,e).
     /// And the number of keys in [a,b), [b,c), [c,d) will be region_split_keys.
-    pub region_max_keys: u64,
+    /// by default, region_max_keys = region_split_keys * 2 / 3.
+    pub region_max_keys: Option<u64>,
     pub region_split_keys: u64,
 
     /// ConsistencyCheckMethod can not be chanaged dynamically.
@@ -82,9 +84,9 @@ impl Default for Config {
             split_region_on_table: false,
             batch_split_limit: BATCH_SPLIT_LIMIT,
             region_split_size: split_size,
-            region_max_size: split_size / 2 * 3,
+            region_max_size: None,
             region_split_keys: SPLIT_KEYS,
-            region_max_keys: SPLIT_KEYS / 2 * 3,
+            region_max_keys: None,
             consistency_check_method: ConsistencyCheckMethod::Mvcc,
             perf_level: PerfLevel::Uninitialized,
             enable_region_bucket: false,
@@ -96,20 +98,41 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn region_max_keys(&self) -> u64 {
+        self.region_max_keys
+            .unwrap_or(self.region_split_keys * 2 / 3)
+    }
+
+    pub fn region_max_size(&self) -> ReadableSize {
+        self.region_max_size
+            .unwrap_or(self.region_split_size * 2 / 3)
+    }
+
     pub fn validate(&mut self) -> Result<()> {
-        if self.region_max_size.0 < self.region_split_size.0 {
-            info!(
-                "region_max_size {:?} < region_split_size {:?}, adjust region_max_size to 125% region_split_size automatically",
-                self.region_max_size, self.region_split_size,
-            );
-            self.region_max_size = self.region_split_size / 2 * 3;
+        match self.region_max_size {
+            Some(region_max_size) => {
+                if region_max_size.0 < self.region_split_size.0 {
+                    return Err(box_err!(
+                        "region max size {} must >= split size {}",
+                        region_max_size.0,
+                        self.region_split_size.0
+                    ));
+                }
+            }
+            None => self.region_max_size = Some(self.region_split_size / 2 * 3),
         }
-        if self.region_max_keys < self.region_split_keys {
-            info!(
-                "region_max_keys {:?} < region_split_keys {:?}, adjust region_max_keys to 125% region_split_keys automatically",
-                self.region_max_keys, self.region_split_keys,
-            );
-            self.region_max_keys = self.region_split_keys / 2 * 3;
+
+        match self.region_max_keys {
+            Some(region_max_keys) => {
+                if region_max_keys < self.region_split_keys {
+                    return Err(box_err!(
+                        "region max keys {} must >= split keys {}",
+                        region_max_keys,
+                        self.region_split_keys
+                    ));
+                }
+            }
+            None => self.region_max_keys = Some(self.region_split_keys / 2 * 3),
         }
         if self.enable_region_bucket {
             if self.region_split_size.0 < self.region_bucket_size.0 {
@@ -171,12 +194,12 @@ mod tests {
         cfg.validate().unwrap();
 
         cfg = Config::default();
-        cfg.region_max_size = ReadableSize(10);
+        cfg.region_max_size = Some(ReadableSize(10));
         cfg.region_split_size = ReadableSize(20);
         assert!(cfg.validate().is_err());
 
         cfg = Config::default();
-        cfg.region_max_keys = 10;
+        cfg.region_max_keys = Some(10);
         cfg.region_split_keys = 20;
         assert!(cfg.validate().is_err());
 

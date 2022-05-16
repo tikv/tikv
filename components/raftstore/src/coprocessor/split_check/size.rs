@@ -137,7 +137,7 @@ where
         let region_size = match get_region_approximate_size(
             engine,
             region,
-            host.cfg.region_max_size.0 * host.cfg.batch_split_limit,
+            host.cfg.region_max_size().0 * host.cfg.batch_split_limit,
         ) {
             Ok(size) => size,
             Err(e) => {
@@ -149,7 +149,7 @@ where
                 );
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
-                    host.cfg.region_max_size.0,
+                    host.cfg.region_max_size().0,
                     host.cfg.region_split_size.0,
                     host.cfg.batch_split_limit,
                     policy,
@@ -170,29 +170,29 @@ where
         }
 
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
-        if region_size >= host.cfg.region_max_size.0
+        if region_size >= host.cfg.region_max_size().0
             || host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0
         {
             info!(
                 "approximate size over threshold, need to do split check";
                 "region_id" => region.get_id(),
                 "size" => region_size,
-                "threshold" => host.cfg.region_max_size.0,
+                "threshold" => host.cfg.region_max_size().0,
             );
             // when meet large region use approximate way to produce split keys
-            let batch_split_limit = if region_size >= host.cfg.region_max_size.0 {
+            let batch_split_limit = if region_size >= host.cfg.region_max_size().0 {
                 host.cfg.batch_split_limit
             } else {
                 0
             };
-            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit
+            if region_size >= host.cfg.region_max_size().0 * host.cfg.batch_split_limit
                 || region_size >= host.cfg.region_size_threshold_for_approximate.0
             {
                 policy = CheckPolicy::Approximate;
             }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
-                host.cfg.region_max_size.0,
+                host.cfg.region_max_size().0,
                 host.cfg.region_split_size.0,
                 batch_split_limit,
                 policy,
@@ -203,7 +203,7 @@ where
                 "approximate size less than threshold, does not need to do split check";
                 "region_id" => region.get_id(),
                 "size" => region_size,
-                "threshold" => host.cfg.region_max_size.0,
+                "threshold" => host.cfg.region_max_size().0,
             );
         }
     }
@@ -410,7 +410,7 @@ pub mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_size: ReadableSize(100),
+            region_max_size: Some(ReadableSize(100)),
             region_split_size: ReadableSize(60),
             batch_split_limit: 5,
             ..Default::default()
@@ -538,7 +538,7 @@ pub mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_size: ReadableSize(50000),
+            region_max_size: Some(ReadableSize(50000)),
             region_split_size: ReadableSize(50000),
             batch_split_limit: 5,
             enable_region_bucket: true,
@@ -640,7 +640,7 @@ pub mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_size: ReadableSize(100),
+            region_max_size: Some(ReadableSize(100)),
             region_split_size: ReadableSize(60),
             batch_split_limit: 5,
             ..Default::default()
