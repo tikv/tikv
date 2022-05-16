@@ -456,7 +456,7 @@ impl Config {
             ));
         }
 
-        if self.raft_entry_max_size == 0 || self.raft_entry_max_size > ReadableSize::gb(3).0 {
+        if self.raft_entry_max_size.0 == 0 || self.raft_entry_max_size.0 > ReadableSize::gb(3).0 {
             return Err(box_err!(
                 "raft entry max size should be greater than 0 and less than or equal to 3GiB"
             ));
