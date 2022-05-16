@@ -626,6 +626,11 @@ pub struct TestPdClient {
     is_incompatible: bool,
     tso: AtomicUsize,
     trigger_tso_failure: AtomicBool,
+<<<<<<< HEAD
+=======
+    feature_gate: FeatureGate,
+    trigger_leader_info_loss: AtomicBool,
+>>>>>>> 116eb4027... raftstore: check store id before sending wakeup message (#12482)
 }
 
 impl TestPdClient {
@@ -637,6 +642,11 @@ impl TestPdClient {
             is_incompatible,
             tso: AtomicUsize::new(1),
             trigger_tso_failure: AtomicBool::new(false),
+<<<<<<< HEAD
+=======
+            trigger_leader_info_loss: AtomicBool::new(false),
+            feature_gate,
+>>>>>>> 116eb4027... raftstore: check store id before sending wakeup message (#12482)
         }
     }
 
@@ -933,6 +943,10 @@ impl TestPdClient {
         self.trigger_tso_failure.store(true, Ordering::SeqCst);
     }
 
+    pub fn trigger_leader_info_loss(&self) {
+        self.trigger_leader_info_loss.store(true, Ordering::SeqCst);
+    }
+
     pub fn shutdown_store(&self, store_id: u64) {
         match self.cluster.write() {
             Ok(mut c) => {
@@ -1021,8 +1035,17 @@ impl PdClient for TestPdClient {
         let cluster = self.cluster.rl();
         match cluster.get_region_by_id(region_id) {
             Ok(resp) => {
+<<<<<<< HEAD
                 let leader = cluster.leaders.get(&region_id).cloned().unwrap_or_default();
                 Box::new(ok(resp.map(|r| (r, leader))))
+=======
+                let leader = if self.trigger_leader_info_loss.load(Ordering::SeqCst) {
+                    new_peer(0, 0)
+                } else {
+                    cluster.leaders.get(&region_id).cloned().unwrap_or_default()
+                };
+                Box::pin(ok(resp.map(|r| (r, leader))))
+>>>>>>> 116eb4027... raftstore: check store id before sending wakeup message (#12482)
             }
             Err(e) => Box::new(err(e)),
         }

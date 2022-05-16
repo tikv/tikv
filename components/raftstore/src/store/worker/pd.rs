@@ -909,9 +909,150 @@ impl<T: PdClient> Runner<T> {
                         error!("get region failed"; "err" => ?e);
                     }
                 }
+<<<<<<< HEAD
                 Ok(())
             });
         handle.spawn(f);
+=======
+            }
+            if success {
+                info!("succeed to update max timestamp"; "region_id" => region_id);
+            } else {
+                info!(
+                    "updating max timestamp is stale";
+                    "region_id" => region_id,
+                    "initial_status" => initial_status,
+                );
+            }
+        };
+
+        #[cfg(feature = "failpoints")]
+        let delay = (|| {
+            fail_point!("delay_update_max_ts", |_| true);
+            false
+        })();
+        #[cfg(not(feature = "failpoints"))]
+        let delay = false;
+
+        if delay {
+            info!("[failpoint] delay update max ts for 1s"; "region_id" => region_id);
+            let deadline = Instant::now() + Duration::from_secs(1);
+            self.remote
+                .spawn(GLOBAL_TIMER_HANDLE.delay(deadline).compat().then(|_| f));
+        } else {
+            self.remote.spawn(f);
+        }
+    }
+
+    fn handle_query_region_leader(&self, region_id: u64) {
+        let router = self.router.clone();
+        let resp = self.pd_client.get_region_leader_by_id(region_id);
+        let f = async move {
+            match resp.await {
+                Ok(Some((region, leader))) => {
+                    if leader.get_store_id() != 0 {
+                        let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
+                        if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                            error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    error!("get region failed"; "err" => ?e);
+                }
+            }
+        };
+        self.remote.spawn(f);
+    }
+
+    // Notice: CPU records here we collect are all from the outside RPC workloads,
+    // CPU consumption from internal TiKV are not included. Also, since the write
+    // path CPU consumption is not large but the logging is complex, the current
+    // CPU time for the write path only takes into account the lock checking,
+    // which is the read load portion of the write path.
+    // TODO: more accurate CPU consumption of a specified region.
+    fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
+        calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
+    }
+
+    fn handle_report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
+        let resp = self
+            .pd_client
+            .report_min_resolved_ts(store_id, min_resolved_ts);
+        let f = async move {
+            if let Err(e) = resp.await {
+                warn!("report min resolved_ts failed"; "err" => ?e);
+            }
+        };
+        self.remote.spawn(f);
+    }
+
+    fn handle_report_region_buckets(&mut self, region_buckets: BucketStat) {
+        let region_id = region_buckets.meta.region_id;
+        self.merge_buckets(region_buckets);
+        let buckets = self.region_buckets.get_mut(&region_id).unwrap();
+        let now = TiInstant::now();
+        let period = now.duration_since(buckets.last_report_time);
+        buckets.last_report_time = now;
+        let meta = buckets.meta.clone();
+        let resp = self.pd_client.report_region_buckets(buckets, period);
+        let f = async move {
+            if let Err(e) = resp.await {
+                debug!(
+                    "failed to send buckets";
+                    "region_id" => region_id,
+                    "version" => meta.version,
+                    "region_epoch" => ?meta.region_epoch,
+                    "err" => ?e
+                );
+            }
+        };
+        self.remote.spawn(f);
+    }
+
+    fn merge_buckets(&mut self, mut buckets: BucketStat) {
+        use std::cmp::Ordering;
+
+        let region_id = buckets.meta.region_id;
+        self.region_buckets
+            .entry(region_id)
+            .and_modify(|current| {
+                if current.meta.cmp(&buckets.meta) == Ordering::Less {
+                    mem::swap(current, &mut buckets);
+                }
+
+                merge_bucket_stats(
+                    &current.meta.keys,
+                    &mut current.stats,
+                    &buckets.meta.keys,
+                    &buckets.stats,
+                );
+            })
+            .or_insert(buckets);
+    }
+
+    fn update_health_status(&mut self, status: ServingStatus) {
+        self.curr_health_status = status;
+        if let Some(health_service) = &self.health_service {
+            health_service.set_serving_status("", status);
+        }
+    }
+}
+
+fn calculate_region_cpu_records(
+    store_id: u64,
+    records: Arc<RawRecords>,
+    region_cpu_records: &mut HashMap<u64, u32>,
+) {
+    for (tag, record) in &records.records {
+        let record_store_id = tag.store_id;
+        if record_store_id != store_id {
+            continue;
+        }
+        // Reporting a region heartbeat later will clear the corresponding record.
+        *region_cpu_records.entry(tag.region_id).or_insert(0) += record.cpu_time;
+>>>>>>> 116eb4027... raftstore: check store id before sending wakeup message (#12482)
     }
 }
 
