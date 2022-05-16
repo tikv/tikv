@@ -1661,9 +1661,11 @@ where
         let f = async move {
             match resp.await {
                 Ok(Some((region, leader))) => {
-                    let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
-                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                        error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                    if leader.get_store_id() != 0 {
+                        let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
+                        if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                            error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                        }
                     }
                 }
                 Ok(None) => {}

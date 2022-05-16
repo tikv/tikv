@@ -4,6 +4,12 @@ use lazy_static::lazy_static;
 use prometheus::*;
 
 lazy_static! {
+    pub static ref INITIAL_SCAN_REASON: IntCounterVec = register_int_counter_vec!(
+        "tikv_log_backup_initial_scan_reason",
+        "The reason of doing initial scanning",
+        &["reason"]
+    )
+    .unwrap();
     pub static ref HANDLE_EVENT_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_stream_event_handle_duration_sec",
         "The duration of handling an cmd batch.",

@@ -231,6 +231,10 @@ impl ApiV2 {
         Ok(ts)
     }
 
+    pub fn split_ts(key: &[u8]) -> Result<(&[u8], TimeStamp)> {
+        Ok(Key::split_on_ts_for(key)?)
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
@@ -332,6 +336,20 @@ mod tests {
                 assert!(r.is_err(), "case {}: {:?}", idx, r);
             }
         }
+    }
+
+    #[test]
+    fn test_key_split_ts() {
+        let user_key = b"r\0aaaaaaaaaaa";
+        let ts = 10;
+        let key = Key::from_raw(user_key).append_ts(ts.into()).into_encoded();
+
+        let encoded_key = ApiV2::encode_raw_key(user_key, None);
+
+        let (split_key, split_ts) = ApiV2::split_ts(key.as_slice()).unwrap();
+
+        assert_eq!(encoded_key.into_encoded(), split_key.to_vec());
+        assert_eq!(ts, split_ts.into_inner());
     }
 
     #[test]
