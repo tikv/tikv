@@ -129,7 +129,7 @@ pub struct BatchTsoProvider<C: PdClient> {
     pd_client: Arc<C>,
     batch: Arc<RwLock<TsoBatch>>,
     batch_min_size: u32,
-    renew_worker: Worker,
+    causal_ts_worker: Worker,
     renew_interval: Duration,
     renew_request_tx: mpsc::Sender<RenewRequest>,
 }
@@ -154,7 +154,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
             pd_client: pd_client.clone(),
             batch: Arc::new(RwLock::new(TsoBatch::default())),
             batch_min_size,
-            renew_worker: WorkerBuilder::new("causal_ts_batch_tso_worker").create(),
+            causal_ts_worker: WorkerBuilder::new("causal_ts_batch_tso_worker").create(),
             renew_interval,
             renew_request_tx,
         };
@@ -300,7 +300,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         let pd_client = self.pd_client.clone();
         let tso_batch = self.batch.clone();
         let batch_min_size = self.batch_min_size;
-        self.renew_worker.remote().spawn(async move {
+        self.causal_ts_worker.remote().spawn(async move {
             Self::renew_thread(pd_client, tso_batch, batch_min_size, renew_request_rx).await;
         });
 
@@ -322,7 +322,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
 
         // Duration::ZERO means never renew automatically. For test purpose ONLY.
         if self.renew_interval > Duration::ZERO {
-            self.renew_worker
+            self.causal_ts_worker
                 .spawn_interval_async_task(self.renew_interval, task);
         }
         Ok(())
