@@ -1,9 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::default_engine;
-use engine_traits::SeekKey;
-use engine_traits::{Iterable, Iterator, KvEngine};
+use engine_traits::{Iterable, Iterator, KvEngine, SeekKey};
 use panic_hook::recover_safe;
+
+use super::default_engine;
 
 fn iter_empty<E, I, IF>(e: &E, i: IF)
 where

@@ -23,11 +23,10 @@ mod parser;
 mod summable;
 mod util;
 
-pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
-
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{codec::data_type::*, expr::EvalContext};
+
+pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
 
 /// A trait for all single parameter aggregate functions.
 ///
@@ -364,9 +363,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use tidb_query_datatype::EvalType;
+
+    use super::*;
 
     #[test]
     fn test_type_match() {

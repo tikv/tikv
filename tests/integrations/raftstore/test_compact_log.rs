@@ -1,23 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable, CF_RAFT};
 use kvproto::raft_serverpb::RaftApplyState;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
-
-fn get_raft_msg_or_default<M: protobuf::Message + Default>(
-    engines: &Engines<RocksEngine, RocksEngine>,
-    key: &[u8],
-) -> M {
-    engines
-        .kv
-        .get_msg_cf(CF_RAFT, key)
-        .unwrap()
-        .unwrap_or_default()
-}
 
 fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -35,12 +22,24 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
         let value = v.as_bytes();
         cluster.must_put(key, value);
 
-        if i > 100 && check_compacted(&cluster.engines, &before_states, 1) {
+        if i > 100
+            && check_compacted(
+                &cluster.engines,
+                &before_states,
+                1,
+                false, /*must_compacted*/
+            )
+        {
             return;
         }
     }
 
-    panic!("after inserting 1000 entries, compaction is still not finished.");
+    check_compacted(
+        &cluster.engines,
+        &before_states,
+        1,
+        true, /*must_compacted*/
+    );
 }
 
 fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -89,11 +88,23 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
 
-        if i > 100 && check_compacted(&cluster.engines, &before_states, 1) {
+        if i > 100
+            && check_compacted(
+                &cluster.engines,
+                &before_states,
+                1,
+                false, /*must_compacted*/
+            )
+        {
             return;
         }
     }
-    panic!("cluster is not compacted after inserting 200 entries.");
+    check_compacted(
+        &cluster.engines,
+        &before_states,
+        1,
+        true, /*must_compacted*/
+    );
 }
 
 fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -124,12 +135,24 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
 
-        if i >= 200 && check_compacted(&cluster.engines, &before_states, gc_limit * 2) {
+        if i >= 200
+            && check_compacted(
+                &cluster.engines,
+                &before_states,
+                gc_limit * 2,
+                false, /*must_compacted*/
+            )
+        {
             return;
         }
     }
 
-    panic!("compact is expected to be executed multiple times");
+    check_compacted(
+        &cluster.engines,
+        &before_states,
+        gc_limit * 2,
+        true, /*must_compacted*/
+    );
 }
 
 #[test]

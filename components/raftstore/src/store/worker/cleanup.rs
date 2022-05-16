@@ -2,24 +2,26 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use super::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
-use super::compact::{Runner as CompactRunner, Task as CompactTask};
-
-use crate::store::StoreRouter;
 use engine_traits::KvEngine;
 use pd_client::PdClient;
 use tikv_util::worker::Runnable;
 
+use super::{
+    cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
+    compact::{Runner as CompactRunner, Task as CompactTask},
+};
+use crate::store::StoreRouter;
+
 pub enum Task {
     Compact(CompactTask),
-    CleanupSST(CleanupSSTTask),
+    CleanupSst(CleanupSstTask),
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Task::Compact(ref t) => t.fmt(f),
-            Task::CleanupSST(ref t) => t.fmt(f),
+            Task::CleanupSst(ref t) => t.fmt(f),
         }
     }
 }
@@ -30,7 +32,7 @@ where
     S: StoreRouter<E>,
 {
     compact: CompactRunner<E>,
-    cleanup_sst: CleanupSSTRunner<E, C, S>,
+    cleanup_sst: CleanupSstRunner<E, C, S>,
 }
 
 impl<E, C, S> Runner<E, C, S>
@@ -41,7 +43,7 @@ where
 {
     pub fn new(
         compact: CompactRunner<E>,
-        cleanup_sst: CleanupSSTRunner<E, C, S>,
+        cleanup_sst: CleanupSstRunner<E, C, S>,
     ) -> Runner<E, C, S> {
         Runner {
             compact,
@@ -61,7 +63,7 @@ where
     fn run(&mut self, task: Task) {
         match task {
             Task::Compact(t) => self.compact.run(t),
-            Task::CleanupSST(t) => self.cleanup_sst.run(t),
+            Task::CleanupSst(t) => self.cleanup_sst.run(t),
         }
     }
 }

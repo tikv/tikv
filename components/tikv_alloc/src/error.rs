@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error;
-use std::fmt;
+use std::{error, fmt};
 
 #[derive(Debug)]
 pub enum ProfError {

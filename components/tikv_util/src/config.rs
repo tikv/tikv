@@ -1,23 +1,29 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error;
-use std::fmt::{self, Write};
-use std::fs;
-use std::net::{SocketAddrV4, SocketAddrV6};
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
-use std::path::{Path, PathBuf};
-use std::str::{self, FromStr};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
-use std::time::Duration;
+use std::{
+    error::Error,
+    fmt::{self, Write},
+    fs,
+    net::{SocketAddrV4, SocketAddrV6},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+    path::{Path, PathBuf},
+    str::{self, FromStr},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, RwLock, RwLockReadGuard,
+    },
+    time::Duration,
+};
 
-use serde::de::{self, Unexpected, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use online_config::ConfigValue;
+use serde::{
+    de::{self, Unexpected, Visitor},
+    Deserialize, Deserializer, Serialize, Serializer,
+};
 use thiserror::Error;
 
 use super::time::Instant;
 use crate::slow_log;
-use online_config::ConfigValue;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -745,10 +751,12 @@ pub fn check_kernel() -> Vec<ConfigError> {
 
 #[cfg(target_os = "linux")]
 mod check_data_dir {
-    use std::ffi::{CStr, CString};
-    use std::fs;
-    use std::path::Path;
-    use std::sync::Mutex;
+    use std::{
+        ffi::{CStr, CString},
+        fs,
+        path::Path,
+        sync::Mutex,
+    };
 
     use lazy_static::lazy_static;
 
@@ -886,9 +894,8 @@ mod check_data_dir {
 
     #[cfg(test)]
     mod tests {
-        use std::fs::File;
-        use std::io::Write;
-        use std::os::unix::fs::symlink;
+        use std::{fs::File, io::Write, os::unix::fs::symlink};
+
         use tempfile::Builder;
 
         use super::*;
@@ -1152,7 +1159,7 @@ enum TomlLine {
     // the `Keys` from "[`Keys`]"
     Table(String),
     // the `Keys` from "`Keys` = value"
-    KVPair(String),
+    KvPair(String),
     // Comment, empty line, etc.
     Unknown,
 }
@@ -1168,7 +1175,7 @@ impl TomlLine {
         if v.is_empty() || v.len() > 2 || TomlLine::parse_key(v[v.len() - 1].as_str()).is_none() {
             return TomlLine::Unknown;
         }
-        TomlLine::KVPair(v.pop().unwrap())
+        TomlLine::KvPair(v.pop().unwrap())
     }
 
     fn parse(s: &str) -> TomlLine {
@@ -1248,7 +1255,7 @@ impl TomlWriter {
                     self.write(line.as_bytes());
                     self.current_table = keys;
                 }
-                TomlLine::KVPair(keys) => {
+                TomlLine::KvPair(keys) => {
                     match change.remove(&TomlLine::concat_key(&self.current_table, &keys)) {
                         None => self.write(line.as_bytes()),
                         Some(chg) => self.write(TomlLine::encode_kv(&keys, &chg).as_bytes()),
@@ -1551,12 +1558,11 @@ impl RaftDataStateMachine {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::io::Write;
-    use std::path::Path;
+    use std::{fs::File, io::Write, path::Path};
+
+    use tempfile::Builder;
 
     use super::*;
-    use tempfile::Builder;
 
     #[test]
     fn test_readable_size() {
@@ -1929,8 +1935,9 @@ mod tests {
 
     #[test]
     fn test_multi_tracker() {
-        use super::*;
         use std::sync::Arc;
+
+        use super::*;
 
         #[derive(Debug, Default, PartialEq)]
         struct Value {

@@ -1,17 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::{util, RocksEngine, RocksWriteBatch};
-
 use engine_traits::{
-    Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly,
-    RaftLogBatch, RaftLogGCTask, Result, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
+    Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
+    RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, Result, SyncMutable, WriteBatch,
+    WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
+
+use crate::{util, RocksEngine, RocksWriteBatch};
 
 impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -118,6 +118,27 @@ impl RaftEngineReadOnly for RocksEngine {
         Ok(())
     }
 }
+
+impl RaftEngineDebug for RocksEngine {
+    fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Entry) -> Result<bool>,
+    {
+        let start_key = keys::raft_log_key(raft_group_id, 0);
+        let end_key = keys::raft_log_key(raft_group_id, u64::MAX);
+        self.scan(
+            &start_key,
+            &end_key,
+            false, // fill_cache
+            |_, value| {
+                let mut entry = Entry::default();
+                entry.merge_from_bytes(value)?;
+                f(&entry)
+            },
+        )
+    }
+}
+
 impl RocksEngine {
     fn gc_impl(
         &self,
@@ -312,8 +333,8 @@ impl RaftLogBatch for RocksWriteBatch {
         WriteBatch::is_empty(self)
     }
 
-    fn merge(&mut self, src: Self) {
-        WriteBatch::merge(self, src);
+    fn merge(&mut self, src: Self) -> Result<()> {
+        WriteBatch::merge(self, src)
     }
 }
 

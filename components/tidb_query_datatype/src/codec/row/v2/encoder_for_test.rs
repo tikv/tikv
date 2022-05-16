@@ -19,18 +19,20 @@
 //! * null column ids: when flag == 1 (big), id is 4 bytes, otherwise 1 byte
 //! * non-null values offset: when big, offset is 4 bytes, otherwise 2 bytes
 
-use crate::codec::{
-    data_type::ScalarValue,
-    mysql::{decimal::DecimalEncoder, json::JsonEncoder},
-    Error, Result,
-};
+use std::{i16, i32, i8, u16, u32, u8};
 
-use crate::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+use codec::prelude::*;
 use tipb::FieldType;
 
-use crate::expr::EvalContext;
-use codec::prelude::*;
-use std::{i16, i32, i8, u16, u32, u8};
+use crate::{
+    codec::{
+        data_type::ScalarValue,
+        mysql::{decimal::DecimalEncoder, json::JsonEncoder},
+        Error, Result,
+    },
+    expr::EvalContext,
+    FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
+};
 
 const MAX_I8: i64 = i8::MAX as i64;
 const MIN_I8: i64 = i8::MIN as i64;
@@ -220,13 +222,16 @@ impl<T: BufferWriter> ScalarValueEncoder for T {}
 
 #[cfg(test)]
 mod tests {
-    use super::{Column, RowEncoder};
-    use crate::codec::{
-        data_type::ScalarValue,
-        mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
-    };
-    use crate::expr::EvalContext;
     use std::str::FromStr;
+
+    use super::{Column, RowEncoder};
+    use crate::{
+        codec::{
+            data_type::ScalarValue,
+            mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
+        },
+        expr::EvalContext,
+    };
 
     #[test]
     fn test_encode_unsigned() {

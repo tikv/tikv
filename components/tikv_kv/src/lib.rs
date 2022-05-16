@@ -5,15 +5,10 @@
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
 #![feature(min_specialization)]
-#![feature(negative_impls)]
 #![feature(generic_associated_types)]
 
-#[macro_use]
-extern crate derive_more;
 #[macro_use(fail_point)]
 extern crate fail;
-#[macro_use]
-extern crate slog_derive;
 #[macro_use]
 extern crate tikv_util;
 
@@ -21,43 +16,40 @@ mod btree_engine;
 mod cursor;
 pub mod metrics;
 mod mock_engine;
-mod perf_context;
 mod raftstore_impls;
 mod rocksdb_engine;
 mod stats;
 
-use std::cell::UnsafeCell;
-use std::num::NonZeroU64;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{error, ptr, result};
+use std::{cell::UnsafeCell, error, num::NonZeroU64, ptr, result, sync::Arc, time::Duration};
 
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK};
 use engine_traits::{
-    IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
+    CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
+    CF_DEFAULT, CF_LOCK,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::prelude::*;
-use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
-use kvproto::raft_cmdpb;
+use into_other::IntoOther;
+use kvproto::{
+    errorpb::Error as ErrorHeader,
+    kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange},
+    raft_cmdpb,
+};
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
-use tikv_util::{deadline::Deadline, escape};
+use tikv_util::{deadline::Deadline, escape, time::ThreadReadId};
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 
-pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
-pub use self::cursor::{Cursor, CursorBuilder};
-pub use self::mock_engine::{ExpectedWrite, MockEngineBuilder};
-pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot};
-pub use self::stats::{
-    CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
-    StatisticsSummary, TTL_TOMBSTONE,
+pub use self::{
+    btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot},
+    cursor::{Cursor, CursorBuilder},
+    mock_engine::{ExpectedWrite, MockEngineBuilder},
+    rocksdb_engine::{RocksEngine, RocksSnapshot},
+    stats::{
+        CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
+        StatisticsSummary, RAW_VALUE_TOMBSTONE,
+    },
 };
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use into_other::IntoOther;
-use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -89,6 +81,15 @@ impl Modify {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
+            Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
+
+    pub fn key(&self) -> &Key {
+        match self {
+            Modify::Delete(_, ref k) => k,
+            Modify::Put(_, ref k, _) => k,
+            Modify::PessimisticLock(ref k, _) => k,
             Modify::DeleteRange(..) => unreachable!(),
         }
     }
@@ -639,8 +640,9 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
 pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
 pub mod tests {
-    use super::*;
     use tikv_util::codec::bytes;
+
+    use super::*;
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
         engine
@@ -1121,9 +1123,10 @@ pub mod tests {
 
 #[cfg(test)]
 mod unit_tests {
+    use engine_traits::CF_WRITE;
+
     use super::*;
     use crate::raft_cmdpb;
-    use engine_traits::CF_WRITE;
 
     #[test]
     fn test_modifies_to_requests() {

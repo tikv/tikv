@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["server/tcmalloc"]
 jemalloc = ["server/jemalloc"]
 mimalloc = ["server/mimalloc"]
@@ -17,6 +17,12 @@ failpoints = ["server/failpoints"]
 cloud-aws = ["server/cloud-aws"]
 cloud-gcp = ["server/cloud-gcp"]
 cloud-azure = ["server/cloud-azure"]
+test-engine-kv-rocksdb = [
+  "server/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "server/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = ["server/test-engines-rocksdb"]
 test-engines-panic = ["server/test-engines-panic"]
 
@@ -29,5 +35,5 @@ tikv = { path = "../../", default-features = false }
 toml = "0.5"
 
 [build-dependencies]
-time = "0.1"
 cc = "1.0"
+time = "0.1"

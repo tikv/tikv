@@ -1,11 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use collections::HashMap;
 use engine_traits::{Peekable, CF_WRITE};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb, tikvpb::TikvClient};
-use std::sync::Arc;
 use test_raftstore::*;
 use tikv::server::gc_worker::sync_gc;
 use tikv_util::HandyRwLock;

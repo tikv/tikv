@@ -1,27 +1,32 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::slice::{Iter, IterMut};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::{
+    cmp::{min, Ordering},
+    collections::{BinaryHeap, HashMap, HashSet},
+    slice::{Iter, IterMut},
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
-use rand::Rng;
-
-use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb::{self, Peer};
-use kvproto::pdpb::QueryKind;
+use kvproto::{
+    kvrpcpb::KeyRange,
+    metapb::{self, Peer},
+    pdpb::QueryKind,
+};
 use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
-use tikv_util::config::Tracker;
-use tikv_util::{debug, info};
+use rand::Rng;
+use tikv_util::{config::Tracker, debug, info, warn};
 
-use crate::store::metrics::*;
-use crate::store::worker::query_stats::{is_read_query, QueryStats};
-use crate::store::worker::split_config::get_sample_num;
-use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
+use crate::store::{
+    metrics::*,
+    worker::{
+        query_stats::{is_read_query, QueryStats},
+        split_config::get_sample_num,
+        FlowStatistics, SplitConfig, SplitConfigManager,
+    },
+};
 
+const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
 pub const TOP_N: usize = 10;
 
 // LOAD_BASE_SPLIT_EVENT metrics label definitions.
@@ -81,11 +86,15 @@ where
     F: Fn(&mut T) -> &mut Vec<KeyRange>,
 {
     let mut sampled_key_ranges = vec![];
+    // Retain the non-empty key ranges.
+    // `key_ranges_provider` may return an empty key ranges vector, which will cause
+    // the later sampling to fall into a dead loop. So we need to filter it out here.
+    key_ranges_providers
+        .retain_mut(|key_ranges_provider| !key_ranges_getter(key_ranges_provider).is_empty());
     if key_ranges_providers.is_empty() {
         return sampled_key_ranges;
     }
     let prefix_sum = prefix_sum_mut(key_ranges_providers.iter_mut(), |key_ranges_provider| {
-        // NOTICE: `key_ranges_provider` may return an empty key range vector here.
         key_ranges_getter(key_ranges_provider).len()
     });
     // The last sum is the number of all the key ranges.
@@ -103,10 +112,16 @@ where
             });
         return sampled_key_ranges;
     }
+    // To prevent the sampling from falling into a dead loop.
+    let mut sample_loop_count = min(
+        sample_num.saturating_mul(100),
+        DEFAULT_MAX_SAMPLE_LOOP_COUNT,
+    );
     let mut rng = rand::thread_rng();
     // If the number of key ranges is greater than the sample number,
     // we will randomly sample the key ranges.
-    while sampled_key_ranges.len() < sample_num {
+    while sampled_key_ranges.len() < sample_num && sample_loop_count > 0 {
+        sample_loop_count -= 1;
         // Generate a random number in [1, all_key_ranges_num].
         // Starting from 1 is to achieve equal probability.
         // For example, for a `prefix_sum` like [1, 2, 3, 4],
@@ -120,6 +135,12 @@ where
             let j = rng.gen_range(0..key_ranges.len());
             sampled_key_ranges.push(key_ranges.remove(j)); // Sampling without replacement
         }
+    }
+    if sample_loop_count == 0 {
+        warn!("the number of sampled key ranges could be less than the sample_num, the sampling may fall into a dead loop before";
+            "sampled_key_ranges_length" => sampled_key_ranges.len(),
+            "sample_num" => sample_num,
+        );
     }
     sampled_key_ranges
 }
@@ -365,6 +386,12 @@ impl RegionInfo {
 #[derive(Clone, Debug)]
 pub struct ReadStats {
     // RegionID -> RegionInfo
+    // There're three methods could insert a `RegionInfo` into the map:
+    //   1. add_query_num
+    //   2. add_query_num_batch
+    //   3. add_flow
+    // Among these three methods, `add_flow` will not update `key_ranges` of `RegionInfo`,
+    // and due to this, an `RegionInfo` without `key_ranges` may occur. The caller should be aware of this.
     pub region_infos: HashMap<u64, RegionInfo>,
     pub sample_num: usize,
     pub region_buckets: HashMap<u64, BucketStat>,
@@ -630,10 +657,10 @@ impl AutoSplitController {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::store::util::build_key_range;
-    use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
     use txn_types::Key;
+
+    use super::*;
+    use crate::store::{util::build_key_range, worker::split_config::DEFAULT_SAMPLE_NUM};
 
     enum Position {
         Left,
@@ -905,33 +932,34 @@ mod tests {
         hub.flush(qps_stats_vec);
     }
 
-    fn check_sample_length(sample_num: usize, key_ranges: Vec<Vec<KeyRange>>) {
-        for _ in 0..100 {
-            let sampled_key_ranges = sample(sample_num, key_ranges.clone(), |x| x);
-            let all_key_ranges_num = *prefix_sum(key_ranges.iter(), Vec::len).last().unwrap();
-            assert_eq!(
-                sampled_key_ranges.len(),
-                std::cmp::min(sample_num, all_key_ranges_num)
-            );
+    fn check_sample_length(key_ranges: Vec<Vec<KeyRange>>) {
+        for sample_num in 0..=DEFAULT_SAMPLE_NUM {
+            for _ in 0..100 {
+                let sampled_key_ranges = sample(sample_num, key_ranges.clone(), |x| x);
+                let all_key_ranges_num = *prefix_sum(key_ranges.iter(), Vec::len).last().unwrap();
+                assert_eq!(
+                    sampled_key_ranges.len(),
+                    std::cmp::min(sample_num, all_key_ranges_num)
+                );
+            }
         }
     }
 
     #[test]
     fn test_sample_length() {
         // Test the sample_num = key range number.
-        let sample_num = 20;
         let mut key_ranges = vec![];
-        for _ in 0..sample_num {
+        for _ in 0..DEFAULT_SAMPLE_NUM {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
-        check_sample_length(sample_num, key_ranges);
+        check_sample_length(key_ranges);
 
         // Test the sample_num < key range number.
         let mut key_ranges = vec![];
-        for _ in 0..sample_num + 1 {
+        for _ in 0..DEFAULT_SAMPLE_NUM + 1 {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
-        check_sample_length(sample_num, key_ranges);
+        check_sample_length(key_ranges);
 
         let mut key_ranges = vec![];
         let num = 100;
@@ -942,16 +970,16 @@ mod tests {
             }
             key_ranges.push(ranges);
         }
-        check_sample_length(sample_num, key_ranges);
+        check_sample_length(key_ranges);
 
         // Test the sample_num > key range number.
-        check_sample_length(sample_num, vec![vec![build_key_range(b"a", b"b", false)]]);
+        check_sample_length(vec![vec![build_key_range(b"a", b"b", false)]]);
 
         let mut key_ranges = vec![];
-        for _ in 0..sample_num - 1 {
+        for _ in 0..DEFAULT_SAMPLE_NUM - 1 {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
-        check_sample_length(sample_num, key_ranges);
+        check_sample_length(key_ranges);
 
         // Test the empty key range gap.
         // See https://github.com/tikv/tikv/issues/12185 for more details.
@@ -1080,11 +1108,42 @@ mod tests {
             ],
             // Case 4: all empty.
             vec![vec![], vec![], vec![], vec![]],
+            // Case 5: multiple one-length gaps.
+            vec![
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"e", b"f", false),
+                ],
+                vec![build_key_range(b"e", b"f", false)],
+                vec![],
+                vec![build_key_range(b"e", b"f", false)],
+                vec![],
+            ],
         ];
-        for sample_num in 0..=DEFAULT_SAMPLE_NUM {
-            for test_case in test_cases.iter() {
-                check_sample_length(sample_num, test_case.clone());
+        for test_case in test_cases.iter() {
+            check_sample_length(test_case.clone());
+        }
+    }
+
+    #[test]
+    fn test_sample_length_randomly() {
+        let mut rng = rand::thread_rng();
+        let mut test_case = vec![vec![]; DEFAULT_SAMPLE_NUM / 2];
+        for _ in 0..100 {
+            for key_ranges in test_case.iter_mut() {
+                key_ranges.clear();
+                // Make the empty range more likely to appear.
+                if rng.gen_range(0..=1) == 0 {
+                    continue;
+                }
+                for _ in 0..rng.gen_range(1..=5) as usize {
+                    key_ranges.push(build_key_range(b"a", b"b", false));
+                }
             }
+            check_sample_length(test_case.clone());
         }
     }
 

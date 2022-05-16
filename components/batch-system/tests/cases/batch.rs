@@ -1,11 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use batch_system::test_runner::*;
-use batch_system::*;
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
-use std::thread::sleep;
-use std::time::Duration;
+use std::{
+    sync::{atomic::AtomicUsize, Arc},
+    thread::sleep,
+    time::Duration,
+};
+
+use batch_system::{test_runner::*, *};
 use tikv_util::mpsc;
 
 #[test]

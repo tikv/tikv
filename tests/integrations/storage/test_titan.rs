@@ -1,30 +1,34 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    thread,
+    time::Duration,
+};
 
-use engine_rocks::raw::{IngestExternalFileOptions, Writable};
-use engine_rocks::util::get_cf_handle;
-use engine_rocks::util::new_temp_engine;
-use engine_rocks::RocksEngine;
-use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
+use engine_rocks::{
+    raw::{IngestExternalFileOptions, Writable},
+    util::{get_cf_handle, new_temp_engine},
+    Compat, RocksEngine, RocksSnapshot, RocksSstWriterBuilder,
+};
 use engine_traits::{
     CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter, SstWriterBuilder,
     ALL_CFS, CF_DEFAULT, CF_WRITE,
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
-use raftstore::store::RegionSnapshot;
-use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
+use raftstore::store::{apply_sst_cf_file, build_sst_cf_file_list, CfFile, RegionSnapshot};
 use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::TiKvConfig;
-use tikv::storage::mvcc::ScannerBuilder;
-use tikv::storage::txn::Scanner;
-use tikv_util::config::{ReadableDuration, ReadableSize};
-use tikv_util::time::Limiter;
+use tikv::{
+    config::TiKvConfig,
+    storage::{mvcc::ScannerBuilder, txn::Scanner},
+};
+use tikv_util::{
+    config::{ReadableDuration, ReadableSize},
+    time::Limiter,
+};
 use txn_types::{Key, Write, WriteType};
 
 #[test]
@@ -87,7 +91,7 @@ fn test_turnoff_titan() {
     assert!(cluster.pre_start_check().is_err());
 
     configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
-    assert!(cluster.pre_start_check().is_ok());
+    cluster.pre_start_check().unwrap();
     cluster.start().unwrap();
     assert_eq!(cluster.must_get(b"k1"), None);
     for i in cluster.get_node_ids().into_iter() {
@@ -138,7 +142,7 @@ fn test_turnoff_titan() {
             return;
         }
     }
-    assert!(cluster.pre_start_check().is_ok());
+    cluster.pre_start_check().unwrap();
 }
 
 #[test]
@@ -360,26 +364,36 @@ fn test_delete_files_in_range_for_titan() {
     assert_eq!(value, 1);
 
     // Generate a snapshot
-    let default_sst_file_path = path.path().join("default.sst");
-    let write_sst_file_path = path.path().join("write.sst");
     let limiter = Limiter::new(f64::INFINITY);
-    build_sst_cf_file::<RocksEngine>(
-        default_sst_file_path.to_str().unwrap(),
+    let mut cf_file = CfFile::new(
+        CF_DEFAULT,
+        PathBuf::from(path.path().to_str().unwrap()),
+        "default".to_string(),
+        ".sst".to_string(),
+    );
+    build_sst_cf_file_list::<RocksEngine>(
+        &mut cf_file,
         &engines.kv,
         &engines.kv.snapshot(),
-        CF_DEFAULT,
         b"",
         b"{",
+        u64::MAX,
         &limiter,
     )
     .unwrap();
-    build_sst_cf_file::<RocksEngine>(
-        write_sst_file_path.to_str().unwrap(),
+    let mut cf_file_write = CfFile::new(
+        CF_WRITE,
+        PathBuf::from(path.path().to_str().unwrap()),
+        "write".to_string(),
+        ".sst".to_string(),
+    );
+    build_sst_cf_file_list::<RocksEngine>(
+        &mut cf_file_write,
         &engines.kv,
         &engines.kv.snapshot(),
-        CF_WRITE,
         b"",
         b"{",
+        u64::MAX,
         &limiter,
     )
     .unwrap();
@@ -390,18 +404,18 @@ fn test_delete_files_in_range_for_titan() {
         .tempdir()
         .unwrap();
     let engines1 = new_temp_engine(&dir1);
-    apply_sst_cf_file(
-        default_sst_file_path.to_str().unwrap(),
-        &engines1.kv,
-        CF_DEFAULT,
-    )
-    .unwrap();
-    apply_sst_cf_file(
-        write_sst_file_path.to_str().unwrap(),
-        &engines1.kv,
-        CF_WRITE,
-    )
-    .unwrap();
+    let tmp_file_paths = cf_file.tmp_file_paths();
+    let tmp_file_paths = tmp_file_paths
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<&str>>();
+    apply_sst_cf_file(&tmp_file_paths, &engines1.kv, CF_DEFAULT).unwrap();
+    let tmp_file_paths = cf_file_write.tmp_file_paths();
+    let tmp_file_paths = tmp_file_paths
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<&str>>();
+    apply_sst_cf_file(&tmp_file_paths, &engines1.kv, CF_WRITE).unwrap();
 
     // Do scan on other DB.
     let mut r = Region::default();

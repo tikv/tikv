@@ -1,38 +1,48 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Display, Formatter};
-use std::io::{Read, Write};
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    fmt::{self, Display, Formatter},
+    io::{Read, Write},
+    marker::PhantomData,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
-use futures::future::{Future, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::{Stream, StreamExt, TryStreamExt};
-use futures::task::{Context, Poll};
+use engine_traits::KvEngine;
+use file_system::{IOType, WithIOType};
+use futures::{
+    future::{Future, TryFutureExt},
+    sink::SinkExt,
+    stream::{Stream, StreamExt, TryStreamExt},
+    task::{Context, Poll},
+};
 use grpcio::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
     WriteFlags,
 };
-use kvproto::raft_serverpb::{Done, RaftMessage, RaftSnapshotData, SnapshotChunk};
-use kvproto::tikvpb::TikvClient;
+use kvproto::{
+    raft_serverpb::{Done, RaftMessage, RaftSnapshotData, SnapshotChunk},
+    tikvpb::TikvClient,
+};
 use protobuf::Message;
+use raftstore::{
+    router::RaftStoreRouter,
+    store::{SnapEntry, SnapKey, SnapManager, Snapshot},
+};
+use security::SecurityManager;
+use tikv_util::{
+    config::{Tracker, VersionTrack},
+    time::Instant,
+    worker::Runnable,
+    DeferContext,
+};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
-use engine_traits::KvEngine;
-use file_system::{IOType, WithIOType};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use security::SecurityManager;
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::time::Instant;
-use tikv_util::worker::Runnable;
-use tikv_util::DeferContext;
-
-use super::metrics::*;
-use super::{Config, Error, Result};
+use super::{metrics::*, Config, Error, Result};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
@@ -373,6 +383,8 @@ where
             };
             self.snap_mgr.set_speed_limit(limit);
             self.snap_mgr.set_max_total_snap_size(max_total_size);
+            self.snap_mgr
+                .set_max_per_file_size(incoming.max_snapshot_file_raw_size.0);
             info!("refresh snapshot manager config";
             "speed_limit"=> limit,
             "max_total_snap_size"=> max_total_size);

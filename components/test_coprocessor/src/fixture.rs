@@ -1,24 +1,24 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
-
 use std::sync::Arc;
 
 use concurrency_manager::ConcurrencyManager;
-use kvproto::kvrpcpb::{ApiVersion, Context};
-
-use engine_rocks::PerfLevel;
+use kvproto::kvrpcpb::Context;
 use resource_metering::ResourceTagFactory;
 use tidb_query_datatype::codec::Datum;
-use tikv::config::CoprReadPoolConfig;
-use tikv::coprocessor::{readpool_impl, Endpoint};
-use tikv::read_pool::ReadPool;
-use tikv::server::Config;
-use tikv::storage::kv::RocksEngine;
-use tikv::storage::lock_manager::DummyLockManager;
-use tikv::storage::{Engine, TestEngineBuilder, TestStorageBuilder};
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::thread_group::GroupProperties;
+use tikv::{
+    config::CoprReadPoolConfig,
+    coprocessor::{readpool_impl, Endpoint},
+    read_pool::ReadPool,
+    server::Config,
+    storage::{
+        kv::RocksEngine, lock_manager::DummyLockManager, Engine, TestEngineBuilder,
+        TestStorageBuilderApiV1,
+    },
+};
+use tikv_util::{quota_limiter::QuotaLimiter, thread_group::GroupProperties};
+
+use super::*;
 
 #[derive(Clone)]
 pub struct ProductTable(Table);
@@ -79,10 +79,9 @@ pub fn init_data_with_details<E: Engine>(
     commit: bool,
     cfg: &Config,
 ) -> (Store<E>, Endpoint<E>) {
-    let storage =
-        TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {}, ApiVersion::V1)
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
     let mut store = Store::from_storage(storage);
 
     store.begin();
@@ -108,7 +107,6 @@ pub fn init_data_with_details<E: Engine>(
         cfg,
         pool.handle(),
         cm,
-        PerfLevel::EnableCount,
         ResourceTagFactory::new_for_test(),
         Arc::new(QuotaLimiter::default()),
     );

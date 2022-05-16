@@ -1,35 +1,41 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Range;
+
+use api_version::KvFormat;
 use async_trait::async_trait;
 use coprocessor_plugin_api::*;
 use futures::channel::oneshot::Canceled;
 use kvproto::kvrpcpb::Context;
-use std::ops::Range;
 use tikv_util::future::paired_future_callback;
 
-use crate::storage::errors::extract_kv_pairs;
-use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
-use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
+use crate::storage::{
+    self,
+    errors::extract_kv_pairs,
+    kv::{Error as KvError, ErrorInner as KvErrorInner},
+    lock_manager::LockManager,
+    Engine, Storage,
+};
 
 /// Implementation of the [`RawStorage`] trait.
 ///
 /// It wraps TiKV's [`Storage`] into an API that is exposed to coprocessor plugins.
 /// The `RawStorageImpl` should be constructed for every invocation of a [`CoprocessorPlugin`] as
 /// it wraps a [`Context`] that is unique for every request.
-pub struct RawStorageImpl<'a, E: Engine, L: LockManager> {
+pub struct RawStorageImpl<'a, E: Engine, L: LockManager, F: KvFormat> {
     context: Context,
-    storage: &'a Storage<E, L>,
+    storage: &'a Storage<E, L, F>,
 }
 
-impl<'a, E: Engine, L: LockManager> RawStorageImpl<'a, E, L> {
+impl<'a, E: Engine, L: LockManager, F: KvFormat> RawStorageImpl<'a, E, L, F> {
     /// Constructs a new `RawStorageImpl` that wraps a given [`Context`] and [`Storage`].
-    pub fn new(context: Context, storage: &'a Storage<E, L>) -> Self {
+    pub fn new(context: Context, storage: &'a Storage<E, L, F>) -> Self {
         RawStorageImpl { context, storage }
     }
 }
 
 #[async_trait(?Send)]
-impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
+impl<E: Engine, L: LockManager, F: KvFormat> RawStorage for RawStorageImpl<'_, E, L, F> {
     async fn get(&self, key: Key) -> PluginResult<Option<Value>> {
         let ctx = self.context.clone();
 
@@ -202,13 +208,15 @@ impl From<Canceled> for PluginErrorShim {
 
 #[cfg(test)]
 mod test {
+    use api_version::ApiV2;
+    use kvproto::kvrpcpb::{ApiVersion, Context};
+
     use super::*;
     use crate::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
-    use kvproto::kvrpcpb::{ApiVersion, Context};
 
     #[tokio::test]
     async fn test_storage_api() {
-        let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
+        let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager)
             .build()
             .unwrap();
         let ctx = Context {
@@ -244,7 +252,7 @@ mod test {
 
     #[tokio::test]
     async fn test_storage_api_batch() {
-        let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
+        let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager)
             .build()
             .unwrap();
         let ctx = Context {

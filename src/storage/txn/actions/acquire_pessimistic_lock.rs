@@ -1,13 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::mvcc::{
-    metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-    ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
-};
-use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
-use crate::storage::Snapshot;
 use txn_types::{Key, LockType, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteType};
+
+use crate::storage::{
+    mvcc::{
+        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
+        ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
+    },
+    txn::actions::check_data_constraint::check_data_constraint,
+    Snapshot,
+};
 
 /// Acquires pessimistic lock on a single key. Optionally reads the previous value by the way.
 ///
@@ -240,14 +243,16 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 }
 
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::WriteData;
-    use crate::storage::mvcc::{Error as MvccError, MvccReader};
-    use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use txn_types::TimeStamp;
 
+    use super::*;
+    use crate::storage::{
+        kv::WriteData,
+        mvcc::{Error as MvccError, MvccReader},
+        Engine,
+    };
     #[cfg(test)]
     use crate::storage::{
         mvcc::tests::*,

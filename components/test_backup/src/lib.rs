@@ -1,35 +1,41 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::{Path, PathBuf};
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
-use std::{cmp, fs};
+use std::{
+    cmp, fs,
+    path::{Path, PathBuf},
+    sync::*,
+    thread,
+    time::Duration,
+};
 
-use futures::channel::mpsc as future_mpsc;
-use grpcio::{ChannelBuilder, Environment};
-
+use api_version::{dispatch_api_version, KvFormat, RawValue};
 use backup::Task;
 use collections::HashMap;
-use engine_traits::IterOptions;
-use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage_export::make_local_backend;
-use kvproto::brpb::*;
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::TikvClient;
+use futures::channel::mpsc as future_mpsc;
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::{brpb::*, kvrpcpb::*, tikvpb::TikvClient};
 use rand::Rng;
 use test_raftstore::*;
-use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query_common::storage::{IntervalRange, Range};
-use tikv::coprocessor::checksum_crc64_xor;
-use tikv::coprocessor::dag::TiKVStorage;
-use tikv::storage::kv::Engine;
-use tikv::storage::SnapshotStore;
-use tikv::{config::BackupConfig, storage::kv::SnapContext};
-use tikv_util::config::ReadableSize;
-use tikv_util::time::Instant;
-use tikv_util::worker::{LazyWorker, Worker};
-use tikv_util::HandyRwLock;
+use tidb_query_common::storage::{
+    scanner::{RangesScanner, RangesScannerOptions},
+    IntervalRange, Range,
+};
+use tikv::{
+    config::BackupConfig,
+    coprocessor::{checksum_crc64_xor, dag::TiKvStorage},
+    storage::{
+        kv::{Engine, SnapContext},
+        SnapshotStore,
+    },
+};
+use tikv_util::{
+    config::ReadableSize,
+    time::Instant,
+    worker::{LazyWorker, Worker},
+    HandyRwLock,
+};
 use txn_types::TimeStamp;
 
 pub struct TestSuite {
@@ -39,6 +45,7 @@ pub struct TestSuite {
     pub context: Context,
     pub ts: TimeStamp,
     pub bg_worker: Worker,
+    pub api_version: ApiVersion,
 
     _env: Arc<Environment>,
 }
@@ -63,8 +70,8 @@ macro_rules! retry_req {
 }
 
 impl TestSuite {
-    pub fn new(count: usize, sst_max_size: u64) -> TestSuite {
-        let mut cluster = new_server_cluster(1, count);
+    pub fn new(count: usize, sst_max_size: u64, api_version: ApiVersion) -> TestSuite {
+        let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
         configure_for_lease_read(&mut cluster, Some(100), None);
         cluster.run();
@@ -86,7 +93,7 @@ impl TestSuite {
                     ..Default::default()
                 },
                 sim.get_concurrency_manager(*id),
-                ApiVersion::V1,
+                api_version,
             );
             let mut worker = bg_worker.lazy_build(format!("backup-{}", id));
             worker.start(backup_endpoint);
@@ -94,7 +101,16 @@ impl TestSuite {
         }
 
         // Make sure there is a leader.
-        cluster.must_put(b"foo", b"foo");
+        let tmp_value = String::from("foo").into_bytes();
+        let value = dispatch_api_version!(api_version, {
+            let raw_value = RawValue {
+                user_value: tmp_value,
+                expire_ts: None,
+                is_delete: false,
+            };
+            API::encode_raw_value_owned(raw_value)
+        });
+        cluster.must_put(b"foo", &value); // make raw apiv1ttl/apiv2 encode happy.
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
         let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
@@ -104,6 +120,7 @@ impl TestSuite {
         context.set_region_id(region_id);
         context.set_peer(leader);
         context.set_region_epoch(epoch);
+        context.set_api_version(api_version);
 
         let env = Arc::new(Environment::new(1));
         let channel = ChannelBuilder::new(env.clone()).connect(&leader_addr);
@@ -117,6 +134,7 @@ impl TestSuite {
             ts: TimeStamp::zero(),
             _env: env,
             bg_worker,
+            api_version,
         }
     }
 
@@ -134,10 +152,19 @@ impl TestSuite {
 
     pub fn must_raw_put(&self, k: Vec<u8>, v: Vec<u8>, cf: String) {
         let mut request = RawPutRequest::default();
-        request.set_context(self.context.clone());
+        let mut context = self.context.clone();
+        if context.api_version == ApiVersion::V1ttl {
+            context.api_version = ApiVersion::V1;
+        }
+        request.set_context(context);
         request.set_key(k);
         request.set_value(v);
         request.set_cf(cf);
+        let ttl = match self.api_version {
+            ApiVersion::V1 => 0,
+            _ => u64::MAX,
+        };
+        request.set_ttl(ttl);
         let mut response = self.tikv_cli.raw_put(&request).unwrap();
         retry_req!(
             self.tikv_cli.raw_put(&request).unwrap(),
@@ -152,6 +179,27 @@ impl TestSuite {
             response.get_region_error(),
         );
         assert!(response.error.is_empty(), "{:?}", response.get_error());
+    }
+
+    pub fn must_raw_get(&self, k: Vec<u8>, cf: String) -> Vec<u8> {
+        let mut request = RawGetRequest::default();
+        let mut context = self.context.clone();
+        if context.api_version == ApiVersion::V1ttl {
+            context.api_version = ApiVersion::V1;
+        }
+        request.set_context(context);
+        request.set_key(k);
+        request.set_cf(cf);
+        let mut response = self.tikv_cli.raw_get(&request).unwrap();
+        retry_req!(
+            self.tikv_cli.raw_get(&request).unwrap(),
+            !response.has_region_error() && response.error.is_empty(),
+            response,
+            10,   // retry 10 times
+            1000  // 1s timeout
+        );
+        assert!(response.error.is_empty(), "{:?}", response.get_error());
+        response.take_value()
     }
 
     pub fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
@@ -263,6 +311,7 @@ impl TestSuite {
         end_key: Vec<u8>,
         cf: String,
         path: &Path,
+        dst_api_ver: ApiVersion,
     ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
         let mut req = BackupRequest::default();
         req.set_start_key(start_key);
@@ -270,6 +319,7 @@ impl TestSuite {
         req.set_storage_backend(make_local_backend(path));
         req.set_is_raw_kv(true);
         req.set_cf(cf);
+        req.set_dst_api_version(dst_api_ver);
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
@@ -304,7 +354,7 @@ impl TestSuite {
             false,
         );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: TiKVStorage::new(snap_store, false),
+            storage: TiKvStorage::new(snap_store, false),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
             scan_backward_in_range: false,
             is_key_only: false,
@@ -320,7 +370,7 @@ impl TestSuite {
     }
 
     pub fn gen_raw_kv(&self, key_idx: u64) -> (String, String) {
-        (format!("key_{}", key_idx), format!("value_{}", key_idx))
+        (format!("rkey_{}", key_idx), format!("value_{}", key_idx))
     }
 
     pub fn raw_kv_checksum(&self, start: String, end: String, cf: CfName) -> (u64, u64, u64) {
@@ -346,12 +396,32 @@ impl TestSuite {
         if !iter.seek(&start).unwrap() {
             return (0, 0, 0);
         }
+        let digest = crc64fast::Digest::new();
+        let mut checksum: u64 = 0;
         while iter.valid().unwrap() {
+            let key = iter.key();
+            let value = iter.value();
             total_kvs += 1;
-            total_bytes += (iter.key().len() + iter.value().len()) as u64;
+            total_bytes += (key.len() + value.len()) as u64;
+            checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
             iter.next().unwrap();
         }
-        (0, total_kvs, total_bytes)
+        (checksum, total_kvs, total_bytes)
+    }
+
+    pub fn storage_raw_checksum(&self, start: String, end: String) -> (u64, u64, u64) {
+        let mut req = RawChecksumRequest::default();
+        let mut context = self.context.clone();
+        if context.api_version == ApiVersion::V1ttl {
+            context.api_version = ApiVersion::V1;
+        }
+        req.set_context(context);
+        let mut range = KeyRange::default();
+        range.set_start_key(start.into_bytes());
+        range.set_end_key(end.into_bytes());
+        req.set_ranges(protobuf::RepeatedField::from_vec(vec![range]));
+        let response = self.tikv_cli.raw_checksum(&req).unwrap();
+        (response.checksum, response.total_kvs, response.total_bytes)
     }
 }
 

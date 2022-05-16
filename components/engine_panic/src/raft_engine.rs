@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
-use crate::write_batch::PanicWriteBatch;
-use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
+use engine_traits::{Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
+
+use crate::{engine::PanicEngine, write_batch::PanicWriteBatch};
 
 impl RaftEngineReadOnly for PanicEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -27,6 +27,19 @@ impl RaftEngineReadOnly for PanicEngine {
     }
 
     fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
+        panic!()
+    }
+}
+
+impl RaftEngineDebug for PanicEngine {
+    fn scan_entries<F>(&self, _: u64, _: F) -> Result<()>
+    where
+        F: FnMut(&Entry) -> Result<bool>,
+    {
+        panic!()
+    }
+
+    fn dump_all_data(&self, _: u64) -> <Self as RaftEngine>::LogBatch {
         panic!()
     }
 }
@@ -124,7 +137,7 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn merge(&mut self, _: Self) {
+    fn merge(&mut self, _: Self) -> Result<()> {
         panic!()
     }
 }

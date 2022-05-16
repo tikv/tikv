@@ -3,26 +3,28 @@
 mod mock_pubsub;
 mod mock_receiver_server;
 
-pub use mock_receiver_server::MockReceiverServer;
-
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
-use futures::channel::oneshot;
-use futures::{select, FutureExt};
+use futures::{channel::oneshot, select, FutureExt};
 use grpcio::{ChannelBuilder, ClientSStreamReceiver, Environment};
-use kvproto::kvrpcpb::{ApiVersion, Context};
-use kvproto::resource_usage_agent::{
-    ResourceMeteringPubSubClient, ResourceMeteringRequest, ResourceUsageRecord,
+use kvproto::{
+    kvrpcpb::Context,
+    resource_usage_agent::{
+        ResourceMeteringPubSubClient, ResourceMeteringRequest, ResourceUsageRecord,
+    },
 };
+pub use mock_receiver_server::MockReceiverServer;
 use resource_metering::{Config, ResourceTagFactory};
 use tempfile::TempDir;
 use test_util::alloc_port;
-use tikv::config::{ConfigController, TiKvConfig};
-use tikv::storage::lock_manager::DummyLockManager;
-use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder};
+use tikv::{
+    config::{ConfigController, TiKvConfig},
+    storage::{
+        lock_manager::DummyLockManager, RocksEngine, StorageApiV1, TestEngineBuilder,
+        TestStorageBuilderApiV1,
+    },
+};
 use tokio::runtime::{self, Runtime};
 use txn_types::{Key, TimeStamp};
 
@@ -30,7 +32,7 @@ pub struct TestSuite {
     pubsub_server_port: u16,
     receiver_server: Option<MockReceiverServer>,
 
-    storage: Storage<RocksEngine, DummyLockManager>,
+    storage: StorageApiV1<RocksEngine, DummyLockManager>,
     cfg_controller: ConfigController,
     resource_tag_factory: ResourceTagFactory,
 
@@ -82,14 +84,10 @@ impl TestSuite {
         );
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .set_resource_tag_factory(resource_tag_factory.clone())
-        .build()
-        .unwrap();
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+            .set_resource_tag_factory(resource_tag_factory.clone())
+            .build()
+            .unwrap();
 
         let (tx, rx) = unbounded();
 
@@ -120,7 +118,7 @@ impl TestSuite {
         }
     }
 
-    pub fn get_storage(&self) -> Storage<RocksEngine, DummyLockManager> {
+    pub fn get_storage(&self) -> StorageApiV1<RocksEngine, DummyLockManager> {
         self.storage.clone()
     }
 

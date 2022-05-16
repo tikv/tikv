@@ -2,8 +2,10 @@
 
 // #[PerformanceCriticalPath]
 use collections::{HashMap, HashMapEntry};
-use kvproto::metapb;
-use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus, StoreDrAutoSyncStatus};
+use kvproto::{
+    metapb,
+    replication_modepb::{ReplicationMode, ReplicationStatus, StoreDrAutoSyncStatus},
+};
 use tikv_util::info;
 
 /// A registry that maps store to a group.
@@ -189,11 +191,15 @@ impl GlobalReplicationState {
 
 #[cfg(test)]
 mod tests {
+    use std::panic;
+
+    use kvproto::{
+        metapb,
+        replication_modepb::{ReplicationMode, ReplicationStatus},
+    };
+
     use super::*;
     use crate::store::util::new_peer;
-    use kvproto::metapb;
-    use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
-    use std::panic;
 
     fn new_label(key: &str, value: &str) -> metapb::StoreLabel {
         metapb::StoreLabel {

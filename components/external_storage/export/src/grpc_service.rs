@@ -1,15 +1,18 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::{self, ErrorKind};
-use std::sync::Arc;
+use std::{
+    io::{self, ErrorKind},
+    sync::Arc,
+};
 
-use crate::request::{restore_receiver, write_receiver};
 use anyhow::Context;
 use external_storage::request::anyhow_to_io_log_error;
 use grpcio::{self};
 use kvproto::brpb as proto;
 use slog_global::{error, info};
 use tokio::runtime::{Builder, Runtime};
+
+use crate::request::{restore_receiver, write_receiver};
 
 #[derive(Debug)]
 pub struct SocketService {
