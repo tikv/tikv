@@ -99,14 +99,14 @@ impl Config {
     pub fn validate(&mut self) -> Result<()> {
         if self.region_max_size.0 < self.region_split_size.0 {
             info!(
-                "region_max_size {:?} < region_split_size {:?}, adjust region_split_size to 125% region_max_size automatically",
+                "region_max_size {:?} < region_split_size {:?}, adjust region_max_size to 125% region_split_size automatically",
                 self.region_max_size, self.region_split_size,
             );
             self.region_max_size = self.region_split_size / 2 * 3;
         }
         if self.region_max_keys < self.region_split_keys {
             info!(
-                "region_max_keys {:?} < region_split_keys {:?}, adjust region_split_keys to 125% region_max_keys automatically",
+                "region_max_keys {:?} < region_split_keys {:?}, adjust region_max_keys to 125% region_split_keys automatically",
                 self.region_max_keys, self.region_split_keys,
             );
             self.region_max_keys = self.region_split_keys / 2 * 3;
