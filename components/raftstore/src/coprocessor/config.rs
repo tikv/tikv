@@ -3,7 +3,7 @@
 use engine_traits::{perf_level_serde, PerfLevel};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
-use tikv_util::{box_err, config::ReadableSize, worker::Scheduler, info};
+use tikv_util::{box_err, config::ReadableSize, info, worker::Scheduler};
 
 use super::Result;
 use crate::store::SplitCheckTask;
@@ -98,16 +98,16 @@ impl Default for Config {
 impl Config {
     pub fn validate(&mut self) -> Result<()> {
         if self.region_max_size.0 < self.region_split_size.0 {
-            info!("region_max_size {:?} < region_split_size {:?}, adjust region_split_size to 125% region_max_size automatically",
-                self.region_max_size,
-                self.region_split_size,
+            info!(
+                "region_max_size {:?} < region_split_size {:?}, adjust region_split_size to 125% region_max_size automatically",
+                self.region_max_size, self.region_split_size,
             );
             self.region_max_size = self.region_split_size / 2 * 3;
         }
         if self.region_max_keys < self.region_split_keys {
-            info!("region_max_keys {:?} < region_split_keys {:?}, adjust region_split_keys to 125% region_max_keys automatically",
-                self.region_max_keys,
-                self.region_split_keys,
+            info!(
+                "region_max_keys {:?} < region_split_keys {:?}, adjust region_split_keys to 125% region_max_keys automatically",
+                self.region_max_keys, self.region_split_keys,
             );
             self.region_max_keys = self.region_split_keys / 2 * 3;
         }
