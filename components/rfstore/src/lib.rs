@@ -8,6 +8,9 @@
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+#[cfg(test)]
+extern crate test;
+
 pub mod errors;
 pub mod mvcc;
 pub mod router;
