@@ -153,9 +153,11 @@ export CARGO_BUILD_PIPELINING=true
 # Compiler gave us the following error message when using an older version of gcc on
 # aarch64 architecture and TIKV_BUILD_STD=1:
 #     .../atomic.rs: undefined reference to __aarch64_xxx
-# This is a temporary workaround. See: https://github.com/rust-lang/rust/issues/93166
+# This is a temporary workaround.
+# See: https://github.com/rust-lang/rust/issues/93166
+#      https://bugzilla.redhat.com/show_bug.cgi?id=1830472
 ifeq ($(TIKV_BUILD_RUSTC_TARGET),"aarch64-unknown-linux-gnu")
-export RUSTFLAGS := $(RUSTFLAGS) -Ctarget-feature=-outline-atomics
+export CFLAGS := $(CFLAGS) -mno-outline-atomics
 endif
 
 # Almost all the rules in this Makefile are PHONY
