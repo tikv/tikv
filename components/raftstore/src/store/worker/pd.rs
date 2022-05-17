@@ -1065,30 +1065,30 @@ where
             read_stat.set_query_stats(query_stats.0);
             report_peers.insert(*region_id, read_stat);
         }
+
+        // We explicitly disable these code from TiKV
+        // let used_size = self.snap_mgr.get_total_snap_size().unwrap()
+        //     + store_info
+        //         .kv_engine
+        //         .get_engine_used_size()
+        //         .expect("kv engine used size")
+        //     + store_info
+        //         .raft_engine
+        //         .get_engine_size()
+        //         .expect("raft engine used size");
+        // stats.set_used_size(used_size);
+        //
+        // let mut available = capacity.checked_sub(used_size).unwrap_or_default();
+        // // We only care about rocksdb SST file size, so we should check disk available here.
+        // available = cmp::min(available, disk_stats.available_space());
+
         let capacity = store_stats.fs_stats.capacity_size;
         let available = store_stats.fs_stats.avail_size;
-        stats.set_used_size(store_stats.fs_stats.used_size);
-        stats.set_capacity(capacity);
-
-        let used_size = self.snap_mgr.get_total_snap_size().unwrap()
-            + store_info
-                .kv_engine
-                .get_engine_used_size()
-                .expect("kv engine used size")
-            + store_info
-                .raft_engine
-                .get_engine_size()
-                .expect("raft engine used size");
-        stats.set_used_size(used_size);
-
-        let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-        // We only care about rocksdb SST file size, so we should check disk available here.
-        available = cmp::min(available, disk_stats.available_space());
-
         if available == 0 {
             warn!("no available space");
         }
-
+        stats.set_used_size(store_stats.fs_stats.used_size);
+        stats.set_capacity(capacity);
         stats.set_available(available);
         stats.set_bytes_written(store_stats.engine_bytes_written);
         stats.set_keys_written(store_stats.engine_keys_written);
