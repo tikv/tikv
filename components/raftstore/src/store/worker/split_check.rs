@@ -234,18 +234,27 @@ where
             buckets.push(bucket_entry);
         }
 
-        if !buckets.is_empty() {
-            return self.router.send(
-                region.get_id(),
-                CasualMessage::RefreshRegionBuckets {
-                    region_epoch: region.get_region_epoch().clone(),
-                    buckets,
-                    bucket_ranges,
-                    cb: Callback::None,
-                },
-            );
-        }
+        self.refresh_region_buckets(buckets, region, bucket_ranges); 
         Ok(())
+    }
+
+    fn refresh_region_buckets(&self, mut buckets: Vec<Bucket>, region: &Region, bucket_ranges: Option<Vec<BucketRange>>) {
+        // strip timestamp of keys
+        for bucket in &mut buckets {
+            for key in &mut bucket.keys {
+                *key = strip_timestamp_if_exists(key.clone());
+            }
+            bucket.keys.dedup();
+        }
+        let _ = self.router.send(
+            region.get_id(),
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch: region.get_region_epoch().clone(),
+                buckets,
+                bucket_ranges,
+                cb: Callback::None,
+            },
+        );
     }
 
     /// Checks a Region with split and bucket checkers to produce split keys and buckets keys and generates split admin command.
@@ -394,8 +403,7 @@ where
                     if bucket_range_list.is_empty() {
                         bucket_size += e.entry_size() as u64;
                         if bucket_size >= host.region_bucket_size() {
-                            let origin_key_no_ts = strip_timestamp_if_exists(origin_key.to_vec());
-                            bucket.keys.push(origin_key_no_ts);
+                            bucket.keys.push(origin_key.to_vec());
                             bucket.size += bucket_size;
                             bucket_size = 0;
                         }
@@ -418,12 +426,7 @@ where
                             // e.key() is between bucket_range_list[bucket_range_idx].0, bucket_range_list[bucket_range_idx].1
                             bucket_size += e.entry_size() as u64;
                             if bucket_size >= host.region_bucket_size() {
-                                let origin_key_no_ts = strip_timestamp_if_exists(origin_key.to_vec());
-                                if bucket.keys.is_empty()
-                                    || bucket.keys[bucket.keys.len() - 1] != origin_key_no_ts
-                                {
-                                    bucket.keys.push(origin_key_no_ts);
-                                }
+                                bucket.keys.push(origin_key.to_vec());
                                 bucket.size += bucket_size;
                                 bucket_size = 0;
                             }
@@ -467,15 +470,7 @@ where
         })?;
 
         if host.enable_region_bucket() {
-            let _ = self.router.send(
-                region.get_id(),
-                CasualMessage::RefreshRegionBuckets {
-                    region_epoch: region.get_region_epoch().clone(),
-                    buckets,
-                    bucket_ranges,
-                    cb: Callback::None,
-                },
-            );
+            self.refresh_region_buckets(buckets, region, bucket_ranges);
         }
         timer.observe_duration();
 

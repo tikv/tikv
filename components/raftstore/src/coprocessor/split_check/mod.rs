@@ -15,7 +15,7 @@ pub use self::{
     table::TableCheckObserver,
 };
 use super::{
-    config::Config, error::Result, split_observer::strip_timestamp_if_exists, Bucket, KeyEntry,
+    config::Config, error::Result, Bucket, KeyEntry,
     ObserverContext, SplitChecker,
 };
 
@@ -102,16 +102,12 @@ impl<'a, E> Host<'a, E> {
             );
             return bucket_checker
                 .approximate_split_keys(region, engine)
-                .map(|keys| {
-                    let mut bucket_keys: Vec<Vec<u8>> = keys
+                .map(|keys| Bucket {
+                    keys: keys
                         .into_iter()
-                        .map(|k| strip_timestamp_if_exists(::keys::origin_key(&k).to_vec()))
-                        .collect();
-                    bucket_keys.dedup();
-                    Bucket {
-                        keys: bucket_keys,
-                        size: region_size,
-                    }
+                        .map(|k| ::keys::origin_key(&k).to_vec())
+                        .collect(),
+                    size: region_size,
                 });
         }
         Ok(Bucket {
