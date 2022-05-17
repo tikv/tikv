@@ -14,10 +14,7 @@ pub use self::{
     size::{get_region_approximate_size, SizeCheckObserver},
     table::TableCheckObserver,
 };
-use super::{
-    config::Config, error::Result, Bucket, KeyEntry,
-    ObserverContext, SplitChecker,
-};
+use super::{config::Config, error::Result, Bucket, KeyEntry, ObserverContext, SplitChecker};
 
 pub struct Host<'a, E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,

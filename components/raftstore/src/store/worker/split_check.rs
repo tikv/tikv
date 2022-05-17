@@ -234,11 +234,16 @@ where
             buckets.push(bucket_entry);
         }
 
-        self.refresh_region_buckets(buckets, region, bucket_ranges); 
+        self.refresh_region_buckets(buckets, region, bucket_ranges);
         Ok(())
     }
 
-    fn refresh_region_buckets(&self, mut buckets: Vec<Bucket>, region: &Region, bucket_ranges: Option<Vec<BucketRange>>) {
+    fn refresh_region_buckets(
+        &self,
+        mut buckets: Vec<Bucket>,
+        region: &Region,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    ) {
         // strip timestamp of keys
         for bucket in &mut buckets {
             for key in &mut bucket.keys {
