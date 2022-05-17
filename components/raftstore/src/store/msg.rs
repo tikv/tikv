@@ -664,6 +664,8 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         create: metapb::Region,
     },
+
+    GcSnapshotFinish,
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -696,6 +698,7 @@ where
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => {
                 write!(fmt, "UnsafeRecoveryCreatePeer")
             }
+            StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
         }
     }
 }

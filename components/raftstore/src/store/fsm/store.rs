@@ -41,7 +41,7 @@ use kvproto::{
     raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
-use pd_client::{FeatureGate, PdClient};
+use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
 use resource_metering::CollectorRegHandle;
@@ -90,9 +90,10 @@ use crate::{
         util::{is_initial_msg, RegionReadProgressRegistry},
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
-            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-            RaftlogFetchRunner, RaftlogFetchTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate,
-            RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask, SplitCheckTask,
+            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
+            GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogFetchRunner, RaftlogFetchTask,
+            RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
+            RegionRunner, RegionTask, SplitCheckTask,
         },
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
@@ -105,6 +106,7 @@ type Key = Vec<u8>;
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
+pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
@@ -522,7 +524,7 @@ where
         self.tick_batch[PeerTick::ReactivateMemoryLock as usize].wait_duration =
             self.cfg.reactive_memory_lock_tick_interval.0;
         self.tick_batch[PeerTick::ReportBuckets as usize].wait_duration =
-            self.cfg.check_leader_lease_interval.0;
+            self.cfg.report_region_buckets_tick_interval.0;
     }
 }
 
@@ -706,6 +708,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.on_unsafe_recovery_create_peer(create);
                     // syncer's destruction triggers the next step.
                 }
+                StoreMsg::GcSnapshotFinish => self.register_snap_mgr_gc_tick(),
             }
         }
     }
@@ -804,6 +807,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
                 _ => {}
             }
+            self.poll_ctx
+                .snap_mgr
+                .set_max_per_file_size(incoming.max_snapshot_file_raw_size.0);
             self.poll_ctx.cfg = incoming.clone();
             self.poll_ctx.raft_metrics.waterfall_metrics = self.poll_ctx.cfg.waterfall_metrics;
             self.poll_ctx.update_ticks_timeout();
@@ -1434,6 +1440,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cfg.value().snap_generator_pool_size,
             workers.coprocessor_host.clone(),
             self.router(),
+            Some(Arc::clone(&pd_client)),
         );
         let region_scheduler = workers
             .region_worker
@@ -1479,7 +1486,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             Arc::clone(&importer),
             Arc::clone(&pd_client),
         );
-        let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
+        let gc_snapshot_runner = GcSnapshotRunner::new(
+            meta.get_id(),
+            self.router.clone(), // RaftRouter
+            mgr.clone(),
+        );
+        let cleanup_runner =
+            CleanupRunner::new(compact_runner, cleanup_sst_runner, gc_snapshot_runner);
         let cleanup_scheduler = workers
             .cleanup_worker
             .start("cleanup-worker", cleanup_runner);
@@ -2357,86 +2370,25 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.register_pd_store_heartbeat_tick();
     }
 
-    fn handle_snap_mgr_gc(&mut self) -> Result<()> {
-        fail_point!("peer_2_handle_snap_mgr_gc", self.fsm.store.id == 2, |_| Ok(
-            ()
-        ));
-        let snap_keys = self.ctx.snap_mgr.list_idle_snap()?;
-        if snap_keys.is_empty() {
-            return Ok(());
-        }
-        let (mut last_region_id, mut keys) = (0, vec![]);
-        let schedule_gc_snap = |region_id: u64, snaps| -> Result<()> {
-            debug!(
-                "schedule snap gc";
-                "store_id" => self.fsm.store.id,
-                "region_id" => region_id,
-            );
-
-            let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
-            match self.ctx.router.send(region_id, gc_snap) {
-                Ok(()) => Ok(()),
-                Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutdown() => Ok(()),
-                Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
-                    CasualMessage::GcSnap { snaps },
-                ))) => {
-                    // The snapshot exists because MsgAppend has been rejected. So the
-                    // peer must have been exist. But now it's disconnected, so the peer
-                    // has to be destroyed instead of being created.
-                    info!(
-                        "region is disconnected, remove snaps";
-                        "region_id" => region_id,
-                        "snaps" => ?snaps,
-                    );
-                    for (key, is_sending) in snaps {
-                        let snap = match self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending) {
-                            Ok(snap) => snap,
-                            Err(e) => {
-                                error!(%e;
-                                    "failed to load snapshot";
-                                    "snapshot" => ?key,
-                                );
-                                continue;
-                            }
-                        };
-                        self.ctx
-                            .snap_mgr
-                            .delete_snapshot(&key, snap.as_ref(), false);
-                    }
-                    Ok(())
-                }
-                Err(TrySendError::Full(_)) => Ok(()),
-                Err(TrySendError::Disconnected(_)) => unreachable!(),
-            }
-        };
-        for (key, is_sending) in snap_keys {
-            if last_region_id == key.region_id {
-                keys.push((key, is_sending));
-                continue;
-            }
-
-            if !keys.is_empty() {
-                schedule_gc_snap(last_region_id, keys)?;
-                keys = vec![];
-            }
-
-            last_region_id = key.region_id;
-            keys.push((key, is_sending));
-        }
-        if !keys.is_empty() {
-            schedule_gc_snap(last_region_id, keys)?;
-        }
-        Ok(())
-    }
-
     fn on_snap_mgr_gc(&mut self) {
-        if let Err(e) = self.handle_snap_mgr_gc() {
-            error!(?e;
-                "handle gc snap failed";
+        // refresh multi_snapshot_files enable flag
+        self.ctx.snap_mgr.set_enable_multi_snapshot_files(
+            self.ctx
+                .feature_gate
+                .can_enable(MULTI_FILES_SNAPSHOT_FEATURE),
+        );
+
+        if let Err(e) = self
+            .ctx
+            .cleanup_scheduler
+            .schedule(CleanupTask::GcSnapshot(GcSnapshotTask::GcSnapshot))
+        {
+            error!(
+                "schedule to delete ssts failed";
                 "store_id" => self.fsm.store.id,
+                "err" => ?e,
             );
         }
-        self.register_snap_mgr_gc_tick();
     }
 
     fn on_compact_lock_cf(&mut self) {

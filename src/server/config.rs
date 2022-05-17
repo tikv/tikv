@@ -4,7 +4,7 @@ use std::{cmp, i32, isize, sync::Arc, time::Duration};
 
 use collections::HashMap;
 use engine_traits::{perf_level_serde, PerfLevel};
-use grpcio::CompressionAlgorithms;
+use grpcio::{CompressionAlgorithms, ResourceQuota};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 pub use raftstore::store::Config as RaftStoreConfig;
 use regex::Regex;
@@ -105,7 +105,6 @@ pub struct Config {
     pub grpc_concurrent_stream: i32,
     #[online_config(skip)]
     pub grpc_raft_conn_num: usize,
-    #[online_config(skip)]
     pub grpc_memory_pool_quota: ReadableSize,
     #[online_config(skip)]
     pub grpc_stream_initial_window_size: ReadableSize,
@@ -321,6 +320,10 @@ impl Config {
                 "concurrent-recv-snap-limit",
                 self.concurrent_recv_snap_limit,
             ),
+            (
+                "grpc-memory-pool-quota",
+                self.grpc_memory_pool_quota.0 as usize,
+            ),
         ];
         for (label, value) in non_zero_entries {
             if value == 0 {
@@ -385,11 +388,23 @@ impl Config {
 pub struct ServerConfigManager {
     tx: Scheduler<SnapTask>,
     config: Arc<VersionTrack<Config>>,
+    grpc_mem_quota: ResourceQuota,
 }
 
+unsafe impl Send for ServerConfigManager {}
+unsafe impl Sync for ServerConfigManager {}
+
 impl ServerConfigManager {
-    pub fn new(tx: Scheduler<SnapTask>, config: Arc<VersionTrack<Config>>) -> ServerConfigManager {
-        ServerConfigManager { tx, config }
+    pub fn new(
+        tx: Scheduler<SnapTask>,
+        config: Arc<VersionTrack<Config>>,
+        grpc_mem_quota: ResourceQuota,
+    ) -> ServerConfigManager {
+        ServerConfigManager {
+            tx,
+            config,
+            grpc_mem_quota,
+        }
     }
 }
 
@@ -398,6 +413,14 @@ impl ConfigManager for ServerConfigManager {
         {
             let change = c.clone();
             self.config.update(move |cfg| cfg.update(change));
+            if let Some(value) = c.get("grpc_memory_pool_quota") {
+                let mem_quota: ReadableSize = value.clone().into();
+                // the resize is done inplace indeed, but grpc-rs's api need self, so we just
+                // clone it here, but this no extra side effect here.
+                self.grpc_mem_quota
+                    .clone()
+                    .resize_memory(mem_quota.0 as usize);
+            }
             if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
             }
@@ -462,6 +485,10 @@ mod tests {
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_recursion_limit = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.grpc_memory_pool_quota = ReadableSize::mb(0);
         assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();

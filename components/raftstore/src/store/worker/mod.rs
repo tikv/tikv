@@ -2,6 +2,7 @@
 
 mod check_leader;
 mod cleanup;
+mod cleanup_snapshot;
 mod cleanup_sst;
 mod compact;
 mod consistency_check;
@@ -20,6 +21,7 @@ mod split_controller;
 pub use self::{
     check_leader::{Runner as CheckLeaderRunner, Task as CheckLeaderTask},
     cleanup::{Runner as CleanupRunner, Task as CleanupTask},
+    cleanup_snapshot::{Runner as GcSnapshotRunner, Task as GcSnapshotTask},
     cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
     compact::{Runner as CompactRunner, Task as CompactTask},
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
