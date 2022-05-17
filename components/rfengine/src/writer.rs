@@ -12,7 +12,7 @@ use std::{
 use bytes::BufMut;
 use file_system::open_direct_file;
 
-use crate::*;
+use crate::{write_batch::RegionBatch, *};
 
 pub const BATCH_HEADER_SIZE: usize = 12;
 pub(crate) const ALIGN_SIZE: usize = 4096;

@@ -18,6 +18,7 @@ mod log_batch;
 mod metrics;
 pub mod traits;
 pub mod worker;
+mod write_batch;
 pub mod writer;
 
 pub use engine::*;
@@ -26,4 +27,5 @@ use load::*;
 use metrics::*;
 pub use traits::*;
 use worker::*;
+pub use write_batch::WriteBatch;
 pub use writer::*;
