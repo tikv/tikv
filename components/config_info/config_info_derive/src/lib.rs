@@ -210,15 +210,19 @@ fn build_encoder_field(
 
     let convert_field = |l: Lit| {
         let converted = match l {
-            Lit::Int(i) => {
-                // always treat int value as i64
-                let typed_value = LitInt::new(&format!("{}i64", i.base10_digits()), i.span());
-                Lit::Int(typed_value)
+            Lit::Int(mut i) => {
+                if i.suffix().is_empty() {
+                    // always treat untyped int value as i64
+                    i = LitInt::new(&format!("{}i64", i.base10_digits()), i.span())
+                };
+                Lit::Int(i)
             }
-            Lit::Float(f) => {
-                // always treat float value as i64
-                let typed_value = LitFloat::new(&format!("{}f64", f.base10_digits()), f.span());
-                Lit::Float(typed_value)
+            Lit::Float(mut f) => {
+                if f.suffix().is_empty() {
+                    // always treat untyped float value as f64
+                    f = LitFloat::new(&format!("{}f64", f.base10_digits()), f.span());
+                };
+                Lit::Float(f)
             }
             l => l,
         };
