@@ -141,7 +141,7 @@ mod tests {
     };
     use crate::{
         coprocessor::{Config, CoprocessorHost},
-        store::{BucketRange, SplitCheckRunner, SplitCheckTask},
+        store::{BucketRange, CasualMessage, SplitCheckRunner, SplitCheckTask},
     };
 
     #[test]
@@ -307,6 +307,114 @@ mod tests {
         ));
 
         must_generate_buckets(&rx, &exp_bucket_keys);
+    }
+
+    #[test]
+    fn test_generate_region_bucket_with_deleting_data() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::default();
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| {
+                let cf_opts = ColumnFamilyOptions::new();
+                CFOptions::new(cf, cf_opts)
+            })
+            .collect();
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: ReadableSize(BUCKET_NUMBER_LIMIT as u64),
+            enable_region_bucket: true,
+            region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
+            ..Default::default()
+        };
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+
+        // so bucket key will be all these keys
+        let mut exp_bucket_keys = vec![];
+        for i in 0..11 {
+            let k = format!("{:04}", i).into_bytes();
+            exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            false,
+            CheckPolicy::Scan,
+            None,
+        ));
+        must_generate_buckets(&rx, &exp_bucket_keys);
+
+        exp_bucket_keys.clear();
+
+        // use non-existing bucket-range to simulate deleted data
+        // [0001,0002] [00032, 00035], [0004,0006], [0012, 0015], [0016, 0017]
+        //  non-empty       empty         non-empty     empty       empty
+        let mut starts = vec![format!("{:04}", 1).into_bytes()];
+        let mut ends = vec![format!("{:04}", 2).into_bytes()];
+        starts.push(format!("{:05}", 32).into_bytes());
+        ends.push(format!("{:05}", 35).into_bytes());
+        starts.push(format!("{:04}", 4).into_bytes());
+        ends.push(format!("{:04}", 6).into_bytes());
+        starts.push(format!("{:04}", 12).into_bytes());
+        ends.push(format!("{:04}", 15).into_bytes());
+        starts.push(format!("{:04}", 16).into_bytes());
+        ends.push(format!("{:04}", 17).into_bytes());
+        let mut bucket_range_list = vec![BucketRange(
+            Key::from_raw(&starts[0]).as_encoded().clone(),
+            Key::from_raw(&ends[0]).as_encoded().clone(),
+        )];
+        for i in 1..starts.len() {
+            bucket_range_list.push(BucketRange(
+                Key::from_raw(&starts[i]).as_encoded().clone(),
+                Key::from_raw(&ends[i]).as_encoded().clone(),
+            ))
+        }
+
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            false,
+            CheckPolicy::Scan,
+            Some(bucket_range_list),
+        ));
+
+        loop {
+            if let Ok((
+                _,
+                CasualMessage::RefreshRegionBuckets {
+                    region_epoch: _,
+                    buckets,
+                    bucket_ranges,
+                    ..
+                },
+            )) = rx.try_recv()
+            {
+                assert_eq!(buckets.len(), bucket_ranges.unwrap().len());
+                assert_eq!(buckets.len(), 5);
+                for i in 0..5 {
+                    if i == 0 || i == 2 {
+                        assert!(!buckets[i].keys.is_empty());
+                        assert!(buckets[i].size > 0);
+                    } else {
+                        assert!(buckets[i].keys.is_empty());
+                        assert_eq!(buckets[i].size, 0);
+                    }
+                }
+                break;
+            }
+        }
     }
 
     #[test]

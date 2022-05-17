@@ -71,7 +71,7 @@ pub const SPLIT_KEYS: u64 = 960000;
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
-pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(128);
+pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(96);
 
 pub const DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO: f64 = 0.33;
 
