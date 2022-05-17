@@ -1187,7 +1187,6 @@ where
                                 router.clone(),
                             );
                             for region in plan.get_force_leader().get_enter_force_leaders() {
-                                info!("Unsafe recovery, forcibly assign the peer in this store to be the leader"; "region" => region);
                                 if let Err(e) = router.significant_send(
                                     *region,
                                     SignificantMsg::EnterForceLeaderState {
@@ -1204,7 +1203,6 @@ where
                                 router.clone(),
                             );
                             for create in plan.take_creates().into_iter() {
-                                info!("Unsafe recovery, asked to create region"; "region" => ?create);
                                 if let Err(e) =
                                     router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
                                         syncer: syncer.clone(),
@@ -1215,7 +1213,6 @@ where
                                 }
                             }
                             for delete in plan.take_tombstones().into_iter() {
-                                info!("Unsafe recovery, asked to delete peer"; "peer" => delete);
                                 if let Err(e) = router.significant_send(
                                     delete,
                                     SignificantMsg::UnsafeRecoveryDestroy(syncer.clone()),
@@ -1224,7 +1221,6 @@ where
                                 }
                             }
                             for demote in plan.take_demotes().into_iter() {
-                                info!("Unsafe recovery, required to demote failed peers"; "demotion" => ?demote);
                                 if let Err(e) = router.significant_send(
                                     demote.get_region_id(),
                                     SignificantMsg::UnsafeRecoveryDemoteFailedVoters {

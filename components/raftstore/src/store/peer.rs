@@ -538,7 +538,6 @@ pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
     report_id: u64,
     exit_force_leader_before_reporting: bool,
 ) {
-    info!("Unsafe recovery, preparing report");
     if exit_force_leader_before_reporting {
         router.broadcast_normal(|| PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState));
     }
@@ -555,7 +554,7 @@ impl UnsafeRecoveryForceLeaderSyncer {
     pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
         let thread_safe_router = Mutex::new(router);
         let inner = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, plan execution finished.");
+            info!("Unsafe recovery, force leader finished.");
             let router_ptr = thread_safe_router.lock().unwrap();
             start_unsafe_recovery_report(&*router_ptr, report_id, false);
         }));
@@ -643,7 +642,7 @@ impl UnsafeRecoveryFillOutReportSyncer {
         let reports = Arc::new(Mutex::new(vec![]));
         let reports_clone = reports.clone();
         let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, scheduling a store report");
+            info!("Unsafe recovery, peer reports collected");
             let mut store_report = pdpb::StoreReport::default();
             {
                 let reports_ptr = reports_clone.lock().unwrap();

@@ -882,13 +882,6 @@ where
         } else {
             self.fsm.peer.raft_group.raft.raft_log.committed
         };
-        info!(
-            "Unsafe recovery wait apply";
-            "region_id" => self.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-            "force_leader" => self.fsm.peer.force_leader.is_some(),
-            "target_index" => target_index,
-        );
 
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
             target_index,
@@ -900,11 +893,6 @@ where
     }
 
     fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
-        info!(
-            "Unsafe recovery, filling out peer report.";
-            "region" => ?self.region(),
-            "force_leader" => self.fsm.peer.force_leader.is_some()
-        );
         let mut self_report = pdpb::PeerReport::default();
         self_report.set_raft_state(self.fsm.peer.get_store().raft_state().clone());
         let mut region_local_state = RegionLocalState::default();
@@ -1998,7 +1986,7 @@ where
                         if !self.fsm.peer.is_force_leader() {
                             error!(
                                 "Unsafe recovery, lost forced leadership after exiting joint state";
-                                "region" => ?self.region(),
+                                "region_id" => self.region().get_id(),
                             );
                             return;
                         }
@@ -2010,7 +1998,10 @@ where
                         );
                     } else {
                         if self.fsm.peer.in_joint_state() {
-                            info!("Unsafe recovery, exiting joint state"; "region" => ?self.region());
+                            info!(
+                                "Unsafe recovery, exiting joint state";
+                                "region_id" => self.region().get_id()
+                            );
                             self.propose_raft_command_internal(
                                 exit_joint_request(self.region(), &self.fsm.peer.peer),
                                 Callback::<EK::Snapshot>::write(Box::new(|resp| {

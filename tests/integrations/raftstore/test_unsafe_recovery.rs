@@ -10,7 +10,7 @@ use raftstore::store::util::find_peer;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 
-fn confirm_quorum_is_lost(cluster: &mut Cluster<ServerCluster>, region: &metapb::Region) {
+fn confirm_quorum_is_lost<T: Simulator>(cluster: &mut Cluster<T>, region: &metapb::Region) {
     let put = new_put_cmd(b"k2", b"v2");
     let req = new_request(
         region.get_id(),
@@ -388,23 +388,17 @@ fn test_force_leader_three_nodes() {
 
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"k9");
-    let mut region = cluster.get_region(b"k2");
+    let region = cluster.get_region(b"k2");
     let peer_on_store3 = find_peer(&region, 3).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store3.clone());
 
     cluster.stop_node(2);
     cluster.stop_node(3);
 
-    let put = new_put_cmd(b"k2", b"v2");
-    let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
     // quorum is lost, can't propose command successfully.
-    assert!(
-        cluster
-            .call_command_on_leader(req, Duration::from_millis(10))
-            .is_err()
-    );
+    confirm_quorum_is_lost(&mut cluster, &region);
 
-    cluster.enter_force_leader(region.get_id(), 1, vec![2, 3]);
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![2, 3]);
     // remove the peers on failed nodes
     cluster
         .pd_client
@@ -442,7 +436,7 @@ fn test_force_leader_five_nodes() {
 
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"k9");
-    let mut region = cluster.get_region(b"k2");
+    let region = cluster.get_region(b"k2");
     let peer_on_store5 = find_peer(&region, 5).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
@@ -450,16 +444,10 @@ fn test_force_leader_five_nodes() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    let put = new_put_cmd(b"k2", b"v2");
-    let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
     // quorum is lost, can't propose command successfully.
-    assert!(
-        cluster
-            .call_command_on_leader(req, Duration::from_millis(10))
-            .is_err()
-    );
+    confirm_quorum_is_lost(&mut cluster, &region);
 
-    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // remove the peers on failed nodes
     cluster
         .pd_client
@@ -504,7 +492,7 @@ fn test_force_leader_for_learner() {
 
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"k9");
-    let mut region = cluster.get_region(b"k2");
+    let region = cluster.get_region(b"k2");
     let peer_on_store5 = find_peer(&region, 5).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
@@ -526,14 +514,7 @@ fn test_force_leader_for_learner() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    let put = new_put_cmd(b"k2", b"v2");
-    let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
-    // quorum is lost, can't propose command successfully.
-    assert!(
-        cluster
-            .call_command_on_leader(req, Duration::from_millis(10))
-            .is_err()
-    );
+    confirm_quorum_is_lost(&mut cluster, &region);
 
     // wait election timeout
     std::thread::sleep(Duration::from_millis(
@@ -541,7 +522,7 @@ fn test_force_leader_for_learner() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 2,
     ));
-    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // promote the learner first and remove the peers on failed nodes
     cluster
         .pd_client
@@ -593,7 +574,7 @@ fn test_force_leader_on_hibernated_leader() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // remove the peers on failed nodes
     cluster
         .pd_client
@@ -642,7 +623,7 @@ fn test_force_leader_on_hibernated_follower() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // remove the peers on failed nodes
     cluster
         .pd_client
@@ -714,7 +695,7 @@ fn test_force_leader_trigger_snapshot() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 5,
     );
-    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
 
     sleep_ms(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
@@ -779,18 +760,7 @@ fn test_force_leader_with_uncommitted_conf_change() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    let put = new_put_cmd(b"k2", b"v2");
-    let req = new_request(
-        region.get_id(),
-        region.get_region_epoch().clone(),
-        vec![put],
-        true,
-    );
-    assert!(
-        cluster
-            .call_command_on_leader(req, Duration::from_millis(10))
-            .is_err()
-    );
+    confirm_quorum_is_lost(&mut cluster, &region);
 
     // an uncommitted conf-change
     let cmd = new_change_peer_request(
@@ -810,7 +780,7 @@ fn test_force_leader_with_uncommitted_conf_change() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 2,
     ));
-    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // the uncommitted conf-change is committed successfully after being force leader
     cluster
         .pd_client
@@ -887,7 +857,7 @@ fn test_force_leader_on_wrong_leader() {
 
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"k9");
-    let mut region = cluster.get_region(b"k2");
+    let region = cluster.get_region(b"k2");
     let peer_on_store5 = find_peer(&region, 5).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
@@ -904,17 +874,10 @@ fn test_force_leader_on_wrong_leader() {
     cluster.stop_node(1);
     cluster.run_node(1).unwrap();
 
-    let put = new_put_cmd(b"k3", b"v3");
-    let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
-    // quorum is lost, can't propose command successfully.
-    assert!(
-        cluster
-            .call_command_on_leader(req, Duration::from_millis(100))
-            .is_err()
-    );
+    confirm_quorum_is_lost(&mut cluster, &region);
 
     // try to force leader on peer of node2 which is stale
-    cluster.enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
     // can't propose confchange as it's not in force leader state
     let cmd = new_change_peer_request(
         ConfChangeType::RemoveNode,
@@ -957,11 +920,11 @@ fn test_force_leader_twice_on_different_peers() {
     cluster.run_node(1).unwrap();
     cluster.stop_node(2);
     cluster.run_node(2).unwrap();
+    confirm_quorum_is_lost(&mut cluster, &region);
 
-    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
-    std::thread::sleep(Duration::from_millis(100));
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // enter force leader on a different peer
-    cluster.enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
     // leader is the peer of store 2
     assert_eq!(
         cluster.leader_of_region(region.get_id()).unwrap(),
@@ -1026,10 +989,8 @@ fn test_force_leader_twice_on_same_peer() {
     cluster.stop_node(2);
     cluster.run_node(2).unwrap();
 
-    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
-    std::thread::sleep(Duration::from_millis(100));
-    // enter force leader on the same peer
-    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // remove the peers on failed nodes
     cluster
         .pd_client
@@ -1079,7 +1040,7 @@ fn test_force_leader_multiple_election_rounds() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 2,
     ));
-    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // wait multiple election rounds
     std::thread::sleep(Duration::from_millis(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
