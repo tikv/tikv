@@ -669,7 +669,7 @@ fn check_query_num_read(
                 return true;
             }
         }
-        if start.elapsed().unwrap().as_secs() > 10 {
+        if start.elapsed().as_secs() > 10 {
             println!("real query {}", num);
             return false;
         }
@@ -690,7 +690,7 @@ fn check_query_num_write(
                 return true;
             }
         }
-        if start.elapsed().unwrap().as_secs() > 5 {
+        if start.elapsed().as_secs() > 5 {
             return false;
         }
     }
@@ -719,7 +719,7 @@ fn check_split_key(
             );
             return true;
         }
-        if start.elapsed().unwrap().as_secs() > 5 {
+        if start.elapsed().as_secs() > 5 {
             return false;
         }
     }
