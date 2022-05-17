@@ -3,7 +3,24 @@
 use lazy_static::lazy_static;
 use prometheus::*;
 
+pub enum TaskStatus {
+    Running = 0,
+    Paused,
+    Error,
+}
+
+pub fn update_task_status(status: TaskStatus, task: &str) {
+    TASK_STATUS.with_label_values(&[task]).set(status as _);
+}
+
 lazy_static! {
+    pub static ref INTERNAL_ACTOR_MESSAGE_HANDLE_DURATION: HistogramVec = register_histogram_vec!(
+        "tikv_log_backup_interal_actor_acting_duration_sec",
+        "The internal actor message handling duration.",
+        &["message"],
+        exponential_buckets(0.001, 2.0, 16).unwrap()
+    )
+    .unwrap();
     pub static ref INITIAL_SCAN_REASON: IntCounterVec = register_int_counter_vec!(
         "tikv_log_backup_initial_scan_reason",
         "The reason of doing initial scanning",
@@ -36,6 +53,12 @@ lazy_static! {
     .unwrap();
     pub static ref STREAM_ERROR: CounterVec = register_counter_vec!(
         "tikv_stream_errors",
+        "The errors during stream backup.",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref STREAM_FATAL_ERROR: CounterVec = register_counter_vec!(
+        "tikv_log_backup_fatal_errors",
         "The errors during stream backup.",
         &["type"]
     )
@@ -98,6 +121,12 @@ lazy_static! {
         "tikv_stream_observed_region",
         "the region being observed by the current store.",
         &["type"],
+    )
+    .unwrap();
+    static ref TASK_STATUS: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_log_backup_task_status",
+        "The status of tasks",
+        &["task"]
     )
     .unwrap();
 }
