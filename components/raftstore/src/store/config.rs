@@ -1079,7 +1079,7 @@ mod tests {
         assert!(cfg.validate().is_err());
         cfg.raft_entry_max_size = ReadableSize::mb(3073);
         assert!(cfg.validate().is_err());
-        cfg.raft_max_size_per_msg = ReadableSize::gb(3);
+        cfg.raft_entry_max_size = ReadableSize::gb(3);
         assert!(cfg.validate().is_ok());
     }
 }
