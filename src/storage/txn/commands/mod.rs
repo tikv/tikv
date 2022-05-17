@@ -38,14 +38,12 @@ pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
-use std::collections::hash_map::DefaultHasher;
 use tikv_util::deadline::Deadline;
 pub use txn_heart_beat::TxnHeartBeat;
 
 pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
 use std::iter;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
@@ -60,11 +58,11 @@ use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotR
 use crate::storage::txn::latch;
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
-    MvccInfo, PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult,
-    SecondaryLocksStatus, StorageCallbackType, TxnStatus,
+    MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
+    TxnStatus,
 };
 use crate::storage::{
-    metrics, Callback, Error as StorageError, Result as StorageResult, Snapshot, Statistics,
+    metrics, Error as StorageError, Result as StorageResult, Snapshot, Statistics,
 };
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 
@@ -387,7 +385,7 @@ pub struct PessimisticLockParameters {
 }
 
 pub type CallbackWithArcError<T> =
-    Box(dyn FnOnce(std::result::Result<T, std::sync::Arc<StorageError>>));
+    Box<dyn FnOnce(std::result::Result<T, std::sync::Arc<StorageError>>)>;
 
 pub struct WriteResultLockInfo {
     pub index_in_request: usize,
@@ -432,7 +430,7 @@ impl WriteResultLockInfo {
 }
 
 #[derive(Default)]
-pub(super) struct ReleasedLocks(Vec<ReleasedLock>);
+pub(super) struct ReleasedLocks(pub Vec<ReleasedLock>);
 
 impl ReleasedLocks {
     pub fn new() -> Self {

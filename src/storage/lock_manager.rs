@@ -2,7 +2,6 @@
 
 use crate::server::lock_manager::waiter_manager;
 use crate::server::lock_manager::waiter_manager::Callback;
-use crate::storage::{txn::ProcessResult, types::StorageCallback};
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::metapb::RegionEpoch;
 use std::num::NonZeroU64;
@@ -70,6 +69,7 @@ impl From<u64> for WaitTimeout {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct KeyLockWaitInfo {
     pub key: Key,
     pub lock_digest: LockDigest,
@@ -77,7 +77,7 @@ pub struct KeyLockWaitInfo {
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-pub struct LockWaitToken(Option<u64>);
+pub struct LockWaitToken(pub Option<u64>);
 
 /// `LockManager` manages transactions waiting for locks held by other transactions.
 /// It has responsibility to handle deadlocks between transactions.
@@ -97,7 +97,7 @@ pub trait LockManager: Clone + Send + 'static {
         wait_info: Vec<KeyLockWaitInfo>,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
-        cancel_callback: Box<dyn FnOnce(StorageError)>,
+        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         diag_ctx: DiagnosticContext,
     ) -> LockWaitToken;
 

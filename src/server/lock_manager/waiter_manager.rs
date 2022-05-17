@@ -33,15 +33,12 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use crate::server::lock_manager::waiter_manager::Task::RegionEpochChanged;
-use crate::server::status_server::region_meta::Epoch;
 use futures::compat::Compat01As03;
 use futures::compat::Future01CompatExt;
 use futures::future::Future;
 use futures::task::{Context, Poll};
 use kvproto::deadlock::WaitForEntry;
 use kvproto::metapb::RegionEpoch;
-use pd_client::RegionStat;
 use prometheus::HistogramTimer;
 use raft::StateRole;
 use tikv_util::config::ReadableDuration;
@@ -122,7 +119,7 @@ pub enum Task {
         start_ts: TimeStamp,
         wait_info: Vec<KeyLockWaitInfo>,
         timeout: WaitTimeout,
-        cancel_callback: Box<dyn FnOnce(StorageError)>,
+        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         diag_ctx: DiagnosticContext,
     },
     WakeUp {
@@ -363,8 +360,6 @@ impl Waiter {
     // }
 
     fn check_region_state(&self, region_state: &RegionState) -> CheckRegionStateResult {
-        use std::cmp::Ordering::{Equal, Greater, Less};
-
         if self.term < region_state.term
             || self.region_epoch.version < region_state.region_epoch.version
             || self.region_epoch.conf_ver < region_state.region_epoch.conf_ver
@@ -630,7 +625,7 @@ impl Scheduler {
         start_ts: TimeStamp,
         wait_info: Vec<KeyLockWaitInfo>,
         timeout: WaitTimeout,
-        cancel_callback: Box<dyn FnOnce(StorageError)>,
+        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         diag_ctx: DiagnosticContext,
     ) {
         self.notify_scheduler(Task::WaitFor {

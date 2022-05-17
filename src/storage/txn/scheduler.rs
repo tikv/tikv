@@ -51,7 +51,6 @@ use crate::storage::kv::{
 };
 use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
 use crate::storage::metrics::{self, *};
-use crate::storage::txn::commands::Command::AcquirePessimisticLock;
 use crate::storage::txn::commands::{
     self, CallbackWithArcError, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
     WriteResultLockInfo,
@@ -952,6 +951,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     scheduler.take_waiting_locks_from_result(cid, pr.as_mut().unwrap(), l);
                 }
             } else {
+                // Enter key-wise waiting state.
                 if let Some(l) = lock_info.as_mut() {
                     let ctx = scheduler.convert_to_keywise_callbacks(
                         cid,
@@ -1324,7 +1324,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     ) {
         let results = match pr {
             ProcessResult::PessimisticLockRes {
-                res: Ok(PessimisticLockKeyResult(res)),
+                res: Ok(PessimisticLockResults(res)),
             } => res,
             _ => unreachable!(),
         };
@@ -1422,7 +1422,7 @@ impl PartialPessimisticLockRequestContext {
     fn get_callback_for_blocked_key(
         &self,
         index: usize,
-    ) -> impl FnOnce(std::result::Result<PessimisicLockKeyRsult, Arc<StorageError>>) {
+    ) -> impl FnOnce(std::result::Result<PessimisticLockKeyResult, Arc<StorageError>>) {
         let ctx = self.clone();
         move |res| {
             // TODO: Handle error.
@@ -1454,8 +1454,8 @@ impl PartialPessimisticLockRequestContext {
             inner
         } else {
             info!("shared state for partial pessimistic lock already taken, perhaps due to error";
-                "start_ts" => ctx.start_ts,
-                "for_update_ts" => ctx.for_update_ts
+                "start_ts" => self.start_ts,
+                "for_update_ts" => self.for_update_ts
             );
             return;
         };

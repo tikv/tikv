@@ -154,7 +154,7 @@ impl PessimisticLockKeyResult {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PessimisticLockResults(Vec<PessimisticLockKeyResult>);
+pub struct PessimisticLockResults(pub Vec<PessimisticLockKeyResult>);
 
 impl PessimisticLockResults {
     pub fn new() -> Self {
@@ -238,7 +238,7 @@ storage_callback! {
     Locks(Vec<kvrpcpb::LockInfo>) ProcessResult::Locks { locks } => locks,
     TxnStatus(TxnStatus) ProcessResult::TxnStatus { txn_status } => txn_status,
     Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,
-    PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
+    PessimisticLock(Result<PessimisticLockResults>) ProcessResult::PessimisticLockRes { res } => res,
     SecondaryLocksStatus(SecondaryLocksStatus) ProcessResult::SecondaryLocksStatus { status } => status,
     RawCompareAndSwap((Option<Value>, bool)) ProcessResult::RawCompareAndSwapRes { previous_value, succeed } => (previous_value, succeed),
 }

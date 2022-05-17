@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use kvproto::kvrpcpb::{ExtraOp, LockInfo};
+use kvproto::kvrpcpb::{Context, ExtraOp, LockInfo};
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::kv::WriteData;
@@ -16,8 +16,8 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::types::PessimisticLockKeyResult;
 use crate::storage::{
-    Callback, Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockResults,
-    ProcessResult, Result as StorageResult, Snapshot,
+    Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockResults, ProcessResult,
+    Result as StorageResult, Snapshot,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -237,7 +237,7 @@ impl AcquirePessimisticLock {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
                     if old_value.resolved() {
-                        let key = k.append_ts(txn.start_ts);
+                        let key = key.append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
                         let mutation_type = None;
                         old_values.insert(key, (old_value, mutation_type));
@@ -253,7 +253,7 @@ impl AcquirePessimisticLock {
                         lock_info,
                         snapshot.ext().get_term(),
                         is_first_lock,
-                        parameters: params,
+                        params,
                         lock_key_ctx.lock_digest,
                         lock_key_ctx.hash_for_latch,
                         None,
@@ -263,7 +263,7 @@ impl AcquirePessimisticLock {
             }
         }
 
-        if let Sme(txn) = txn {
+        if let Some(txn) = txn {
             if txn.write_size() > 0 {
                 modifies.extend(txn.into_modifies());
             }
@@ -314,7 +314,7 @@ impl AcquirePessimisticLock {
             Some(encountered_locks)
         };
         Ok(WriteResult {
-            ctx,
+            ctx: pb_ctx,
             to_be_write,
             rows,
             pr,
@@ -363,22 +363,20 @@ impl AcquirePessimisticLock {
         let ctx = items[0].parameters.pb_ctx.clone();
         let items = items
             .into_iter()
-            .map(
-                (|item| {
-                    assert!(item.key_cb.is_none());
-                    let lock_key_ctx = PessimisticLockKeyContext {
-                        index_in_request: item.index_in_request,
-                        lock_digest: item.lock_digest,
-                        hash_for_latch: item.hash_for_latch,
-                    };
-                    (
-                        item.key,
-                        item.should_not_exist,
-                        item.parameters,
-                        lock_key_ctx,
-                    )
-                }),
-            )
+            .map(|item| {
+                assert!(item.key_cb.is_none());
+                let lock_key_ctx = PessimisticLockKeyContext {
+                    index_in_request: item.index_in_request,
+                    lock_digest: item.lock_digest,
+                    hash_for_latch: item.hash_for_latch,
+                };
+                (
+                    item.key,
+                    item.should_not_exist,
+                    item.parameters,
+                    lock_key_ctx,
+                )
+            })
             .collect();
         let inner = PessimisticLockCmdInner::BatchResumedRequests(items);
         Self::new(inner, false, ctx)

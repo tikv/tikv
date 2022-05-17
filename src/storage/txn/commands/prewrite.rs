@@ -6,7 +6,6 @@
 //! handling of the commands is similar. We therefore have a single type (Prewriter) to handle both
 //! kinds of prewrite.
 
-use crate::storage::mvcc::ReleasedLock;
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
@@ -28,7 +27,6 @@ use crate::storage::{
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::{AssertionLevel, ExtraOp};
 use std::mem;
-use std::sync::atomic::Ordering::Release;
 use tikv_kv::SnapshotExt;
 use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 

@@ -24,7 +24,7 @@ use crate::server::{Error, Result};
 use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{
     lock_manager::{LockDigest, LockManager as LockManagerTrait, WaitTimeout},
-    Error as StorageError, ProcessResult, StorageCallback,
+    Error as StorageError,
 };
 use raftstore::coprocessor::CoprocessorHost;
 
@@ -263,7 +263,7 @@ impl LockManagerTrait for LockManager {
         wait_info: Vec<KeyLockWaitInfo>,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
-        cancel_callback: Box<dyn FnOnce(StorageError)>,
+        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         diag_ctx: DiagnosticContext,
     ) -> LockWaitToken {
         let timeout = match timeout {
