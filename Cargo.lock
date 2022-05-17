@@ -495,11 +495,12 @@ dependencies = [
  "tikv_util",
  "tokio",
  "tokio-stream",
- "tokio-util 0.7.0",
+ "tokio-util 0.7.2",
  "txn_types",
  "url",
  "uuid",
  "walkdir",
+ "yatp",
 ]
 
 [[package]]
@@ -740,6 +741,7 @@ dependencies = [
  "thiserror",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
  "txn_types",
 ]
 
@@ -1668,7 +1670,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
- "tokio-util 0.7.0",
+ "tokio-util 0.7.2",
  "url",
 ]
 
@@ -1708,7 +1710,7 @@ dependencies = [
  "tempfile",
  "tikv_util",
  "tokio",
- "tokio-util 0.7.0",
+ "tokio-util 0.7.2",
  "url",
 ]
 
@@ -2184,9 +2186,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3e636f21532a4a55b3c43d8852014686f54898dd0ea083e40a6b040bbc6d737"
+checksum = "86ef249d9cb1b1843767501ae7463b500542e7f9e72d9c2d61ed320fbefa6c79"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -5947,7 +5949,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.0.0-alpha"
+version = "6.1.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6422,15 +6424,14 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.0"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64910e1b9c1901aaf5375561e35b9c057d95ff41a44ede043a03e09279eabaf1"
+checksum = "f988a1a1adc2fb21f9c12aa96441da33a1728193ae0b95d2be22dbd17fcb4e5c"
 dependencies = [
  "bytes",
  "futures-core",
  "futures-io",
  "futures-sink",
- "log",
  "pin-project-lite",
  "tokio",
 ]
@@ -6534,9 +6535,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-attributes"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e65ce065b4b5c53e73bb28912318cb8c9e9ad3921f1d669eb0e68b4c8143a2b"
+checksum = "cc6b8ad3567499f98a1db7a752b07a7c8c7c7c34c332ec00effb2b0027974b7c"
 dependencies = [
  "proc-macro2",
  "quote",
