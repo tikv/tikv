@@ -197,8 +197,7 @@ mod tests {
         must_split_at(&rx, &region, vec![split_key.into_encoded()]);
     }
 
-    #[test]
-    fn test_generate_region_bucket() {
+    fn test_generate_region_bucket_impl(mvcc: bool) {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::default();
@@ -227,12 +226,19 @@ mod tests {
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
+        let key_gen = |k: &[u8], i: u64, mvcc: bool| {
+            if !mvcc {
+                keys::data_key(Key::from_raw(k).as_encoded())
+            } else {
+                keys::data_key(Key::from_raw(k).append_ts(i.into()).as_encoded())
+            }
+        };
         // so bucket key will be all these keys
         let mut exp_bucket_keys = vec![];
         for i in 0..11 {
             let k = format!("{:04}", i).into_bytes();
             exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
-            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            let k = key_gen(&k, i, mvcc);
             engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(CF_DEFAULT, true).unwrap();
@@ -258,7 +264,7 @@ mod tests {
         for i in 10..20 {
             let k = format!("{:05}", i).into_bytes();
             exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
-            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            let k = key_gen(&k, i, mvcc);
             engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(CF_DEFAULT, true).unwrap();
@@ -283,7 +289,7 @@ mod tests {
         for i in 11..20 {
             let k = format!("{:04}", i).into_bytes();
             exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
-            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            let k = key_gen(&k, i, mvcc);
             engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(CF_DEFAULT, true).unwrap();
@@ -307,6 +313,16 @@ mod tests {
         ));
 
         must_generate_buckets(&rx, &exp_bucket_keys);
+    }
+
+    #[test]
+    fn test_generate_region_bucket() {
+        test_generate_region_bucket_impl(false);
+    }
+
+    #[test]
+    fn test_generate_region_bucket_mvcc() {
+        test_generate_region_bucket_impl(true);
     }
 
     #[test]
