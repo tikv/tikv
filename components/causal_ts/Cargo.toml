@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 api_version = { path = "../api_version", default-features = false }
+collections = { path = "../collections" }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
