@@ -12,7 +12,7 @@ use protobuf::ProtobufError;
 use raftstore::Error as RaftStoreError;
 use thiserror::Error as ThisError;
 use tikv::storage::txn::Error as TxnError;
-use tikv_util::{error, worker::ScheduleError};
+use tikv_util::{error, warn, worker::ScheduleError};
 
 use crate::{endpoint::Task, metrics};
 
@@ -129,12 +129,18 @@ macro_rules! annotate {
 
 impl Error {
     pub fn report(&self, context: impl Display) {
-        error!(%self; "backup stream meet error"; "context" => %context,);
+        warn!("backup stream meet error"; "context" => %context, "err" => %self);
         metrics::STREAM_ERROR
             .with_label_values(&[self.kind()])
             .inc()
     }
 
+    pub fn report_fatal(&self) {
+        error!(%self; "backup stream meet fatal error");
+        metrics::STREAM_FATAL_ERROR
+            .with_label_values(&[self.kind()])
+            .inc()
+    }
     /// remove all context added to the error.
     pub fn without_context(&self) -> &Self {
         match self {
