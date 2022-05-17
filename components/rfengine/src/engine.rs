@@ -3,7 +3,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
-    num::ParseIntError,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{mpsc::SyncSender, Arc, Mutex, RwLock},
@@ -15,7 +14,6 @@ use bytes::{Buf, Bytes};
 use dashmap::{mapref::one::Ref, DashMap};
 use raft_proto::eraftpb;
 use slog_global::info;
-use thiserror::Error as ThisError;
 
 use crate::{
     log_batch::{RaftLogBlock, RaftLogs},
@@ -421,37 +419,6 @@ impl RegionData {
             truncated_idx: self.truncated_idx,
             dep_count: self.dependents.len(),
         }
-    }
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Debug, ThisError)]
-pub enum Error {
-    #[error("IO error: {0:?}")]
-    Io(std::io::Error),
-    #[error("EOF")]
-    EOF,
-    #[error("parse error")]
-    ParseError,
-    #[error("checksum not match")]
-    Checksum,
-    #[error("Open error: {0}")]
-    Open(String),
-}
-
-impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Self {
-        if e.kind() == std::io::ErrorKind::UnexpectedEof {
-            return Error::EOF;
-        }
-        Error::Io(e)
-    }
-}
-
-impl From<ParseIntError> for Error {
-    fn from(_: ParseIntError) -> Self {
-        Error::ParseError
     }
 }
 

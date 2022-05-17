@@ -21,11 +21,45 @@ pub mod worker;
 mod write_batch;
 pub mod writer;
 
+use std::num::ParseIntError;
+
 pub use engine::*;
 use iterator::*;
 use load::*;
 use metrics::*;
+use thiserror::Error as ThisError;
 pub use traits::*;
 use worker::*;
 pub use write_batch::WriteBatch;
 pub use writer::*;
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, ThisError)]
+pub enum Error {
+    #[error("IO error: {0:?}")]
+    Io(std::io::Error),
+    #[error("EOF")]
+    EOF,
+    #[error("parse error")]
+    ParseError,
+    #[error("checksum not match")]
+    Checksum,
+    #[error("Open error: {0}")]
+    Open(String),
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            return Error::EOF;
+        }
+        Error::Io(e)
+    }
+}
+
+impl From<ParseIntError> for Error {
+    fn from(_: ParseIntError) -> Self {
+        Error::ParseError
+    }
+}
