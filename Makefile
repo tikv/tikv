@@ -150,8 +150,8 @@ export DOCKER_IMAGE_TAG ?= "latest"
 # https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199/68
 export CARGO_BUILD_PIPELINING=true
 
-# Older versions of gcc give the following error when building on aarch64
-# architecture and TIKV_BUILD_STD=1:
+# Compiler gave us the following error message when using an older version of gcc on
+# aarch64 architecture and TIKV_BUILD_STD=1:
 #     .../atomic.rs: undefined reference to __aarch64_xxx
 # This is a temporary workaround. See: https://github.com/rust-lang/rust/issues/93166
 ifeq ($(TIKV_BUILD_RUSTC_TARGET),"aarch64-unknown-linux-gnu")
