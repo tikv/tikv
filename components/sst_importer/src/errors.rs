@@ -8,11 +8,11 @@ use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
-use kvproto::import_sstpb;
+use kvproto::{import_sstpb, kvrpcpb::ApiVersion};
 use tikv_util::codec::Error as CodecError;
 use uuid::Error as UuidError;
 
-use crate::metrics::*;
+use crate::{metrics::*, sst_writer::SstWriterType};
 
 pub fn error_inc(type_: &str, err: &Error) {
     let label = match err {
@@ -115,6 +115,27 @@ pub enum Error {
 
     #[error("Importing a SST file with imcompatible api version")]
     IncompatibleApiVersion,
+
+    #[error("Key mode mismatched with the request mode, writer: {:?}, storage: {:?}, key: {}", .writer, .storage_api_version, .key)]
+    InvalidKeyMode {
+        writer: SstWriterType,
+        storage_api_version: ApiVersion,
+        key: String,
+    },
+}
+
+impl Error {
+    pub fn invalid_key_mode(
+        writer: SstWriterType,
+        storage_api_version: ApiVersion,
+        key: &[u8],
+    ) -> Self {
+        Error::InvalidKeyMode {
+            writer,
+            storage_api_version,
+            key: log_wrappers::hex_encode_upper(key),
+        }
+    }
 }
 
 impl From<String> for Error {
@@ -159,6 +180,7 @@ impl ErrorCodeExt for Error {
             Error::TtlNotEnabled => error_code::sst_importer::TTL_NOT_ENABLED,
             Error::TtlLenNotEqualsToPairs => error_code::sst_importer::TTL_LEN_NOT_EQUALS_TO_PAIRS,
             Error::IncompatibleApiVersion => error_code::sst_importer::INCOMPATIBLE_API_VERSION,
+            Error::InvalidKeyMode { .. } => error_code::sst_importer::INVALID_KEY_MODE,
         }
     }
 }

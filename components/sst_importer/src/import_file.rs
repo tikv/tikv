@@ -355,7 +355,7 @@ impl ImportDir {
             .check_api_version(&meta_vec, key_manager.clone(), api_version)
             .unwrap()
         {
-            panic!("cannot ingest because of imcompatible api version");
+            panic!("cannot ingest because of incompatible api version");
         }
 
         let mut paths = HashMap::new();

@@ -64,7 +64,9 @@ use raftstore::{
     store::{
         config::RaftstoreConfigManager,
         fsm,
-        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
+        fsm::store::{
+            RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
+        },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
@@ -708,6 +710,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .encryption_key_manager(self.encryption_key_manager.clone())
+            .max_per_file_size(self.config.raft_store.max_snapshot_file_raw_size.0)
+            .enable_multi_snapshot_files(
+                self.pd_client
+                    .feature_gate()
+                    .can_enable(MULTI_FILES_SNAPSHOT_FEATURE),
+            )
             .build(snap_path);
 
         // Create coprocessor endpoint.
@@ -832,6 +840,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             Box::new(ServerConfigManager::new(
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
+                server.get_grpc_mem_quota().clone(),
             )),
         );
 
@@ -966,6 +975,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,
+            self.config.storage.api_version(),
             self.pd_client.clone(),
             cdc_scheduler.clone(),
             self.router.clone(),

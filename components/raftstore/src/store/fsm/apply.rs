@@ -3021,6 +3021,8 @@ pub struct GenSnapTask {
     snap_notifier: SyncSender<RaftSnapshot>,
     // indicates whether the snapshot is triggered due to load balance
     for_balance: bool,
+    // the store id the snapshot will be sent to
+    to_store_id: u64,
 }
 
 impl GenSnapTask {
@@ -3029,6 +3031,7 @@ impl GenSnapTask {
         index: Arc<AtomicU64>,
         canceled: Arc<AtomicBool>,
         snap_notifier: SyncSender<RaftSnapshot>,
+        to_store_id: u64,
     ) -> GenSnapTask {
         GenSnapTask {
             region_id,
@@ -3036,6 +3039,7 @@ impl GenSnapTask {
             canceled,
             snap_notifier,
             for_balance: false,
+            to_store_id,
         }
     }
 
@@ -3065,6 +3069,7 @@ impl GenSnapTask {
             // This snapshot may be held for a long time, which may cause too many
             // open files in rocksdb.
             kv_snap,
+            to_store_id: self.to_store_id,
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
@@ -4284,7 +4289,7 @@ mod tests {
         fn new_for_test(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
             let index = Arc::new(AtomicU64::new(0));
             let canceled = Arc::new(AtomicBool::new(false));
-            Self::new(region_id, index, canceled, snap_notifier)
+            Self::new(region_id, index, canceled, snap_notifier, 0)
         }
     }
 
