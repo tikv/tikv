@@ -592,7 +592,7 @@ where
     pub fn on_pause(&self, task: &str) {
         let task = self.unload_task(task);
         if let Some(t) = task {
-            info!("pause backup stream task.";"task" => %t.name);
+            info!("pause backup stream task."; "task" => %t.name);
         }
     }
 
