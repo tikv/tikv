@@ -44,9 +44,14 @@ impl RaftLogOp {
     }
 
     pub(crate) fn encoded_len(&self) -> usize {
-        8 + 4 + 1 + 1 + self.data.len()
+        8 /* index */ + 4 /* term */ + 1 /* entry_type */ + 1 /* context */ + self.data.len()
     }
 
+    /// +-------------+-----------+-------------------+---------------+--------------+
+    /// |             |           |                   |               |              |
+    /// |  index(8B)  |  term(4B) |   entry_type(1B)  |  context(1B)  |   data(n)    |
+    /// |             |           |                   |               |              |
+    /// +-------------+-----------+-------------------+---------------+--------------+
     // It's faster than protobuf, so as `decode`. See `bench_encode_and_decode_raft_log_op`.
     pub(crate) fn encode_to(&self, buf: &mut impl BufMut) {
         buf.put_u64_le(self.index);
@@ -146,6 +151,9 @@ impl RaftLogBlock {
 /// `RaftLogs` contains continuous raft logs in memory for a single raft group.
 #[derive(Clone, Default)]
 pub(crate) struct RaftLogs {
+    // Actually one `VecDeque<RaftLogOp>` can satisfiy our requirements. However, when
+    // truncating, it may drop lots of raft logs in the main thread which hurts the performance,
+    // so we allocate small chunks of raft logs and transfer them to the background worker to drop.
     blocks: VecDeque<RaftLogBlock>,
 }
 
