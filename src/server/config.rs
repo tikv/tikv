@@ -343,6 +343,12 @@ impl Config {
             ));
         }
 
+        if self.max_grpc_send_msg_len <= 0 {
+            return Err(box_err!(
+                "server.max-grpc-send-msg-len must be bigger than 0."
+            ));
+        }
+
         if self.grpc_stream_initial_window_size.0 > i32::MAX as u64 {
             return Err(box_err!(
                 "server.grpc-stream-initial-window-size is too large."
@@ -513,6 +519,10 @@ mod tests {
         invalid_cfg = Config::default();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
+        assert!(invalid_cfg.validate().is_err());
+
+        invalid_cfg = Config::default();
+        invalid_cfg.max_grpc_send_msg_len = 0;
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();
