@@ -229,26 +229,5 @@ mod tests {
             assert_eq!(level_n[0].get_smallestkey(), &[0]);
             assert_eq!(level_n[0].get_largestkey(), &[4]);
         }
-
-        for cf_name in db.cf_names() {
-            let mut files = vec![];
-            let cf = db.cf_handle(cf_name).unwrap();
-            let cf_meta = db.get_column_family_meta_data(cf);
-            let cf_levels = cf_meta.get_levels();
-
-            for level in cf_levels.into_iter().rev() {
-                files.extend(level.get_files().iter().map(|f| f.get_name()));
-            }
-
-            assert_eq!(files.len(), 2);
-            db.c()
-                .compact_files_cf(cf_name, files.clone(), Some(3), 0, true)
-                .unwrap();
-
-            let cf_meta = db.get_column_family_meta_data(cf);
-            let cf_levels = cf_meta.get_levels();
-            assert_eq!(cf_levels[0].get_files().len(), 1);
-            assert_eq!(cf_levels[3].get_files().len(), 1);
-        }
     }
 }

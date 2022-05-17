@@ -468,7 +468,7 @@ macro_rules! build_cf_opt {
             .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
         if $opt.use_bloom_filter {
             block_base_opts.set_bloom_filter(
-                $opt.bloom_filter_bits_per_key,
+                $opt.bloom_filter_bits_per_key as f64,
                 $opt.block_based_bloom_filter,
             );
             block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
