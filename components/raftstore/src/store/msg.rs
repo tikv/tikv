@@ -653,6 +653,8 @@ where
 
     UnsafeRecoveryReport,
     CreatePeer(metapb::Region),
+
+    GcSnapshotFinish,
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -683,6 +685,7 @@ where
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
             StoreMsg::UnsafeRecoveryReport => write!(fmt, "UnsafeRecoveryReport"),
             StoreMsg::CreatePeer(_) => write!(fmt, "CreatePeer"),
+            StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
         }
     }
 }

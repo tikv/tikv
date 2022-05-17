@@ -109,7 +109,6 @@ fn test_serde_custom_tikv_config() {
         end_point_perf_level: PerfLevel::EnableTime,
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
-        max_snapshot_file_raw_size: ReadableSize::gb(10),
         stats_concurrency: 10,
         heavy_load_threshold: 25,
         heavy_load_wait_duration: Some(ReadableDuration::millis(2)),
@@ -240,6 +239,7 @@ fn test_serde_custom_tikv_config() {
         reactive_memory_lock_tick_interval: ReadableDuration::millis(566),
         reactive_memory_lock_timeout_tick: 8,
         report_region_buckets_tick_interval: ReadableDuration::secs(1234),
+        max_snapshot_file_raw_size: ReadableSize::gb(10),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

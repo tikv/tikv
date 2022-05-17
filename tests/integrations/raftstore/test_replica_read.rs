@@ -210,19 +210,14 @@ fn test_read_hibernated_region() {
     cluster.stop_node(2);
     cluster.run_node(2).unwrap();
 
-    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let (tx, rx) = mpsc::sync_channel(1);
+    let store2_sent_msgs = Arc::new(Mutex::new(Vec::new()));
     let filter = Box::new(
-        RegionPacketFilter::new(1, 3)
-            .direction(Direction::Recv)
-            .reserve_dropped(Arc::clone(&dropped_msgs))
-            .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-                if msg.has_extra_msg() {
-                    tx.send(msg.clone()).unwrap();
-                }
-            })),
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Send)
+            .reserve_dropped(Arc::clone(&store2_sent_msgs)),
     );
-    cluster.sim.wl().add_recv_filter(3, filter);
+    cluster.sim.wl().add_send_filter(2, filter);
+    cluster.pd_client.trigger_leader_info_loss();
     // This request will fail because no valid leader.
     let resp1_ch = async_read_on_peer(&mut cluster, p2.clone(), region.clone(), b"k1", true, true);
     let resp1 = resp1_ch.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -231,11 +226,20 @@ fn test_read_hibernated_region() {
         "{:?}",
         resp1.get_header()
     );
-    // Wait util receiving wake up message.
-    let wake_up_msg = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    cluster.sim.wl().clear_recv_filters(3);
-    let router = cluster.sim.wl().get_router(3).unwrap();
-    router.send_raft_message(wake_up_msg).unwrap();
+    thread::sleep(Duration::from_millis(300));
+    cluster.sim.wl().clear_send_filters(2);
+    let mut has_extra_message = false;
+    for msg in std::mem::take(&mut *store2_sent_msgs.lock().unwrap()) {
+        let to_store = msg.get_to_peer().get_store_id();
+        assert_ne!(to_store, 0, "{:?}", msg);
+        if to_store == 3 && msg.has_extra_msg() {
+            has_extra_message = true;
+        }
+        let router = cluster.sim.wl().get_router(to_store).unwrap();
+        router.send_raft_message(msg).unwrap();
+    }
+    // Had a wakeup message from 2 to 3.
+    assert!(has_extra_message);
     // Wait for the leader is woken up.
     thread::sleep(Duration::from_millis(500));
     let resp2_ch = async_read_on_peer(&mut cluster, p2, region, b"k1", true, true);

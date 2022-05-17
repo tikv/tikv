@@ -14,6 +14,11 @@ define_error_codes! {
         "A task not found.",
         "Please check the spell of your task name."
     ),
+    OBSERVE_CANCELED => (
+        "ObserveCancel",
+        "When doing initial scanning, the observe of that region has been canceled",
+        "No need to handle this, this is retryable."
+    ),
     MALFORMED_META => ("MalformedMetadata",
         "Malformed metadata found.",
         "The metadata format is unexpected, please check the compatibility between TiKV / BR."
