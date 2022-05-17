@@ -6,7 +6,7 @@ use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
-use crate::storage::lock_manager::{DiagnosticContext, LockDigest};
+use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken};
 use collections::HashMap;
 use engine_traits::KvEngine;
 use futures::future::{self, FutureExt, TryFutureExt};
@@ -31,6 +31,7 @@ use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use tidb_query_datatype::codec::Datum::Time;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
@@ -377,8 +378,10 @@ pub enum Task {
     /// The detect request of itself.
     Detect {
         tp: DetectType,
+        token: LockWaitToken,
         txn_ts: TimeStamp,
-        lock: LockDigest,
+        // lock: LockDigest,
+        wait_info: Vec<KeyLockWaitInfo>,
         // Only valid when `tp == Detect`.
         diag_ctx: DiagnosticContext,
     },
@@ -405,11 +408,14 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Task::Detect {
-                tp, txn_ts, lock, ..
+                tp,
+                txn_ts,
+                wait_info,
+                ..
             } => write!(
                 f,
-                "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?} }}",
-                tp, txn_ts, lock
+                "Detect {{ tp: {:?}, txn_ts: {}, wait_info: {:?} }}",
+                tp, txn_ts, wait_info
             ),
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
@@ -440,21 +446,29 @@ impl Scheduler {
         }
     }
 
-    pub fn detect(&self, txn_ts: TimeStamp, lock: LockDigest, diag_ctx: DiagnosticContext) {
+    pub fn detect(
+        &self,
+        token: LockWaitToken,
+        txn_ts: TimeStamp,
+        wait_info: Vec<KeyLockWaitInfo>,
+        diag_ctx: DiagnosticContext,
+    ) {
         // TODO: Support detect many keys in a batch
         self.notify_scheduler(Task::Detect {
             tp: DetectType::Detect,
+            token,
             txn_ts,
-            lock,
+            wait_info,
             diag_ctx,
         });
     }
 
-    pub fn clean_up_wait_for(&self, txn_ts: TimeStamp, lock: LockDigest) {
+    pub fn clean_up_wait_for(&self, token: LockWaitToken) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUpWaitFor,
-            txn_ts,
-            lock,
+            token,
+            txn_ts: TimeStamp::default(),
+            wait_info: vec![],
             diag_ctx: DiagnosticContext::default(),
         });
     }
@@ -462,8 +476,9 @@ impl Scheduler {
     pub fn clean_up(&self, txn_ts: TimeStamp) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUp,
+            token: LockWaitToken(None),
             txn_ts,
-            lock: LockDigest::default(),
+            wait_info: vec![],
             diag_ctx: DiagnosticContext::default(),
         });
     }
@@ -771,7 +786,14 @@ where
             };
             let mut wait_chain: Vec<_> = resp.take_wait_chain().into();
             wait_chain.push(entry);
-            waiter_mgr_scheduler.deadlock(txn, lock, resp.get_deadlock_key_hash(), wait_chain)
+            waiter_mgr_scheduler.deadlock(
+                LockWaitToken(None),
+                txn,
+                entry.take_key(),
+                lock,
+                resp.get_deadlock_key_hash(),
+                wait_chain,
+            )
         }));
         spawn_local(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
         // No need to log it again.
@@ -788,11 +810,14 @@ where
     fn send_request_to_leader(
         &mut self,
         tp: DetectType,
+        _token: LockWaitToken,
         txn_ts: TimeStamp,
-        lock: LockDigest,
+        wait_info: &Vec<KeyLockWaitInfo>,
         diag_ctx: DiagnosticContext,
     ) -> bool {
         assert!(!self.is_leader() && self.leader_info.is_some());
+
+        // TODO: Adapt to new protocol
 
         if self.leader_client.is_none() {
             self.reconnect_leader();
@@ -805,8 +830,8 @@ where
             };
             let mut entry = WaitForEntry::default();
             entry.set_txn(txn_ts.into_inner());
-            entry.set_wait_for_txn(lock.ts.into_inner());
-            entry.set_key_hash(lock.hash);
+            entry.set_wait_for_txn(wait_info[0].lock_digest.ts.into_inner());
+            entry.set_key_hash(wait_info[0].lock_digest.hash);
             entry.set_key(diag_ctx.key);
             entry.set_resource_group_tag(diag_ctx.resource_group_tag);
             let mut req = DeadlockRequest::default();
@@ -824,34 +849,38 @@ where
     fn handle_detect_locally(
         &self,
         tp: DetectType,
+        token: LockWaitToken,
         txn_ts: TimeStamp,
-        lock_digest: LockDigest,
+        wait_info: Vec<KeyLockWaitInfo>,
         diag_ctx: DiagnosticContext,
     ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
         match tp {
             DetectType::Detect => {
-                if let Some((deadlock_key_hash, mut wait_chain)) = detect_table.detect(
-                    txn_ts,
-                    lock_digest.ts,
-                    lock_digest.hash,
-                    &diag_ctx.key,
-                    &diag_ctx.resource_group_tag,
-                ) {
-                    let mut last_entry = WaitForEntry::default();
-                    last_entry.set_txn(txn_ts.into_inner());
-                    last_entry.set_wait_for_txn(lock_digest.ts.into_inner());
-                    last_entry.set_key_hash(lock_digest.hash);
-                    last_entry.set_key(diag_ctx.key.clone());
-                    last_entry.set_resource_group_tag(diag_ctx.resource_group_tag);
-                    wait_chain.push(last_entry);
-                    self.waiter_mgr_scheduler.deadlock(
+                for lock in wait_info {
+                    if let Some((deadlock_key_hash, mut wait_chain)) = detect_table.detect(
                         txn_ts,
-                        diag_ctx.key,
-                        lock_digest,
-                        deadlock_key_hash,
-                        wait_chain,
-                    );
+                        lock_digest.ts,
+                        lock_digest.hash,
+                        &diag_ctx.key,
+                        &diag_ctx.resource_group_tag,
+                    ) {
+                        let mut last_entry = WaitForEntry::default();
+                        last_entry.set_txn(txn_ts.into_inner());
+                        last_entry.set_wait_for_txn(lock.lock_digest.ts.into_inner());
+                        last_entry.set_key_hash(lock.lock_digest.hash);
+                        last_entry.set_key(diag_ctx.key.clone());
+                        last_entry.set_resource_group_tag(diag_ctx.resource_group_tag.clone()); // TODO: Avoid cloning.
+                        wait_chain.push(last_entry);
+                        self.waiter_mgr_scheduler.deadlock(
+                            token,
+                            txn_ts,
+                            diag_ctx.key.clone(),
+                            lock_digest,
+                            deadlock_key_hash,
+                            wait_chain,
+                        );
+                    }
                 }
             }
             DetectType::CleanUpWaitFor => {
@@ -865,12 +894,13 @@ where
     fn handle_detect(
         &mut self,
         tp: DetectType,
+        token: LockWaitToken,
         txn_ts: TimeStamp,
-        lock: LockDigest,
+        wait_info: Vec<KeyLockWaitInfo>,
         diag_ctx: DiagnosticContext,
     ) {
         if self.is_leader() {
-            self.handle_detect_locally(tp, txn_ts, lock, diag_ctx);
+            self.handle_detect_locally(tp, token, txn_ts, wait_info, diag_ctx);
         } else {
             for _ in 0..2 {
                 // TODO: If the leader hasn't been elected, it requests Pd for
@@ -880,7 +910,7 @@ where
                 if self.leader_client.is_none() && !self.refresh_leader_info() {
                     break;
                 }
-                if self.send_request_to_leader(tp, txn_ts, lock, diag_ctx.clone()) {
+                if self.send_request_to_leader(tp, token, txn_ts, &wait_info, diag_ctx.clone()) {
                     return;
                 }
                 // Because the client is asynchronous, it won't be closed until failing to send a
@@ -986,11 +1016,12 @@ where
         match task {
             Task::Detect {
                 tp,
+                token,
                 txn_ts,
-                lock,
+                wait_info,
                 diag_ctx,
             } => {
-                self.handle_detect(tp, txn_ts, lock, diag_ctx);
+                self.handle_detect(tp, token, txn_ts, wait_info, diag_ctx);
             }
             Task::DetectRpc { stream, sink } => {
                 self.handle_detect_rpc(stream, sink);

@@ -35,7 +35,6 @@ use std::time::{Duration, Instant};
 
 use crate::server::lock_manager::waiter_manager::Task::RegionEpochChanged;
 use crate::server::status_server::region_meta::Epoch;
-use crate::storage::mvcc::reader_tests::RegionEngine;
 use futures::compat::Compat01As03;
 use futures::compat::Future01CompatExt;
 use futures::future::Future;
@@ -136,6 +135,7 @@ pub enum Task {
         cb: Callback,
     },
     Deadlock {
+        token: LockWaitToken,
         // Which txn causes deadlock
         start_ts: TimeStamp,
         key: Vec<u8>,
@@ -398,7 +398,7 @@ struct RegionState {
 }
 
 impl RegionState {
-    fn new(region_epoch: RegionEngine, term: NonZeroU64) -> Self {
+    fn new(region_epoch: RegionEpoch, term: NonZeroU64) -> Self {
         Self { region_epoch, term }
     }
 }
@@ -485,7 +485,7 @@ impl WaitTable {
                 .insert((waiting_item.lock_digest.hash, waiter.start_ts), token);
         }
 
-        waiter_pool.insert(token, waiter).unwrap();
+        self.waiter_pool.insert(token, waiter).unwrap();
 
         // if let Some(old_idx) = old_idx {
         //     let _old = waiters.swap_remove(old_idx);
@@ -660,6 +660,7 @@ impl Scheduler {
 
     pub fn deadlock(
         &self,
+        token: LockWaitToken,
         txn_ts: TimeStamp,
         key: Vec<u8>,
         lock: LockDigest,
@@ -667,6 +668,7 @@ impl Scheduler {
         wait_chain: Vec<WaitForEntry>,
     ) {
         self.notify_scheduler(Task::Deadlock {
+            token,
             start_ts: txn_ts,
             key,
             lock,

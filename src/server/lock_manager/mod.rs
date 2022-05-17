@@ -33,6 +33,7 @@ use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockWaitT
 use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_traits::KvEngine;
+use kvproto::metapb::RegionEpoch;
 use parking_lot::Mutex;
 use pd_client::PdClient;
 use security::SecurityManager;
@@ -277,6 +278,12 @@ impl LockManagerTrait for LockManager {
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
         let token = self.allocate_waiter_token();
+        // If it is the first lock the transaction tries to lock, it won't cause deadlock.
+        if !is_first_lock {
+            self.add_to_detected(start_ts);
+            self.detector_scheduler
+                .detect(token, start_ts, wait_info.clone(), diag_ctx); // TODO: Try to avoid cloning.
+        }
         self.waiter_mgr_scheduler.wait_for(
             token,
             region_id,
@@ -289,11 +296,6 @@ impl LockManagerTrait for LockManager {
             diag_ctx.clone(),
         );
 
-        // If it is the first lock the transaction tries to lock, it won't cause deadlock.
-        if !is_first_lock {
-            self.add_to_detected(start_ts);
-            self.detector_scheduler.detect(start_ts, lock, diag_ctx);
-        }
         token
     }
 
