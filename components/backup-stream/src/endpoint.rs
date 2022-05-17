@@ -592,13 +592,12 @@ where
             .map(|r| r.map_err(|err| err.into()))
     }
 
-    pub fn on_pause(&self, task: &str) {
-        let task = self.unload_task(task);
+    pub fn on_pause(&self, task_name: &str) {
+        let task = self.unload_task(task_name);
         if let Some(t) = task {
             info!("pause backup stream task."; "task" => %t.name);
         }
-
-        metrics::update_task_status(TaskStatus::Paused, task);
+        metrics::update_task_status(TaskStatus::Paused, task_name);
     }
 
     pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
