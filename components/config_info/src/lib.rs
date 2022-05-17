@@ -8,18 +8,24 @@ use serde::Serialize;
 /// it support following field attributes with the format `#[config_info(...)]`
 /// - type. Explicitly set the config type of target field.
 /// - default_desc. Describe the default value with a given string.
-/// - min. The minimal valid value of target field. Must be a literal value with the same type or
-///        can be coverted to the type by `TryInfo::try_into`.
+/// - min. The minimal valid value of target field.
 /// - min_desc. Describe the minimal valid value as a string.
-/// - max. The maximal valid value of target field. Must be a literal value with the same type or
-///        can be coverted to the type by `TryInfo::try_into`.
+/// - max. The maximal valid value of target field.
 /// - max_desc. Describe the maximal valid value as a string.
-/// - options. A list of value that define the set of all valid values.
+/// - options. A list of value that define the set of all valid values. The value of this attribue is a
+///            literal string with format like "[element1, element2, ...,]"
 /// - skip. Skip generate config info for this field.
 /// - submodule. This field is a submodule.
 /// - description. The field **can not** be set via `config_info` attribute but is extracted from the
 ///   field document attribute(with `#[doc = '..']` or `/// ...`). If the doc attributes is not found,
 ///   a compile error will be raised.
+///
+/// NOTE: The auto-generated code use the same `Deserialize` and `Serialize` method to parse and output
+/// the value of `min`, `max` and all elements in `options`. If the literal value is with wrong type, an
+/// compile error will be raised. If the literal value's type is valid but value is invalid(that say
+/// the deserialize will return an error), then it will cause runtime panic due to the corresponding
+/// `unwrap()` call.
+///
 ///
 /// # Field Type(#[config_info(type= "..")])
 ///
@@ -27,22 +33,15 @@ use serde::Serialize;
 /// - Number. Represent a numeric value, auto-assigned for all primitive numeric types.
 /// - Array. Represent the array type. auto-assigned for `[T, N]` and `Vec<T>` types.
 /// - Stirng. Represent string type. auto-assigned for `String`, `ReadableSize` and `ReadableDuration`.
-/// - Boolean. Represent the bool type. auto-assigned for `bool`. Custom defined type should implement
-///            `From<bool>` trait.
+/// - Boolean. Represent the bool type. auto-assigned for `bool`.
 /// - Map. Represent the map type. auto-assigned for `HashMap` and `BTreeMap`.
 ///
-/// NOTE:
-/// 1. The `type` attribute should be explicitly set if target field type is not build-in supported.
-/// 2. The generated code will use the same `Serialize` and `Deserialize` implement as the corresponding
-///    field, so the data type for `min`, `max` and `options` attributes should be the same as they are
-///    in the config file.
+/// NOTE: The `type` attribute should be explicitly set if target field type is not build-in supported.
 ///
 ///
 /// # Field Value Bound (#config_info(min = .., max = ..))
 ///
-/// The `min` and `max` attribue define the lower and upper bound of target field. The provide literal
-/// value must be value that can be deserialized to target type by `Deserialize::deserialize` or the
-/// target func provide by `#[serde(with = ..)` or `#[serde(deserialize_with)`.
+/// The `min` and `max` attribue define the lower and upper bound of target field.
 ///
 ///
 /// # Field Value Bound Description(#config_info(default_desc="..", min_desc = "...", max_desc = "..."))
