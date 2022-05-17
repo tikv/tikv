@@ -1112,7 +1112,7 @@ where
             .set(available as i64);
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["used"])
-            .set(used_size as i64);
+            .set(store_stats.fs_stats.used_size as i64);
 
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
