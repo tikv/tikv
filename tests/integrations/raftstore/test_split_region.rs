@@ -652,8 +652,8 @@ fn test_node_split_region_after_reboot_with_config_change() {
             break;
         }
         try_cnt += 1;
-        if try_cnt == 50 {
-            panic!("expect get_split_count > 0 after 1s");
+        if try_cnt == 200 {
+            panic!("expect get_split_count > 0 after 4s");
         }
     }
 }

@@ -629,7 +629,7 @@ impl Config {
         }
 
         #[cfg(not(any(test, feature = "testexport")))]
-        if self.max_snapshot_file_raw_size.as_mb() < 100 {
+        if self.max_snapshot_file_raw_size.0 != 0 && self.max_snapshot_file_raw_size.as_mb() < 100 {
             return Err(box_err!(
                 "max_snapshot_file_raw_size should be no less than 100MB."
             ));
