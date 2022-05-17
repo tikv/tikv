@@ -2492,6 +2492,8 @@ pub mod tests {
         s.write_all(&recv_remain).unwrap();
         s.save().unwrap();
 
+        let snap_size = snap_mgr.get_total_snap_size().unwrap();
+        let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
         for (i, region_id) in regions.into_iter().enumerate() {
             let key = SnapKey::new(region_id, 1, 1);
             let region = gen_test_region(region_id, 1, 1);
@@ -2501,9 +2503,6 @@ pub mod tests {
             s.build(&engine.kv, &snapshot, &region, &mut snap_data, &mut stat)
                 .unwrap();
 
-            // NOTICE: Specific to RocksDB version.
-            let snap_size = 1966;
-            let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
             // The first snap_size is for region 100.
             // That snapshot won't be deleted because it's not for generating.
             assert_eq!(
