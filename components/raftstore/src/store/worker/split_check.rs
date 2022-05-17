@@ -390,12 +390,11 @@ where
                 size += e.entry_size() as u64;
                 keys += 1;
                 if !skip_check_bucket {
-                    let origin_key_vec =
-                        strip_timestamp_if_exists(keys::origin_key(e.key()).to_vec());
-                    let origin_key = origin_key_vec.as_slice();
+                    let origin_key = keys::origin_key(e.key());
                     if bucket_range_list.is_empty() {
                         bucket_size += e.entry_size() as u64;
                         if bucket_size >= host.region_bucket_size() {
+                            let origin_key_vec = strip_timestamp_if_exists(origin_key.to_vec());
                             bucket.keys.push(origin_key_vec);
                             bucket.size += bucket_size;
                             bucket_size = 0;
@@ -419,6 +418,7 @@ where
                             // e.key() is between bucket_range_list[bucket_range_idx].0, bucket_range_list[bucket_range_idx].1
                             bucket_size += e.entry_size() as u64;
                             if bucket_size >= host.region_bucket_size() {
+                                let origin_key_vec = strip_timestamp_if_exists(origin_key.to_vec());
                                 if bucket.keys.is_empty()
                                     || bucket.keys[bucket.keys.len() - 1] != origin_key_vec
                                 {
