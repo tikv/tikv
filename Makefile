@@ -158,7 +158,6 @@ export CARGO_BUILD_PIPELINING=true
 #      https://bugzilla.redhat.com/show_bug.cgi?id=1830472
 ifeq ($(TIKV_BUILD_RUSTC_TARGET),aarch64-unknown-linux-gnu)
 export RUSTFLAGS := $(RUSTFLAGS) -Ctarget-feature=-outline-atomics
-export CFLAGS := $(CFLAGS) -mno-outline-atomics
 endif
 
 # Almost all the rules in this Makefile are PHONY
