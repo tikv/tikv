@@ -880,7 +880,7 @@ impl RequestCollector {
         match self {
             RequestCollector::RetainLastTs(ref mut reqs) => {
                 let k = key_from_request(&req);
-                let (encoded_key, ts) = match Key::split_on_ts_for(&k) {
+                let (encoded_key, ts) = match Key::split_on_ts_for(k) {
                     Ok(k) => k,
                     Err(err) => {
                         warn!("key without ts, skipping"; "key" => %log_wrappers::Value::key(k), "err" => %err);
@@ -924,7 +924,7 @@ fn key_from_request(req: &Request) -> &[u8] {
         return req.get_delete().get_key();
     }
     warn!("trying to extract key from request is neither put nor delete.");
-    return b"";
+    b""
 }
 
 fn make_request_header(mut context: Context) -> RaftRequestHeader {
@@ -1011,7 +1011,7 @@ where
 }
 
 fn write_needs_restore(write: &[u8]) -> bool {
-    let w = WriteRef::parse(&write);
+    let w = WriteRef::parse(write);
     match w {
         Ok(w)
             if matches!(
@@ -1027,7 +1027,7 @@ fn write_needs_restore(write: &[u8]) -> bool {
         }
         Err(err) => {
             warn!("write cannot be parsed, skipping"; "err" => %err, 
-                        "write" => %log_wrappers::Value::key(&write));
+                        "write" => %log_wrappers::Value::key(write));
             false
         }
     }
