@@ -377,7 +377,6 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 time_slice_start = Instant::now();
             }
 
-            SysQuota::cpu_cores_quota();
             let mut sample = self.quota_limiter.new_sample();
             {
                 let _guard = sample.observe_cpu();
