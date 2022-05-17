@@ -14,7 +14,10 @@ pub use self::{
     size::{get_region_approximate_size, SizeCheckObserver},
     table::TableCheckObserver,
 };
-use super::{config::Config, error::Result, Bucket, KeyEntry, ObserverContext, SplitChecker};
+use super::{
+    config::Config, error::Result, split_observer::strip_timestamp_if_exists, Bucket, KeyEntry,
+    ObserverContext, SplitChecker,
+};
 
 pub struct Host<'a, E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,
@@ -99,12 +102,16 @@ impl<'a, E> Host<'a, E> {
             );
             return bucket_checker
                 .approximate_split_keys(region, engine)
-                .map(|keys| Bucket {
-                    keys: keys
+                .map(|keys| {
+                    let mut bucket_keys: Vec<Vec<u8>> = keys
                         .into_iter()
-                        .map(|k| ::keys::origin_key(&k).to_vec())
-                        .collect(),
-                    size: region_size,
+                        .map(|k| strip_timestamp_if_exists(::keys::origin_key(&k).to_vec()))
+                        .collect();
+                    bucket_keys.dedup();
+                    Bucket {
+                        keys: bucket_keys,
+                        size: region_size,
+                    }
                 });
         }
         Ok(Bucket {
