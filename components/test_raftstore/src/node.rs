@@ -218,7 +218,7 @@ impl Simulator for NodeCluster {
     fn run_node(
         &mut self,
         node_id: u64,
-        mut cfg: Config,
+        cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
@@ -229,12 +229,15 @@ impl Simulator for NodeCluster {
         let pd_worker = LazyWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
-        cfg.validate().unwrap();
+        let mut raft_store = cfg.raft_store.clone();
+        raft_store
+            .validate(cfg.coprocessor.region_split_size)
+            .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let mut node = Node::new(
             system,
             &cfg.server,
-            Arc::new(VersionTrack::new(cfg.raft_store.clone())),
+            Arc::new(VersionTrack::new(raft_store)),
             cfg.storage.api_version(),
             Arc::clone(&self.pd_client),
             Arc::default(),
@@ -326,8 +329,9 @@ impl Simulator for NodeCluster {
                 .map(|p| p.path().to_str().unwrap().to_owned())
         );
 
+        let region_split_size = cfg.coprocessor.region_split_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.validate().unwrap();
+        raftstore_cfg.validate(region_split_size).unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,

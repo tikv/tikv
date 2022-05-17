@@ -2864,6 +2864,8 @@ impl TiKvConfig {
         self.server.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
+        self.raft_store
+            .validate(self.coprocessor.region_split_size)?;
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
@@ -2875,14 +2877,6 @@ impl TiKvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
-
-        match self.raft_store.validate() {
-            Err(raftstore::Error::RaftLogGcLimitNotSet) => {
-                self.raft_log_gc_limit_adjust();
-            }
-            Ok(_) => (),
-            Err(e) => return Err(e.into()),
-        }
 
         if self.storage.flow_control.enable {
             // using raftdb write stall to control memtables as a safety net
@@ -2987,21 +2981,6 @@ impl TiKvConfig {
         }
 
         Ok(())
-    }
-
-    pub fn raft_log_gc_limit_adjust(&mut self) {
-        if self.raft_store.raft_log_gc_size_limit.is_none() {
-            self.raft_store.raft_log_gc_size_limit =
-                Some(self.coprocessor.region_split_size * 3 / 4);
-        }
-        if self.raft_store.raft_log_gc_count_limit.is_none() {
-            // Assume the average size of entries is 1k.
-            self.raft_store.raft_log_gc_count_limit =
-                Some(self.coprocessor.region_split_size * 3 / 4 / ReadableSize::kb(1));
-        }
-        if self.raft_store.region_split_check_diff.is_none() {
-            self.raft_store.region_split_check_diff = Some(self.coprocessor.region_split_size / 16);
-        }
     }
 
     // As the init of `logger` is very early, this adjust needs to be separated and called
@@ -4937,7 +4916,12 @@ mod tests {
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
-        default_cfg.raft_log_gc_limit_adjust();
+        default_cfg.raft_store.raft_log_gc_size_limit =
+            Some(default_cfg.coprocessor.region_split_size * 3 / 4);
+        default_cfg.raft_store.raft_log_gc_count_limit =
+            Some(default_cfg.coprocessor.region_split_size * 3 / 4 / ReadableSize::kb(1));
+        default_cfg.raft_store.region_split_check_diff =
+            Some(default_cfg.coprocessor.region_split_size / 16);
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
