@@ -79,6 +79,10 @@ pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
 pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
+
+/// Min block cache shard's size. If a shard is too small, the index/filter data may not fit one shard
+pub const MIN_BLOCK_CACHE_SHARD_SIZE: usize = 128 * MIB as usize;
+
 /// Maximum of 15% of system memory can be used by Raft Engine. Normally its
 /// memory usage is much smaller than that.
 const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
@@ -2328,11 +2332,20 @@ impl Default for BackupConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct BackupStreamConfig {
+    #[online_config(skip)]
+    pub max_flush_interval: ReadableDuration,
+    #[online_config(skip)]
     pub num_threads: usize,
     #[online_config(skip)]
+    pub io_threads: usize,
+    #[online_config(skip)]
     pub enable: bool,
+    #[online_config(skip)]
     pub temp_path: String,
+    #[online_config(skip)]
     pub temp_file_size_limit_per_task: ReadableSize,
+    #[online_config(skip)]
+    pub initial_scan_pending_memory_quota: ReadableSize,
 }
 
 impl BackupStreamConfig {
@@ -2347,13 +2360,18 @@ impl BackupStreamConfig {
 impl Default for BackupStreamConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::cpu_cores_quota();
+        let total_mem = SysQuota::memory_limit_in_bytes();
+        let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
+            max_flush_interval: ReadableDuration::minutes(5),
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
+            io_threads: 2,
             enable: false,
             // TODO: may be use raft store directory
             temp_path: String::new(),
             temp_file_size_limit_per_task: ReadableSize::mb(128),
+            initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
         }
     }
 }
@@ -2656,8 +2674,8 @@ pub struct TiKvConfig {
     pub backup: BackupConfig,
 
     #[online_config(submodule)]
-    // The term "log-backup" and "backup-stream" points to the same object.
-    // But the product name is `log-backup`.
+    // The term "log backup" and "backup stream" are identity.
+    // The "log backup" should be the only product name exposed to the user.
     #[serde(rename = "log-backup")]
     pub backup_stream: BackupStreamConfig,
 
