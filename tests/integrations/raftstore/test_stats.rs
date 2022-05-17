@@ -657,7 +657,7 @@ fn check_query_num_read(
     kind: QueryKind,
     expect: u64,
 ) -> bool {
-    let start = std::time::SystemTime::now();
+    let start = std::time::Instant::now();
     let mut num = 0;
     loop {
         sleep_ms(10);
@@ -682,7 +682,7 @@ fn check_query_num_write(
     kind: QueryKind,
     expect: u64,
 ) -> bool {
-    let start = std::time::SystemTime::now();
+    let start = std::time::Instant::now();
     loop {
         sleep_ms(10);
         if let Some(hb) = cluster.pd_client.get_store_stats(store_id) {
@@ -701,7 +701,7 @@ fn check_split_key(
     start_key: Vec<u8>,
     end_key: Option<Vec<u8>>,
 ) -> bool {
-    let start = std::time::SystemTime::now();
+    let start = std::time::Instant::now();
     loop {
         sleep_ms(10);
         let region_num = cluster.pd_client.get_regions_number();
