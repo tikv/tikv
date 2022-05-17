@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use self::deadlock::{Detector, RoleChangeNotifier};
+use self::deadlock::Detector;
 use self::waiter_manager::WaiterManager;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
@@ -204,8 +204,13 @@ impl LockManager {
         &self,
         host: &mut CoprocessorHost<impl KvEngine>,
     ) {
-        let role_change_notifier = RoleChangeNotifier::new(self.detector_scheduler.clone());
+        let role_change_notifier =
+            deadlock::RoleChangeNotifier::new(self.detector_scheduler.clone());
         role_change_notifier.register(host);
+        let region_cancel_observer = waiter_manager::RegionLockWaitCancellationObserver::new(
+            self.waiter_mgr_scheduler.clone(),
+        );
+        region_cancel_observer.register(host);
     }
 
     /// Creates a `DeadlockService` to handle deadlock detect requests from other nodes.

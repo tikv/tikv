@@ -12,11 +12,19 @@ use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
 };
 use collections::{HashMap, HashSet};
+use engine_traits::KvEngine;
+use raftstore::coprocessor::RoleChange;
+use raftstore::coprocessor::{
+    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionChangeEvent, RegionChangeObserver, RoleObserver,
+};
+use std::borrow::BorrowMut;
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::num::NonZeroU64;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{
@@ -25,6 +33,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use crate::server::lock_manager::waiter_manager::Task::RegionEpochChanged;
+use crate::server::status_server::region_meta::Epoch;
 use crate::storage::mvcc::reader_tests::RegionEngine;
 use futures::compat::Compat01As03;
 use futures::compat::Future01CompatExt;
@@ -34,6 +44,7 @@ use kvproto::deadlock::WaitForEntry;
 use kvproto::metapb::RegionEpoch;
 use pd_client::RegionStat;
 use prometheus::HistogramTimer;
+use raft::StateRole;
 use tikv_util::config::ReadableDuration;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio::task::spawn_local;
@@ -132,6 +143,14 @@ pub enum Task {
         deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
     },
+    RegionLeaderRetired {
+        region_id: u64,
+        expired_term: u64,
+    },
+    RegionEpochChanged {
+        region_id: u64,
+        region_epoch: RegionEpoch,
+    },
     ChangeConfig {
         timeout: Option<ReadableDuration>,
         delay: Option<ReadableDuration>,
@@ -168,6 +187,18 @@ impl Display for Task {
             Task::WakeUp { lock_ts, .. } => write!(f, "waking up txns waiting for {}", lock_ts),
             Task::Dump { .. } => write!(f, "dump"),
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
+            Task::RegionLeaderRetired {
+                region_id,
+                expired_term,
+            } => write!(
+                f,
+                "region {} leader at term {} retired",
+                region_id, expired_term
+            ),
+            Task::RegionEpochChanged {
+                region_id,
+                region_epoch,
+            } => write!(f, "region {} epoch changed: {:?}", region_id, region_epoch),
             Task::ChangeConfig { timeout, delay } => write!(
                 f,
                 "change config to default_wait_for_lock_timeout: {:?}, wake_up_delay_duration: {:?}",
@@ -534,15 +565,30 @@ impl WaitTable {
     // }
 
     fn to_wait_for_entries(&self) -> Vec<WaitForEntry> {
-        self.wait_table
+        // self.wait_table
+        //     .iter()
+        //     .flat_map(|(_, waiters)| {
+        //         waiters.iter().map(|waiter| {
+        //             let mut wait_for_entry = WaitForEntry::default();
+        //             wait_for_entry.set_txn(waiter.start_ts.into_inner());
+        //             wait_for_entry.set_wait_for_txn(waiter.lock.ts.into_inner());
+        //             wait_for_entry.set_key_hash(waiter.lock.hash);
+        //             wait_for_entry.set_key(waiter.diag_ctx.key.clone());
+        //             wait_for_entry
+        //                 .set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
+        //             wait_for_entry
+        //         })
+        //     })
+        //     .collect()
+        self.waiter_pool
             .iter()
-            .flat_map(|(_, waiters)| {
-                waiters.iter().map(|waiter| {
+            .flat_map(|(_, waiter)| {
+                waiter.wait_info.iter().map(|waiting_item| {
                     let mut wait_for_entry = WaitForEntry::default();
                     wait_for_entry.set_txn(waiter.start_ts.into_inner());
-                    wait_for_entry.set_wait_for_txn(waiter.lock.ts.into_inner());
-                    wait_for_entry.set_key_hash(waiter.lock.hash);
-                    wait_for_entry.set_key(waiter.diag_ctx.key.clone());
+                    wait_for_entry.set_wait_for_txn(waiting_item.lock_digest.ts.into_inner());
+                    wait_for_entry.set_key_hash(waiting_item.lock_digest.hash);
+                    wait_for_entry.set_key(waiting_item.key.clone());
                     wait_for_entry
                         .set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
                     wait_for_entry
@@ -754,6 +800,14 @@ impl WaiterManager {
         }
     }
 
+    fn handle_region_leader_retire(&mut self, region_id: u64, _term: u64) {
+        self.wait_table.borrow_mut().cancel_region(region_id);
+    }
+
+    fn handle_region_epoch_change(&mut self, region_id: u64, _epoch: RegionEpoch) {
+        self.wait_table.borrow_mut().cancel_region(region_id);
+    }
+
     fn handle_config_change(
         &mut self,
         timeout: Option<ReadableDuration>,
@@ -821,6 +875,14 @@ impl FutureRunnable<Task> for WaiterManager {
             } => {
                 self.handle_deadlock(start_ts, key, lock, deadlock_key_hash, wait_chain);
             }
+            Task::RegionLeaderRetired {
+                region_id,
+                expired_term,
+            } => {}
+            Task::RegionEpochChanged {
+                region_id,
+                region_epoch,
+            } => {}
             Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(
@@ -828,6 +890,52 @@ impl FutureRunnable<Task> for WaiterManager {
                 self.wake_up_delay_duration,
             ),
         }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RegionLockWaitCancellationObserver {
+    scheduler: Scheduler,
+}
+
+impl RegionLockWaitCancellationObserver {
+    pub fn new(scheduler: Scheduler) -> Self {
+        Self { scheduler }
+    }
+
+    pub fn register(self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
+        coprocessor_host
+            .registry
+            .register_role_observer(1, BoxRoleObserver::new(self.clone()));
+        coprocessor_host
+            .registry
+            .register_region_change_observer(1, BoxRegionChangeObserver::new(self));
+    }
+}
+
+impl Coprocessor for RegionLockWaitCancellationObserver {}
+
+impl RoleObserver for RegionLockWaitCancellationObserver {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
+        self.scheduler.notify_scheduler(Task::RegionLeaderRetired {
+            region_id: ctx.region().get_id(),
+            expired_term: 0, // TODO: Pass term here.
+        });
+    }
+}
+
+impl RegionChangeObserver for RegionLockWaitCancellationObserver {
+    fn on_region_changed(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        event: RegionChangeEvent,
+        role: StateRole,
+    ) {
+        // TODO: Filter out non-leader events.
+        self.scheduler.notify_scheduler(Task::RegionEpochChanged {
+            region_id: ctx.region().get_id(),
+            region_epoch: ctx.region().get_region_epoch(),
+        });
     }
 }
 
