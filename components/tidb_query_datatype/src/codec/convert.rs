@@ -711,18 +711,18 @@ pub fn produce_str_with_specified_tp<'a>(
         let truncate_info = {
             let s = &String::from_utf8_lossy(&s);
             let mut truncate_pos = 0;
-            s.char_indices().take(flen).for_each( |(_, utf8_char)|
+            s.char_indices().take(flen).for_each(|(_, utf8_char)| {
                 if utf8_char == char::REPLACEMENT_CHARACTER {
                     truncate_pos += 1;
                 } else {
                     truncate_pos += utf8_char.len_utf8();
                 }
-            );
+            });
             (s.char_indices().count(), truncate_pos)
         };
         let (char_count, truncate_pos) = truncate_info;
         if char_count <= flen {
-            return Ok(s)
+            return Ok(s);
         }
         ctx.handle_truncate_err(Error::data_too_long(format!(
             "Data Too Long, field len {}, data len {}",
@@ -2222,12 +2222,27 @@ mod tests {
 
         // test with invalid utf8 characters 0x80 and 0x81
         let test_vec = vec![0xE4, 0xBD, 0xA0, 0x80, 0x81, 0xE4, 0xBD, 0xA0];
-        let cases = vec! [
-            (test_vec.clone(), 1, charset::CHARSET_UTF8, vec![0xE4, 0xBD, 0xA0]),
-            (test_vec.clone(), 2, charset::CHARSET_UTF8, vec![0xE4, 0xBD, 0xA0, 0x80]),
-            (test_vec.clone(), 3, charset::CHARSET_UTF8, vec![0xE4, 0xBD, 0xA0, 0x80, 0x81]),
+        let cases = vec![
+            (
+                test_vec.clone(),
+                1,
+                charset::CHARSET_UTF8,
+                vec![0xE4, 0xBD, 0xA0],
+            ),
+            (
+                test_vec.clone(),
+                2,
+                charset::CHARSET_UTF8,
+                vec![0xE4, 0xBD, 0xA0, 0x80],
+            ),
+            (
+                test_vec.clone(),
+                3,
+                charset::CHARSET_UTF8,
+                vec![0xE4, 0xBD, 0xA0, 0x80, 0x81],
+            ),
             (test_vec.clone(), 4, charset::CHARSET_UTF8, test_vec.clone()),
-            (test_vec.clone(), 5, charset::CHARSET_UTF8, test_vec.clone()),
+            (test_vec.clone(), 5, charset::CHARSET_UTF8, test_vec),
         ];
 
         for (s, char_num, cs, result) in cases {
