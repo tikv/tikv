@@ -343,8 +343,8 @@ impl ServerCluster {
 
         if ApiVersion::V2 == F::TAG {
             let causal_ts_provider =
-                Arc::new(causal_ts::SimpleTsoProvider::new(self.pd_client.clone()));
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+                block_on(causal_ts::BatchTsoProvider::new(self.pd_client.clone())).unwrap();
+            let causal_ob = causal_ts::CausalObserver::new(Arc::new(causal_ts_provider));
             causal_ob.register_to(&mut coprocessor_host);
         }
 

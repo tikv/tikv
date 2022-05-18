@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use fail::fail_point;
 use futures::executor::block_on;
 use parking_lot::RwLock;
 use pd_client::PdClient;
@@ -284,6 +285,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     }
 
     fn calc_new_batch_size(batch_size: u32, used_size: u32, batch_min_size: u32) -> u32 {
+        fail_point!("causal_ts_batch_size", |v| v.unwrap().parse().unwrap());
         if used_size > batch_size * 3 / 4 {
             // Enlarge to double if used more than 3/4.
             std::cmp::min(batch_size << 1, TSO_BATCH_MAX_SIZE)
@@ -299,9 +301,9 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         // Spawn renew thread.
         let pd_client = self.pd_client.clone();
         let tso_batch = self.batch.clone();
-        let batch_min_size = self.batch_min_size;
+        let batch_size = Self::calc_new_batch_size(self.batch_min_size, 0, self.batch_min_size);
         self.causal_ts_worker.remote().spawn(async move {
-            Self::renew_thread(pd_client, tso_batch, batch_min_size, renew_request_rx).await;
+            Self::renew_thread(pd_client, tso_batch, batch_size, renew_request_rx).await;
         });
 
         self.renew_tso_batch(true, TSO_BATCH_RENEW_ON_INITIALIZE)
@@ -320,10 +322,17 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
             }
         };
 
+        let calc_renew_interval = || {
+            fail_point!("causal_ts_background_renew_interval", |v| {
+                Duration::from_millis(v.unwrap().parse().unwrap())
+            });
+            self.renew_interval
+        };
+        let renew_interval = calc_renew_interval();
         // Duration::ZERO means never renew automatically. For test purpose ONLY.
-        if self.renew_interval > Duration::ZERO {
+        if renew_interval > Duration::ZERO {
             self.causal_ts_worker
-                .spawn_interval_async_task(self.renew_interval, task);
+                .spawn_interval_async_task(renew_interval, task);
         }
         Ok(())
     }

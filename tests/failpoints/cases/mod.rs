@@ -4,6 +4,7 @@ mod test_async_fetch;
 mod test_async_io;
 mod test_backup;
 mod test_bootstrap;
+mod test_causal_ts;
 mod test_cmd_epoch_checker;
 mod test_conf_change;
 mod test_coprocessor;

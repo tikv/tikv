@@ -8,6 +8,7 @@ use std::sync::{
 use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::HashMap;
 use engine_traits::KvEngine;
+use fail::fail_point;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use parking_lot::RwLock;
 use raft::StateRole;
@@ -58,10 +59,19 @@ impl<Ts: CausalTsProvider> CausalObserver<Ts> {
     // Some test cases do not have coprocessor to deal with "on_region_changed".
     // TODO: make test cases handle "on_region_changed".
     fn region_is_leader(&self, region_id: u64) -> bool {
+        fail_point!("causal_ts_region_is_leader", |v| v.unwrap() == "true");
         let region_map = self.region_map.read();
         region_map
             .get(&region_id)
             .map_or(true, |info| info.is_leader.load(Ordering::Relaxed))
+    }
+
+    fn region_set_leader(&self, region_id: u64, is_leader: bool) {
+        let region_map = self.region_map.read();
+        if let Some(info) = region_map.get(&region_id) {
+            // The region would have been destroyed.
+            info.is_leader.store(is_leader, Ordering::Relaxed);
+        }
     }
 }
 
@@ -104,23 +114,33 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
         }) {
             if ts.is_none() {
                 let region_id = ctx.region().get_id();
-                if !self.region_is_leader(region_id) {
-                    // Fix issue #12498.
-                    // In scenario of frequent leader transfer, the observing of change from
-                    // follower to leader by `on_role_change` would be later than the real role
-                    // change in raft state and adjacent write commands.
-                    // As raft state must be leader when reach here, `!is_leader` just indicates that
-                    // the change from follower to leader is not observed yet.
-                    // So it is necessary to flush timestamp here for causality correctness.
-                    // TODO: reduce the duplicated flush in following `on_role_change`.
-                    // TODO: `flush()` return a ts.
-                    self.causal_ts_provider
-                        .flush()
-                        .map_err(|err| -> coprocessor::Error {
-                            box_err!("Flush causal timestamp in pre_propose error: {:?}", err)
-                        })?;
-                    debug!("CausalObserver::pre_propose_query, flush timestamp succeed"; "region" => region_id);
-                }
+                let do_flush = || -> coprocessor::Result<()> {
+                    fail_point!("causal_ts_flush_in_pre_propose", |_| Ok(()));
+                    if !self.region_is_leader(region_id) {
+                        // Fix issue #12498.
+                        // In scenario of frequent leader transfer, the observing of change from
+                        // follower to leader by `on_role_change` would be later than the real role
+                        // change in raft state and adjacent write commands.
+                        // As raft state must be leader when reach here, `!is_leader` just indicates that
+                        // the change from follower to leader is not observed yet.
+                        // So it is necessary to flush timestamp here for causality correctness.
+                        // TODO: reduce the duplicated flush in following `on_role_change`.
+                        // TODO: `flush()` return a ts.
+                        self.causal_ts_provider
+                            .flush()
+                            .map_err(|err| -> coprocessor::Error {
+                                box_err!("Flush causal timestamp in pre_propose error: {:?}", err)
+                            })?;
+                        debug!("CausalObserver::pre_propose_query, flush timestamp succeed"; "region" => region_id);
+
+                        // As above comments say, this region is leader although not observed.
+                        // So it is reasonable to set `is_leader` true here.
+                        // Also be helpful to avoid duplicated flush in the same batch.
+                        self.region_set_leader(region_id, true);
+                    }
+                    Ok(())
+                };
+                do_flush()?;
 
                 ts = Some(self.causal_ts_provider.get_ts().map_err(
                     |err| -> coprocessor::Error {
@@ -138,6 +158,7 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
 impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
     /// Observe becoming leader, to flush CausalTsProvider.
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
+        fail_point!("causal_ts_before_on_role_change", |_| ());
         let region_id = ctx.region().get_id();
         let is_leader = role_change.state == StateRole::Leader;
         if is_leader {
@@ -148,11 +169,7 @@ impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
             }
         }
 
-        let region_map = self.region_map.read();
-        if let Some(info) = region_map.get(&region_id) {
-            // The region would have been destroyed.
-            info.is_leader.store(is_leader, Ordering::Relaxed);
-        }
+        self.region_set_leader(region_id, is_leader);
     }
 }
 
