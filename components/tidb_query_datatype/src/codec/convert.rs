@@ -710,22 +710,20 @@ pub fn produce_str_with_specified_tp<'a>(
     if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
         let truncate_info = {
             let s = &String::from_utf8_lossy(&s);
-            let mut truncate_pos = 0 as usize;
-            let mut char_indices = s.char_indices();
-            for _ in 0..flen {
-                let utf8_char = char_indices.next();
-                if utf8_char == None {
-                    break;
-                }
-                if utf8_char.unwrap().1 == char::REPLACEMENT_CHARACTER {
+            let mut truncate_pos = 0;
+            s.char_indices().take(flen).for_each( |(_, utf8_char)|
+                if utf8_char == char::REPLACEMENT_CHARACTER {
                     truncate_pos += 1;
                 } else {
-                    truncate_pos += utf8_char.unwrap().1.len_utf8();
+                    truncate_pos += utf8_char.len_utf8();
                 }
-            }
+            );
             (s.char_indices().count(), truncate_pos)
         };
         let (char_count, truncate_pos) = truncate_info;
+        if char_count <= flen {
+            return Ok(s)
+        }
         ctx.handle_truncate_err(Error::data_too_long(format!(
             "Data Too Long, field len {}, data len {}",
             flen, char_count
