@@ -5,12 +5,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{mpsc::Receiver, Arc},
-    time::Instant,
 };
 
 use bytes::{Buf, BufMut, Bytes};
 use file_system::{DirectWriter, IORateLimitMode, IOType};
 use slog_global::*;
+use tikv_util::time::Instant;
 
 use crate::{log_batch::RaftLogBlock, write_batch::RegionBatch, *};
 
@@ -183,9 +183,9 @@ impl Worker {
         truncated_index: u64,
         truncated: Vec<RaftLogBlock>,
     ) {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
         drop(truncated);
-        ENGINE_TRUNCATE_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
+        ENGINE_TRUNCATE_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
         self.truncated_idx.insert(region_id, truncated_index);
         let mut removed_epoch_ids = HashSet::new();
         let mut remove_cnt = 0;

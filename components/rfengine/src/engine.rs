@@ -7,13 +7,13 @@ use std::{
     path::{Path, PathBuf},
     sync::{mpsc::SyncSender, Arc, Mutex, RwLock},
     thread::{self, JoinHandle},
-    time::Instant,
 };
 
 use bytes::{Buf, Bytes};
-use dashmap::{mapref::one::Ref, DashMap};
+use dashmap::mapref::one::Ref;
 use raft_proto::eraftpb;
 use slog_global::info;
+use tikv_util::time::Instant;
 
 use crate::{
     log_batch::{RaftLogBlock, RaftLogs},
@@ -25,39 +25,38 @@ use crate::{
 #[derive(Clone)]
 pub struct RfEngine {
     pub dir: PathBuf,
+
     pub(crate) writer: Arc<Mutex<WALWriter>>,
 
     pub(crate) regions: Arc<dashmap::DashMap<u64, RwLock<RegionData>>>,
 
     pub(crate) task_sender: SyncSender<Task>,
+
     pub(crate) worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl RfEngine {
     pub fn open(dir: &Path, wal_size: usize) -> Result<Self> {
-        maybe_create_dir(dir)?;
+        maybe_create_recycle_dir(dir)?;
         let mut epoches = read_epoches(dir)?;
-        let mut epoch_id = 1;
-        if !epoches.is_empty() {
-            epoch_id = epoches.last().unwrap().id;
-        }
+        let epoch_id = epoches.last().map(|e| e.id).unwrap_or(1);
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1024);
         let writer = WALWriter::new(dir, epoch_id, wal_size)?;
         let mut en = Self {
             dir: dir.to_owned(),
-            regions: Arc::new(DashMap::default()),
+            regions: Arc::default(),
             writer: Arc::new(Mutex::new(writer)),
             task_sender: tx,
-            worker_handle: Arc::new(Mutex::new(None)),
+            worker_handle: Arc::default(),
         };
         let mut offset = 0;
         let mut worker_states = HashMap::new();
         for ep in &epoches {
             offset = en.load_epoch(ep)?;
             if ep.has_state_file {
-                for e in en.regions.iter() {
-                    let region = e.read().unwrap();
+                for region in en.regions.iter() {
+                    let region = region.read().unwrap();
                     worker_states.insert(region.region_id, region.states.clone());
                 }
             }
@@ -66,22 +65,58 @@ impl RfEngine {
         if !epoches.is_empty() {
             epoches.pop();
         }
+
         {
             let mut worker = Worker::new(dir.to_owned(), epoches, rx, worker_states);
             let join_handle = thread::spawn(move || worker.run());
-            let mut handle_ref = en.worker_handle.lock().unwrap();
-            *handle_ref = Some(join_handle);
+            en.worker_handle.lock().unwrap().replace(join_handle);
         }
+
         Ok(en)
     }
 
+    pub(crate) fn get_or_init_region_data(
+        &self,
+        region_id: u64,
+    ) -> Ref<'_, u64, RwLock<RegionData>> {
+        self.regions
+            .entry(region_id)
+            .or_insert_with(|| RwLock::new(RegionData::new(region_id)))
+            .downgrade()
+    }
+
+    /// Applies and persists the write batch.
     pub fn write(&self, wb: WriteBatch) -> Result<usize> {
         self.apply(&wb);
         self.persist(wb)
     }
 
+    /// Applies the write batch to memory without persisting it to WAL.
+    pub fn apply(&self, wb: &WriteBatch) {
+        let timer = Instant::now_coarse();
+        for (&region_id, batch_data) in &wb.regions {
+            let region_data = self.get_or_init_region_data(region_id);
+            let mut region_data = region_data.write().unwrap();
+            let truncated = region_data.apply(batch_data);
+            let truncated_index = region_data.truncated_idx;
+            drop(region_data);
+            if !truncated.is_empty() {
+                self.task_sender
+                    .send(Task::Truncate {
+                        region_id,
+                        truncated_index,
+                        truncated,
+                    })
+                    .unwrap();
+            }
+        }
+        ENGINE_APPLY_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
+    }
+
+    /// Persists the write batch to WAL. It can be used in another thread to implement async I/O,
+    /// i.e., call `apply` in the main thread and call `persist` in the I/O thread.
     pub fn persist(&self, wb: WriteBatch) -> Result<usize> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
         let mut writer = self.writer.lock().unwrap();
         let epoch_id = writer.epoch_id;
         for data in wb.regions.values() {
@@ -93,32 +128,8 @@ impl RfEngine {
         if rotated {
             self.task_sender.send(Task::Rotate { epoch_id }).unwrap();
         }
-        ENGINE_PERSIST_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
+        ENGINE_PERSIST_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
         Ok(size)
-    }
-
-    // apply applies the write batch to the memory before persist, so it can be retrieved
-    // before persist.
-    // It is used for async I/O that persist the write batch in another thread.
-    pub fn apply(&self, wb: &WriteBatch) {
-        let timer = Instant::now();
-        for (region_id, batch_data) in &wb.regions {
-            let region_id = *region_id;
-            let region_ref = self.get_or_init_region_data(region_id);
-            let mut region_data = region_ref.write().unwrap();
-            let truncated = region_data.apply(batch_data);
-            let truncated_index = region_data.truncated_idx;
-            if !truncated.is_empty() {
-                self.task_sender
-                    .send(Task::Truncate {
-                        region_id,
-                        truncated_index,
-                        truncated,
-                    })
-                    .unwrap();
-            }
-        }
-        ENGINE_APPLY_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
     }
 
     pub fn is_empty(&self) -> bool {
@@ -126,86 +137,61 @@ impl RfEngine {
     }
 
     pub fn get_term(&self, region_id: u64, index: u64) -> Option<u64> {
-        let map_ref = self.regions.get(&region_id);
-        map_ref.as_ref()?;
-        let map_ref = map_ref.unwrap();
-        let region_data = map_ref.read().unwrap();
-        region_data.term(index)
+        self.regions
+            .get(&region_id)
+            .map(|data| data.read().unwrap().term(index))
+            .flatten()
     }
 
     pub fn get_last_index(&self, region_id: u64) -> Option<u64> {
-        let map_ref = self.regions.get(&region_id);
-        map_ref.as_ref()?;
-        let map_ref = map_ref.unwrap();
-        let region_data = map_ref.read().unwrap();
-        let last = region_data.raft_logs.last_index();
-        if last == 0 {
-            return None;
-        }
-        Some(last)
+        self.regions
+            .get(&region_id)
+            .map(|data| data.read().unwrap().raft_logs.last_index())
+            .and_then(|index| if index != 0 { Some(index) } else { None })
     }
 
     pub fn get_state(&self, region_id: u64, key: &[u8]) -> Option<Bytes> {
-        let map_ref = self.regions.get(&region_id);
-        map_ref.as_ref()?;
-        let map_ref = map_ref.unwrap();
-        let region_data = map_ref.read().unwrap();
-        match region_data.get_state(key) {
-            Some(val) => {
+        self.regions.get(&region_id).and_then(|data| {
+            data.read().unwrap().get_state(key).and_then(|val| {
+                // TODO: seems it's impossible.
                 if !val.is_empty() {
                     Some(val.clone())
                 } else {
                     None
                 }
-            }
-            None => None,
-        }
+            })
+        })
     }
 
+    /// Get the value of the last state key with the `prefix`. `prefix` must be non-empty.
     pub fn get_last_state_with_prefix(&self, region_id: u64, prefix: &[u8]) -> Option<Bytes> {
-        let map_ref = self.regions.get(&region_id);
-        map_ref.as_ref()?;
-        let map_ref = map_ref.unwrap();
-        let region_data = map_ref.read().unwrap();
-        let mut end_prefix = Vec::from(prefix);
+        debug_assert!(!prefix.is_empty());
+        let region_data = self.regions.get(&region_id)?;
+        let region_data = region_data.read().unwrap();
+
+        let mut end_prefix = prefix.to_vec();
         end_prefix[prefix.len() - 1] += 1;
-        let r = Bytes::copy_from_slice(prefix)..Bytes::copy_from_slice(&end_prefix);
-        let states = &region_data.states;
-        let range = states.range(r);
-        for (k, v) in range.rev() {
-            if k.chunk() == end_prefix.as_slice() {
-                continue;
-            }
-            return Some(v.clone());
-        }
-        None
+        let range = Bytes::copy_from_slice(prefix)..Bytes::from(end_prefix);
+        region_data
+            .states
+            .range(range)
+            .rev()
+            .next()
+            .map(|(_, v)| v.clone())
     }
 
-    pub(crate) fn get_or_init_region_data(
-        &self,
-        region_id: u64,
-    ) -> Ref<'_, u64, RwLock<RegionData>> {
-        match self.regions.get(&region_id) {
-            Some(region_data) => {
-                return region_data;
-            }
-            None => {}
-        }
-        let region_data = RwLock::new(RegionData::new(region_id));
-        self.regions.insert(region_id, region_data);
-        self.regions.get(&region_id).unwrap()
-    }
-
+    /// Iterates states of the region in order or in desc order if `desc` is true until `f` returns
+    /// error.
     pub fn iterate_region_states<F>(&self, region_id: u64, desc: bool, mut f: F) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<()>,
     {
-        let map_ref = self.regions.get(&region_id);
-        if map_ref.is_none() {
-            return Ok(());
-        }
-        let map_ref = map_ref.unwrap();
-        let region_data = map_ref.read().unwrap();
+        let region_data = self.regions.get(&region_id);
+        let region_data = match &region_data {
+            Some(data) => data.read().unwrap(),
+            None => return Ok(()),
+        };
+
         let states = &region_data.states;
         if desc {
             for (k, v) in states.iter().rev() {
@@ -219,29 +205,27 @@ impl RfEngine {
         Ok(())
     }
 
-    /// f returns false to stop iterating.
+    /// Iterates stats of all regions in order or in desc order if `desc` is true and breaks one
+    /// regions iteration if `f` returns false.
     pub fn iterate_all_states<F>(&self, desc: bool, mut f: F)
     where
         F: FnMut(u64, &[u8], &[u8]) -> bool,
     {
-        for region_ref in self.regions.iter() {
-            let region_data = region_ref.read().unwrap();
-            let states = &region_data.states;
-            let iter = states.iter();
+        self.regions.iter().for_each(|data| {
+            let data = data.read().unwrap();
             if desc {
-                for (k, v) in iter.rev() {
-                    if !f(region_data.region_id, k.chunk(), v.chunk()) {
-                        break;
-                    }
-                }
+                data.states
+                    .iter()
+                    .rev()
+                    .take_while(|(k, v)| f(data.region_id, k, v))
+                    .count();
             } else {
-                for (k, v) in iter {
-                    if !f(region_data.region_id, k.chunk(), v.chunk()) {
-                        break;
-                    }
-                }
+                data.states
+                    .iter()
+                    .take_while(|(k, v)| f(data.region_id, k, v))
+                    .count();
             }
-        }
+        });
     }
 
     pub fn stop_worker(&mut self) {
@@ -254,52 +238,52 @@ impl RfEngine {
 
     /// After split and before the new region is initially flushed, the old region's raft log
     /// can not be truncated, otherwise, it would not be able to recover the new region.
-    /// So we can call add_dependent after split to protect the raft log.
+    /// So we can call `add_dependent` after split to protect the raft log.
     /// After the new region is initially flushed or re-ingested or destroyed, call
-    /// remove_dependent to resume truncate the raft log.
+    /// `remove_dependent` to resume truncating the raft log.
     pub fn add_dependent(&self, region_id: u64, dependent_id: u64) {
-        let map_ref = self.regions.get(&region_id);
-        if map_ref.is_none() {
-            return;
+        if let Some(len) = self.regions.get(&region_id).map(|data| {
+            let mut data = data.write().unwrap();
+            data.dependents.insert(dependent_id);
+            data.dependents.len()
+        }) {
+            info!(
+                "region {} add dependent {}, dependents_len {}",
+                region_id, dependent_id, len
+            );
         }
-        let map_ref = map_ref.unwrap();
-        let mut region_data = map_ref.write().unwrap();
-        region_data.dependents.insert(dependent_id);
-        let dependents_len = region_data.dependents.len();
-        drop(region_data);
-        info!(
-            "region {} add dependent {}, dependents_len {}",
-            region_id, dependent_id, dependents_len
-        );
     }
 
     pub fn remove_dependent(&self, region_id: u64, dependent_id: u64) {
-        let map_ref = self.regions.get(&region_id);
-        if map_ref.is_none() {
-            return;
+        if let Some(len) = self.regions.get(&region_id).map(|data| {
+            let mut data = data.write().unwrap();
+            data.dependents.remove(&dependent_id);
+            data.dependents.len()
+        }) {
+            info!(
+                "region {} remove dependent {}, dependents_len {}",
+                region_id, dependent_id, len
+            );
         }
-        let map_ref = map_ref.unwrap();
-        let mut region_data = map_ref.write().unwrap();
-        region_data.dependents.remove(&dependent_id);
-        let dependents_len = region_data.dependents.len();
-        info!(
-            "region {} remove dependent {}, dependents_len {}",
-            region_id, dependent_id, dependents_len
-        );
     }
 
+    /// Dumps the state of the engine.
     pub fn get_engine_stats(&self) -> EngineStats {
         let mut total_mem_size = 0;
         let mut total_mem_entries = 0;
-        let mut regions_stats = vec![];
-        for region in self.regions.iter() {
-            let region_stats = region.read().unwrap().get_stats();
-            total_mem_size += region_stats.size;
-            total_mem_entries += region_stats.num_logs;
-            regions_stats.push(region_stats);
-        }
+        let mut regions_stats = self
+            .regions
+            .iter()
+            .map(|data| {
+                let region_stats = data.read().unwrap().get_stats();
+                total_mem_size += region_stats.size;
+                total_mem_entries += region_stats.num_logs;
+                region_stats
+            })
+            .collect::<Vec<RegionStats>>();
         regions_stats.sort_by(|a, b| (b.size).cmp(&a.size));
         regions_stats.truncate(10);
+
         let mut disk_size = 0;
         let mut num_files = 0;
         if let Ok(read_dir) = self.dir.read_dir() {
@@ -319,16 +303,16 @@ impl RfEngine {
         }
     }
 
+    /// Dumps the state of the region.
     pub fn get_region_stats(&self, region_id: u64) -> RegionStats {
-        if let Some(mref) = self.regions.get(&region_id) {
-            mref.read().unwrap().get_stats()
-        } else {
-            RegionStats::default()
-        }
+        self.regions
+            .get(&region_id)
+            .map(|data| data.read().unwrap().get_stats())
+            .unwrap_or_default()
     }
 }
 
-pub(crate) fn maybe_create_dir(dir: &Path) -> Result<()> {
+pub(crate) fn maybe_create_recycle_dir(dir: &Path) -> Result<()> {
     let recycle_path = dir.join(RECYCLE_DIR);
     if !recycle_path.exists() {
         fs::create_dir_all(recycle_path)?;
@@ -450,7 +434,9 @@ pub struct RegionStats {
 #[cfg(test)]
 mod tests {
     use bytes::{BufMut, BytesMut};
+    use engine_traits::{Error as TraitError, RaftEngineReadOnly};
     use eraftpb::{Entry, EntryType};
+    use protobuf::Message;
     use slog::o;
 
     use super::*;
@@ -559,7 +545,9 @@ mod tests {
         entry.set_term(term);
         entry.set_index(index);
         entry.set_data(data.to_vec().into());
-        entry.set_context(vec![context].into());
+        if context > 0 {
+            entry.set_context(vec![context].into());
+        }
         entry
     }
 
@@ -635,5 +623,188 @@ mod tests {
         assert!(region_data.apply(&region_batch).is_empty());
         assert!(region_data.get_state(b"k1").is_none());
         assert_eq!(region_data.get_state(b"k2"), Some(&b"v2".to_vec().into()));
+    }
+
+    #[test]
+    fn test_rfengine_basic() {
+        const STATE_PREFIX: u8 = b'p';
+
+        let dir = tempfile::tempdir().unwrap();
+        let engine = RfEngine::open(dir.path(), 128 * 1024).unwrap();
+
+        // Write 10 logs and states to 2 region.
+        let mut data_map = HashMap::new();
+        let mut wb = WriteBatch::new();
+        for region_id in 1..=2 {
+            for i in 1..=10 {
+                let entry = new_raft_entry(EntryType::EntryNormal, region_id, i, b"data", 0);
+                let (state_key, state_val) = (&[STATE_PREFIX, i as u8], &[i as u8]);
+                wb.append_raft_log(region_id, &entry);
+                wb.set_state(region_id, state_key, state_val);
+
+                let (entries, states) = data_map
+                    .entry(region_id)
+                    .or_insert_with(|| (vec![], BTreeMap::new()));
+                entries.push(entry);
+                states.insert(state_key.to_vec(), state_val.to_vec());
+            }
+        }
+        assert!(engine.write(wb).is_ok());
+
+        assert_eq!(engine.get_term(1, 1), Some(1));
+        assert_eq!(engine.get_term(1, 11), None);
+        assert_eq!(engine.get_term(3, 1), None);
+        assert_eq!(engine.get_last_index(1), Some(10));
+        assert_eq!(engine.get_last_index(3), None);
+
+        // Test `get_entry` and `get_state`.
+        for (&region_id, (entries, states)) in &data_map {
+            entries.iter().for_each(|entry| {
+                assert_eq!(
+                    entry,
+                    &engine.get_entry(region_id, entry.index).unwrap().unwrap(),
+                );
+            });
+            states
+                .iter()
+                .for_each(|(key, val)| assert_eq!(val, &engine.get_state(region_id, key).unwrap()));
+        }
+        assert!(engine.get_entry(1, 11).unwrap().is_none());
+        assert!(engine.get_entry(3, 1).unwrap().is_none());
+        assert!(engine.get_state(1, b"k").is_none());
+
+        // Test `fetch_entries_to`.
+        let mut buf = vec![];
+        for region_id in 1..=2 {
+            for low in 1..=10 {
+                for high in low + 1..=11 {
+                    assert_eq!(
+                        engine
+                            .fetch_entries_to(region_id, low, high, None, &mut buf)
+                            .unwrap(),
+                        (high - low) as usize
+                    );
+                    assert_eq!(
+                        data_map.get(&region_id).unwrap().0
+                            [(low - 1) as usize..(high - 1) as usize],
+                        buf
+                    );
+                    buf.clear();
+                }
+            }
+        }
+        // Test `fetch_entries_to` should push logs to the buf.
+        let region1_entries = &data_map.get(&1).unwrap().0;
+        for i in 1..=10 {
+            assert_eq!(
+                engine
+                    .fetch_entries_to(1, i, i + 1, None, &mut buf)
+                    .unwrap(),
+                1
+            );
+            assert_eq!(buf, region1_entries[..i as usize]);
+        }
+        assert!(matches!(
+            engine.fetch_entries_to(1, 11, 12, None, &mut buf),
+            Err(TraitError::EntriesUnavailable),
+        ));
+        // Test `fetch_entries_to` limits size.
+        let mut max_size = 0;
+        for (i, entry) in region1_entries.iter().enumerate() {
+            buf.clear();
+            max_size += entry.compute_size();
+            assert_eq!(
+                engine
+                    .fetch_entries_to(1, 1, 11, Some(max_size as usize), &mut buf)
+                    .unwrap(),
+                i + 1
+            );
+            assert_eq!(buf, region1_entries[..=i]);
+        }
+
+        // Test `get_last_state_with_prefix`
+        assert_eq!(
+            engine
+                .get_last_state_with_prefix(1, &[STATE_PREFIX])
+                .unwrap(),
+            [10 as u8].as_slice()
+        );
+        assert!(
+            engine
+                .get_last_state_with_prefix(1, &[STATE_PREFIX + 1])
+                .is_none()
+        );
+
+        // Test `iterate_region_states`
+        for desc in [false, true] {
+            let mut expect_index = if desc { 10 } else { 1 };
+            assert!(
+                engine
+                    .iterate_region_states(1, desc, |k, v| {
+                        assert_eq!(k, &[STATE_PREFIX, expect_index]);
+                        assert_eq!(v, &[expect_index]);
+                        if desc {
+                            expect_index -= 1;
+                        } else {
+                            expect_index += 1;
+                        }
+                        Ok(())
+                    })
+                    .is_ok()
+            );
+            assert_eq!(expect_index, if desc { 0 } else { 11 });
+        }
+        // Test `iterate_region_states` breaks.
+        let mut count = 0;
+        assert!(matches!(
+            engine.iterate_region_states(1, false, |_, _| {
+                count += 1;
+                Err(Error::EOF)
+            }),
+            Err(Error::EOF)
+        ));
+        assert_eq!(count, 1);
+
+        // Test `iterate_all_states`
+        for desc in [false, true] {
+            let mut count = 0;
+            engine.iterate_all_states(desc, |id, k, v| {
+                assert_eq!(v, data_map.get(&id).unwrap().1.get(k).unwrap());
+                count += 1;
+                true
+            });
+            assert_eq!(count, 20);
+        }
+        // Test `iterate_all_states` breaks.
+        let mut count = 0;
+        engine.iterate_all_states(false, |_, _, _| {
+            count += 1;
+            false
+        });
+        assert_eq!(count, 2);
+
+        // Test `add_dependent` and `remove_dependent`.
+        engine.add_dependent(1, 1);
+        assert!(
+            engine
+                .regions
+                .get(&1)
+                .unwrap()
+                .read()
+                .unwrap()
+                .dependents
+                .contains(&1)
+        );
+        engine.remove_dependent(1, 1);
+        assert!(
+            !engine
+                .regions
+                .get(&1)
+                .unwrap()
+                .read()
+                .unwrap()
+                .dependents
+                .contains(&1)
+        );
     }
 }
