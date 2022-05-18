@@ -1266,6 +1266,8 @@ fn test_merge_election_and_restart() {
     cluster.run();
 
     let region = pd_client.get_region(b"k1").unwrap();
+    let region_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), region_on_store1);
     cluster.must_split(&region, b"k2");
 
     let r1 = pd_client.get_region(b"k1").unwrap();

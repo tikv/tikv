@@ -1089,7 +1089,7 @@ where
             report_peers.insert(*region_id, read_stat);
         }
 
-        stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
+        collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, &mut stats);
 
         let disk_cap = disk_stats.total_space();
         let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
@@ -2137,13 +2137,13 @@ fn send_destroy_peer_message<EK, ER>(
 fn collect_report_read_peer_stats(
     capacity: usize,
     mut report_read_stats: HashMap<u64, pdpb::PeerStat>,
-    mut stats: pdpb::StoreStats,
-) -> pdpb::StoreStats {
+    stats: &mut pdpb::StoreStats,
+) {
     if report_read_stats.len() < capacity * 3 {
         for (_, read_stat) in report_read_stats {
             stats.peer_stats.push(read_stat);
         }
-        return stats;
+        return;
     }
     let mut keys_topn_report = TopN::new(capacity);
     let mut bytes_topn_report = TopN::new(capacity);
@@ -2179,7 +2179,6 @@ fn collect_report_read_peer_stats(
             stats.peer_stats.push(report_stat);
         }
     }
-    stats
 }
 
 fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
@@ -2314,7 +2313,7 @@ mod tests {
             report_stats.insert(i, stat);
         }
         let mut store_stats = pdpb::StoreStats::default();
-        store_stats = collect_report_read_peer_stats(1, report_stats, store_stats);
+        collect_report_read_peer_stats(1, report_stats, &mut store_stats);
         assert_eq!(store_stats.peer_stats.len(), 3)
     }
 
