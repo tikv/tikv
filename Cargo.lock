@@ -3786,8 +3786,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f9307de92566887d485ac6f20df17b0fe1704fffdbad0bdbc05a3864d3082f6"
+source = "git+https://github.com/mornyx/pprof-rs.git?branch=fix-errno#acebd2ccb7a8801ed051c195ad1aeb9a06a909e0"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
