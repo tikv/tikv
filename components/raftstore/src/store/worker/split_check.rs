@@ -258,8 +258,8 @@ where
                 .enumerate()
                 .filter_map(|(i, key)| {
                     let key = strip_timestamp_if_exists(key);
-                    assert!(is_valid_split_key(&key, i, &region));
                     if is_valid_split_key(&key, i, &bucket_region) {
+                        assert!(is_valid_split_key(&key, i, &region));
                         Some(key)
                     } else {
                         None
