@@ -61,7 +61,6 @@ pub struct Config {
     pub raft_max_size_per_msg: ReadableSize,
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
-    #[online_config(hidden)]
     pub raft_entry_max_size: ReadableSize,
 
     // Interval to compact unnecessary raft log.
@@ -458,6 +457,12 @@ impl Config {
         {
             return Err(box_err!(
                 "raft max size per message should be greater than 0 and less than or equal to 3GiB"
+            ));
+        }
+
+        if self.raft_entry_max_size.0 == 0 || self.raft_entry_max_size.0 > ReadableSize::gb(3).0 {
+            return Err(box_err!(
+                "raft entry max size should be greater than 0 and less than or equal to 3GiB"
             ));
         }
 
@@ -1067,6 +1072,14 @@ mod tests {
         cfg.raft_max_size_per_msg = ReadableSize::gb(64);
         assert!(cfg.validate().is_err());
         cfg.raft_max_size_per_msg = ReadableSize::gb(3);
+        assert!(cfg.validate().is_ok());
+
+        cfg = Config::new();
+        cfg.raft_entry_max_size = ReadableSize(0);
+        assert!(cfg.validate().is_err());
+        cfg.raft_entry_max_size = ReadableSize::mb(3073);
+        assert!(cfg.validate().is_err());
+        cfg.raft_entry_max_size = ReadableSize::gb(3);
         assert!(cfg.validate().is_ok());
     }
 }
