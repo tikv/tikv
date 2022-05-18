@@ -5939,16 +5939,18 @@ fn demote_failed_voters_request(
     let mut req = new_admin_request(region.get_id(), peer.clone());
     req.mut_header()
         .set_region_epoch(region.get_region_epoch().clone());
-    let mut change_peer_reqs: Vec<pdpb::ChangePeer> = failed_voters
+    let mut change_peer_reqs: Vec<pdpb::ChangePeer> = region
+        .get_peers()
         .into_iter()
-        .filter_map(|mut peer| {
+        .filter_map(|peer| {
             if failed_voter_ids.contains(&peer.get_id())
                 && peer.get_role() == metapb::PeerRole::Voter
             {
-                peer.set_role(metapb::PeerRole::Learner);
+                let mut peer_clone = peer.clone();
+                peer_clone.set_role(metapb::PeerRole::Learner);
                 let mut cp = pdpb::ChangePeer::default();
                 cp.set_change_type(ConfChangeType::AddLearnerNode);
-                cp.set_peer(peer);
+                cp.set_peer(peer_clone);
                 return Some(cp);
             }
             None
