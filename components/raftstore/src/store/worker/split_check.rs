@@ -16,6 +16,7 @@ use kvproto::{
 };
 use online_config::{ConfigChange, OnlineConfig};
 use tikv_util::{box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable};
+use txn_types::Key;
 
 use super::metrics::*;
 #[cfg(any(test, feature = "testexport"))]
@@ -145,6 +146,8 @@ pub struct Bucket {
 pub enum Task {
     SplitCheckTask {
         region: Region,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
         auto_split: bool,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
@@ -164,6 +167,26 @@ impl Task {
     ) -> Task {
         Task::SplitCheckTask {
             region,
+            start_key: None,
+            end_key: None,
+            auto_split,
+            policy,
+            bucket_ranges,
+        }
+    }
+
+    pub fn split_check_key_range(
+        region: Region,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
+        auto_split: bool,
+        policy: CheckPolicy,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    ) -> Task {
+        Task::SplitCheckTask {
+            region,
+            start_key,
+            end_key,
             auto_split,
             policy,
             bucket_ranges,
@@ -314,18 +337,31 @@ where
     fn check_split_and_bucket(
         &mut self,
         region: &Region,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
         auto_split: bool,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) {
         let region_id = region.get_id();
-        let start_key = keys::enc_start_key(region);
-        let end_key = keys::enc_end_key(region);
+        let is_key_range = start_key.is_some() && end_key.is_some();
+        let start_key = if is_key_range {
+            // This key is from a request, which should be encoded first.
+            keys::data_key(Key::from_raw(&start_key.unwrap()).as_encoded().as_slice())
+        } else {
+            keys::enc_start_key(region)
+        };
+        let end_key = if is_key_range {
+            keys::data_end_key(Key::from_raw(&end_key.unwrap()).as_encoded().as_slice())
+        } else {
+            keys::enc_end_key(region)
+        };
         debug!(
             "executing task";
             "region_id" => region_id,
             "start_key" => log_wrappers::Value::key(&start_key),
             "end_key" => log_wrappers::Value::key(&end_key),
+            "is_key_range" => is_key_range,
             "policy" => ?policy,
         );
         CHECK_SPILT_COUNTER.all.inc();
@@ -334,16 +370,33 @@ where
                 .new_split_checker_host(region, &self.engine, auto_split, policy);
 
         if host.skip() {
-            debug!("skip split check"; "region_id" => region.get_id());
+            debug!("skip split check";
+                "region_id" => region.get_id(),
+                "start_key" => log_wrappers::Value::key(&start_key),
+                "end_key" => log_wrappers::Value::key(&end_key),
+                "is_key_range" => is_key_range,
+            );
             return;
         }
 
         let split_keys = match host.policy() {
             CheckPolicy::Scan => {
-                match self.scan_split_keys(&mut host, region, &start_key, &end_key, bucket_ranges) {
+                match self.scan_split_keys(
+                    &mut host,
+                    region,
+                    &start_key,
+                    &end_key,
+                    is_key_range,
+                    bucket_ranges,
+                ) {
                     Ok(keys) => keys,
                     Err(e) => {
-                        error!(%e; "failed to scan split key"; "region_id" => region_id,);
+                        error!(%e; "failed to scan split key";
+                            "region_id" => region_id,
+                            "start_key" => log_wrappers::Value::key(&start_key),
+                            "end_key" => log_wrappers::Value::key(&end_key),
+                            "is_key_range" => is_key_range,
+                        );
                         return;
                     }
                 }
@@ -357,6 +410,9 @@ where
                             error!(%e;
                                 "approximate_check_bucket failed";
                                 "region_id" => region_id,
+                                "start_key" => log_wrappers::Value::key(&start_key),
+                                "end_key" => log_wrappers::Value::key(&end_key),
+                                "is_key_range" => is_key_range,
                             );
                         }
                     }
@@ -368,17 +424,26 @@ where
                     error!(%e;
                         "failed to get approximate split key, try scan way";
                         "region_id" => region_id,
+                        "start_key" => log_wrappers::Value::key(&start_key),
+                        "end_key" => log_wrappers::Value::key(&end_key),
+                        "is_key_range" => is_key_range,
                     );
                     match self.scan_split_keys(
                         &mut host,
                         region,
                         &start_key,
                         &end_key,
+                        is_key_range,
                         bucket_ranges,
                     ) {
                         Ok(keys) => keys,
                         Err(e) => {
-                            error!(%e; "failed to scan split key"; "region_id" => region_id,);
+                            error!(%e; "failed to scan split key";
+                                "region_id" => region_id,
+                                "start_key" => log_wrappers::Value::key(&start_key),
+                                "end_key" => log_wrappers::Value::key(&end_key),
+                                "is_key_range" => is_key_range,
+                            );
                             return;
                         }
                     }
@@ -392,7 +457,13 @@ where
             let msg = new_split_region(region_epoch, split_keys, "split checker");
             let res = self.router.send(region_id, msg);
             if let Err(e) = res {
-                warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
+                warn!("failed to send check result";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Value::key(&start_key),
+                    "end_key" => log_wrappers::Value::key(&end_key),
+                    "is_key_range" => is_key_range,
+                    "err" => %e,
+                );
             }
 
             CHECK_SPILT_COUNTER.success.inc();
@@ -400,6 +471,9 @@ where
             debug!(
                 "no need to send, split key not found";
                 "region_id" => region_id,
+                "start_key" => log_wrappers::Value::key(&start_key),
+                "end_key" => log_wrappers::Value::key(&end_key),
+                "is_key_range" => is_key_range,
             );
 
             CHECK_SPILT_COUNTER.ignore.inc();
@@ -416,6 +490,7 @@ where
         region: &Region,
         start_key: &[u8],
         end_key: &[u8],
+        is_key_range: bool,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
@@ -509,9 +584,14 @@ where
             }
 
             // if we scan the whole range, we can update approximate size and keys with accurate value.
+            if is_key_range {
+                return;
+            }
             info!(
                 "update approximate size and keys with accurate value";
                 "region_id" => region.get_id(),
+                "start_key" => log_wrappers::Value::key(start_key),
+                "end_key" => log_wrappers::Value::key(end_key),
                 "size" => size,
                 "keys" => keys,
                 "bucket_count" => buckets.len(),
@@ -565,10 +645,19 @@ where
         match task {
             Task::SplitCheckTask {
                 region,
+                start_key,
+                end_key,
                 auto_split,
                 policy,
                 bucket_ranges,
-            } => self.check_split_and_bucket(&region, auto_split, policy, bucket_ranges),
+            } => self.check_split_and_bucket(
+                &region,
+                start_key,
+                end_key,
+                auto_split,
+                policy,
+                bucket_ranges,
+            ),
             Task::ChangeConfig(c) => self.change_cfg(c),
             Task::ApproximateBuckets(region) => {
                 if self.coprocessor.cfg.enable_region_bucket {

@@ -964,7 +964,24 @@ where
                 source,
                 cb,
             } => {
-                self.on_schedule_half_split_region(&region_epoch, policy, source, cb);
+                self.on_schedule_half_split_region(None, None, &region_epoch, policy, source, cb);
+            }
+            CasualMessage::HalfSplitKeyRange {
+                start_key,
+                end_key,
+                region_epoch,
+                policy,
+                source,
+                cb,
+            } => {
+                self.on_schedule_half_split_region(
+                    Some(start_key),
+                    Some(end_key),
+                    &region_epoch,
+                    policy,
+                    source,
+                    cb,
+                );
             }
             CasualMessage::GcSnap { snaps } => {
                 self.on_gc_snap(snaps);
@@ -5488,15 +5505,21 @@ where
 
     fn on_schedule_half_split_region(
         &mut self,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
         region_epoch: &metapb::RegionEpoch,
         policy: CheckPolicy,
         source: &str,
         _cb: Callback<EK::Snapshot>,
     ) {
+        let start_key_to_log = start_key.clone().unwrap_or(vec![]);
+        let end_key_to_log = end_key.clone().unwrap_or(vec![]);
         info!(
-            "on half split";
+            "on half split key range";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
+            "start_key" => log_wrappers::Value::key(&start_key_to_log),
+            "end_key" => log_wrappers::Value::key(&end_key_to_log),
             "policy" => ?policy,
             "source" => source,
         );
@@ -5506,6 +5529,8 @@ where
                 "not leader, skip";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "start_key" => log_wrappers::Value::key(&start_key_to_log),
+                "end_key" => log_wrappers::Value::key(&end_key_to_log),
             );
             return;
         }
@@ -5516,10 +5541,13 @@ where
                 "receive a stale halfsplit message";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "start_key" => log_wrappers::Value::key(&start_key_to_log),
+                "end_key" => log_wrappers::Value::key(&end_key_to_log),
             );
             return;
         }
 
+        // TODO: consider start_key and end_key here.
         let split_check_bucket_ranges = self.gen_bucket_range_for_update();
         #[cfg(any(test, feature = "testexport"))]
         {
@@ -5531,13 +5559,21 @@ where
                 cb(peer_stat);
             }
         }
-        let task =
-            SplitCheckTask::split_check(region.clone(), false, policy, split_check_bucket_ranges);
+        let task = SplitCheckTask::split_check_key_range(
+            region.clone(),
+            start_key,
+            end_key,
+            false,
+            policy,
+            split_check_bucket_ranges,
+        );
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "start_key" => log_wrappers::Value::key(&start_key_to_log),
+                "end_key" => log_wrappers::Value::key(&end_key_to_log),
                 "err" => %e,
             );
         }

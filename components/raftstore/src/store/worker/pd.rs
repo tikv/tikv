@@ -465,6 +465,7 @@ where
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
     read_stats_sender: Option<Sender<ReadStats>>,
+    cpu_stats_sender: Option<Sender<Arc<RawRecords>>>,
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
@@ -486,6 +487,7 @@ where
             handle: None,
             timer: None,
             read_stats_sender: None,
+            cpu_stats_sender: None,
             collect_store_infos_interval: interval,
             load_base_split_check_interval: cmp::min(
                 DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
@@ -524,11 +526,14 @@ where
             .report_min_resolved_ts_interval
             .div_duration_f64(tick_interval) as u64;
 
-        let (timer_tx, timer_rx) = mpsc::channel();
-        self.timer = Some(timer_tx);
+        let (tx, rx) = mpsc::channel();
+        self.timer = Some(tx);
 
         let (read_stats_sender, read_stats_receiver) = mpsc::channel();
         self.read_stats_sender = Some(read_stats_sender);
+
+        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::channel();
+        self.cpu_stats_sender = Some(cpu_stats_sender);
 
         let scheduler = self.scheduler.clone();
         let props = tikv_util::thread_group::current_properties();
@@ -542,9 +547,7 @@ where
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
-                while let Err(mpsc::RecvTimeoutError::Timeout) =
-                    timer_rx.recv_timeout(tick_interval)
-                {
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(tick_interval) {
                     if is_enable_tick(timer_cnt, collect_store_infos_interval) {
                         StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
                     }
@@ -552,6 +555,8 @@ where
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
                             &read_stats_receiver,
+                            &cpu_stats_receiver,
+                            &mut thread_stats,
                             &scheduler,
                         );
                     }
@@ -595,15 +600,23 @@ where
 
     pub fn load_base_split(
         auto_split_controller: &mut AutoSplitController,
-        receiver: &Receiver<ReadStats>,
+        read_stats_receiver: &Receiver<ReadStats>,
+        cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
+        thread_stats: &mut ThreadInfoStatistics,
         scheduler: &Scheduler<Task<EK, ER>>,
     ) {
         auto_split_controller.refresh_cfg();
-        let mut others = vec![];
-        while let Ok(other) = receiver.try_recv() {
-            others.push(other);
+        let mut read_stats_vec = vec![];
+        while let Ok(read_stats) = read_stats_receiver.try_recv() {
+            read_stats_vec.push(read_stats);
         }
-        let (top, split_infos) = auto_split_controller.flush(others);
+        let mut cpu_stats_vec = vec![];
+        while let Ok(cpu_stats) = cpu_stats_receiver.try_recv() {
+            cpu_stats_vec.push(cpu_stats);
+        }
+        thread_stats.record();
+        let (top_qps, split_infos) =
+            auto_split_controller.flush(read_stats_vec, cpu_stats_vec, thread_stats);
         auto_split_controller.clear();
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = scheduler.schedule(task) {
@@ -613,10 +626,10 @@ where
             );
         }
         for i in 0..TOP_N {
-            if i < top.len() {
+            if i < top_qps.len() {
                 READ_QPS_TOPN
                     .with_label_values(&[&i.to_string()])
-                    .set(top[i] as f64);
+                    .set(top_qps[i] as f64);
             } else {
                 READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
             }
@@ -658,8 +671,14 @@ where
         }
     }
 
-    pub fn get_read_stats_sender(&self) -> &Option<Sender<ReadStats>> {
+    #[inline(always)]
+    fn get_read_stats_sender(&self) -> &Option<Sender<ReadStats>> {
         &self.read_stats_sender
+    }
+
+    #[inline(always)]
+    fn get_cpu_stats_sender(&self) -> &Option<Sender<Arc<RawRecords>>> {
+        &self.cpu_stats_sender
     }
 }
 
@@ -889,7 +908,7 @@ where
 
         let _region_cpu_records_collector = collector_reg_handle.register(
             Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
-            true,
+            !cfg.enable_cpu_collector,
         );
 
         Runner {
@@ -1638,6 +1657,12 @@ where
     // which is the read load portion of the write path.
     // TODO: more accurate CPU consumption of a specified region.
     fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
+        // Send Region CPU info to AutoSplitController inside the stats_monitor.
+        if let Some(cpu_stats_sender) = self.stats_monitor.get_cpu_stats_sender() {
+            if cpu_stats_sender.send(records.clone()).is_err() {
+                warn!("send region cpu info failed, are we shutting down?")
+            }
+        }
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 
@@ -1785,18 +1810,41 @@ where
                         if let Ok(Some(region)) =
                             pd_client.get_region_by_id(split_info.region_id).await
                         {
-                            Self::handle_ask_batch_split(
-                                router.clone(),
-                                scheduler.clone(),
-                                pd_client.clone(),
-                                region,
-                                vec![split_info.split_key],
-                                split_info.peer,
-                                true,
-                                Callback::None,
-                                String::from("auto_split"),
-                                remote.clone(),
-                            );
+                            if let Some(split_key) = split_info.split_key {
+                                Self::handle_ask_batch_split(
+                                    router.clone(),
+                                    scheduler.clone(),
+                                    pd_client.clone(),
+                                    region,
+                                    vec![split_key],
+                                    split_info.peer,
+                                    true,
+                                    Callback::None,
+                                    String::from("auto_split"),
+                                    remote.clone(),
+                                );
+                            } else {
+                                let start_key = split_info.start_key.unwrap();
+                                let end_key = split_info.end_key.unwrap();
+                                let region_id = region.get_id();
+                                let msg = CasualMessage::HalfSplitKeyRange {
+                                    start_key: start_key.clone(),
+                                    end_key: end_key.clone(),
+                                    region_epoch: region.get_region_epoch().clone(),
+                                    policy: pdpb::CheckPolicy::Scan,
+                                    source: "auto_split",
+                                    cb: Callback::None,
+                                };
+                                if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg))
+                                {
+                                    error!("send auto half split request failed";
+                                        "region_id" => region_id,
+                                        "start_key" => log_wrappers::Value::key(&start_key),
+                                        "end_key" => log_wrappers::Value::key(&end_key),
+                                        "err" => ?e,
+                                    );
+                                }
+                            }
                         }
                     }
                 };

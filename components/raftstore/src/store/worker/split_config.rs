@@ -19,6 +19,10 @@ const DEFAULT_SPLIT_BALANCE_SCORE: f64 = 0.25;
 // We get contained score by sample.contained/(sample.right+sample.left+sample.contained). It will be used to avoid to split regions requested by range.
 const DEFAULT_SPLIT_CONTAINED_SCORE: f64 = 0.5;
 
+const DEFAULT_GRPC_THREAD_CPU_THRESHOLD_RATIO: f64 = 0.5;
+const DEFAULT_UNIFIED_READ_POOL_THREAD_CPU_THRESHOLD_RATIO: f64 = 0.8;
+const REGION_CPU_THRESHOLD_RATIO: f64 = 0.25;
+
 lazy_static! {
     static ref SPLIT_CONFIG: Mutex<Option<Arc<VersionTrack<SplitConfig>>>> = Mutex::new(None);
 }
@@ -43,6 +47,9 @@ pub struct SplitConfig {
     pub sample_num: usize,
     pub sample_threshold: u64,
     pub byte_threshold: usize,
+    pub grpc_thread_cpu_threshold_ratio: f64,
+    pub unified_read_pool_thread_cpu_threshold_ratio: f64,
+    pub region_cpu_threshold_ratio: f64,
     // deprecated.
     #[online_config(skip)]
     #[doc(hidden)]
@@ -65,6 +72,10 @@ impl Default for SplitConfig {
             sample_num: DEFAULT_SAMPLE_NUM,
             sample_threshold: DEFAULT_SAMPLE_THRESHOLD,
             byte_threshold: DEFAULT_BYTE_THRESHOLD,
+            grpc_thread_cpu_threshold_ratio: DEFAULT_GRPC_THREAD_CPU_THRESHOLD_RATIO,
+            unified_read_pool_thread_cpu_threshold_ratio:
+                DEFAULT_UNIFIED_READ_POOL_THREAD_CPU_THRESHOLD_RATIO,
+            region_cpu_threshold_ratio: REGION_CPU_THRESHOLD_RATIO,
             size_threshold: None, // deprecated.
             key_threshold: None,  // deprecated.
         }
@@ -86,6 +97,15 @@ impl SplitConfig {
             return Err(
                 ("sample_num should be less than qps_threshold for load-base-split.").into(),
             );
+        }
+        if self.grpc_thread_cpu_threshold_ratio > 1.0
+            || self.grpc_thread_cpu_threshold_ratio < 0.0
+            || self.unified_read_pool_thread_cpu_threshold_ratio > 1.0
+            || self.unified_read_pool_thread_cpu_threshold_ratio < 0.0
+            || self.region_cpu_threshold_ratio > 1.0
+            || self.region_cpu_threshold_ratio < 0.0
+        {
+            return Err(("threshold ratio should be between 0 and 1.").into());
         }
         Ok(())
     }

@@ -28,6 +28,10 @@ impl ThreadInfoStatistics {
         HashMap::default()
     }
 
+    pub fn get_cpu_usages_by_name(&self, _name: &str) -> HashMap<i32, u64> {
+        HashMap::default()
+    }
+
     pub fn get_read_io_rates(&self) -> HashMap<String, u64> {
         HashMap::default()
     }

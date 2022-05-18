@@ -409,6 +409,20 @@ impl ThreadInfoStatistics {
         collect_metrics_by_name(&self.tid_names, &self.metrics_rate.cpu_times)
     }
 
+    pub fn get_cpu_usages_by_name(&self, name: &str) -> HashMap<i32, u64> {
+        let mut new_map: HashMap<i32, u64> = HashMap::default();
+        for (tid, thread_name) in self.tid_names.iter() {
+            if !thread_name.contains(name) {
+                continue;
+            }
+            let new_value = new_map.entry(*tid).or_insert(0);
+            if let Some(value) = self.metrics_rate.cpu_times.get(tid) {
+                *new_value += *value as u64;
+            }
+        }
+        new_map
+    }
+
     pub fn get_read_io_rates(&self) -> HashMap<String, u64> {
         collect_metrics_by_name(&self.tid_names, &self.metrics_rate.read_ios)
     }

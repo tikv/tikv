@@ -408,6 +408,15 @@ pub enum CasualMessage<EK: KvEngine> {
         source: &'static str,
         cb: Callback<EK::Snapshot>,
     },
+    /// Half split the target key range.
+    HalfSplitKeyRange {
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        region_epoch: RegionEpoch,
+        policy: CheckPolicy,
+        source: &'static str,
+        cb: Callback<EK::Snapshot>,
+    },
     /// Remove snapshot files in `snaps`.
     GcSnap {
         snaps: Vec<(SnapKey, bool)>,
@@ -488,6 +497,20 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             }
             CasualMessage::HalfSplitRegion { source, .. } => {
                 write!(fmt, "Half Split from {}", source)
+            }
+            CasualMessage::HalfSplitKeyRange {
+                start_key,
+                end_key,
+                source,
+                ..
+            } => {
+                write!(
+                    fmt,
+                    "Half Split {} and {} from {}",
+                    log_wrappers::Value::key(start_key),
+                    log_wrappers::Value::key(end_key),
+                    source
+                )
             }
             CasualMessage::GcSnap { ref snaps } => write! {
                 fmt,
