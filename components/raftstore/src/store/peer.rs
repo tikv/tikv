@@ -614,7 +614,6 @@ impl UnsafeRecoveryWaitApplySyncer {
             }
             let router_ptr = thread_safe_router.lock().unwrap();
             if exit_force_leader {
-                info!("Unsafe recovery, exiting force leaders");
                 (*router_ptr).broadcast_normal(|| {
                     PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState)
                 });

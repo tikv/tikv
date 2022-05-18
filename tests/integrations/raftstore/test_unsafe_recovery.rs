@@ -1040,7 +1040,7 @@ fn test_force_leader_multiple_election_rounds() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 2,
     ));
-    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // wait multiple election rounds
     std::thread::sleep(Duration::from_millis(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
