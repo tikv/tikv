@@ -213,7 +213,7 @@ fn test_stale_peer_cache() {
 #[test]
 fn test_redundant_conf_change_by_snapshot() {
     let mut cluster = new_node_cluster(0, 4);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
     cluster.cfg.raft_store.merge_max_log_gap = 4;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
 
