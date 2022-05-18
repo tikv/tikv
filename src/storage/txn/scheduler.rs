@@ -21,6 +21,7 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
+use std::iter::Iterator;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
@@ -182,29 +183,22 @@ impl SchedulerTaskCallback {
     fn execute(self, pr: ProcessResult) {
         match self {
             Self::NormalRequestCallback(cb) => cb.execute(pr),
-            Self::LockKeyCallbacks(cbs) => {
-                match pr {
-                    ProcessResult::Failed { err }
-                    | ProcessResult::PessimisticLockRes { res: Err(err) } => {
-                        let err = Arc::new(err);
-                        for cb in cbs {
-                            cb(Err(err.clone()));
-                        }
+            Self::LockKeyCallbacks(cbs) => match pr {
+                ProcessResult::Failed { err }
+                | ProcessResult::PessimisticLockRes { res: Err(err) } => {
+                    let err = Arc::new(err);
+                    for cb in cbs {
+                        cb(Err(err.clone()));
                     }
-                    ProcessResult::PessimisticLockRes { res: Ok(res) } => {
-                        match res {
-                            Ok(PessimisticLockResults(v)) => {
-                                // TODO: May this case happen?
-                                assert_eq!(v.len(), cbs.len());
-                                for (res, cb) in v.into_iter().zip(cbs) {
-                                    cb(Ok(res))
-                                }
-                            }
-                        }
-                    }
-                    _ => unreachable!(),
                 }
-            }
+                ProcessResult::PessimisticLockRes { res: Ok(v) } => {
+                    assert_eq!(v.0.len(), cbs.len());
+                    for (res, cb) in v.0.into_iter().zip(cbs) {
+                        cb(Ok(res))
+                    }
+                }
+                _ => unreachable!(),
+            },
         }
     }
 }
@@ -870,6 +864,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
 
+        // Keep some information to use after the command being consumed.
+        let pessimistic_lock_single_request_meta =
+            if let Command::AcquirePessimisticLock(cmd) = &task.cmd {
+                cmd.get_single_request_meta()
+            } else {
+                None
+            };
+
         let deadline = task.cmd.deadline();
         let write_result = {
             let _guard = sample.observe_cpu();
@@ -943,28 +945,31 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         //     return;
         // }
 
-        let mut partial_lock_ctx = None;
         let mut pr = Some(pr);
-        if let Command::AcquirePessimisticLock(cmd) = &task {
-            if cmd.is_resumed_after_waiting() {
+        if tag == CommandKind::acquire_pessimistic_lock {
+            if let Some(cmd_meta) = pessimistic_lock_single_request_meta {
                 if let Some(l) = lock_info.as_mut() {
-                    scheduler.take_waiting_locks_from_result(cid, pr.as_mut().unwrap(), l);
-                }
-            } else {
-                // Enter key-wise waiting state.
-                if let Some(l) = lock_info.as_mut() {
+                    // Enter key-wise waiting state.
                     let ctx = scheduler.convert_to_keywise_callbacks(
                         cid,
-                        cmd,
-                        pr.take.unwrap(),
-                        cmd.keys.len(),
-                        cmd.keys.len() - l.locks.len(),
+                        cmd_meta.start_ts,
+                        cmd_meta.for_update_ts,
+                        pr.take().unwrap(),
+                        cmd_meta.keys_count,
+                        cmd_meta.keys_count - l.len(),
                     );
-                    for (index, _, _, ref mut cb) in l.locks {
-                        assert!(cb.is_none());
+                    for lock_info in l {
+                        assert!(lock_info.key_cb.is_none());
                         // TODO: Check if there are paths that the cb is never invoked.
-                        *cb = Some(Box::new(ctx.get_callback_for_blocked_key(index)));
+                        lock_info.key_cb = Some(Box::new(
+                            ctx.get_callback_for_blocked_key(lock_info.index_in_request),
+                        ));
                     }
+                }
+            } else {
+                // It's already in keywise mode.
+                if let Some(l) = lock_info.as_mut() {
+                    scheduler.take_waiting_locks_from_result(cid, pr.as_mut().unwrap(), l);
                 }
             }
         }
@@ -1297,7 +1302,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     fn convert_to_keywise_callbacks(
         &self,
         cid: u64,
-        cmd: &commands::AcquirePessimisticLock,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
         first_batch_pr: ProcessResult,
         total_size: usize,
         first_batch_size: usize,
@@ -1309,7 +1315,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             _ => unreachable!(),
         };
 
-        let ctx = PartialPessimisticLockRequestContext::new(cmd, first_batch_pr, cb, total_size);
+        let ctx = PartialPessimisticLockRequestContext::new(
+            start_ts,
+            for_update_ts,
+            first_batch_pr,
+            cb,
+            total_size,
+        );
         let first_batch_cb = ctx.get_callback_for_first_write_batch(first_batch_size);
         // TODO: Do not use NormalRequestCallback and remove get_callback_for_first_write_batch
         task_ctx.cb = Some(SchedulerTaskCallback::NormalRequestCallback(first_batch_cb));
@@ -1386,7 +1398,8 @@ struct PartialPessimisticLockRequestContext {
 
 impl PartialPessimisticLockRequestContext {
     fn new(
-        cmd: &commands::AcquirePessimisticLock,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
         first_batch_pr: ProcessResult,
         cb: StorageCallback,
         size: usize,
@@ -1400,8 +1413,8 @@ impl PartialPessimisticLockRequestContext {
         Self {
             shared_states: Arc::new((Mutex::new(Some(inner)), AtomicUsize::new(size))),
             tx,
-            start_ts: cmd.start_ts,
-            for_update_ts: cmd.for_update_ts,
+            start_ts,
+            for_update_ts,
         }
     }
 

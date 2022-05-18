@@ -2,11 +2,11 @@
 
 use crate::server::lock_manager::waiter_manager;
 use crate::server::lock_manager::waiter_manager::Callback;
+use crate::storage::Error as StorageError;
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::metapb::RegionEpoch;
 use std::num::NonZeroU64;
 use std::time::Duration;
-use tidb_query_common::error::StorageError;
 use txn_types::{Key, TimeStamp};
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -88,6 +88,7 @@ pub trait LockManager: Clone + Send + 'static {
     /// should be waken up and call `cb` with `pr` to notify the caller.
     ///
     /// If the lock is the first lock the transaction waits for, it won't result in deadlock.
+    #[must_use]
     fn wait_for(
         &self,
         region_id: u64,
@@ -141,9 +142,10 @@ impl LockManager for DummyLockManager {
         _wait_info: Vec<KeyLockWaitInfo>,
         _is_first_lock: bool,
         _timeout: Option<WaitTimeout>,
-        _cancel_callback: Box<dyn FnOnce(StorageError)>,
+        _cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         _diag_ctx: DiagnosticContext,
-    ) {
+    ) -> LockWaitToken {
+        LockWaitToken(None)
     }
 
     fn wake_up(

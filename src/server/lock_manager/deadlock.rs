@@ -31,7 +31,6 @@ use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use tidb_query_datatype::codec::Datum::Time;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
@@ -291,13 +290,15 @@ impl DetectTable {
     }
 
     /// Removes the corresponding wait_for_entry.
-    fn clean_up_wait_for(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) {
+    fn clean_up_wait_for(&mut self, txn_ts: TimeStamp, locks: impl Iterator<Item = LockDigest>) {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
-            if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                if locks.remove(lock_hash) {
-                    wait_for.remove(&lock_ts);
-                    if wait_for.is_empty() {
-                        self.wait_for_map.remove(&txn_ts);
+            for lock in locks {
+                if let Some(matching_locks) = wait_for.get_mut(&lock.ts) {
+                    if matching_locks.remove(lock.hash) {
+                        wait_for.remove(&lock.ts);
+                        if wait_for.is_empty() {
+                            self.wait_for_map.remove(&txn_ts);
+                        }
                     }
                 }
             }
@@ -851,20 +852,21 @@ where
         tp: DetectType,
         token: LockWaitToken,
         txn_ts: TimeStamp,
-        wait_info: Vec<KeyLockWaitInfo>,
+        mut wait_info: Vec<KeyLockWaitInfo>,
         diag_ctx: DiagnosticContext,
     ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
         match tp {
             DetectType::Detect => {
-                for lock in wait_info {
+                for (current_index, lock) in wait_info.iter_mut().enumerate() {
                     if let Some((deadlock_key_hash, mut wait_chain)) = detect_table.detect(
                         txn_ts,
-                        lock_digest.ts,
-                        lock_digest.hash,
+                        lock.lock_digest.ts,
+                        lock.lock_digest.hash,
                         &diag_ctx.key,
                         &diag_ctx.resource_group_tag,
                     ) {
+                        // Deadlock found. Send deadlock message.
                         let mut last_entry = WaitForEntry::default();
                         last_entry.set_txn(txn_ts.into_inner());
                         last_entry.set_wait_for_txn(lock.lock_digest.ts.into_inner());
@@ -876,16 +878,27 @@ where
                             token,
                             txn_ts,
                             diag_ctx.key.clone(),
-                            lock_digest,
+                            lock.lock_digest,
                             deadlock_key_hash,
                             wait_chain,
                         );
+
+                        // Clean up edges that are already added.
+                        detect_table.clean_up_wait_for(
+                            txn_ts,
+                            wait_info
+                                .iter()
+                                .take(current_index)
+                                .map(|item| item.lock_digest),
+                        );
+
+                        // And exit.
+                        break;
                     }
                 }
             }
-            DetectType::CleanUpWaitFor => {
-                detect_table.clean_up_wait_for(txn_ts, lock_digest.ts, lock_digest.hash)
-            }
+            DetectType::CleanUpWaitFor => detect_table
+                .clean_up_wait_for(txn_ts, wait_info.iter().map(|item| item.lock_digest)),
             DetectType::CleanUp => detect_table.clean_up(txn_ts),
         }
     }
@@ -918,7 +931,7 @@ where
             }
             // If a request which causes deadlock is dropped, it leads to the waiter timeout.
             // TiDB will retry to acquire the lock and detect deadlock again.
-            warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "lock" => ?lock);
+            warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "wait_info" => ?wait_info);
             ERROR_COUNTER_METRICS.dropped.inc();
         }
     }
@@ -929,6 +942,7 @@ where
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     ) {
+        // TODO: Support batch checking.
         if !self.is_leader() {
             let status = RpcStatus::with_message(
                 RpcStatusCode::FAILED_PRECONDITION,
@@ -975,7 +989,13 @@ where
                     }
                 }
                 DeadlockRequestType::CleanUpWaitFor => {
-                    detect_table.clean_up_wait_for(txn.into(), wait_for_txn.into(), *key_hash);
+                    detect_table.clean_up_wait_for(
+                        txn.into(),
+                        std::iter::once(LockDigest {
+                            ts: wait_for_txn.into(),
+                            hash: *key_hash,
+                        }),
+                    );
                     None
                 }
                 DeadlockRequestType::CleanUp => {

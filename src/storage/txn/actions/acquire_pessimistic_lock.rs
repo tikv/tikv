@@ -229,7 +229,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
     let old_value = load_old_value(
         need_old_value,
-        need_load_value(),
+        need_load_value,
         val.as_ref(),
         reader,
         &key,
@@ -317,7 +317,8 @@ pub mod tests {
                 .write(&ctx, WriteData::from_modifies(modifies))
                 .unwrap();
         }
-        res.0
+        // res.0
+        todo!()
     }
 
     pub fn must_succeed<E: Engine>(

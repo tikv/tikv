@@ -120,7 +120,7 @@ pub struct PrewriteResult {
     pub one_pc_commit_ts: TimeStamp,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 /// Represents the result of pessimistic lock on a single key.
 pub enum PessimisticLockKeyResult {
     Empty,
@@ -153,7 +153,7 @@ impl PessimisticLockKeyResult {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PessimisticLockResults(pub Vec<PessimisticLockKeyResult>);
 
 impl PessimisticLockResults {
@@ -170,20 +170,21 @@ impl PessimisticLockResults {
     }
 
     pub fn into_resp_parts(self) -> (Vec<Value>, Vec<bool>, Vec<u64>) {
-        match self {
-            PessimisticLockResults::Values(vals) => vals
-                .into_iter()
-                .map(|v| {
-                    let is_not_found = v.is_none();
-                    (v.unwrap_or_default(), is_not_found)
-                })
-                .unzip(),
-            PessimisticLockResults::Existence(mut vals) => {
-                vals.iter_mut().for_each(|x| *x = !*x);
-                (vec![], vals)
-            }
-            PessimisticLockResults::Empty => (vec![], vec![]),
-        }
+        unimplemented!();
+        // match self {
+        //     PessimisticLockResults::Values(vals) => vals
+        //         .into_iter()
+        //         .map(|v| {
+        //             let is_not_found = v.is_none();
+        //             (v.unwrap_or_default(), is_not_found)
+        //         })
+        //         .unzip(),
+        //     PessimisticLockResults::Existence(mut vals) => {
+        //         vals.iter_mut().for_each(|x| *x = !*x);
+        //         (vec![], vals)
+        //     }
+        //     PessimisticLockResults::Empty => (vec![], vec![]),
+        // }
     }
 }
 

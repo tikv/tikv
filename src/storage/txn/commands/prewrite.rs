@@ -768,7 +768,7 @@ pub fn one_pc_commit(
 
 /// Commit and delete all 1pc locks in txn.
 fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
-    let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
+    let mut released_locks = ReleasedLocks::new();
 
     for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
         let write = Write::new(

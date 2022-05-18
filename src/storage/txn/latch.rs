@@ -1,16 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::collections::hash_map::DefaultHasher;
+use std::collections::hash_map::{DefaultHasher, RandomState};
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
 use std::usize;
 
 use crate::storage::txn::commands::{ReleasedLocks, WriteResultLockInfo};
-use collections::HashMap;
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
+use std::collections::HashMap;
 use txn_types::Key;
 
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
@@ -23,12 +23,11 @@ const WAITING_LIST_MAX_CAPACITY: usize = 16;
 ///
 /// If command A is ahead of command B in one latch, it must be ahead of command B in all the
 /// overlapping latches. This is an invariant ensured by the `gen_lock`, `acquire` and `release`.
-#[derive(Clone)]
 struct Latch {
     // store hash value of the key and command ID which requires this key.
     pub waiting: VecDeque<Option<(u64, u64)>>,
     // TODO: Filter by the known hash to make it perhaps faster.
-    pub lock_waiting: HashMap<Key, Vec<WriteResultLockInfo>>,
+    pub lock_waiting: HashMap<Key, Vec<WriteResultLockInfo>, RandomState>,
 }
 
 impl Latch {
@@ -98,7 +97,7 @@ impl Latch {
     }
 
     fn push_lock_waiting(&mut self, lock_info: WriteResultLockInfo) {
-        let key = lock_info.clone();
+        let key = lock_info.key.clone();
         self.lock_waiting
             .entry(key)
             .or_insert_with(Vec::new)
@@ -264,13 +263,13 @@ impl Latches {
             assert_eq!(v, key_hash);
 
             while let Some(next_lock) = wait_for_locks.next_if(|v| v.hash_for_latch <= key_hash) {
-                assert!(next_lock.hash_for_latch == *key_hash);
+                assert_eq!(next_lock.hash_for_latch, key_hash);
                 latch.push_lock_waiting(next_lock);
             }
 
             let mut has_awakened_lock = false;
             while let Some(next_lock) = released_locks.next_if(|v| v.hash_for_latch <= key_hash) {
-                assert!(next_lock.hash_for_latch == *key_hash);
+                assert_eq!(next_lock.hash_for_latch, key_hash);
                 // TODO: Pass term here
                 if let Some(lock_wait) = latch.pop_lock_waiting(&next_lock.key, None) {
                     txn_lock_wakeup_list.push(lock_wait);

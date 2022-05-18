@@ -92,6 +92,7 @@ use kvproto::kvrpcpb::{
     ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo,
     RawGetRequest,
 };
+use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::QueryKind;
 use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, TxnExt};
@@ -1365,7 +1366,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<T>,
     ) -> Result<()> {
         use crate::storage::txn::commands::{
-            AcquirePessimisticLock, Prewrite, PrewritePessimistic,
+            acquire_pessimistic_lock::PessimisticLockCmdInner, AcquirePessimisticLock, Prewrite,
+            PrewritePessimistic,
         };
 
         let cmd: Command = cmd.into();
@@ -1391,16 +1393,28 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
             }
-            Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
-                let keys = keys.iter().map(|k| k.0.as_encoded());
-                Self::check_api_version(
-                    self.api_version,
-                    cmd.ctx().api_version,
-                    CommandKind::prewrite,
-                    keys.clone(),
-                )?;
-                check_key_size!(keys, self.max_key_size, callback);
-            }
+            Command::AcquirePessimisticLock(AcquirePessimisticLock { inner, .. }) => match inner {
+                PessimisticLockCmdInner::SingleRequest { keys, .. } => {
+                    let keys = keys.iter().map(|k| k.0.as_encoded());
+                    Self::check_api_version(
+                        self.api_version,
+                        cmd.ctx().api_version,
+                        CommandKind::acquire_pessimistic_lock,
+                        keys.clone(),
+                    )?;
+                    check_key_size!(keys, self.max_key_size, callback);
+                }
+                PessimisticLockCmdInner::BatchResumedRequests(items) => {
+                    let keys = items.iter().map(|(k, ..)| k.as_encoded());
+                    Self::check_api_version(
+                        self.api_version,
+                        cmd.ctx().api_version,
+                        CommandKind::acquire_pessimistic_lock,
+                        keys.clone(),
+                    )?;
+                    check_key_size!(keys, self.max_key_size, callback);
+                }
+            },
             _ => {}
         }
 
@@ -2933,8 +2947,55 @@ pub mod test_util {
         done: Sender<i32>,
         pessimistic_lock_res: PessimisticLockResults,
     ) -> Callback<Result<PessimisticLockResults>> {
+        use types::PessimisticLockKeyResult;
+        fn key_res_matches_ignoring_error_content(
+            lhs: &PessimisticLockKeyResult,
+            rhs: &PessimisticLockKeyResult,
+        ) -> bool {
+            match (lhs, rhs) {
+                (PessimisticLockKeyResult::Empty, PessimisticLockKeyResult::Empty) => true,
+                (PessimisticLockKeyResult::Value(l), PessimisticLockKeyResult::Value(r))
+                    if l == r =>
+                {
+                    true
+                }
+                (
+                    PessimisticLockKeyResult::Existence(l),
+                    PessimisticLockKeyResult::Existence(r),
+                ) if l == r => true,
+                (
+                    PessimisticLockKeyResult::LockedWithConflict {
+                        value: value1,
+                        conflict_ts: ts1,
+                    },
+                    PessimisticLockKeyResult::LockedWithConflict {
+                        value: value2,
+                        conflict_ts: ts2,
+                    },
+                ) if value1 == value2 && ts1 == ts2 => true,
+                (PessimisticLockKeyResult::Waiting, PessimisticLockKeyResult::Waiting) => true,
+                (PessimisticLockKeyResult::Failed(_), PessimisticLockKeyResult::Failed(_)) => true,
+                _ => false,
+            }
+        }
+
         Box::new(move |res: Result<Result<PessimisticLockResults>>| {
-            assert_eq!(res.unwrap().unwrap(), pessimistic_lock_res);
+            let res = res.unwrap().unwrap();
+            assert_eq!(
+                res.0.len(),
+                pessimistic_lock_res.0.len(),
+                "pessimistic lock result length not match, expected: {:?}, got: {:?}",
+                pessimistic_lock_res,
+                res
+            );
+            for (expected, got) in pessimistic_lock_res.0.iter().zip(res.0.iter()) {
+                assert!(
+                    key_res_matches_ignoring_error_content(expected, got),
+                    "pessimistic lock result not match, expected: {:?}, got: {:?}",
+                    pessimistic_lock_res,
+                    res
+                );
+            }
             done.send(0).unwrap();
         })
     }
@@ -3075,7 +3136,7 @@ mod tests {
 
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
-    use crate::storage::lock_manager::DiagnosticContext;
+    use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockWaitToken};
     use crate::storage::mvcc::LockType;
     use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
     use crate::storage::txn::tests::must_rollback;
@@ -3095,6 +3156,7 @@ mod tests {
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op};
+    use std::num::NonZeroU64;
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -6733,12 +6795,14 @@ mod tests {
     #[allow(clippy::large_enum_variant)]
     pub enum Msg {
         WaitFor {
+            region_id: u64,
+            region_epoch: RegionEpoch,
+            term: NonZeroU64,
             start_ts: TimeStamp,
-            cb: StorageCallback,
-            pr: ProcessResult,
-            lock: LockDigest,
+            wait_info: Vec<KeyLockWaitInfo>,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            cancel_callback: Box<dyn FnOnce(Error) + Send>,
             diag_ctx: DiagnosticContext,
         },
 
@@ -6774,25 +6838,30 @@ mod tests {
     impl LockManager for ProxyLockMgr {
         fn wait_for(
             &self,
+            region_id: u64,
+            region_epoch: RegionEpoch,
+            term: NonZeroU64,
             start_ts: TimeStamp,
-            cb: StorageCallback,
-            pr: ProcessResult,
-            lock: LockDigest,
+            wait_info: Vec<KeyLockWaitInfo>,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            cancel_callback: Box<dyn FnOnce(Error) + Send>,
             diag_ctx: DiagnosticContext,
-        ) {
+        ) -> LockWaitToken {
             self.tx
                 .send(Msg::WaitFor {
+                    region_id,
+                    region_epoch,
+                    term,
                     start_ts,
-                    cb,
-                    pr,
-                    lock,
+                    wait_info,
                     is_first_lock,
                     timeout,
+                    cancel_callback,
                     diag_ctx,
                 })
                 .unwrap();
+            LockWaitToken(Some(1))
         }
 
         fn wake_up(
@@ -6878,15 +6947,14 @@ mod tests {
         match msg {
             Msg::WaitFor {
                 start_ts,
-                pr,
-                lock,
+                wait_info,
                 is_first_lock,
                 timeout,
                 ..
             } => {
                 assert_eq!(start_ts, TimeStamp::new(20));
                 assert_eq!(
-                    lock,
+                    wait_info[0].lock_digest,
                     LockDigest {
                         ts: 10.into(),
                         hash: Key::from_raw(&k).gen_hash(),
@@ -6894,19 +6962,20 @@ mod tests {
                 );
                 assert_eq!(is_first_lock, true);
                 assert_eq!(timeout, Some(WaitTimeout::Millis(100)));
-                match pr {
-                    ProcessResult::PessimisticLockRes { res } => match res {
-                        Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
-                            MvccError(box MvccErrorInner::KeyIsLocked(info)),
-                        ))))) => {
-                            assert_eq!(info.get_key(), k.as_slice());
-                            assert_eq!(info.get_primary_lock(), k.as_slice());
-                            assert_eq!(info.get_lock_version(), 10);
-                        }
-                        _ => panic!("unexpected error"),
-                    },
-                    _ => panic!("unexpected process result"),
-                };
+                todo!();
+                // match pr {
+                //     ProcessResult::PessimisticLockRes { res } => match res {
+                //         Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                //             MvccError(box MvccErrorInner::KeyIsLocked(info)),
+                //         ))))) => {
+                //             assert_eq!(info.get_key(), k.as_slice());
+                //             assert_eq!(info.get_primary_lock(), k.as_slice());
+                //             assert_eq!(info.get_lock_version(), 10);
+                //         }
+                //         _ => panic!("unexpected error"),
+                //     },
+                //     _ => panic!("unexpected process result"),
+                // };
             }
 
             _ => panic!("unexpected msg"),

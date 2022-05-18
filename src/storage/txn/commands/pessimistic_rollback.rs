@@ -50,7 +50,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
         let keys = mem::take(&mut self.keys);
 
         let rows = keys.len();
-        let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
+        let mut released_locks = ReleasedLocks::new();
         for key in keys {
             fail_point!("pessimistic_rollback", |err| Err(
                 crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
@@ -84,7 +84,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             rows,
             pr: ProcessResult::MultiRes { results: vec![] },
             encountered_locks: None,
-            released_locks,
+            released_locks: Some(released_locks),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

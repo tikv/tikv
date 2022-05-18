@@ -58,8 +58,8 @@ use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotR
 use crate::storage::txn::latch;
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
-    MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
-    TxnStatus,
+    MvccInfo, PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult,
+    SecondaryLocksStatus, StorageCallbackType, TxnStatus,
 };
 use crate::storage::{
     metrics, Error as StorageError, Result as StorageResult, Snapshot, Statistics,
@@ -385,7 +385,7 @@ pub struct PessimisticLockParameters {
 }
 
 pub type CallbackWithArcError<T> =
-    Box<dyn FnOnce(std::result::Result<T, std::sync::Arc<StorageError>>)>;
+    Box<dyn FnOnce(std::result::Result<T, std::sync::Arc<StorageError>>) + Send>;
 
 pub struct WriteResultLockInfo {
     pub index_in_request: usize,
@@ -394,7 +394,7 @@ pub struct WriteResultLockInfo {
     pub last_found_lock: LockInfo,
     pub lock_digest: lock_manager::LockDigest,
     pub hash_for_latch: u64,
-    pub key_cb: Option<CallbackWithArcError<PessimisticLockResults>>,
+    pub key_cb: Option<CallbackWithArcError<PessimisticLockKeyResult>>,
     // pub locks: Vec<(usize, LockInfo, lock_manager::LockDigest, Option<Callback<PessimisticLockKeyResult>>)>,
     pub term: Option<NonZeroU64>,
     pub is_first_lock: bool,
@@ -412,7 +412,7 @@ impl WriteResultLockInfo {
         parameters: PessimisticLockParameters,
         lock_digest: lock_manager::LockDigest,
         hash_for_latch: u64,
-        key_cb: Option<CallbackWithArcError<PessimisticLockResults>>,
+        key_cb: Option<CallbackWithArcError<PessimisticLockKeyResult>>,
     ) -> Self {
         Self {
             index_in_request,
@@ -450,7 +450,8 @@ impl ReleasedLocks {
     // Wake up pessimistic transactions that waiting for these locks.
     #[deprecated = "wake up invocations may need to be updated"]
     pub fn wake_up<L: LockManager>(&self, lock_mgr: &L) {
-        lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
+        unimplemented!();
+        // lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
     }
 }
 

@@ -18,13 +18,11 @@ use raftstore::coprocessor::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     RegionChangeEvent, RegionChangeObserver, RoleObserver,
 };
-use std::borrow::BorrowMut;
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::num::NonZeroU64;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{
@@ -277,7 +275,7 @@ impl Waiter {
     fn cancel_for_timeout(mut self) {
         let lock_info = self.wait_info.swap_remove(0).lock_info;
         let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
-        self.cancel(StorageError::from(error));
+        self.cancel(StorageError::from(TxnError::from(error)));
     }
 
     pub(super) fn cancel_no_timeout(
@@ -286,7 +284,7 @@ impl Waiter {
     ) {
         let lock_info = wait_info.swap_remove(0).lock_info;
         let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
-        cancel_callback(StorageError::from(error))
+        cancel_callback(StorageError::from(TxnError::from(error)))
     }
 
     fn cancel_for_deadlock(
@@ -302,7 +300,7 @@ impl Waiter {
             deadlock_key_hash: lock_digest.hash,
             wait_chain,
         });
-        self.cancel(StorageError::from(e));
+        self.cancel(StorageError::from(TxnError::from(e)));
     }
 
     // /// Changes the `ProcessResult` to `WriteConflict`.
@@ -583,7 +581,7 @@ impl WaitTable {
                     wait_for_entry.set_txn(waiter.start_ts.into_inner());
                     wait_for_entry.set_wait_for_txn(waiting_item.lock_digest.ts.into_inner());
                     wait_for_entry.set_key_hash(waiting_item.lock_digest.hash);
-                    wait_for_entry.set_key(waiting_item.key.clone());
+                    wait_for_entry.set_key(waiting_item.key.to_raw().unwrap());
                     wait_for_entry
                         .set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
                     wait_for_entry
@@ -609,7 +607,7 @@ impl Scheduler {
             } = task
             {
                 // TODO: Pass proper error for the scheduling error.
-                cancel_callback();
+                cancel_callback(StorageError(Box::new(StorageErrorInner::SchedTooBusy)));
             }
             return false;
         }
@@ -721,23 +719,16 @@ impl WaiterManager {
     }
 
     fn handle_wait_for(&mut self, token: LockWaitToken, waiter: Waiter) {
-        let (waiter_ts, lock) = (waiter.start_ts, waiter.lock);
         let wait_table = self.wait_table.clone();
         let detector_scheduler = self.detector_scheduler.clone();
         // Remove the waiter from wait table when it times out.
         let f = waiter.on_timeout(move || {
-            if let Some(waiter) = wait_table
-                .borrow_mut()
-                .take_waiter_by_lock_digest(lock, waiter_ts)
-            {
-                detector_scheduler.clean_up_wait_for(waiter.start_ts, waiter.lock);
+            if let Some(waiter) = wait_table.borrow_mut().take_waiter(token) {
+                detector_scheduler.clean_up_wait_for(token);
                 waiter.cancel_for_timeout();
             }
         });
-        if let Some(_old) = self.wait_table.borrow_mut().add_waiter(token, waiter) {
-            // old.cancel();
-            // TODO: Is it ok to drop it directly?
-        };
+        let _success = self.wait_table.borrow_mut().add_waiter(token, waiter);
         spawn_local(f);
     }
 
@@ -748,29 +739,29 @@ impl WaiterManager {
             return;
         }
         let duration: Duration = self.wake_up_delay_duration.into();
-        let new_timeout = Instant::now() + duration;
+        let _new_timeout = Instant::now() + duration;
         for hash in hashes {
-            let lock = LockDigest { ts: lock_ts, hash };
-            if let Some((mut oldest, others)) = wait_table.remove_oldest_waiter(lock) {
-                // Notify the oldest one immediately.
-                self.detector_scheduler
-                    .clean_up_wait_for(oldest.start_ts, oldest.lock);
-                // oldest.conflict_with(lock_ts, commit_ts);
-                // oldest.cancel();
-                // Others will be waked up after `wake_up_delay_duration`.
-                //
-                // NOTE: Actually these waiters are waiting for an unknown transaction.
-                // If there is a deadlock between them, it will be detected after timeout.
-                if others.is_empty() {
-                    // Remove the empty entry here.
-                    wait_table.remove(lock);
-                } else {
-                    others.iter_mut().for_each(|waiter| {
-                        waiter.conflict_with(lock_ts, commit_ts);
-                        waiter.reset_timeout(new_timeout);
-                    });
-                }
-            }
+            let _lock = LockDigest { ts: lock_ts, hash };
+            // if let Some((mut oldest, others)) = wait_table.remove_oldest_waiter(lock) {
+            //     // Notify the oldest one immediately.
+            //     self.detector_scheduler
+            //         .clean_up_wait_for(oldest.start_ts, oldest.lock);
+            //     // oldest.conflict_with(lock_ts, commit_ts);
+            //     // oldest.cancel();
+            //     // Others will be waked up after `wake_up_delay_duration`.
+            //     //
+            //     // NOTE: Actually these waiters are waiting for an unknown transaction.
+            //     // If there is a deadlock between them, it will be detected after timeout.
+            //     if others.is_empty() {
+            //         // Remove the empty entry here.
+            //         wait_table.remove(lock);
+            //     } else {
+            //         others.iter_mut().for_each(|waiter| {
+            //             waiter.conflict_with(lock_ts, commit_ts);
+            //             waiter.reset_timeout(new_timeout);
+            //         });
+            //     }
+            // }
         }
     }
 
@@ -780,17 +771,21 @@ impl WaiterManager {
 
     fn handle_deadlock(
         &mut self,
+        token: LockWaitToken,
         waiter_ts: TimeStamp,
         key: Vec<u8>,
         lock: LockDigest,
         _deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
     ) {
-        if let Some(mut waiter) = self
-            .wait_table
-            .borrow_mut()
-            .take_waiter_by_lock_digest(lock, waiter_ts)
-        {
+        let waiter = if token.0.is_some() {
+            self.wait_table.borrow_mut().take_waiter(token)
+        } else {
+            self.wait_table
+                .borrow_mut()
+                .take_waiter_by_lock_digest(lock, waiter_ts)
+        };
+        if let Some(mut waiter) = waiter {
             // waiter.deadlock_with(deadlock_key_hash, wait_chain);
             // waiter.cancel();
             waiter.cancel_for_deadlock(lock, key, wait_chain);
@@ -864,13 +859,14 @@ impl FutureRunnable<Task> for WaiterManager {
                 TASK_COUNTER_METRICS.dump.inc();
             }
             Task::Deadlock {
+                token,
                 start_ts,
                 key,
                 lock,
                 deadlock_key_hash,
                 wait_chain,
             } => {
-                self.handle_deadlock(start_ts, key, lock, deadlock_key_hash, wait_chain);
+                self.handle_deadlock(token, start_ts, key, lock, deadlock_key_hash, wait_chain);
             }
             Task::RegionLeaderRetired {
                 region_id,
@@ -931,7 +927,7 @@ impl RegionChangeObserver for RegionLockWaitCancellationObserver {
         // TODO: Filter out non-leader events.
         self.scheduler.notify_scheduler(Task::RegionEpochChanged {
             region_id: ctx.region().get_id(),
-            region_epoch: ctx.region().get_region_epoch(),
+            region_epoch: ctx.region().get_region_epoch().clone(),
         });
     }
 }
