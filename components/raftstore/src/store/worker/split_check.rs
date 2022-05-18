@@ -245,7 +245,7 @@ where
 
     fn on_buckets_created(
         &self,
-        buckets: &mut Vec<Bucket>,
+        buckets: &mut [Bucket],
         region: &Region,
         bucket_ranges: &Vec<BucketRange>,
     ) {
