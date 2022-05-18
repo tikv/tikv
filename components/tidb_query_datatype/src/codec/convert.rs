@@ -694,10 +694,6 @@ pub fn produce_float_with_specified_tp(
 
 /// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in TiDB) produces
 /// a new string according to `flen` and `chs`.
-///
-/// # Panics
-///
-/// The s must represent a valid str, otherwise, panic!
 pub fn produce_str_with_specified_tp<'a>(
     ctx: &mut EvalContext,
     s: Cow<'a, [u8]>,
@@ -712,20 +708,21 @@ pub fn produce_str_with_specified_tp<'a>(
     // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
     // char count and truncate to flen chars if it is too long.
     if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
-        let truncate_info = {
-            // In TiDB's version, the param `s` is a string,
-            // so we can unwrap directly here because we need the `s` represent a valid str
-            let s: &str = std::str::from_utf8(s.as_ref()).unwrap();
-            let mut indices = s.char_indices().skip(flen);
-            indices.next().map(|(truncate_pos, _)| {
-                let char_count = flen + 1 + indices.count();
-                (char_count, truncate_pos)
-            })
+        let (char_count, truncate_pos) = {
+            let s = &String::from_utf8_lossy(&s);
+            let mut truncate_pos = 0;
+            s.chars().take(flen).for_each(|utf8_char| {
+                if utf8_char == char::REPLACEMENT_CHARACTER {
+                    truncate_pos += 1;
+                } else {
+                    truncate_pos += utf8_char.len_utf8();
+                }
+            });
+            (s.chars().count(), truncate_pos)
         };
-        if truncate_info.is_none() {
+        if char_count <= flen {
             return Ok(s);
         }
-        let (char_count, truncate_pos) = truncate_info.unwrap();
         ctx.handle_truncate_err(Error::data_too_long(format!(
             "Data Too Long, field len {}, data len {}",
             flen, char_count
@@ -2220,6 +2217,41 @@ mod tests {
 
             let p = r.unwrap();
             assert_eq!(p.len(), char_num as usize, "{}, {}, {}", s, char_num, cs);
+        }
+
+        // test with invalid utf8 characters 0x80 and 0x81
+        let test_vec = vec![0xE4, 0xBD, 0xA0, 0x80, 0x81, 0xE4, 0xBD, 0xA0];
+        let cases = vec![
+            (
+                test_vec.clone(),
+                1,
+                charset::CHARSET_UTF8,
+                vec![0xE4, 0xBD, 0xA0],
+            ),
+            (
+                test_vec.clone(),
+                2,
+                charset::CHARSET_UTF8,
+                vec![0xE4, 0xBD, 0xA0, 0x80],
+            ),
+            (
+                test_vec.clone(),
+                3,
+                charset::CHARSET_UTF8,
+                vec![0xE4, 0xBD, 0xA0, 0x80, 0x81],
+            ),
+            (test_vec.clone(), 4, charset::CHARSET_UTF8, test_vec.clone()),
+            (test_vec.clone(), 5, charset::CHARSET_UTF8, test_vec),
+        ];
+
+        for (s, char_num, cs, result) in cases {
+            ft.set_charset(cs.to_string());
+            ft.set_flen(char_num);
+            let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(&s), &ft, true);
+            assert!(r.is_ok(), "{:?}, {}, {}, {:?}", &s, char_num, cs, result);
+
+            let p = r.unwrap();
+            assert_eq!(p, result, "{:?}, {}, {}, {:?}", &s, char_num, cs, result);
         }
     }
 

@@ -28,7 +28,10 @@ use tikv::server::{
     self, load_statistics::ThreadLoadPool, resolve, resolve::Callback, Config, ConnectionBuilder,
     RaftClient, StoreAddrResolver, TestRaftStoreRouter,
 };
-use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
+use tikv_util::{
+    config::VersionTrack,
+    worker::{Builder as WorkerBuilder, LazyWorker},
+};
 
 use super::*;
 
@@ -56,7 +59,7 @@ where
     T: StoreAddrResolver + 'static,
 {
     let env = Arc::new(Environment::new(2));
-    let cfg = Arc::new(Config::default());
+    let cfg = Arc::new(VersionTrack::new(Config::default()));
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
     let loads = Arc::new(ThreadLoadPool::with_threshold(1000));
