@@ -10,7 +10,7 @@ use tikv_util::{box_err, box_try, codec::bytes, error, warn};
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::{store::util, Error};
 
-fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
+pub fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     let mut slice = key.as_slice();
     let strip_len = match bytes::decode_bytes(&mut slice, false) {
         // It is an encoded key and the slice points to the remaining unparsable
@@ -24,7 +24,7 @@ fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     key
 }
 
-fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
+pub fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
     if key.is_empty() {
         warn!(
             "skip invalid split key: key is empty";
