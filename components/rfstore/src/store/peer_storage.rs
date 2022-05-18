@@ -20,7 +20,7 @@ use raftstore::store::{util, util::conf_state_from_region};
 use rfengine;
 use tikv_util::{box_err, debug, info};
 
-use super::keys::raft_state_key;
+use super::util::raft_state_key;
 use crate::{
     errors::*,
     store::{

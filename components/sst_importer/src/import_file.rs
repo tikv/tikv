@@ -283,13 +283,22 @@ impl ImportDir {
         meta: &SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<SstMetaInfo> {
+        let sst_reader = self.get_reader(meta, key_manager)?;
+        // TODO: check the length and crc32 of ingested file.
+        let meta_info = sst_reader.sst_meta_info(meta.to_owned());
+        Ok(meta_info)
+    }
+
+    pub fn get_reader(
+        &self,
+        meta: &SstMeta,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<RocksSstReader> {
         let path = self.join(meta)?;
         let path_str = path.save.to_str().unwrap();
         let env = get_env(key_manager, get_io_rate_limiter())?;
         let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
-        // TODO: check the length and crc32 of ingested file.
-        let meta_info = sst_reader.sst_meta_info(meta.to_owned());
-        Ok(meta_info)
+        Ok(sst_reader)
     }
 
     /// check if api version of sst files are compatible

@@ -63,6 +63,7 @@ pub struct Shard {
 }
 
 pub const MEM_TABLE_SIZE_KEY: &str = "_mem_table_size";
+pub const INGEST_ID_KEY: &str = "_ingest_id";
 
 impl Shard {
     pub fn new(

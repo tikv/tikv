@@ -11,18 +11,6 @@ use slog_global::{info, warn};
 use crate::{table::memtable::CFTable, *};
 
 impl Engine {
-    pub fn get_shard_with_ver(&self, shard_id: u64, shard_ver: u64) -> Result<Arc<Shard>> {
-        let shard = self.get_shard(shard_id).ok_or(Error::ShardNotFound)?;
-        if shard.ver != shard_ver {
-            warn!(
-                "shard {} version not match, current {}, request {}",
-                shard_id, shard.ver, shard_ver
-            );
-            return Err(Error::ShardNotMatch);
-        }
-        Ok(shard)
-    }
-
     pub fn split(&self, mut cs: pb::ChangeSet, initial_seq: u64) -> Result<()> {
         let split = cs.take_split();
         let sequence = cs.get_sequence();

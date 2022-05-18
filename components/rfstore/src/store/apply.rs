@@ -214,6 +214,12 @@ pub(crate) struct Applier {
     pub(crate) metrics: ApplyMetrics,
 
     pub(crate) pending_split: Option<kvenginepb::ChangeSet>,
+
+    pub(crate) paused: bool,
+
+    pub(crate) paused_apply_queue: Vec<MsgApply>,
+
+    pub(crate) ingest_callback: Option<Callback>,
 }
 
 impl Applier {
@@ -235,6 +241,9 @@ impl Applier {
             snap: None,
             metrics: ApplyMetrics::default(),
             pending_split: Default::default(),
+            paused: false,
+            ingest_callback: None,
+            paused_apply_queue: Default::default(),
         }
     }
 
@@ -265,6 +274,9 @@ impl Applier {
             snap: Some(snap),
             metrics: ApplyMetrics::default(),
             pending_split: Default::default(),
+            paused: false,
+            ingest_callback: None,
+            paused_apply_queue: Default::default(),
         }
     }
 
@@ -488,7 +500,11 @@ impl Applier {
                 });
             }
             TYPE_ENGINE_META => {
-                // Already handled by raft store thread.
+                let cs = cl.get_change_set().unwrap();
+                if cs.has_ingest_files() {
+                    self.ingest_callback = self.find_callback(log_index, ctx.exec_log_term, false);
+                    self.paused = true;
+                }
             }
             TYPE_NEX_MEM_TABLE_SIZE => {
                 let mut cs = cl.get_change_set().unwrap();
@@ -1231,6 +1247,10 @@ impl Applier {
         {
             return;
         }
+        if self.paused {
+            self.paused_apply_queue.push(apply);
+            return;
+        }
         self.term = apply.term;
         self.append_proposal(apply.cbs.drain(..));
         self.handle_raft_committed_entries(ctx, apply.entries.drain(..));
@@ -1245,6 +1265,7 @@ impl Applier {
 
     fn handle_apply_change_set(&mut self, ctx: &mut ApplyContext, cs: ChangeSet) {
         let cs_pb = cs.change_set.clone();
+        let is_ingest_files = cs.has_ingest_files();
         let result = if cs.has_snapshot() {
             ctx.engine.ingest(cs, false).map(|()| cs_pb)
         } else {
@@ -1252,6 +1273,17 @@ impl Applier {
         };
         let router = ctx.router.as_ref().unwrap();
         router.send(self.region_id(), PeerMsg::ApplyChangeSetResult(result));
+        if is_ingest_files {
+            if let Some(callback) = self.ingest_callback.take() {
+                let mut resp = RaftCmdResponse::default();
+                resp.mut_header().set_current_term(ctx.exec_log_term);
+                callback.invoke_with_response(resp);
+            }
+            self.paused = false;
+            for apply in std::mem::take(&mut self.paused_apply_queue) {
+                self.handle_apply(ctx, apply);
+            }
+        }
     }
 
     fn clear_all_commands_as_stale(&mut self) {

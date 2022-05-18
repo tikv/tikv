@@ -2,6 +2,7 @@
 
 use std::{collections::BTreeMap, ops::Deref, path::PathBuf};
 
+use engine_rocks::RocksEngine;
 use engine_traits::{
     CFNamesExt, CFOptionsExt, ColumnFamilyOptions, CompactExt, CompactedEvent, DBOptions,
     DBOptionsExt, DBVector, DeleteStrategy, ExternalSstFileInfo, FlowControlFactorsExt, ImportExt,
@@ -23,65 +24,15 @@ impl CFNamesExt for Engine {
 }
 
 impl CFOptionsExt for Engine {
-    type ColumnFamilyOptions = EngineColumnFamilyOptions;
+    type ColumnFamilyOptions = engine_rocks::RocksColumnFamilyOptions;
 
     fn get_options_cf(&self, _cf: &str) -> TraitsResult<Self::ColumnFamilyOptions> {
-        panic!()
+        Ok(engine_rocks::RocksColumnFamilyOptions::from_raw(
+            rocksdb::ColumnFamilyOptions::default(),
+        ))
     }
     fn set_options_cf(&self, _cf: &str, _options: &[(&str, &str)]) -> TraitsResult<()> {
-        panic!()
-    }
-}
-
-pub struct EngineColumnFamilyOptions;
-
-impl ColumnFamilyOptions for EngineColumnFamilyOptions {
-    type TitanDBOptions = EngineTitanDBOptions;
-
-    fn new() -> Self {
-        panic!()
-    }
-    fn get_max_write_buffer_number(&self) -> u32 {
-        panic!()
-    }
-    fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {
-        panic!()
-    }
-    fn get_level_zero_stop_writes_trigger(&self) -> u32 {
-        panic!()
-    }
-    fn set_level_zero_file_num_compaction_trigger(&mut self, _v: i32) {
-        panic!()
-    }
-    fn get_soft_pending_compaction_bytes_limit(&self) -> u64 {
-        panic!()
-    }
-    fn get_hard_pending_compaction_bytes_limit(&self) -> u64 {
-        panic!()
-    }
-    fn get_block_cache_capacity(&self) -> u64 {
-        panic!()
-    }
-    fn set_block_cache_capacity(&self, _capacity: u64) -> std::result::Result<(), String> {
-        panic!()
-    }
-    fn set_titandb_options(&mut self, _opts: &Self::TitanDBOptions) {
-        panic!()
-    }
-    fn get_target_file_size_base(&self) -> u64 {
-        panic!()
-    }
-    fn set_disable_auto_compactions(&mut self, _v: bool) {
-        panic!()
-    }
-    fn get_disable_auto_compactions(&self) -> bool {
-        panic!()
-    }
-    fn get_disable_write_stall(&self) -> bool {
-        panic!()
-    }
-    fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, _factory: F) {
-        panic!()
+        Ok(())
     }
 }
 
@@ -166,10 +117,10 @@ impl DBOptionsExt for Engine {
     type DBOptions = EngineDBOptions;
 
     fn get_db_options(&self) -> Self::DBOptions {
-        panic!()
+        EngineDBOptions::new()
     }
     fn set_db_options(&self, _options: &[(&str, &str)]) -> TraitsResult<()> {
-        panic!()
+        Ok(())
     }
 }
 
@@ -179,27 +130,27 @@ impl DBOptions for EngineDBOptions {
     type TitanDBOptions = EngineTitanDBOptions;
 
     fn new() -> Self {
-        panic!()
+        EngineDBOptions {}
     }
 
     fn get_max_background_jobs(&self) -> i32 {
-        panic!()
+        2
     }
 
     fn get_rate_bytes_per_sec(&self) -> Option<i64> {
-        panic!()
+        None
     }
 
     fn set_rate_bytes_per_sec(&mut self, _rate_bytes_per_sec: i64) -> TraitsResult<()> {
-        panic!()
+        Ok(())
     }
 
     fn get_rate_limiter_auto_tuned(&self) -> Option<bool> {
-        panic!()
+        None
     }
 
     fn set_rate_limiter_auto_tuned(&mut self, _rate_limiter_auto_tuned: bool) -> TraitsResult<()> {
-        panic!()
+        Ok(())
     }
 
     fn set_titandb_options(&mut self, _opts: &Self::TitanDBOptions) {
@@ -617,146 +568,44 @@ impl engine_traits::Iterator for PanicSnapshotIterator {
 }
 
 impl SstExt for Engine {
-    type SstReader = EngineSstReader;
-    type SstWriter = EngineSstWriter;
+    type SstReader = engine_rocks::RocksSstReader;
+    type SstWriter = engine_rocks::RocksSstWriter;
     type SstWriterBuilder = EngineSstWriterBuilder;
 }
 
-pub struct EngineSstReader;
-
-impl SstReader for EngineSstReader {
-    fn open(_path: &str) -> TraitsResult<Self> {
-        panic!()
-    }
-    fn verify_checksum(&self) -> TraitsResult<()> {
-        panic!()
-    }
-    fn iter(&self) -> Self::Iterator {
-        panic!()
-    }
+pub struct EngineSstWriterBuilder {
+    builder: engine_rocks::RocksSstWriterBuilder,
 }
-
-impl Iterable for EngineSstReader {
-    type Iterator = EngineSstReaderIterator;
-
-    fn iterator_opt(&self, _opts: IterOptions) -> TraitsResult<Self::Iterator> {
-        panic!()
-    }
-    fn iterator_cf_opt(&self, _cf: &str, _opts: IterOptions) -> TraitsResult<Self::Iterator> {
-        panic!()
-    }
-}
-
-pub struct EngineSstReaderIterator;
-
-impl engine_traits::Iterator for EngineSstReaderIterator {
-    fn seek(&mut self, _key: SeekKey<'_>) -> TraitsResult<bool> {
-        panic!()
-    }
-    fn seek_for_prev(&mut self, _key: SeekKey<'_>) -> TraitsResult<bool> {
-        panic!()
-    }
-
-    fn prev(&mut self) -> TraitsResult<bool> {
-        panic!()
-    }
-    fn next(&mut self) -> TraitsResult<bool> {
-        panic!()
-    }
-
-    fn key(&self) -> &[u8] {
-        panic!()
-    }
-    fn value(&self) -> &[u8] {
-        panic!()
-    }
-
-    fn valid(&self) -> TraitsResult<bool> {
-        panic!()
-    }
-}
-
-pub struct EngineSstWriter;
-
-impl SstWriter for EngineSstWriter {
-    type ExternalSstFileInfo = EngineExternalSstFileInfo;
-    type ExternalSstFileReader = EngineExternalSstFileReader;
-
-    fn put(&mut self, _key: &[u8], _val: &[u8]) -> TraitsResult<()> {
-        panic!()
-    }
-    fn delete(&mut self, _key: &[u8]) -> TraitsResult<()> {
-        panic!()
-    }
-    fn file_size(&mut self) -> u64 {
-        panic!()
-    }
-    fn finish(self) -> TraitsResult<Self::ExternalSstFileInfo> {
-        panic!()
-    }
-    fn finish_read(self) -> TraitsResult<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)> {
-        panic!()
-    }
-}
-
-pub struct EngineSstWriterBuilder;
 
 impl SstWriterBuilder<Engine> for EngineSstWriterBuilder {
     fn new() -> Self {
-        panic!()
+        Self {
+            builder: engine_rocks::RocksSstWriterBuilder::new(),
+        }
     }
-    fn set_db(self, _db: &Engine) -> Self {
-        panic!()
+    fn set_db(mut self, _db: &Engine) -> Self {
+        // TODO(x): need to find a way to pass RocksDB Env and CFOptions to the builder.
+        self
     }
-    fn set_cf(self, _cf: &str) -> Self {
-        panic!()
+    fn set_cf(mut self, cf: &str) -> Self {
+        self.builder = self.builder.set_cf(cf);
+        self
     }
-    fn set_in_memory(self, _in_memory: bool) -> Self {
-        panic!()
+    fn set_in_memory(mut self, in_memory: bool) -> Self {
+        self.builder = self.builder.set_in_memory(in_memory);
+        self
     }
-    fn set_compression_type(self, _compression: Option<SstCompressionType>) -> Self {
-        panic!()
+    fn set_compression_type(mut self, compression: Option<SstCompressionType>) -> Self {
+        self.builder = self.builder.set_compression_type(compression);
+        self
     }
-    fn set_compression_level(self, _level: i32) -> Self {
-        panic!()
+    fn set_compression_level(mut self, level: i32) -> Self {
+        self.builder = self.builder.set_compression_level(level);
+        self
     }
 
-    fn build(self, _path: &str) -> TraitsResult<EngineSstWriter> {
-        panic!()
-    }
-}
-
-pub struct EngineExternalSstFileInfo;
-
-impl ExternalSstFileInfo for EngineExternalSstFileInfo {
-    fn new() -> Self {
-        panic!()
-    }
-    fn file_path(&self) -> PathBuf {
-        panic!()
-    }
-    fn smallest_key(&self) -> &[u8] {
-        panic!()
-    }
-    fn largest_key(&self) -> &[u8] {
-        panic!()
-    }
-    fn sequence_number(&self) -> u64 {
-        panic!()
-    }
-    fn file_size(&self) -> u64 {
-        panic!()
-    }
-    fn num_entries(&self) -> u64 {
-        panic!()
-    }
-}
-
-pub struct EngineExternalSstFileReader;
-
-impl std::io::Read for EngineExternalSstFileReader {
-    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-        panic!()
+    fn build(self, path: &str) -> TraitsResult<engine_rocks::RocksSstWriter> {
+        self.builder.build(path)
     }
 }
 

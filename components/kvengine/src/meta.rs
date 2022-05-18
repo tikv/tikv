@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use kvenginepb as pb;
 use protobuf::Message;
 use slog_global::*;
@@ -124,6 +124,10 @@ impl ShardMeta {
             self.apply_compaction(cs.get_compaction());
             return;
         }
+        if cs.has_ingest_files() {
+            self.apply_ingest_files(cs.get_ingest_files());
+            return;
+        }
         panic!("unexpected change set {:?}", cs)
     }
 
@@ -167,6 +171,20 @@ impl ShardMeta {
                 }
             }
         }
+        if cs.has_ingest_files() {
+            let ingest_files = cs.get_ingest_files();
+            let ingest_id =
+                get_shard_property(INGEST_ID_KEY, ingest_files.get_properties()).unwrap();
+            if let Some(old_ingest_id) = self.get_property(INGEST_ID_KEY) {
+                if ingest_id.eq(&old_ingest_id) {
+                    info!(
+                        "{}:{} skip duplicated ingest files, ingest_id:{:?}",
+                        self.id, self.ver, ingest_id,
+                    );
+                    return true;
+                }
+            }
+        }
         false
     }
 
@@ -184,12 +202,7 @@ impl ShardMeta {
 
     fn apply_flush(&mut self, cs: &pb::ChangeSet) {
         let flush = cs.get_flush();
-        let props = flush.get_properties();
-        for i in 0..props.get_keys().len() {
-            let key = &props.get_keys()[i];
-            let val = &props.get_values()[i];
-            self.properties.set(key, val.as_slice());
-        }
+        self.apply_properties(flush.get_properties());
         if flush.has_l0_create() {
             let l0 = flush.get_l0_create();
             self.add_file(l0.id, -1, 0, l0.get_smallest(), l0.get_biggest());
@@ -237,6 +250,55 @@ impl ShardMeta {
                 tbl.get_smallest(),
                 tbl.get_biggest(),
             )
+        }
+    }
+
+    fn apply_ingest_files(&mut self, ingest_files: &pb::IngestFiles) {
+        let mut min_level = 4;
+        for (id, file) in &self.files {
+            if min_level < file.level {
+                min_level = file.level;
+            }
+        }
+        let has_ln_file = !ingest_files.get_table_creates().is_empty();
+        if min_level <= 1 && has_ln_file {
+            // We need spare level to ingest Ln files.
+            error!(
+                "{}:{} no empty level to ingest Ln files!",
+                self.id, self.ver
+            );
+            return;
+        }
+        self.apply_properties(ingest_files.get_properties());
+        if has_ln_file {
+            let ingest_level = min_level - 1;
+            for tbl in ingest_files.get_table_creates() {
+                self.add_file(
+                    tbl.id,
+                    0,
+                    ingest_level as u32,
+                    tbl.get_smallest(),
+                    tbl.get_biggest(),
+                );
+            }
+        } else {
+            for l0_tbl in ingest_files.get_l0_creates() {
+                self.add_file(
+                    l0_tbl.id,
+                    -1,
+                    0,
+                    l0_tbl.get_smallest(),
+                    l0_tbl.get_biggest(),
+                );
+            }
+        }
+    }
+
+    fn apply_properties(&mut self, props: &pb::Properties) {
+        for i in 0..props.get_keys().len() {
+            let key = &props.get_keys()[i];
+            let val = &props.get_values()[i];
+            self.properties.set(key, val.as_slice());
         }
     }
 

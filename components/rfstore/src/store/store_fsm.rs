@@ -28,6 +28,7 @@ use raftstore::{
         util::{is_initial_msg, is_region_initialized},
     },
 };
+use sst_importer::SstImporter;
 use tikv_util::{
     box_err,
     config::VersionTrack,
@@ -90,6 +91,7 @@ impl RaftBatchSystem {
         pd_worker: LazyWorker<PdTask>,
         mut store_meta: StoreMeta,
         mut coprocessor_host: CoprocessorHost<kvengine::Engine>,
+        importer: Arc<SstImporter>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         assert!(self.workers.is_none());
@@ -114,6 +116,7 @@ impl RaftBatchSystem {
             trans,
             pd_scheduler,
             coprocessor_host,
+            importer,
         };
         let mut region_peers = self.load_peers(&ctx, &mut store_meta)?;
         for peer_fsm in &region_peers {
@@ -365,6 +368,7 @@ pub(crate) struct GlobalContext {
     pub(crate) trans: Box<dyn Transport>,
     pub(crate) pd_scheduler: Scheduler<PdTask>,
     pub(crate) coprocessor_host: CoprocessorHost<kvengine::Engine>,
+    pub(crate) importer: Arc<SstImporter>,
 }
 
 pub(crate) struct RaftContext {

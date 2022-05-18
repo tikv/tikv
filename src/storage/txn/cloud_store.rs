@@ -5,10 +5,16 @@ use std::{borrow::Cow, marker::PhantomData};
 use bytes::{Buf, Bytes};
 use kvengine::Item;
 use kvproto::kvrpcpb::IsolationLevel;
+use rfstore::UserMeta;
 use tikv_kv::{Snapshot, Statistics};
-use txn_types::{Key, Lock, TimeStamp, TsSet, Value};
+use txn_types::{Key, Lock, OldValue, TimeStamp, TsSet, Value, Write, WriteType};
 
-use crate::storage::{mvcc, mvcc::NewerTsCheckState, txn::Result};
+use crate::storage::{
+    mvcc,
+    mvcc::NewerTsCheckState,
+    txn::{Error, ErrorInner, Result, TxnEntry, TxnEntryStore},
+    REQUEST_EXCEED_BOUND,
+};
 
 pub struct CloudStore<S: Snapshot> {
     marker: PhantomData<S>,
@@ -86,27 +92,7 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner> {
-        let lower_bound = lower_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
-        let upper_bound = upper_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
-        let mut stats = Statistics::default();
-        let lock_iter = self.snapshot.new_iterator(LOCK_CF, desc, false, None);
-        self.check_locks(
-            lock_iter,
-            lower_bound.clone(),
-            upper_bound.clone(),
-            &mut stats,
-        )?;
-        let iter = self
-            .snapshot
-            .new_iterator(WRITE_CF, desc, false, Some(self.start_ts));
-        Ok(CloudStoreScanner {
-            iter,
-            desc,
-            stats,
-            is_started: false,
-            lower_bound,
-            upper_bound,
-        })
+        self.scanner_inner(desc, lower_bound, upper_bound, false)
     }
 }
 
@@ -205,6 +191,70 @@ impl<S: Snapshot> CloudStore<S> {
         }
         Ok(())
     }
+
+    fn scanner_inner(
+        &self,
+        desc: bool,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+        output_delete: bool,
+    ) -> Result<CloudStoreScanner> {
+        let lower_bound = lower_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
+        let upper_bound = upper_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
+        self.verify_range(&lower_bound, &upper_bound)?;
+        let mut stats = Statistics::default();
+        let lock_iter = self.snapshot.new_iterator(LOCK_CF, desc, false, None);
+        self.check_locks(
+            lock_iter,
+            lower_bound.clone(),
+            upper_bound.clone(),
+            &mut stats,
+        )?;
+        let iter = self
+            .snapshot
+            .new_iterator(WRITE_CF, desc, false, Some(self.start_ts));
+        Ok(CloudStoreScanner {
+            iter,
+            desc,
+            stats,
+            is_started: false,
+            lower_bound,
+            upper_bound,
+            output_delete,
+        })
+    }
+
+    fn verify_range(&self, lower_bound: &Option<Bytes>, upper_bound: &Option<Bytes>) -> Result<()> {
+        if let Some(ref l) = lower_bound {
+            if l.chunk() < self.snapshot.get_start_key() {
+                return self.range_error(lower_bound, upper_bound);
+            }
+        }
+        if let Some(ref u) = upper_bound {
+            if u.chunk() > self.snapshot.get_end_key() {
+                return self.range_error(lower_bound, upper_bound);
+            }
+        }
+        Ok(())
+    }
+
+    fn range_error(&self, lower_bound: &Option<Bytes>, upper_bound: &Option<Bytes>) -> Result<()> {
+        REQUEST_EXCEED_BOUND.inc();
+        let start = lower_bound
+            .as_ref()
+            .map(|k| Key::from_raw(k.chunk()).into_encoded());
+        let end = upper_bound
+            .as_ref()
+            .map(|k| Key::from_raw(k.chunk()).into_encoded());
+        let snap_start = Key::from_raw(self.snapshot.get_start_key());
+        let snap_end = Key::from_raw(self.snapshot.get_end_key());
+        Err(Error::from(ErrorInner::InvalidReqRange {
+            start,
+            end,
+            lower_bound: Some(snap_start.into_encoded()),
+            upper_bound: Some(snap_end.into_encoded()),
+        }))
+    }
 }
 
 pub struct CloudStoreScanner {
@@ -214,6 +264,7 @@ pub struct CloudStoreScanner {
     lower_bound: Option<Bytes>,
     upper_bound: Option<Bytes>,
     desc: bool,
+    output_delete: bool,
 }
 
 impl CloudStoreScanner {
@@ -239,10 +290,8 @@ impl CloudStoreScanner {
             }
         }
     }
-}
 
-impl super::Scanner for CloudStoreScanner {
-    fn next(&mut self) -> Result<Option<(Key, Value)>> {
+    fn next_inner(&mut self) -> Result<Option<(Key, UserMeta, Value)>> {
         if self.is_started {
             self.iter.next();
         } else {
@@ -261,15 +310,22 @@ impl super::Scanner for CloudStoreScanner {
             self.stats.write.processed_keys += 1;
             self.stats.processed_size += iter_key.len() + item.value_len();
             let val = item.get_value();
-            if !val.is_empty() {
+            if !val.is_empty() || self.output_delete {
+                let user_meta = UserMeta::from_slice(item.user_meta());
                 let key = Key::from_raw(iter_key);
-                return Ok(Some((key, val.to_vec())));
+                return Ok(Some((key, user_meta, val.to_vec())));
             }
             self.stats.write.next_tombstone += 1;
             // Skip delete record.
             self.iter.next();
             continue;
         }
+    }
+}
+
+impl super::Scanner for CloudStoreScanner {
+    fn next(&mut self) -> Result<Option<(Key, Value)>> {
+        Ok(self.next_inner()?.map(|(key, _user_meta, val)| (key, val)))
     }
 
     fn met_newer_ts_data(&self) -> NewerTsCheckState {
@@ -278,5 +334,41 @@ impl super::Scanner for CloudStoreScanner {
 
     fn take_statistics(&mut self) -> Statistics {
         std::mem::take(&mut self.stats)
+    }
+}
+
+impl super::TxnEntryScanner for CloudStoreScanner {
+    fn next_entry(&mut self) -> Result<Option<TxnEntry>> {
+        Ok(self.next_inner()?.map(|(key, user_meta, val)| {
+            let key = key.append_ts(TimeStamp::new(user_meta.commit_ts));
+            let write_type = if val.is_empty() {
+                WriteType::Delete
+            } else {
+                WriteType::Put
+            };
+            let write = Write::new(write_type, user_meta.start_ts.into(), Some(val));
+            TxnEntry::Commit {
+                default: (vec![], vec![]),
+                write: (key.into_encoded(), write.as_ref().to_bytes()),
+                old_value: OldValue::None,
+            }
+        }))
+    }
+
+    fn take_statistics(&mut self) -> Statistics {
+        std::mem::take(&mut self.stats)
+    }
+}
+
+impl<S: Snapshot> TxnEntryStore for CloudStore<S> {
+    type Scanner = CloudStoreScanner;
+    fn entry_scanner(
+        &self,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+        _after_ts: TimeStamp,
+        output_delete: bool,
+    ) -> Result<Self::Scanner> {
+        self.scanner_inner(false, lower_bound, upper_bound, output_delete)
     }
 }

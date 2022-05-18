@@ -85,7 +85,7 @@ impl TestSuite {
                 *id,
                 sim.storages[id].clone(),
                 sim.region_info_accessors[id].clone(),
-                engines.kv.as_inner().clone(),
+                engines.kv.clone(),
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,

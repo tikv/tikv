@@ -40,6 +40,7 @@ pub struct ChangeSet {
     pub sequence: u64,
     pub next_mem_table_size: u64,
     pub parent: ::protobuf::SingularPtrField<ChangeSet>,
+    pub ingest_files: ::protobuf::SingularPtrField<IngestFiles>,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -328,6 +329,39 @@ impl ChangeSet {
     pub fn take_parent(&mut self) -> ChangeSet {
         self.parent.take().unwrap_or_else(|| ChangeSet::new())
     }
+
+    // .enginepb.IngestFiles ingest_files = 15;
+
+
+    pub fn get_ingest_files(&self) -> &IngestFiles {
+        self.ingest_files.as_ref().unwrap_or_else(|| IngestFiles::default_instance())
+    }
+    pub fn clear_ingest_files(&mut self) {
+        self.ingest_files.clear();
+    }
+
+    pub fn has_ingest_files(&self) -> bool {
+        self.ingest_files.is_some()
+    }
+
+    // Param is passed by value, moved
+    pub fn set_ingest_files(&mut self, v: IngestFiles) {
+        self.ingest_files = ::protobuf::SingularPtrField::some(v);
+    }
+
+    // Mutable pointer to the field.
+    // If field is not initialized, it is initialized with default value first.
+    pub fn mut_ingest_files(&mut self) -> &mut IngestFiles {
+        if self.ingest_files.is_none() {
+            self.ingest_files.set_default();
+        }
+        self.ingest_files.as_mut().unwrap()
+    }
+
+    // Take field
+    pub fn take_ingest_files(&mut self) -> IngestFiles {
+        self.ingest_files.take().unwrap_or_else(|| IngestFiles::new())
+    }
 }
 
 impl ::protobuf::Message for ChangeSet {
@@ -358,6 +392,11 @@ impl ::protobuf::Message for ChangeSet {
             }
         };
         for v in &self.parent {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
+        for v in &self.ingest_files {
             if !v.is_initialized() {
                 return false;
             }
@@ -422,6 +461,9 @@ impl ::protobuf::Message for ChangeSet {
                 14 => {
                     ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.parent)?;
                 },
+                15 => {
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.ingest_files)?;
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -473,6 +515,10 @@ impl ::protobuf::Message for ChangeSet {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
+        if let Some(ref v) = self.ingest_files.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
@@ -521,6 +567,11 @@ impl ::protobuf::Message for ChangeSet {
         }
         if let Some(ref v) = self.parent.as_ref() {
             os.write_tag(14, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
+        }
+        if let Some(ref v) = self.ingest_files.as_ref() {
+            os.write_tag(15, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         }
@@ -621,6 +672,11 @@ impl ::protobuf::Message for ChangeSet {
                     |m: &ChangeSet| { &m.parent },
                     |m: &mut ChangeSet| { &mut m.parent },
                 ));
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<IngestFiles>>(
+                    "ingest_files",
+                    |m: &ChangeSet| { &m.ingest_files },
+                    |m: &mut ChangeSet| { &mut m.ingest_files },
+                ));
                 ::protobuf::reflect::MessageDescriptor::new::<ChangeSet>(
                     "ChangeSet",
                     fields,
@@ -654,6 +710,7 @@ impl ::protobuf::Clear for ChangeSet {
         self.sequence = 0;
         self.next_mem_table_size = 0;
         self.parent.clear();
+        self.ingest_files.clear();
         self.unknown_fields.clear();
     }
 }
@@ -674,6 +731,7 @@ impl ::protobuf::PbPrint for ChangeSet {
         ::protobuf::PbPrint::fmt(&self.sequence, "sequence", buf);
         ::protobuf::PbPrint::fmt(&self.next_mem_table_size, "next_mem_table_size", buf);
         ::protobuf::PbPrint::fmt(&self.parent, "parent", buf);
+        ::protobuf::PbPrint::fmt(&self.ingest_files, "ingest_files", buf);
         if old_len < buf.len() {
           buf.push(' ');
         }
@@ -695,6 +753,7 @@ impl ::std::fmt::Debug for ChangeSet {
         ::protobuf::PbPrint::fmt(&self.sequence, "sequence", &mut s);
         ::protobuf::PbPrint::fmt(&self.next_mem_table_size, "next_mem_table_size", &mut s);
         ::protobuf::PbPrint::fmt(&self.parent, "parent", &mut s);
+        ::protobuf::PbPrint::fmt(&self.ingest_files, "ingest_files", &mut s);
         write!(f, "{}", s)
     }
 }
@@ -2690,6 +2749,307 @@ impl ::protobuf::reflect::ProtobufValue for Split {
 }
 
 #[derive(PartialEq,Clone,Default)]
+pub struct IngestFiles {
+    // message fields
+    pub l0_creates: ::protobuf::RepeatedField<L0Create>,
+    pub table_creates: ::protobuf::RepeatedField<TableCreate>,
+    pub properties: ::protobuf::SingularPtrField<Properties>,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a IngestFiles {
+    fn default() -> &'a IngestFiles {
+        <IngestFiles as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl IngestFiles {
+    pub fn new() -> IngestFiles {
+        ::std::default::Default::default()
+    }
+
+    // repeated .enginepb.L0Create l0Creates = 1;
+
+
+    pub fn get_l0_creates(&self) -> &[L0Create] {
+        &self.l0_creates
+    }
+    pub fn clear_l0_creates(&mut self) {
+        self.l0_creates.clear();
+    }
+
+    // Param is passed by value, moved
+    pub fn set_l0_creates(&mut self, v: ::protobuf::RepeatedField<L0Create>) {
+        self.l0_creates = v;
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_l0_creates(&mut self) -> &mut ::protobuf::RepeatedField<L0Create> {
+        &mut self.l0_creates
+    }
+
+    // Take field
+    pub fn take_l0_creates(&mut self) -> ::protobuf::RepeatedField<L0Create> {
+        ::std::mem::replace(&mut self.l0_creates, ::protobuf::RepeatedField::new())
+    }
+
+    // repeated .enginepb.TableCreate tableCreates = 2;
+
+
+    pub fn get_table_creates(&self) -> &[TableCreate] {
+        &self.table_creates
+    }
+    pub fn clear_table_creates(&mut self) {
+        self.table_creates.clear();
+    }
+
+    // Param is passed by value, moved
+    pub fn set_table_creates(&mut self, v: ::protobuf::RepeatedField<TableCreate>) {
+        self.table_creates = v;
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_table_creates(&mut self) -> &mut ::protobuf::RepeatedField<TableCreate> {
+        &mut self.table_creates
+    }
+
+    // Take field
+    pub fn take_table_creates(&mut self) -> ::protobuf::RepeatedField<TableCreate> {
+        ::std::mem::replace(&mut self.table_creates, ::protobuf::RepeatedField::new())
+    }
+
+    // .enginepb.Properties properties = 3;
+
+
+    pub fn get_properties(&self) -> &Properties {
+        self.properties.as_ref().unwrap_or_else(|| Properties::default_instance())
+    }
+    pub fn clear_properties(&mut self) {
+        self.properties.clear();
+    }
+
+    pub fn has_properties(&self) -> bool {
+        self.properties.is_some()
+    }
+
+    // Param is passed by value, moved
+    pub fn set_properties(&mut self, v: Properties) {
+        self.properties = ::protobuf::SingularPtrField::some(v);
+    }
+
+    // Mutable pointer to the field.
+    // If field is not initialized, it is initialized with default value first.
+    pub fn mut_properties(&mut self) -> &mut Properties {
+        if self.properties.is_none() {
+            self.properties.set_default();
+        }
+        self.properties.as_mut().unwrap()
+    }
+
+    // Take field
+    pub fn take_properties(&mut self) -> Properties {
+        self.properties.take().unwrap_or_else(|| Properties::new())
+    }
+}
+
+impl ::protobuf::Message for IngestFiles {
+    fn is_initialized(&self) -> bool {
+        for v in &self.l0_creates {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
+        for v in &self.table_creates {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
+        for v in &self.properties {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.l0_creates)?;
+                },
+                2 => {
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.table_creates)?;
+                },
+                3 => {
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.properties)?;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        for value in &self.l0_creates {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        };
+        for value in &self.table_creates {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        };
+        if let Some(ref v) = self.properties.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+        for v in &self.l0_creates {
+            os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
+        };
+        for v in &self.table_creates {
+            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
+        };
+        if let Some(ref v) = self.properties.as_ref() {
+            os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn as_any(&self) -> &dyn (::std::any::Any) {
+        self as &dyn (::std::any::Any)
+    }
+    fn as_any_mut(&mut self) -> &mut dyn (::std::any::Any) {
+        self as &mut dyn (::std::any::Any)
+    }
+    fn into_any(self: Box<Self>) -> ::std::boxed::Box<dyn (::std::any::Any)> {
+        self
+    }
+
+    fn descriptor(&self) -> &'static ::protobuf::reflect::MessageDescriptor {
+        Self::descriptor_static()
+    }
+
+    fn new() -> IngestFiles {
+        IngestFiles::new()
+    }
+
+    fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
+        static mut descriptor: ::protobuf::lazy::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::lazy::Lazy {
+            lock: ::protobuf::lazy::ONCE_INIT,
+            ptr: 0 as *const ::protobuf::reflect::MessageDescriptor,
+        };
+        unsafe {
+            descriptor.get(|| {
+                let mut fields = ::std::vec::Vec::new();
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<L0Create>>(
+                    "l0Creates",
+                    |m: &IngestFiles| { &m.l0_creates },
+                    |m: &mut IngestFiles| { &mut m.l0_creates },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<TableCreate>>(
+                    "tableCreates",
+                    |m: &IngestFiles| { &m.table_creates },
+                    |m: &mut IngestFiles| { &mut m.table_creates },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<Properties>>(
+                    "properties",
+                    |m: &IngestFiles| { &m.properties },
+                    |m: &mut IngestFiles| { &mut m.properties },
+                ));
+                ::protobuf::reflect::MessageDescriptor::new::<IngestFiles>(
+                    "IngestFiles",
+                    fields,
+                    file_descriptor_proto()
+                )
+            })
+        }
+    }
+
+    fn default_instance() -> &'static IngestFiles {
+        static mut instance: ::protobuf::lazy::Lazy<IngestFiles> = ::protobuf::lazy::Lazy {
+            lock: ::protobuf::lazy::ONCE_INIT,
+            ptr: 0 as *const IngestFiles,
+        };
+        unsafe {
+            instance.get(IngestFiles::new)
+        }
+    }
+}
+
+impl ::protobuf::Clear for IngestFiles {
+    fn clear(&mut self) {
+        self.l0_creates.clear();
+        self.table_creates.clear();
+        self.properties.clear();
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::protobuf::PbPrint for IngestFiles {
+    #[allow(unused_variables)]
+    fn fmt(&self, name: &str, buf: &mut String) {
+        ::protobuf::push_message_start(name, buf);
+        let old_len = buf.len();
+        ::protobuf::PbPrint::fmt(&self.l0_creates, "l0_creates", buf);
+        ::protobuf::PbPrint::fmt(&self.table_creates, "table_creates", buf);
+        ::protobuf::PbPrint::fmt(&self.properties, "properties", buf);
+        if old_len < buf.len() {
+          buf.push(' ');
+        }
+        buf.push('}');
+    }
+}
+impl ::std::fmt::Debug for IngestFiles {
+    #[allow(unused_variables)]
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        let mut s = String::new();
+        ::protobuf::PbPrint::fmt(&self.l0_creates, "l0_creates", &mut s);
+        ::protobuf::PbPrint::fmt(&self.table_creates, "table_creates", &mut s);
+        ::protobuf::PbPrint::fmt(&self.properties, "properties", &mut s);
+        write!(f, "{}", s)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for IngestFiles {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct Properties {
     // message fields
     pub shard_id: u64,
@@ -2953,7 +3313,7 @@ impl ::protobuf::reflect::ProtobufValue for Properties {
 }
 
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n\x0fchangeset.proto\x12\x08enginepb\"\xe7\x02\n\tChangeSet\x12\x11\n\
+    \n\x0fchangeset.proto\x12\x08enginepb\"\x96\x03\n\tChangeSet\x12\x11\n\
     \x07shardID\x18\x01\x20\x01(\x04B\0\x12\x12\n\x08shardVer\x18\x02\x20\
     \x01(\x04B\0\x12*\n\ncompaction\x18\x04\x20\x01(\x0b2\x14.enginepb.Compa\
     ctionB\0\x12\x20\n\x05flush\x18\x05\x20\x01(\x0b2\x0f.enginepb.FlushB\0\
@@ -2962,8 +3322,9 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \n\x05split\x18\n\x20\x01(\x0b2\x0f.enginepb.SplitB\0\x12\x15\n\x0bshard\
     Delete\x18\x0b\x20\x01(\x08B\0\x12\x12\n\x08sequence\x18\x0c\x20\x01(\
     \x04B\0\x12\x1a\n\x10nextMemTableSize\x18\r\x20\x01(\x04B\0\x12%\n\x06pa\
-    rent\x18\x0e\x20\x01(\x0b2\x13.enginepb.ChangeSetB\0:\0\"\xa1\x01\n\nCom\
-    paction\x12\x0c\n\x02cf\x18\x01\x20\x01(\x05B\0\x12\x0f\n\x05level\x18\
+    rent\x18\x0e\x20\x01(\x0b2\x13.enginepb.ChangeSetB\0\x12-\n\x0cingest_fi\
+    les\x18\x0f\x20\x01(\x0b2\x15.enginepb.IngestFilesB\0:\0\"\xa1\x01\n\nCo\
+    mpaction\x12\x0c\n\x02cf\x18\x01\x20\x01(\x05B\0\x12\x0f\n\x05level\x18\
     \x02\x20\x01(\rB\0\x12-\n\x0ctableCreates\x18\x03\x20\x03(\x0b2\x15.engi\
     nepb.TableCreateB\0\x12\x14\n\ntopDeletes\x18\x04\x20\x03(\x04B\0\x12\
     \x17\n\rbottomDeletes\x18\x05\x20\x03(\x04B\0\x12\x14\n\nconflicted\x18\
@@ -2983,9 +3344,12 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x12\x12\n\x08smallest\x18\x04\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\
     \x05\x20\x01(\x0cB\0:\0\"D\n\x05Split\x12)\n\tnewShards\x18\x01\x20\x03(\
     \x0b2\x14.enginepb.PropertiesB\0\x12\x0e\n\x04Keys\x18\x03\x20\x03(\x0cB\
-    \0:\0\"C\n\nProperties\x12\x11\n\x07shardID\x18\x01\x20\x01(\x04B\0\x12\
-    \x0e\n\x04keys\x18\x02\x20\x03(\tB\0\x12\x10\n\x06values\x18\x03\x20\x03\
-    (\x0cB\0:\0B\0b\x06proto3\
+    \0:\0\"\x93\x01\n\x0bIngestFiles\x12'\n\tl0Creates\x18\x01\x20\x03(\x0b2\
+    \x12.enginepb.L0CreateB\0\x12-\n\x0ctableCreates\x18\x02\x20\x03(\x0b2\
+    \x15.enginepb.TableCreateB\0\x12*\n\nproperties\x18\x03\x20\x01(\x0b2\
+    \x14.enginepb.PropertiesB\0:\0\"C\n\nProperties\x12\x11\n\x07shardID\x18\
+    \x01\x20\x01(\x04B\0\x12\x0e\n\x04keys\x18\x02\x20\x03(\tB\0\x12\x10\n\
+    \x06values\x18\x03\x20\x03(\x0cB\0:\0B\0b\x06proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {

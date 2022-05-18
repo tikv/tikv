@@ -2,5 +2,7 @@
 
 mod batch;
 mod kv;
+mod sst_service;
 
 pub use kv::Service as KvService;
+pub use sst_service::ImportSstService;

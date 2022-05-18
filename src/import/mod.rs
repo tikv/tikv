@@ -12,7 +12,7 @@
 //! thread to notify it of the ingesting operation.  This service is running
 //! inside TiKV because it needs to interact with raftstore.
 
-mod duplicate_detect;
+pub mod duplicate_detect;
 mod sst_service;
 
 use std::fmt::Debug;

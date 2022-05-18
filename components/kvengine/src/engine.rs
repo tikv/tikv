@@ -14,18 +14,22 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::{mapref::entry::Entry, DashMap};
 use file_system::IORateLimiter;
 use fslock;
 use moka::sync::SegmentedCache;
+use slog::kv;
 use slog_global::info;
 use tikv_util::mpsc;
 
 use crate::{
     apply::ChangeSet,
     meta::ShardMeta,
-    table::{memtable::CFTable, sstable::BlockCacheKey},
+    table::{
+        memtable::CFTable,
+        sstable::{BlockCacheKey, MAGIC_NUMBER, NO_COMPRESSION, TABLE_FORMAT_V1, ZSTD_COMPRESSION},
+    },
     *,
 };
 
@@ -251,6 +255,18 @@ impl EngineCore {
         None
     }
 
+    pub fn get_shard_with_ver(&self, shard_id: u64, shard_ver: u64) -> Result<Arc<Shard>> {
+        let shard = self.get_shard(shard_id).ok_or(Error::ShardNotFound)?;
+        if shard.ver != shard_ver {
+            warn!(
+                "shard {} version not match, current {}, request {}",
+                shard_id, shard.ver, shard_ver
+            );
+            return Err(Error::ShardNotMatch);
+        }
+        Ok(shard)
+    }
+
     pub fn remove_shard(&self, shard_id: u64) -> bool {
         let x = self.shards.remove(&shard_id);
         if let Some((_, _ptr)) = x {
@@ -329,6 +345,90 @@ impl EngineCore {
                 }),
             })
             .unwrap();
+    }
+
+    pub fn build_ingest_files(
+        &self,
+        shard_id: u64,
+        shard_ver: u64,
+        mut iter: Box<dyn table::Iterator>,
+        level: u32,
+        ingest_id: Vec<u8>,
+    ) -> Result<kvenginepb::ChangeSet> {
+        let shard = self.get_shard_with_ver(shard_id, shard_ver)?;
+        let l0_version = shard.load_mem_table_version();
+        let mut cs = new_change_set(shard_id, shard_ver);
+        let mut ingest_files = cs.mut_ingest_files();
+        ingest_files
+            .mut_properties()
+            .mut_keys()
+            .push(INGEST_ID_KEY.to_string());
+        ingest_files.mut_properties().mut_values().push(ingest_id);
+        let opts = dfs::Options::new(shard_id, shard_ver);
+        let (tx, rx) = tikv_util::mpsc::unbounded();
+        let mut tbl_cnt = 0;
+        let block_size = self.opts.table_builder_options.block_size;
+        let max_table_size = self.opts.table_builder_options.max_table_size;
+        let compress_tp = if level == 0 {
+            NO_COMPRESSION
+        } else {
+            ZSTD_COMPRESSION
+        };
+        let mut builder = table::sstable::Builder::new(0, block_size, compress_tp);
+        let mut fids = vec![];
+        iter.rewind();
+        while iter.valid() {
+            if fids.is_empty() {
+                fids = self.id_allocator.alloc_id(5).unwrap();
+            }
+            let id = fids.pop().unwrap();
+            builder.reset(id);
+            while iter.valid() {
+                builder.add(iter.key(), iter.value());
+                iter.next();
+                if builder.estimated_size() > max_table_size || !iter.valid() {
+                    info!("builder estimated_size {}", builder.estimated_size());
+                    let mut buf = BytesMut::with_capacity(builder.estimated_size());
+                    let res = builder.finish(0, &mut buf);
+                    if level == 0 {
+                        let offsets = vec![buf.len() as u32; NUM_CFS];
+                        for offset in offsets {
+                            buf.put_u32_le(offset);
+                        }
+                        buf.put_u64_le(l0_version);
+                        buf.put_u32_le(NUM_CFS as u32);
+                        buf.put_u32_le(MAGIC_NUMBER);
+                        let mut l0_create = kvenginepb::L0Create::new();
+                        l0_create.set_id(id);
+                        l0_create.set_smallest(res.smallest);
+                        l0_create.set_biggest(res.biggest);
+                        ingest_files.mut_l0_creates().push(l0_create);
+                    } else {
+                        let mut tbl_create = kvenginepb::TableCreate::new();
+                        tbl_create.set_id(id);
+                        tbl_create.set_cf(0);
+                        tbl_create.set_level(level);
+                        tbl_create.set_smallest(res.smallest);
+                        tbl_create.set_biggest(res.biggest);
+                        ingest_files.mut_table_creates().push(tbl_create);
+                    }
+                    tbl_cnt += 1;
+                    let fs = self.fs.clone();
+                    let atx = tx.clone();
+                    self.fs.get_runtime().spawn(async move {
+                        if let Err(err) = fs.create(id, buf.freeze(), opts).await {
+                            atx.send(Err(err)).unwrap();
+                        } else {
+                            atx.send(Ok(())).unwrap();
+                        }
+                    });
+                }
+            }
+        }
+        for _ in 0..tbl_cnt {
+            rx.recv().unwrap()?
+        }
+        Ok(cs)
     }
 }
 

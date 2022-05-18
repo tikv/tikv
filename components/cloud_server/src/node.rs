@@ -20,6 +20,7 @@ use rfstore::store::{
     self, store_fsm::StoreMeta, Config as StoreConfig, Engines, PdTask, RaftBatchSystem, Transport,
 };
 use tikv::{
+    import::SstImporter,
     read_pool::ReadPoolHandle,
     server::{lock_manager::LockManager, Config as ServerConfig},
     storage::{
@@ -166,6 +167,7 @@ where
         pd_worker: LazyWorker<PdTask>,
         mut store_meta: StoreMeta,
         coprocessor_host: CoprocessorHost<kvengine::Engine>,
+        importer: Arc<SstImporter>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         let store_id = self.id();
@@ -190,6 +192,7 @@ where
             pd_worker,
             store_meta,
             coprocessor_host,
+            importer,
             concurrency_manager,
         )?;
 
@@ -362,6 +365,7 @@ where
         pd_worker: LazyWorker<PdTask>,
         store_meta: StoreMeta,
         coprocessor_host: CoprocessorHost<kvengine::Engine>,
+        importer: Arc<SstImporter>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         let store_id = store_meta.store_id.unwrap();
@@ -384,6 +388,7 @@ where
             pd_worker,
             store_meta,
             coprocessor_host,
+            importer,
             concurrency_manager,
         )?;
         Ok(())
