@@ -412,6 +412,8 @@ pub mod tests {
         let cfg = Config {
             region_max_size: Some(ReadableSize(100)),
             region_split_size: ReadableSize(60),
+            region_max_keys: Some(1000000),
+            region_split_keys: Some(1000000),
             batch_split_limit: 5,
             ..Default::default()
         };
@@ -540,6 +542,8 @@ pub mod tests {
         let cfg = Config {
             region_max_size: Some(ReadableSize(50000)),
             region_split_size: ReadableSize(50000),
+            region_max_keys: Some(1000000),
+            region_split_keys: Some(1000000),
             batch_split_limit: 5,
             enable_region_bucket: true,
             region_bucket_size: ReadableSize(3000),
@@ -642,6 +646,8 @@ pub mod tests {
         let cfg = Config {
             region_max_size: Some(ReadableSize(100)),
             region_split_size: ReadableSize(60),
+            region_max_keys: Some(1000000),
+            region_split_keys: Some(1000000),
             batch_split_limit: 5,
             ..Default::default()
         };

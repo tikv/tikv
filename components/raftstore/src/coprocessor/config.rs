@@ -222,7 +222,7 @@ mod tests {
         cfg.region_max_keys = None;
         cfg.region_split_keys = Some(20);
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.region_max_keys, Some(25));
+        assert_eq!(cfg.region_max_keys, Some(30));
 
         cfg = Config::default();
         cfg.enable_region_bucket = false;

@@ -1002,7 +1002,8 @@ mod tests {
 
         cfg = Config::new();
         cfg.raft_log_gc_size_limit = None;
-        assert!(cfg.validate(split_size).is_err());
+        assert!(cfg.validate(ReadableSize(20)).is_ok());
+        assert_eq!(cfg.raft_log_gc_size_limit, Some(ReadableSize(15)));
 
         cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
@@ -1017,7 +1018,8 @@ mod tests {
 
         cfg = Config::new();
         cfg.raft_log_gc_count_limit = None;
-        assert!(cfg.validate(split_size).is_err());
+        assert!(cfg.validate(ReadableSize::mb(1)).is_ok());
+        assert_eq!(cfg.raft_log_gc_count_limit, Some(768));
 
         cfg = Config::new();
         cfg.merge_check_tick_interval = ReadableDuration::secs(0);
