@@ -12,7 +12,7 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use futures::{Future, FutureExt};
+use futures::FutureExt;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -241,19 +241,26 @@ where
     }
 
     fn on_fatal_error(&self, task: String, err: Box<Error>) {
-        // Let's pause the task locally first.
-        let start_ts = self.unload_task(&task).map(|task| task.start_ts);
+        // Let's pause the task first.
+        self.unload_task(&task);
         err.report_fatal();
         metrics::update_task_status(TaskStatus::Error, &task);
 
         let meta_cli = self.get_meta_client();
+        let pdc = self.pd_client.clone();
         let store_id = self.store_id;
         let sched = self.scheduler.clone();
-        let register_safepoint = self
-            .register_service_safepoint(task.clone(), TimeStamp::new(start_ts.unwrap_or_default()));
+        let safepoint_name = self.pause_guard_id_for_task(&task);
+        let safepoint_ttl = self.pause_guard_duration();
         self.pool.block_on(async move {
             let err_fut = async {
-                register_safepoint.await?;
+                let safepoint = meta_cli.global_progress_of_task(&task).await?;
+                pdc.update_service_safe_point(
+                    safepoint_name,
+                    TimeStamp::new(safepoint),
+                    safepoint_ttl,
+                )
+                .await?;
                 meta_cli.pause(&task).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(err.error_code().code.to_owned());
@@ -517,7 +524,7 @@ where
             self.pool.spawn(
                 self.pd_client
                     .update_service_safe_point(
-                        format!("{}-pause-guard", task.info.name),
+                        self.pause_guard_id_for_task(task.info.get_name()),
                         TimeStamp::zero(),
                         Duration::new(0, 0),
                     )
@@ -576,32 +583,16 @@ where
         };
     }
 
-    fn register_service_safepoint(
-        &self,
-        task_name: String,
-        // hint for make optimized safepoint when we cannot get that from `SubscriptionTracker`
-        start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<()>> + Send + 'static {
-        self.pd_client
-            .update_service_safe_point(
-                format!("{}-pause-guard", task_name),
-                self.subs.safepoint().max(start_ts),
-                ReadableDuration::hours(24).0,
-            )
-            .map(|r| r.map_err(|err| err.into()))
+    fn pause_guard_id_for_task(&self, task: &str) -> String {
+        format!("{}-{}-pause-guard", task, self.store_id)
+    }
+
+    fn pause_guard_duration(&self) -> Duration {
+        ReadableDuration::hours(24).0
     }
 
     pub fn on_pause(&self, task: &str) {
-        let t = self.unload_task(task);
-
-        if let Some(task) = t {
-            self.pool.spawn(
-                self.register_service_safepoint(task.name, TimeStamp::new(task.start_ts))
-                    .map(|r| {
-                        r.map_err(|err| err.report("during setting service safepoint for task"))
-                    }),
-            );
-        }
+        self.unload_task(task);
 
         metrics::update_task_status(TaskStatus::Paused, task);
     }

@@ -500,7 +500,7 @@ mod test {
     use std::time::Duration;
 
     use backup_stream::{errors::Error, metadata::MetadataClient, Task};
-    use tikv_util::{box_err, defer, info};
+    use tikv_util::{box_err, defer, info, HandyRwLock};
     use txn_types::TimeStamp;
 
     use crate::{make_record_key, make_split_key_at_record, run_async_test};
@@ -601,9 +601,12 @@ mod test {
     #[test]
     fn fatal_error() {
         // test_util::init_log_for_test();
-        let suite = super::Suite::new("fatal_error", 3);
+        let mut suite = super::Suite::new("fatal_error", 3);
         suite.must_register_task(1, "test_fatal_error");
         suite.sync();
+        run_async_test(suite.write_records(0, 1, 1));
+        suite.force_flush_files("test_fatal_error");
+        suite.wait_for_flush();
         let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
         endpoint
             .scheduler()
@@ -622,7 +625,24 @@ mod test {
         assert!(err.error_message.contains("everything is alright"));
         assert_eq!(err.store_id, *victim);
         let paused = run_async_test(meta_cli.check_task_paused("test_fatal_error")).unwrap();
-        assert!(paused)
+        assert!(paused);
+        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        assert_eq!(safepoints.len(), 1, "{:?}", safepoints);
+        let sp = &safepoints[0];
+        assert!(sp.serivce.contains(&format!("{}", victim)), "{:?}", sp);
+        assert!(sp.ttl >= Duration::from_secs(60 * 60 * 24), "{:?}", sp);
+        let checkpoint = run_async_test(
+            suite
+                .get_meta_cli()
+                .global_progress_of_task("test_fatal_error"),
+        )
+        .unwrap();
+        assert!(
+            sp.safepoint.into_inner() <= checkpoint,
+            "{:?} vs {}",
+            sp,
+            checkpoint
+        );
     }
 
     #[test]
