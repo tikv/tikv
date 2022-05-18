@@ -313,7 +313,7 @@ fn test_stale_read_while_applying_snapshot() {
     );
 
     // Compact logs to force requesting snapshot after clearing send filters.
-    let gc_limit = cluster.cfg.raft_store.raft_log_gc_count_limit;
+    let gc_limit = cluster.cfg.raft_store.raft_log_gc_count_limit();
     let state = cluster.truncated_state(1, 1);
     for i in 1..gc_limit * 10 {
         let (k, v) = (
