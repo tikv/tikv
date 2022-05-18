@@ -83,7 +83,6 @@ pub struct Config {
     #[online_config(skip)]
     pub status_thread_pool_size: usize,
 
-    #[online_config(skip)]
     pub max_grpc_send_msg_len: i32,
 
     // When merge raft messages into a batch message, leave a buffer.
@@ -93,7 +92,6 @@ pub struct Config {
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
 
-    #[online_config(skip)]
     pub raft_msg_max_batch_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
@@ -135,7 +133,6 @@ pub struct Config {
     pub end_point_perf_level: PerfLevel,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
-    pub max_snapshot_file_raw_size: ReadableSize,
     #[online_config(skip)]
     pub stats_concurrency: usize,
     #[online_config(skip)]
@@ -238,7 +235,6 @@ impl Default for Config {
             end_point_perf_level: PerfLevel::Uninitialized,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
-            max_snapshot_file_raw_size: ReadableSize(0),
             stats_concurrency: 1,
             // 75 means a gRPC thread is under heavy load if its total CPU usage
             // is greater than 75%.
@@ -342,6 +338,12 @@ impl Config {
         {
             return Err(box_err!(
                 "server.end-point-request-max-handle-secs is too small."
+            ));
+        }
+
+        if self.max_grpc_send_msg_len <= 0 {
+            return Err(box_err!(
+                "server.max-grpc-send-msg-len must be bigger than 0."
             ));
         }
 
@@ -515,6 +517,10 @@ mod tests {
         invalid_cfg = Config::default();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
+        assert!(invalid_cfg.validate().is_err());
+
+        invalid_cfg = Config::default();
+        invalid_cfg.max_grpc_send_msg_len = 0;
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();

@@ -61,7 +61,6 @@ pub struct Config {
     pub raft_max_size_per_msg: ReadableSize,
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
-    #[online_config(hidden)]
     pub raft_entry_max_size: ReadableSize,
 
     // Interval to compact unnecessary raft log.
@@ -276,6 +275,9 @@ pub struct Config {
     pub reactive_memory_lock_timeout_tick: usize,
     // Interval of scheduling a tick to report region buckets.
     pub report_region_buckets_tick_interval: ReadableDuration,
+
+    #[doc(hidden)]
+    pub max_snapshot_file_raw_size: ReadableSize,
 }
 
 impl Default for Config {
@@ -366,6 +368,7 @@ impl Default for Config {
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
+            max_snapshot_file_raw_size: ReadableSize::mb(100),
         }
     }
 }
@@ -454,6 +457,12 @@ impl Config {
         {
             return Err(box_err!(
                 "raft max size per message should be greater than 0 and less than or equal to 3GiB"
+            ));
+        }
+
+        if self.raft_entry_max_size.0 == 0 || self.raft_entry_max_size.0 > ReadableSize::gb(3).0 {
+            return Err(box_err!(
+                "raft entry max size should be greater than 0 and less than or equal to 3GiB"
             ));
         }
 
@@ -622,6 +631,13 @@ impl Config {
 
         if self.renew_leader_lease_advance_duration.as_millis() == 0 && self.hibernate_regions {
             self.renew_leader_lease_advance_duration = self.raft_store_max_leader_lease / 4;
+        }
+
+        #[cfg(not(any(test, feature = "testexport")))]
+        if self.max_snapshot_file_raw_size.0 != 0 && self.max_snapshot_file_raw_size.as_mb() < 100 {
+            return Err(box_err!(
+                "max_snapshot_file_raw_size should be no less than 100MB."
+            ));
         }
 
         Ok(())
@@ -1056,6 +1072,14 @@ mod tests {
         cfg.raft_max_size_per_msg = ReadableSize::gb(64);
         assert!(cfg.validate().is_err());
         cfg.raft_max_size_per_msg = ReadableSize::gb(3);
+        assert!(cfg.validate().is_ok());
+
+        cfg = Config::new();
+        cfg.raft_entry_max_size = ReadableSize(0);
+        assert!(cfg.validate().is_err());
+        cfg.raft_entry_max_size = ReadableSize::mb(3073);
+        assert!(cfg.validate().is_err());
+        cfg.raft_entry_max_size = ReadableSize::gb(3);
         assert!(cfg.validate().is_ok());
     }
 }

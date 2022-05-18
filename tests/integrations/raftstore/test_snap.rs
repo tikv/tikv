@@ -28,7 +28,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
-    cluster.cfg.server.max_snapshot_file_raw_size = ReadableSize(max_snapshot_file_size);
+    cluster.cfg.raft_store.max_snapshot_file_raw_size = ReadableSize(max_snapshot_file_size);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_operator();
@@ -102,7 +102,7 @@ fn test_server_snap_gc_internal(version: &str) {
     configure_for_snapshot(&mut cluster);
     cluster.pd_client.reset_version(version);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
-    cluster.cfg.server.max_snapshot_file_raw_size = ReadableSize::mb(100);
+    cluster.cfg.raft_store.max_snapshot_file_raw_size = ReadableSize::mb(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -166,7 +166,7 @@ fn test_server_snap_gc_internal(version: &str) {
 
     // version > 6.0.0 should enable multi_snapshot_file feature, which means actual max_per_file_size equals the config
     if version == "6.5.0" {
-        assert!(actual_max_per_file_size == cluster.cfg.server.max_snapshot_file_raw_size.0);
+        assert!(actual_max_per_file_size == cluster.cfg.raft_store.max_snapshot_file_raw_size.0);
     } else {
         // the feature is disabled, and the actual_max_per_file_size should be u64::MAX (so that only one file is generated)
         assert!(actual_max_per_file_size == u64::MAX);
