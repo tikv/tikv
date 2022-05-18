@@ -2394,6 +2394,13 @@ pub struct CdcConfig {
     /// `TsFilter` will be enabled if `incremental/total <= incremental_scan_ts_filter_ratio`.
     /// Set `incremental_scan_ts_filter_ratio` to 0 will disable it.
     pub incremental_scan_ts_filter_ratio: f64,
+
+    /// Count of threads to confirm Region leadership in TiKV instances, 1 by default.
+    /// Please consider to increase it if count of regions on one TiKV instance is
+    /// greater than 20k.
+    #[online_config(skip)]
+    pub tso_worker_threads: usize,
+
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
@@ -2416,6 +2423,7 @@ impl Default for CdcConfig {
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
             incremental_scan_ts_filter_ratio: 0.2,
+            tso_worker_threads: 1,
             // 512MB memory for CDC sink.
             sink_memory_quota: ReadableSize::mb(512),
             // 512MB memory for old value cache.
