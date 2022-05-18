@@ -5941,7 +5941,7 @@ fn demote_failed_voters_request(
         .set_region_epoch(region.get_region_epoch().clone());
     let mut change_peer_reqs: Vec<pdpb::ChangePeer> = region
         .get_peers()
-        .into_iter()
+        .iter()
         .filter_map(|peer| {
             if failed_voter_ids.contains(&peer.get_id())
                 && peer.get_role() == metapb::PeerRole::Voter
