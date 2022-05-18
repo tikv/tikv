@@ -250,14 +250,15 @@ where
         bucket_ranges: &Vec<BucketRange>,
     ) {
         for (mut bucket, bucket_range) in &mut buckets.into_iter().zip(bucket_ranges) {
+            let mut bucket_region = region.clone();
+            bucket_region.set_start_key(bucket_range.0.clone());
+            bucket_region.set_end_key(bucket_range.1.clone());
             let adjusted_keys = std::mem::take(&mut bucket.keys)
                 .into_iter()
                 .enumerate()
                 .filter_map(|(i, key)| {
                     let key = strip_timestamp_if_exists(key);
-                    let mut bucket_region = region.clone();
-                    bucket_region.set_start_key(bucket_range.0.clone());
-                    bucket_region.set_end_key(bucket_range.1.clone());
+                    assert!(is_valid_split_key(&key, i, &region));
                     if is_valid_split_key(&key, i, &bucket_region) {
                         Some(key)
                     } else {
