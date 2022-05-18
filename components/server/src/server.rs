@@ -29,6 +29,7 @@ use api_version::{dispatch_api_version, KvFormat};
 use backup_stream::{config::BackupStreamConfigManager, observer::BackupStreamObserver};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
+use config_info::ConfigInfo;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     from_rocks_compression_type,
@@ -73,6 +74,7 @@ use raftstore::{
     },
 };
 use security::SecurityManager;
+use serde_json::{to_value, Map, Value};
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
@@ -1722,4 +1724,58 @@ impl IOBudgetAdjustor for EnginesResourceInfo {
         let score = 0.5 + score / 2.0;
         (total_budgets as f32 * score) as usize
     }
+}
+
+// currently, only support return json result
+pub fn get_json_config_info(cfg: &TiKvConfig) -> Result<Value, String> {
+    fn append_sub_key(key: &mut String, sub_key: &str) {
+        if !key.is_empty() {
+            key.push('.');
+        }
+
+        key.push_str(sub_key);
+    }
+
+    fn to_cfg_value(value_obj: &Map<String, Value>, key: &str) -> Value {
+        let mut res = Map::with_capacity(value_obj.len() + 1);
+        res.insert("Name".into(), Value::String(key.into()));
+        for (k, v) in value_obj.iter() {
+            assert!(!v.is_object());
+            res.insert(k.clone(), v.clone());
+        }
+
+        Value::Object(res)
+    }
+
+    fn flatten_value(
+        value_obj: &Map<String, Value>,
+        key_buf: &mut String,
+        res: &mut Vec<Value>,
+    ) -> Result<(), String> {
+        for (i, (k, v)) in value_obj.iter().enumerate() {
+            if let Value::Object(m) = v {
+                append_sub_key(key_buf, k);
+                flatten_value(m, key_buf, res)?;
+                key_buf.truncate(key_buf.len() - k.len() - 1);
+            } else if i > 0 {
+                append_sub_key(key_buf, &*k);
+                return Err(format!(
+                    "invalid config field: '{}', expect object, found: {:?}",
+                    key_buf, v
+                ));
+            } else {
+                res.push(to_cfg_value(value_obj, key_buf));
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    let cfg_encoder = cfg.get_cfg_encoder();
+    let origin_value = to_value(cfg_encoder).unwrap();
+
+    let mut key_buf = String::new();
+    let mut res = Vec::new();
+    flatten_value(&origin_value.as_object().unwrap(), &mut key_buf, &mut res)?;
+    Ok(Value::Array(res))
 }

@@ -305,7 +305,7 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub read_amp_bytes_per_bit: u32,
             /// The default compression algorithm for each level.
-            #[config_info(options =r#"["no", "snappy", "zlib", "bzip2", "lz4", "lz4hc", "zstd"]"#)]
+            //#[config_info(options =r#"["no", "snappy", "zlib", "bzip2", "lz4", "lz4hc", "zstd"]"#)]
             #[serde(with = "rocks_config::compression_type_level_serde")]
             #[online_config(skip)]
             pub compression_per_level: [DBCompressionType; 7],
@@ -1033,7 +1033,7 @@ pub struct DbConfig {
     #[config_info(min = 0)]
     pub wal_ttl_seconds: u64,
     /// The size limit of the archived WAL files. When the value is exceeded, the system deletes these files.
-    #[config_info(min = "0kiB")]
+    #[config_info(min = "0KiB")]
     #[online_config(skip)]
     pub wal_size_limit: ReadableSize,
     #[config_info(skip)]

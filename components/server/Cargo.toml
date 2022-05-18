@@ -42,6 +42,7 @@ chrono = "0.4"
 clap = "2.32"
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
+config_info = { path = "../config_info" }
 crossbeam = "0.8"
 encryption = { path = "../encryption", default-features = false }
 encryption_export = { path = "../encryption/export", default-features = false }
