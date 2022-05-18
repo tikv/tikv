@@ -244,9 +244,27 @@ impl KeyValueCodec {
         if !self.is_raw_kv {
             return (start_key, end_key);
         }
-        dispatch_api_version!(self.dst_api_ver, {
+        let empty_start = start_key.is_empty();
+        let empty_end = end_key.is_empty();
+        let (mut raw_start_key, mut raw_end_key) = dispatch_api_version!(self.dst_api_ver, {
             API::convert_raw_user_key_range_version_from(self.cur_api_ver, start_key, end_key)
-        })
+        });
+        // if backup from v1/v1ttl => v2, the backup key should be encoded as v2 format
+        if self.cur_api_ver != ApiVersion::V2 && self.dst_api_ver == ApiVersion::V2 {
+            if !empty_start {
+                raw_start_key = dispatch_api_version!(
+                    self.dst_api_ver,
+                    API::encode_raw_key_owned(raw_start_key, None).into_encoded()
+                )
+            };
+            if !empty_end {
+                raw_end_key = dispatch_api_version!(
+                    self.dst_api_ver,
+                    API::encode_raw_key_owned(raw_end_key, None).into_encoded()
+                )
+            };
+        }
+        (raw_start_key, raw_end_key)
     }
 }
 
