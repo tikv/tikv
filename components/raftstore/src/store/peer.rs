@@ -43,7 +43,7 @@ use kvproto::{
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use pd_client::{BucketStat, INVALID_ID};
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use raft::{
     self,
     eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType},
@@ -645,8 +645,8 @@ impl UnsafeRecoveryFillOutReportSyncer {
             info!("Unsafe recovery, peer reports collected");
             let mut store_report = pdpb::StoreReport::default();
             {
-                let reports_ptr = reports_clone.lock().unwrap();
-                store_report.set_peer_reports(RepeatedField::from_vec((*reports_ptr).to_vec()));
+                let mut reports_ptr = reports_clone.lock().unwrap();
+                store_report.set_peer_reports(mem::take(&mut *reports_ptr).into());
             }
             store_report.set_step(report_id);
             let router_ptr = thread_safe_router.lock().unwrap();

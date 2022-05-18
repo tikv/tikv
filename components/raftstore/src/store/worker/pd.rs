@@ -1272,7 +1272,7 @@ where
                                     error!("fail to send delete peer message for recovery"; "err" => ?e);
                                 }
                             }
-                            for demote in plan.take_demotes().into_iter() {
+                            for mut demote in plan.take_demotes().into_iter() {
                                 if let Err(e) = router.significant_send(
                                     demote.get_region_id(),
                                     SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
