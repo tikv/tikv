@@ -3,22 +3,22 @@
 use tidb_query_common::storage::{
     IntervalRange, OwnedKvPair, PointRange, Result as QEResult, Storage,
 };
-
-use crate::coprocessor::Error;
-use crate::storage::mvcc::NewerTsCheckState;
-use crate::storage::Statistics;
-use crate::storage::{Scanner, Store};
 use txn_types::Key;
 
+use crate::{
+    coprocessor::Error,
+    storage::{mvcc::NewerTsCheckState, Scanner, Statistics, Store},
+};
+
 /// A `Storage` implementation over TiKV's storage.
-pub struct TiKVStorage<S: Store> {
+pub struct TiKvStorage<S: Store> {
     store: S,
     scanner: Option<S::Scanner>,
     cf_stats_backlog: Statistics,
     met_newer_ts_data_backlog: NewerTsCheckState,
 }
 
-impl<S: Store> TiKVStorage<S> {
+impl<S: Store> TiKvStorage<S> {
     pub fn new(store: S, check_can_be_cached: bool) -> Self {
         Self {
             store,
@@ -33,7 +33,7 @@ impl<S: Store> TiKVStorage<S> {
     }
 }
 
-impl<S: Store> Storage for TiKVStorage<S> {
+impl<S: Store> Storage for TiKvStorage<S> {
     type Statistics = Statistics;
 
     fn begin_scan(

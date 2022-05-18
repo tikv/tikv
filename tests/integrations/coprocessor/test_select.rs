@@ -2,23 +2,28 @@
 
 use std::{cmp, thread, time::Duration};
 
-use kvproto::coprocessor::{Request, Response};
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use kvproto::{
+    coprocessor::{Request, Response},
+    kvrpcpb::{Context, IsolationLevel},
+};
 use protobuf::Message;
+use raftstore::store::Bucket;
+use test_coprocessor::*;
+use test_storage::*;
+use tidb_query_datatype::{
+    codec::{datum, Datum},
+    expr::EvalContext,
+};
+use tikv::{
+    coprocessor::{REQ_TYPE_ANALYZE, REQ_TYPE_CHECKSUM},
+    server::Config,
+    storage::TestEngineBuilder,
+};
+use tikv_util::codec::number::*;
 use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,
     ScalarFuncSig, SelectResponse,
 };
-
-use raftstore::store::Bucket;
-use test_coprocessor::*;
-use test_storage::*;
-use tidb_query_datatype::codec::{datum, Datum};
-use tidb_query_datatype::expr::EvalContext;
-use tikv::coprocessor::{REQ_TYPE_ANALYZE, REQ_TYPE_CHECKSUM};
-use tikv::server::Config;
-use tikv::storage::TestEngineBuilder;
-use tikv_util::codec::number::*;
 use txn_types::TimeStamp;
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;

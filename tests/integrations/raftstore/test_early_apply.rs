@@ -1,10 +1,31 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::RocksSnapshot;
+use std::time::Duration;
+
+use engine_traits::{RaftEngine, RaftEngineDebug};
+use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::MessageType;
 use raftstore::store::*;
-use std::time::*;
 use test_raftstore::*;
+
+fn delete_old_data<E: RaftEngineDebug>(engine: &E, id: u64) {
+    let mut deleter = engine.log_batch(0);
+    let mut last_index = 0;
+    engine
+        .scan_entries(id, |e| {
+            last_index = e.get_index();
+            Ok(true)
+        })
+        .unwrap();
+    let state = RaftLocalState {
+        last_index,
+        ..Default::default()
+    };
+    engine
+        .clean(id, 0 /*first_index*/, &state, &mut deleter)
+        .unwrap();
+    engine.consume(&mut deleter, true /*sync*/).unwrap();
+}
 
 /// Allow lost situation.
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -36,26 +57,42 @@ where
             .direction(Direction::Recv),
     };
     cluster.add_send_filter(CloneFilterFactory(filter));
-    let last_index = cluster.raft_local_state(1, 1).get_last_index();
+
+    let ids = if mode == DataLost::AllLost {
+        vec![1, 2, 3]
+    } else {
+        vec![1]
+    };
+    let last_index: Vec<_> = ids
+        .iter()
+        .map(|id| cluster.raft_local_state(1, *id).get_last_index())
+        .collect();
+
     action(cluster);
-    cluster.wait_last_index(1, 1, last_index + 1, Duration::from_secs(3));
-    let mut snaps = vec![(1, RocksSnapshot::new(cluster.get_raft_engine(1)))];
-    if mode == DataLost::AllLost {
-        cluster.wait_last_index(1, 2, last_index + 1, Duration::from_secs(3));
-        snaps.push((2, RocksSnapshot::new(cluster.get_raft_engine(2))));
-        cluster.wait_last_index(1, 3, last_index + 1, Duration::from_secs(3));
-        snaps.push((3, RocksSnapshot::new(cluster.get_raft_engine(3))));
-    }
+
+    let snaps: Vec<_> = ids
+        .iter()
+        .zip(last_index)
+        .map(|(id, index)| {
+            cluster.wait_last_index(1, *id, index + 1, Duration::from_secs(3));
+            cluster.get_raft_engine(*id).dump_all_data(*id)
+        })
+        .collect();
+
     cluster.clear_send_filters();
     check(cluster);
-    for (id, _) in &snaps {
+    for id in &ids {
         cluster.stop_node(*id);
     }
     // Simulate data lost in raft cf.
-    for (id, snap) in &snaps {
-        cluster.restore_raft(1, *id, snap);
+    for (id, mut batch) in ids.iter().zip(snaps) {
+        delete_old_data(&cluster.get_raft_engine(*id), *id);
+        cluster
+            .get_raft_engine(*id)
+            .consume(&mut batch, true /*sync*/)
+            .unwrap();
     }
-    for (id, _) in &snaps {
+    for id in &ids {
         cluster.run_node(*id).unwrap();
     }
 
@@ -150,20 +187,24 @@ fn test_update_internal_apply_index() {
     let last_index = cluster.raft_local_state(1, 1).get_last_index();
     cluster.async_remove_peer(1, new_peer(4, 4)).unwrap();
     cluster.async_put(b"k2", b"v2").unwrap();
-    let mut snaps = vec![];
-    for i in 1..3 {
-        cluster.wait_last_index(1, i, last_index + 2, Duration::from_secs(3));
-        snaps.push((i, RocksSnapshot::new(cluster.get_raft_engine(1))));
+    let mut snaps = Vec::new();
+    for id in 1..3 {
+        cluster.wait_last_index(1, id, last_index + 2, Duration::from_secs(3));
+        snaps.push((id, cluster.get_raft_engine(id).dump_all_data(id)));
     }
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 
     // Simulate data lost in raft cf.
-    for (id, snap) in &snaps {
-        cluster.stop_node(*id);
-        cluster.restore_raft(1, *id, snap);
-        cluster.run_node(*id).unwrap();
+    for (id, mut batch) in snaps {
+        cluster.stop_node(id);
+        delete_old_data(&cluster.get_raft_engine(id), id);
+        cluster
+            .get_raft_engine(id)
+            .consume(&mut batch, true /*sync*/)
+            .unwrap();
+        cluster.run_node(id).unwrap();
     }
 
     let region = cluster.get_region(b"k1");

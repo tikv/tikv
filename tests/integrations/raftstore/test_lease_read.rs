@@ -2,10 +2,12 @@
 
 //! A module contains test cases for lease read on Raft leader.
 
-use std::sync::atomic::*;
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
-use std::{mem, thread};
+use std::{
+    mem,
+    sync::{atomic::*, mpsc, Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 use engine_rocks::RocksSnapshot;
 use kvproto::metapb;
@@ -14,9 +16,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::time::Instant;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's

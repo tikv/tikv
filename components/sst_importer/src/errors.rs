@@ -1,20 +1,18 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error as StdError;
-use std::io::Error as IoError;
-use std::num::ParseIntError;
-use std::path::PathBuf;
-use std::result;
+use std::{
+    error::Error as StdError, io::Error as IoError, num::ParseIntError, path::PathBuf, result,
+};
 
 use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
-use kvproto::import_sstpb;
+use kvproto::{import_sstpb, kvrpcpb::ApiVersion};
 use tikv_util::codec::Error as CodecError;
 use uuid::Error as UuidError;
 
-use crate::metrics::*;
+use crate::{metrics::*, sst_writer::SstWriterType};
 
 pub fn error_inc(type_: &str, err: &Error) {
     let label = match err {
@@ -26,7 +24,7 @@ pub fn error_inc(type_: &str, err: &Error) {
         Error::ParseIntError(..) => "parse_int",
         Error::FileExists(..) => "file_exists",
         Error::FileCorrupted(..) => "file_corrupt",
-        Error::InvalidSSTPath(..) => "invalid_sst",
+        Error::InvalidSstPath(..) => "invalid_sst",
         Error::Engine(..) => "engine",
         Error::CannotReadExternalStorage { .. } => "read_external_storage",
         Error::WrongKeyPrefix { .. } => "wrong_prefix",
@@ -69,7 +67,7 @@ pub enum Error {
     FileCorrupted(PathBuf, String),
 
     #[error("Invalid SST path {0:?}")]
-    InvalidSSTPath(PathBuf),
+    InvalidSstPath(PathBuf),
 
     #[error("invalid chunk")]
     InvalidChunk,
@@ -110,13 +108,34 @@ pub enum Error {
     FileConflict,
 
     #[error("ttl is not enabled")]
-    TTLNotEnabled,
+    TtlNotEnabled,
 
     #[error("The length of ttls does not equal to the length of pairs")]
-    TTLsLenNotEqualsToPairs,
+    TtlLenNotEqualsToPairs,
 
     #[error("Importing a SST file with imcompatible api version")]
     IncompatibleApiVersion,
+
+    #[error("Key mode mismatched with the request mode, writer: {:?}, storage: {:?}, key: {}", .writer, .storage_api_version, .key)]
+    InvalidKeyMode {
+        writer: SstWriterType,
+        storage_api_version: ApiVersion,
+        key: String,
+    },
+}
+
+impl Error {
+    pub fn invalid_key_mode(
+        writer: SstWriterType,
+        storage_api_version: ApiVersion,
+        key: &[u8],
+    ) -> Self {
+        Error::InvalidKeyMode {
+            writer,
+            storage_api_version,
+            key: log_wrappers::hex_encode_upper(key),
+        }
+    }
 }
 
 impl From<String> for Error {
@@ -147,7 +166,7 @@ impl ErrorCodeExt for Error {
             Error::ParseIntError(_) => error_code::sst_importer::PARSE_INT_ERROR,
             Error::FileExists(..) => error_code::sst_importer::FILE_EXISTS,
             Error::FileCorrupted(..) => error_code::sst_importer::FILE_CORRUPTED,
-            Error::InvalidSSTPath(_) => error_code::sst_importer::INVALID_SST_PATH,
+            Error::InvalidSstPath(_) => error_code::sst_importer::INVALID_SST_PATH,
             Error::InvalidChunk => error_code::sst_importer::INVALID_CHUNK,
             Error::Engine(_) => error_code::sst_importer::ENGINE,
             Error::CannotReadExternalStorage { .. } => {
@@ -158,11 +177,10 @@ impl ErrorCodeExt for Error {
             Error::Encryption(e) => e.error_code(),
             Error::CodecError(e) => e.error_code(),
             Error::FileConflict => error_code::sst_importer::FILE_CONFLICT,
-            Error::TTLNotEnabled => error_code::sst_importer::TTL_NOT_ENABLED,
-            Error::TTLsLenNotEqualsToPairs => {
-                error_code::sst_importer::TTLS_LEN_NOT_EQUALS_TO_PAIRS
-            }
+            Error::TtlNotEnabled => error_code::sst_importer::TTL_NOT_ENABLED,
+            Error::TtlLenNotEqualsToPairs => error_code::sst_importer::TTL_LEN_NOT_EQUALS_TO_PAIRS,
             Error::IncompatibleApiVersion => error_code::sst_importer::INCOMPATIBLE_API_VERSION,
+            Error::InvalidKeyMode { .. } => error_code::sst_importer::INVALID_KEY_MODE,
         }
     }
 }

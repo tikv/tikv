@@ -1,15 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::convert::TryFrom;
+use std::{cmp::Ordering, convert::TryFrom};
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::Collator;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::match_template_collator;
-use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeFlag};
+use tidb_query_datatype::{
+    codec::{collation::Collator, data_type::*},
+    expr::EvalContext,
+    match_template_collator, Collation, EvalType, FieldTypeAccessor, FieldTypeFlag,
+};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
@@ -547,16 +546,15 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::EvalType;
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        EvalType, FieldTypeAccessor, FieldTypeTp,
+    };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
-    use crate::parser::AggrDefinitionParser;
-    use crate::AggrFunction;
-
     use super::*;
+    use crate::{parser::AggrDefinitionParser, AggrFunction};
 
     #[test]
     fn test_max() {

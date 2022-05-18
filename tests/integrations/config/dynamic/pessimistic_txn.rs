@@ -1,14 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::Ordering, mpsc, Arc};
-use std::time::Duration;
+use std::{
+    sync::{atomic::Ordering, mpsc, Arc},
+    time::Duration,
+};
 
 use security::SecurityManager;
 use test_raftstore::TestPdClient;
-use tikv::config::*;
-use tikv::server::lock_manager::*;
-use tikv::server::resolve::{Callback, StoreAddrResolver};
-use tikv::server::{Error, Result};
+use tikv::{
+    config::*,
+    server::{
+        lock_manager::*,
+        resolve::{Callback, StoreAddrResolver},
+        Error, Result,
+    },
+};
 use tikv_util::config::ReadableDuration;
 
 #[test]

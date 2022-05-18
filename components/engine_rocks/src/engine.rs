@@ -1,26 +1,25 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::any::Any;
-use std::fs;
-use std::path::Path;
-use std::sync::Arc;
+use std::{any::Any, fs, path::Path, sync::Arc};
 
 use engine_traits::{
     Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
-use crate::db_vector::RocksDBVector;
-use crate::options::RocksReadOptions;
-use crate::rocks_metrics::{
-    flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
-    flush_engine_ticker_metrics,
+use crate::{
+    db_vector::RocksDBVector,
+    options::RocksReadOptions,
+    rocks_metrics::{
+        flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
+        flush_engine_ticker_metrics,
+    },
+    rocks_metrics_defs::{
+        ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
+    },
+    util::get_cf_handle,
+    RocksEngineIterator, RocksSnapshot,
 };
-use crate::rocks_metrics_defs::{
-    ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
-};
-use crate::util::get_cf_handle;
-use crate::{RocksEngineIterator, RocksSnapshot};
 
 #[derive(Clone, Debug)]
 pub struct RocksEngine {
@@ -190,13 +189,13 @@ impl SyncMutable for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use crate::raw_util;
+    use std::sync::Arc;
+
     use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
     use kvproto::metapb::Region;
-    use std::sync::Arc;
     use tempfile::Builder;
 
-    use crate::{RocksEngine, RocksSnapshot};
+    use crate::{raw_util, RocksEngine, RocksSnapshot};
 
     #[test]
     fn test_base() {

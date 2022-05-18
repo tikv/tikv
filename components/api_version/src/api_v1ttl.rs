@@ -1,12 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::Result;
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::Error;
+use tikv_util::codec::{
+    number::{self, NumberEncoder},
+    Error,
+};
 
 use super::*;
 
-impl APIVersion for APIV1TTL {
+impl KvFormat for ApiV1Ttl {
     const TAG: ApiVersion = ApiVersion::V1ttl;
     #[cfg(any(test, feature = "testexport"))]
     const CLIENT_TAG: ApiVersion = ApiVersion::V1;
@@ -56,5 +58,37 @@ impl APIVersion for APIV1TTL {
             .encode_u64(value.expire_ts.unwrap_or(0))
             .unwrap();
         value.user_value
+    }
+
+    fn convert_raw_encoded_key_version_from(
+        src_api: ApiVersion,
+        key: &[u8],
+        _ts: Option<TimeStamp>,
+    ) -> Result<Key> {
+        match src_api {
+            ApiVersion::V1 | ApiVersion::V1ttl => Ok(Key::from_encoded_slice(key)),
+            ApiVersion::V2 => {
+                debug_assert_eq!(ApiV2::parse_key_mode(key), KeyMode::Raw);
+                let (mut user_key, _) = ApiV2::decode_raw_key(&Key::from_encoded_slice(key), true)?;
+                user_key.remove(0); // remove first byte `RAW_KEY_PREFIX`
+                Ok(Self::encode_raw_key_owned(user_key, None))
+            }
+        }
+    }
+
+    fn convert_raw_user_key_range_version_from(
+        src_api: ApiVersion,
+        mut start_key: Vec<u8>,
+        mut end_key: Vec<u8>,
+    ) -> (Vec<u8>, Vec<u8>) {
+        match src_api {
+            ApiVersion::V1 | ApiVersion::V1ttl => (start_key, end_key),
+            ApiVersion::V2 => {
+                // TODO: check raw key range after check_api_version_range is refactored.
+                start_key.remove(0);
+                end_key.remove(0);
+                (start_key, end_key)
+            }
+        }
     }
 }

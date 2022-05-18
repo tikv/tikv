@@ -1,25 +1,26 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use std::u64;
-use time::Duration as TimeDuration;
+use std::{collections::HashMap, sync::Arc, time::Duration, u64};
 
-use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
-use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
-use engine_traits::perf_level_serde;
-use engine_traits::PerfLevel;
+use engine_traits::{perf_level_serde, PerfLevel};
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
 use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
-use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::sys::SysQuota;
-use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, error, info, warn};
+use tikv_util::{
+    box_err,
+    config::{ReadableDuration, ReadableSize, VersionTrack},
+    error, info,
+    sys::SysQuota,
+    warn,
+    worker::Scheduler,
+};
+use time::Duration as TimeDuration;
+
+use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
+use crate::{coprocessor, Result};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -60,7 +61,6 @@ pub struct Config {
     pub raft_max_size_per_msg: ReadableSize,
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
-    #[online_config(hidden)]
     pub raft_entry_max_size: ReadableSize,
 
     // Interval to compact unnecessary raft log.
@@ -275,6 +275,9 @@ pub struct Config {
     pub reactive_memory_lock_timeout_tick: usize,
     // Interval of scheduling a tick to report region buckets.
     pub report_region_buckets_tick_interval: ReadableDuration,
+
+    #[doc(hidden)]
+    pub max_snapshot_file_raw_size: ReadableSize,
 }
 
 impl Default for Config {
@@ -344,12 +347,12 @@ impl Default for Config {
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
-            perf_level: PerfLevel::EnableTime,
+            perf_level: PerfLevel::Uninitialized,
             evict_cache_on_memory_ratio: 0.0,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
-            waterfall_metrics: false,
+            waterfall_metrics: true,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
             raft_msg_flush_interval: ReadableDuration::micros(250),
@@ -365,6 +368,7 @@ impl Default for Config {
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
+            max_snapshot_file_raw_size: ReadableSize::mb(100),
         }
     }
 }
@@ -453,6 +457,12 @@ impl Config {
         {
             return Err(box_err!(
                 "raft max size per message should be greater than 0 and less than or equal to 3GiB"
+            ));
+        }
+
+        if self.raft_entry_max_size.0 == 0 || self.raft_entry_max_size.0 > ReadableSize::gb(3).0 {
+            return Err(box_err!(
+                "raft entry max size should be greater than 0 and less than or equal to 3GiB"
             ));
         }
 
@@ -621,6 +631,13 @@ impl Config {
 
         if self.renew_leader_lease_advance_duration.as_millis() == 0 && self.hibernate_regions {
             self.renew_leader_lease_advance_duration = self.raft_store_max_leader_lease / 4;
+        }
+
+        #[cfg(not(any(test, feature = "testexport")))]
+        if self.max_snapshot_file_raw_size.0 != 0 && self.max_snapshot_file_raw_size.as_mb() < 100 {
+            return Err(box_err!(
+                "max_snapshot_file_raw_size should be no less than 100MB."
+            ));
         }
 
         Ok(())
@@ -1055,6 +1072,14 @@ mod tests {
         cfg.raft_max_size_per_msg = ReadableSize::gb(64);
         assert!(cfg.validate().is_err());
         cfg.raft_max_size_per_msg = ReadableSize::gb(3);
+        assert!(cfg.validate().is_ok());
+
+        cfg = Config::new();
+        cfg.raft_entry_max_size = ReadableSize(0);
+        assert!(cfg.validate().is_err());
+        cfg.raft_entry_max_size = ReadableSize::mb(3073);
+        assert!(cfg.validate().is_err());
+        cfg.raft_entry_max_size = ReadableSize::gb(3);
         assert!(cfg.validate().is_ok());
     }
 }

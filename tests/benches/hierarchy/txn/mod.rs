@@ -4,14 +4,14 @@ use concurrency_manager::ConcurrencyManager;
 use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::{AssertionLevel, Context};
 use test_util::KvGenerator;
-use tikv::storage::kv::{Engine, WriteData};
-use tikv::storage::mvcc::{self, MvccTxn, SnapshotReader};
+use tikv::storage::{
+    kv::{Engine, WriteData},
+    mvcc::{self, MvccTxn, SnapshotReader},
+    txn::{cleanup, commit, prewrite, CommitKind, TransactionKind, TransactionProperties},
+};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
-use tikv::storage::txn::{
-    cleanup, commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
-};
 
 fn setup_prewrite<E, F>(
     engine: &E,

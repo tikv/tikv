@@ -1,16 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Error as IoError;
-use std::{error, result};
+use std::{error, io::Error as IoError, result};
 
 use engine_traits::Error as EngineTraitError;
-use kvproto::brpb::Error as ErrorPb;
-use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use kvproto::kvrpcpb::KeyError;
+use kvproto::{
+    brpb::Error as ErrorPb,
+    errorpb::{Error as RegionError, ServerIsBusy},
+    kvrpcpb::KeyError,
+};
 use thiserror::Error;
-use tikv::storage::kv::{Error as KvError, ErrorInner as EngineErrorInner};
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use tikv::storage::{
+    kv::{Error as KvError, ErrorInner as EngineErrorInner},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+};
+use tikv_util::codec::Error as CodecError;
 use tokio::sync::AcquireError;
 
 use crate::metrics::*;
@@ -118,6 +122,8 @@ pub enum Error {
     Semaphore(#[from] AcquireError),
     #[error("Channel is closed")]
     ChannelClosed,
+    #[error("Codec error {0}")]
+    Codec(#[from] CodecError),
 }
 
 macro_rules! impl_from {

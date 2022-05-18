@@ -1,23 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::time::Duration;
-use std::{cmp, i32, isize};
-
-use super::Result;
-use grpcio::CompressionAlgorithms;
-use regex::Regex;
+use std::{cmp, i32, isize, sync::Arc, time::Duration};
 
 use collections::HashMap;
+use engine_traits::{perf_level_serde, PerfLevel};
+use grpcio::{CompressionAlgorithms, ResourceQuota};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
-use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::sys::SysQuota;
-use tikv_util::worker::Scheduler;
-
-pub use crate::storage::config::Config as StorageConfig;
 pub use raftstore::store::Config as RaftStoreConfig;
+use regex::Regex;
+use tikv_util::{
+    config::{self, ReadableDuration, ReadableSize, VersionTrack},
+    sys::SysQuota,
+    worker::Scheduler,
+};
 
-use super::snap::Task as SnapTask;
+use super::{snap::Task as SnapTask, Result};
+pub use crate::storage::config::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
@@ -85,7 +83,6 @@ pub struct Config {
     #[online_config(skip)]
     pub status_thread_pool_size: usize,
 
-    #[online_config(skip)]
     pub max_grpc_send_msg_len: i32,
 
     // When merge raft messages into a batch message, leave a buffer.
@@ -95,7 +92,6 @@ pub struct Config {
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
 
-    #[online_config(skip)]
     pub raft_msg_max_batch_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
@@ -107,7 +103,6 @@ pub struct Config {
     pub grpc_concurrent_stream: i32,
     #[online_config(skip)]
     pub grpc_raft_conn_num: usize,
-    #[online_config(skip)]
     pub grpc_memory_pool_quota: ReadableSize,
     #[online_config(skip)]
     pub grpc_stream_initial_window_size: ReadableSize,
@@ -133,6 +128,9 @@ pub struct Config {
     pub end_point_request_max_handle_duration: ReadableDuration,
     #[online_config(skip)]
     pub end_point_max_concurrency: usize,
+    #[serde(with = "perf_level_serde")]
+    #[online_config(skip)]
+    pub end_point_perf_level: PerfLevel,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     #[online_config(skip)]
@@ -234,6 +232,7 @@ impl Default for Config {
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
+            end_point_perf_level: PerfLevel::Uninitialized,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
@@ -319,6 +318,10 @@ impl Config {
                 "concurrent-recv-snap-limit",
                 self.concurrent_recv_snap_limit,
             ),
+            (
+                "grpc-memory-pool-quota",
+                self.grpc_memory_pool_quota.0 as usize,
+            ),
         ];
         for (label, value) in non_zero_entries {
             if value == 0 {
@@ -335,6 +338,12 @@ impl Config {
         {
             return Err(box_err!(
                 "server.end-point-request-max-handle-secs is too small."
+            ));
+        }
+
+        if self.max_grpc_send_msg_len <= 0 {
+            return Err(box_err!(
+                "server.max-grpc-send-msg-len must be bigger than 0."
             ));
         }
 
@@ -383,11 +392,23 @@ impl Config {
 pub struct ServerConfigManager {
     tx: Scheduler<SnapTask>,
     config: Arc<VersionTrack<Config>>,
+    grpc_mem_quota: ResourceQuota,
 }
 
+unsafe impl Send for ServerConfigManager {}
+unsafe impl Sync for ServerConfigManager {}
+
 impl ServerConfigManager {
-    pub fn new(tx: Scheduler<SnapTask>, config: Arc<VersionTrack<Config>>) -> ServerConfigManager {
-        ServerConfigManager { tx, config }
+    pub fn new(
+        tx: Scheduler<SnapTask>,
+        config: Arc<VersionTrack<Config>>,
+        grpc_mem_quota: ResourceQuota,
+    ) -> ServerConfigManager {
+        ServerConfigManager {
+            tx,
+            config,
+            grpc_mem_quota,
+        }
     }
 }
 
@@ -396,6 +417,14 @@ impl ConfigManager for ServerConfigManager {
         {
             let change = c.clone();
             self.config.update(move |cfg| cfg.update(change));
+            if let Some(value) = c.get("grpc_memory_pool_quota") {
+                let mem_quota: ReadableSize = value.clone().into();
+                // the resize is done inplace indeed, but grpc-rs's api need self, so we just
+                // clone it here, but this no extra side effect here.
+                self.grpc_mem_quota
+                    .clone()
+                    .resize_memory(mem_quota.0 as usize);
+            }
             if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
             }
@@ -437,8 +466,9 @@ fn validate_label_value(s: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tikv_util::config::ReadableDuration;
+
+    use super::*;
 
     #[test]
     fn test_config_validate() {
@@ -459,6 +489,10 @@ mod tests {
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_recursion_limit = 0;
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
+        invalid_cfg.grpc_memory_pool_quota = ReadableSize::mb(0);
         assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
@@ -483,6 +517,10 @@ mod tests {
         invalid_cfg = Config::default();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
+        assert!(invalid_cfg.validate().is_err());
+
+        invalid_cfg = Config::default();
+        invalid_cfg.max_grpc_send_msg_len = 0;
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();

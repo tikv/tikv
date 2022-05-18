@@ -1,21 +1,21 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::Ordering;
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
-use std::{fs, io, thread};
+use std::{
+    fs,
+    fs::File,
+    io,
+    io::prelude::*,
+    path::PathBuf,
+    sync::{atomic::Ordering, mpsc, Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 use engine_traits::RaftEngineReadOnly;
-use raft::eraftpb::MessageType;
-use std::fs::File;
-use std::io::prelude::*;
-use std::path::PathBuf;
-use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::time::Instant;
-use tikv_util::HandyRwLock;
-
 use kvproto::raft_serverpb::RaftMessage;
+use raft::eraftpb::MessageType;
+use test_raftstore::*;
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 #[test]
 fn test_overlap_cleanup() {

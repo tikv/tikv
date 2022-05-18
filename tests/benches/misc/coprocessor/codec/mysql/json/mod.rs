@@ -1,13 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::ToOwned;
-use std::io;
-use std::io::prelude::*;
-use std::process::{Command, Stdio};
-use std::thread;
+use std::{
+    borrow::ToOwned,
+    io,
+    io::prelude::*,
+    process::{Command, Stdio},
+    thread,
+};
 
 use test::Bencher;
-
 use tidb_query_datatype::codec::mysql::{Json, JsonDecoder, JsonEncoder};
 
 fn download_and_extract_file(url: &str) -> io::Result<String> {

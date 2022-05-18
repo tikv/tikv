@@ -1,32 +1,28 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use async_trait::async_trait;
-use std::io;
-use std::time::Duration;
-use thiserror::Error;
+use std::{error::Error as StdError, io, time::Duration};
 
+use async_trait::async_trait;
+use cloud::{
+    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
+};
 use fail::fail_point;
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
-use rusoto_core::{
-    request::DispatchSignedRequest,
-    {ByteStream, RusotoError},
-};
+pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
+use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
-use std::error::Error as StdError;
-use tokio::time::{sleep, timeout};
-
-use cloud::blob::{
-    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
+use thiserror::Error;
+use tikv_util::{
+    debug,
+    stream::{error_stream, retry},
+    time::Instant,
 };
-use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
-pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
-use tikv_util::debug;
-use tikv_util::stream::{error_stream, retry};
-use tikv_util::time::Instant;
+use tokio::time::{sleep, timeout};
 
 use crate::util;
 
@@ -262,6 +258,26 @@ impl<T: 'static + StdError> From<RusotoError<T>> for UploadError {
     }
 }
 
+/// try_read_exact tries to read exact length data as the buffer size.  
+/// like [`std::io::Read::read_exact`], but won't return `UnexpectedEof` when cannot read anything more from the `Read`.  
+/// once returning a size less than the buffer length, implies a EOF was meet, or nothing readed.
+async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
+    r: &mut R,
+    buf: &mut [u8],
+) -> io::Result<usize> {
+    let mut size_read = 0;
+    loop {
+        let r = r.read(&mut buf[size_read..]).await?;
+        if r == 0 {
+            return Ok(size_read);
+        }
+        size_read += r;
+        if size_read >= buf.len() {
+            return Ok(size_read);
+        }
+    }
+}
+
 /// Specifies the minimum size to use multi-part upload.
 /// AWS S3 requires each part to be at least 5 MiB.
 const MINIMUM_PART_SIZE: usize = 5 * 1024 * 1024;
@@ -302,7 +318,7 @@ impl<'client> S3Uploader<'client> {
                 let mut buf = vec![0; self.multi_part_size];
                 let mut part_number = 1;
                 loop {
-                    let data_size = reader.read(&mut buf).await?;
+                    let data_size = try_read_exact(reader, &mut buf).await?;
                     if data_size == 0 {
                         break;
                     }
@@ -564,10 +580,13 @@ impl BlobStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::assert_matches::assert_matches;
+
     use rusoto_core::signature::SignedRequest;
     use rusoto_mock::{MockRequestDispatcher, MultipleMockRequestDispatcher};
     use tikv_util::stream::block_on_external_io;
+
+    use super::*;
 
     #[test]
     fn test_s3_config() {
@@ -875,5 +894,31 @@ mod tests {
         cd.set_attrs(attrs);
         cd.set_bucket(bucket);
         cd
+    }
+
+    #[tokio::test]
+    async fn test_try_read_exact() {
+        use std::io::{self, Cursor, Read};
+
+        use futures::io::AllowStdIo;
+
+        use self::try_read_exact;
+
+        /// ThrottleRead throttles a `Read` -- make it emits 2 chars for each `read` call.
+        struct ThrottleRead<R>(R);
+        impl<R: Read> Read for ThrottleRead<R> {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let idx = buf.len().min(2);
+                self.0.read(&mut buf[..idx])
+            }
+        }
+
+        let mut data = AllowStdIo::new(ThrottleRead(Cursor::new(b"muthologia.")));
+        let mut buf = vec![0u8; 6];
+        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(6));
+        assert_eq!(buf, b"muthol");
+        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(5));
+        assert_eq!(&buf[..5], b"ogia.");
+        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(0));
     }
 }

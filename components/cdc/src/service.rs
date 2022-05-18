@@ -1,22 +1,34 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::hash_map::Entry;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    collections::hash_map::Entry,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
-use futures::future::{self, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
+use futures::{
+    future::{self, TryFutureExt},
+    sink::SinkExt,
+    stream::TryStreamExt,
+};
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
-use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility};
-use tikv_util::worker::*;
-use tikv_util::{error, info, warn};
+use kvproto::{
+    cdcpb::{
+        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi, Compatibility,
+    },
+    kvrpcpb::ApiVersion,
+};
+use tikv_util::{error, info, warn, worker::*};
 
-use crate::channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY};
-use crate::delegate::{Downstream, DownstreamID, DownstreamState};
-use crate::endpoint::{Deregister, Task};
+use crate::{
+    channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY},
+    delegate::{Downstream, DownstreamID, DownstreamState},
+    endpoint::{Deregister, Task},
+};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -53,6 +65,11 @@ impl FeatureGate {
     // Returns the first version (v5.3.0) that supports validate cluster id.
     pub(crate) fn validate_cluster_id() -> semver::Version {
         semver::Version::new(5, 3, 0)
+    }
+
+    pub(crate) fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
+        kv_api == ChangeDataRequestKvApi::TiDb
+            || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
     }
 }
 
@@ -213,6 +230,7 @@ impl ChangeData for Service {
         let recv_req = stream.try_for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
+            let req_kvapi = request.get_kv_api();
             let version = match semver::Version::parse(request.get_header().get_ticdc_version()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -222,7 +240,8 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
+            let downstream =
+                Downstream::new(peer.clone(), region_epoch, req_id, conn_id, req_kvapi);
             let ret = scheduler
                 .schedule(Task::Register {
                     request,
@@ -287,6 +306,7 @@ impl ChangeData for Service {
 #[cfg(feature = "failpoints")]
 async fn sleep_before_drain_change_event() {
     use std::time::{Duration, Instant};
+
     use tikv_util::timer::GLOBAL_TIMER_HANDLE;
     let should_sleep = || {
         fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
@@ -301,16 +321,14 @@ async fn sleep_before_drain_change_event() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     use futures::executor::block_on;
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
     use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
 
-    use crate::channel::{poll_timeout, recv_timeout, CdcEvent};
-
     use super::*;
+    use crate::channel::{poll_timeout, recv_timeout, CdcEvent};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = MemoryQuota::new(capacity);

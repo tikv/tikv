@@ -2,8 +2,7 @@
 
 use std::cell::RefCell;
 
-use prometheus::local::*;
-use prometheus::*;
+use prometheus::{local::*, *};
 use prometheus_static_metric::*;
 
 make_static_metric! {
