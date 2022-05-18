@@ -2708,7 +2708,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 if exist_region.get_id() == region.get_id() {
                     warn!(
                         "Unsafe recovery, region has already been created.";
-                        "region"=>?region,
+                        "region" => ?region,
                         "exist_region" => ?exist_region,
                     );
                     return;
