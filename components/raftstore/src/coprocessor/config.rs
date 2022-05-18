@@ -68,8 +68,6 @@ pub enum ConsistencyCheckMethod {
 
 /// Default region split size.
 pub const SPLIT_SIZE_MB: u64 = 96;
-/// Default region split keys.
-pub const SPLIT_KEYS: u64 = 960000;
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
@@ -99,8 +97,9 @@ impl Default for Config {
 
 impl Config {
     pub fn region_max_keys(&self) -> u64 {
+        let default_split_keys = self.region_split_size.as_mb_f64() * 10000.0;
         self.region_max_keys
-            .unwrap_or(self.region_split_size.0 / 1024 / 1024 * 10000 / 2 * 3)
+            .unwrap_or(default_split_keys as u64 / 2 * 3)
     }
 
     pub fn region_max_size(&self) -> ReadableSize {
