@@ -1277,7 +1277,7 @@ where
                                     demote.get_region_id(),
                                     SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
                                         syncer: syncer.clone(),
-                                        failed_voters: demote.get_failed_voters().to_vec(),
+                                        failed_voters: demote.take_failed_voters().into_vec(),
                                     },
                                 ) {
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);
