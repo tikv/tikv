@@ -71,8 +71,10 @@ fn build_read_opts(iter_opts: engine_traits::IterOptions) -> RawReadOptions {
     }
 
     if iter_opts.hint_min_ts().is_some() || iter_opts.hint_max_ts().is_some() {
-        let ts_filter = TsFilter::new(iter_opts.hint_min_ts(), iter_opts.hint_max_ts());
-        opts.set_table_filter(Box::new(ts_filter))
+        opts.set_table_filter(TsFilter::new(
+            iter_opts.hint_min_ts(),
+            iter_opts.hint_max_ts(),
+        ))
     }
 
     let (lower, upper) = iter_opts.build_bounds();

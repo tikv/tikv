@@ -41,10 +41,10 @@ impl Iterable for PanicSstReader {
 pub struct PanicSstReaderIterator;
 
 impl Iterator for PanicSstReaderIterator {
-    fn seek(&mut self, key: SeekKey) -> Result<bool> {
+    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
         panic!()
     }
 

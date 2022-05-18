@@ -1,3 +1,5 @@
+#![feature(slice_take)]
+
 use engine_rocks::RocksEngine;
 use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
 use engine_store_ffi::EngineStoreServerHelper;
@@ -105,10 +107,12 @@ impl EngineStoreServerWrap {
             for i in 0..cmds.len {
                 let key = &*cmds.keys.add(i as _);
                 let val = &*cmds.vals.add(i as _);
+                let k = &key.to_slice();
+                let v = &val.to_slice();
                 debug!(
                     "handle_write_raft_cmd add K {:?} V {:?} to region {} node id {}",
-                    key.to_slice(),
-                    val.to_slice(),
+                    &k[..std::cmp::min(4usize, k.len())],
+                    &v[..std::cmp::min(4usize, v.len())],
                     region_id,
                     server.id
                 );

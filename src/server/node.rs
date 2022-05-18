@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -10,39 +10,51 @@ use crate::import::SSTImporter;
 use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::HackedLockManager as LockManager;
 use crate::server::Config as ServerConfig;
+use crate::storage::kv::FlowStatsReporter;
+use crate::storage::txn::flow_controller::FlowController;
+use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{config::Config as StorageConfig, Storage};
+use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable, RaftEngine};
+use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
-use pd_client::{Error as PdError, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
+use raftstore::store::{GlobalReplicationState, PdTask, RefreshConfigTask, SplitCheckTask};
+use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{FutureWorker, Scheduler, Worker};
+use tikv_util::quota_limiter::QuotaLimiter;
+use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S>(
-    engine: RaftKv<RocksEngine, S>,
+pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
+    engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
-    pipelined_pessimistic_lock: Arc<AtomicBool>,
-) -> Result<Storage<RaftKv<RocksEngine, S>, LockManager>>
+    dynamic_configs: StorageDynamicConfigs,
+    flow_controller: Arc<FlowController>,
+    reporter: R,
+    resource_tag_factory: ResourceTagFactory,
+    quota_limiter: Arc<QuotaLimiter>,
+    feature_gate: FeatureGate,
+) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
+    EK: KvEngine,
 {
     let store = Storage::from_engine(
         engine,
@@ -50,18 +62,24 @@ where
         read_pool,
         lock_mgr,
         concurrency_manager,
-        pipelined_pessimistic_lock,
+        dynamic_configs,
+        flow_controller,
+        reporter,
+        resource_tag_factory,
+        quota_limiter,
+        feature_gate,
     )?;
     Ok(store)
 }
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
+pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem<RocksEngine, ER>,
+    api_version: ApiVersion,
+    system: RaftBatchSystem<EK, ER>,
     has_started: bool,
 
     pd_client: Arc<C>,
@@ -69,20 +87,22 @@ pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
     bg_worker: Worker,
 }
 
-impl<C, ER> Node<C, ER>
+impl<C, EK, ER> Node<C, EK, ER>
 where
     C: PdClient,
+    EK: KvEngine,
     ER: RaftEngine,
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem<RocksEngine, ER>,
+        system: RaftBatchSystem<EK, ER>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
+        api_version: ApiVersion,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
-    ) -> Node<C, ER> {
+    ) -> Node<C, EK, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -131,6 +151,7 @@ where
             cluster_id: cfg.cluster_id,
             store,
             store_cfg,
+            api_version,
             pd_client,
             system,
             has_started: false,
@@ -139,7 +160,7 @@ where
         }
     }
 
-    pub fn try_bootstrap_store(&mut self, engines: Engines<RocksEngine, ER>) -> Result<()> {
+    pub fn try_bootstrap_store(&mut self, engines: Engines<EK, ER>) -> Result<()> {
         let mut store_id = self.check_store(&engines)?;
         if store_id == INVALID_ID {
             store_id = self.alloc_id()?;
@@ -149,6 +170,7 @@ where
                 "injected error: node_after_bootstrap_store"
             )));
         }
+        self.check_api_version(&engines)?;
         self.store.set_id(store_id);
         Ok(())
     }
@@ -159,16 +181,17 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        engines: Engines<RocksEngine, ER>,
+        engines: Engines<EK, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost<RocksEngine>,
+        coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -204,6 +227,7 @@ where
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager,
+            collector_reg_handle,
         )?;
 
         Ok(())
@@ -218,19 +242,24 @@ where
         self.store.clone()
     }
 
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after start.
+    pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
+        self.system.refresh_config_scheduler()
+    }
+
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter<RocksEngine, ER> {
+    pub fn get_router(&self) -> RaftRouter<EK, ER> {
         self.system.router()
     }
     /// Gets a transmission end of a channel which is used send messages to apply worker.
-    pub fn get_apply_router(&self) -> ApplyRouter<RocksEngine> {
+    pub fn get_apply_router(&self) -> ApplyRouter<EK> {
         self.system.apply_router()
     }
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
+    fn check_store(&self, engines: &Engines<EK, ER>) -> Result<u64> {
         let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
@@ -250,7 +279,62 @@ where
         if store_id == INVALID_ID {
             return Err(box_err!("invalid store ident {:?}", ident));
         }
+
         Ok(store_id)
+    }
+
+    // During the api version switch only TiDB data are allowed to exist otherwise
+    // returns error.
+    fn check_api_version(&self, engines: &Engines<EK, ER>) -> Result<()> {
+        let ident = engines
+            .kv
+            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?
+            .expect("Store should have bootstrapped");
+        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be V1 in
+        // `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading from legacy V1
+        // TiKV, the config switch between V1 and V1ttl are not checked here.
+        // It's safe to do so because `storage.enable_ttl` is impossible to change thanks to the
+        // config check.
+        let should_check = match (ident.api_version, self.api_version) {
+            (ApiVersion::V1, ApiVersion::V1ttl) | (ApiVersion::V1ttl, ApiVersion::V1) => false,
+            (left, right) => left != right,
+        };
+        if should_check {
+            // Check if there are only TiDB data in the engine
+            let snapshot = engines.kv.snapshot();
+            for cf in DATA_CFS {
+                for (start, end) in TIDB_RANGES_COMPLEMENT {
+                    let mut unexpected_data_key = None;
+                    snapshot.scan_cf(
+                        cf,
+                        &keys::data_key(start),
+                        &keys::data_key(end),
+                        false,
+                        |key, _| {
+                            unexpected_data_key = Some(key[DATA_KEY_PREFIX_LEN..].to_vec());
+                            Ok(false)
+                        },
+                    )?;
+                    if let Some(unexpected_data_key) = unexpected_data_key {
+                        return Err(box_err!(
+                            "unable to switch `storage.api_version` from {:?} to {:?} \
+                            because found data key that is not written by TiDB: {:?}",
+                            ident.api_version,
+                            self.api_version,
+                            log_wrappers::hex_encode_upper(&unexpected_data_key)
+                        ));
+                    }
+                }
+            }
+            // Switch api version
+            let ident = StoreIdent {
+                api_version: self.api_version,
+                ..ident
+            };
+            engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
+            engines.sync_kv()?;
+        }
+        Ok(())
     }
 
     fn alloc_id(&self) -> Result<u64> {
@@ -279,7 +363,7 @@ where
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
-        engines: &Engines<RocksEngine, ER>,
+        engines: &Engines<EK, ER>,
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
@@ -297,13 +381,13 @@ where
         );
 
         let region = initial_region(store_id, region_id, peer_id);
-        store::prepare_bootstrap_cluster(&engines, &region)?;
+        store::prepare_bootstrap_cluster(engines, &region)?;
         Ok(region)
     }
 
     fn check_or_prepare_bootstrap_cluster(
         &self,
-        engines: &Engines<RocksEngine, ER>,
+        engines: &Engines<EK, ER>,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
         if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
@@ -317,7 +401,7 @@ where
 
     fn bootstrap_cluster(
         &mut self,
-        engines: &Engines<RocksEngine, ER>,
+        engines: &Engines<EK, ER>,
         first_region: metapb::Region,
     ) -> Result<()> {
         let region_id = first_region.get_id();
@@ -332,16 +416,16 @@ where
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
                         "injected error: node_after_bootstrap_cluster"
                     )));
-                    store::clear_prepare_bootstrap_key(&engines)?;
+                    store::clear_prepare_bootstrap_key(engines)?;
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
                     Ok(region) => {
                         if region == first_region {
-                            store::clear_prepare_bootstrap_key(&engines)?;
+                            store::clear_prepare_bootstrap_key(engines)?;
                         } else {
                             info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
-                            store::clear_prepare_bootstrap_cluster(&engines, region_id)?;
+                            store::clear_prepare_bootstrap_cluster(engines, region_id)?;
                         }
                         return Ok(());
                     }
@@ -379,16 +463,17 @@ where
     fn start_store<T>(
         &mut self,
         store_id: u64,
-        engines: Engines<RocksEngine, ER>,
+        engines: Engines<EK, ER>,
         trans: T,
         snap_mgr: SnapManager,
-        pd_worker: FutureWorker<PdTask<RocksEngine>>,
+        pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        coprocessor_host: CoprocessorHost<RocksEngine>,
+        coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SSTImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        collector_reg_handle: CollectorRegHandle,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -419,6 +504,7 @@ where
             auto_split_controller,
             self.state.clone(),
             concurrency_manager,
+            collector_reg_handle,
         )?;
         Ok(())
     }

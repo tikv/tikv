@@ -3,22 +3,18 @@
 //! Storage configuration.
 
 use crate::config::BLOCK_CACHE_RATE;
-use crate::server::ttl::TTLCheckerTask;
-use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
-use engine_rocks::RocksEngine;
-use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
-use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
+use file_system::{IOPriority, IORateLimitMode, IORateLimiter, IOType};
+use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
-use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
+use online_config::OnlineConfig;
 use std::error::Error;
-use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
+use tikv_util::config::{self, ReadableDuration, ReadableSize};
 use tikv_util::sys::SysQuota;
-use tikv_util::worker::Scheduler;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
-const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
+const DEFAULT_MAX_KEY_SIZE: usize = 8 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
 const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 
@@ -43,7 +39,6 @@ pub struct Config {
     pub max_key_size: usize,
     #[online_config(skip)]
     pub scheduler_concurrency: usize,
-    #[online_config(skip)]
     pub scheduler_worker_pool_size: usize,
     #[online_config(skip)]
     pub scheduler_pending_write_threshold: ReadableSize,
@@ -53,9 +48,13 @@ pub struct Config {
     #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
     #[online_config(skip)]
+    pub api_version: u8,
+    #[online_config(skip)]
     pub enable_ttl: bool,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
+    #[online_config(submodule)]
+    pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
@@ -70,12 +69,18 @@ impl Default for Config {
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
-            scheduler_worker_pool_size: 4,
+            scheduler_worker_pool_size: if _cpu_num >= 16.0 {
+                8
+            } else {
+                std::cmp::max(1, std::cmp::min(4, _cpu_num as usize))
+            },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
+            api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
+            flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IORateLimitConfig::default(),
         }
@@ -95,68 +100,81 @@ impl Config {
             );
             self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
-        self.io_rate_limit.validate()
-    }
-}
-
-pub struct StorageConfigManger {
-    kvdb: RocksEngine,
-    shared_block_cache: bool,
-    ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
-}
-
-impl StorageConfigManger {
-    pub fn new(
-        kvdb: RocksEngine,
-        shared_block_cache: bool,
-        ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
-    ) -> StorageConfigManger {
-        StorageConfigManger {
-            kvdb,
-            shared_block_cache,
-            ttl_checker_scheduler,
+        if !matches!(self.api_version, 1 | 2) {
+            return Err("storage.api_version can only be set to 1 or 2.".into());
         }
-    }
-}
+        if self.api_version == 2 && !self.enable_ttl {
+            return Err(
+                "storage.enable_ttl must be true in API V2 because API V2 forces to enable TTL."
+                    .into(),
+            );
+        };
+        // max worker pool size should be at least 4.
+        let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
+        if self.scheduler_worker_pool_size == 0 || self.scheduler_worker_pool_size > max_pool_size {
+            return Err(
+                format!(
+                    "storage.scheduler_worker_pool_size should be greater than 0 and less than or equal to {}",
+                    max_pool_size
+                ).into()
+            );
+        }
+        self.io_rate_limit.validate()?;
 
-impl ConfigManager for StorageConfigManger {
-    fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {
-        if let Some(ConfigValue::Module(mut block_cache)) = change.remove("block_cache") {
-            if !self.shared_block_cache {
-                return Err("shared block cache is disabled".into());
-            }
-            if let Some(size) = block_cache.remove("capacity") {
-                let s: OptionReadableSize = size.into();
-                if let Some(size) = s.0 {
-                    // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
-                    // the size through any of them. Here we change it through default CF in kvdb.
-                    // A better way to do it is to hold the cache reference somewhere, and use it to
-                    // change cache size.
-                    let opt = self.kvdb.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
-                    opt.set_block_cache_capacity(size.0)?;
-                    // Write config to metric
-                    CONFIG_ROCKSDB_GAUGE
-                        .with_label_values(&[CF_DEFAULT, "block_cache_size"])
-                        .set(size.0 as f64);
-                }
-            }
-        } else if let Some(v) = change.remove("ttl_check_poll_interval") {
-            let interval: ReadableDuration = v.into();
-            self.ttl_checker_scheduler
-                .schedule(TTLCheckerTask::UpdatePollInterval(interval.into()))
-                .unwrap();
-        }
-        if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
-            let limiter = match get_io_rate_limiter() {
-                None => return Err("IO rate limiter is not present".into()),
-                Some(limiter) => limiter,
-            };
-            if let Some(limit) = io_rate_limit.remove("max_bytes_per_sec") {
-                let limit: ReadableSize = limit.into();
-                limiter.set_io_rate_limit(limit.0 as usize);
-            }
-        }
         Ok(())
+    }
+
+    pub fn api_version(&self) -> ApiVersion {
+        match self.api_version {
+            1 if self.enable_ttl => ApiVersion::V1ttl,
+            1 => ApiVersion::V1,
+            2 => ApiVersion::V2,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn set_api_version(&mut self, api_version: ApiVersion) {
+        match api_version {
+            ApiVersion::V1 => {
+                self.api_version = 1;
+                self.enable_ttl = false;
+            }
+            ApiVersion::V1ttl => {
+                self.api_version = 1;
+                self.enable_ttl = true;
+            }
+            ApiVersion::V2 => {
+                self.api_version = 2;
+                self.enable_ttl = true;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct FlowControlConfig {
+    pub enable: bool,
+    #[online_config(skip)]
+    pub soft_pending_compaction_bytes_limit: ReadableSize,
+    #[online_config(skip)]
+    pub hard_pending_compaction_bytes_limit: ReadableSize,
+    #[online_config(skip)]
+    pub memtables_threshold: u64,
+    #[online_config(skip)]
+    pub l0_files_threshold: u64,
+}
+
+impl Default for FlowControlConfig {
+    fn default() -> FlowControlConfig {
+        FlowControlConfig {
+            enable: true,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(1024),
+            memtables_threshold: 5,
+            l0_files_threshold: 20,
+        }
     }
 }
 
@@ -166,7 +184,7 @@ impl ConfigManager for StorageConfigManger {
 pub struct BlockCacheConfig {
     #[online_config(skip)]
     pub shared: bool,
-    pub capacity: OptionReadableSize,
+    pub capacity: Option<ReadableSize>,
     #[online_config(skip)]
     pub num_shard_bits: i32,
     #[online_config(skip)]
@@ -181,7 +199,7 @@ impl Default for BlockCacheConfig {
     fn default() -> BlockCacheConfig {
         BlockCacheConfig {
             shared: true,
-            capacity: OptionReadableSize(None),
+            capacity: None,
             num_shard_bits: 6,
             strict_capacity_limit: false,
             high_pri_pool_ratio: 0.8,
@@ -195,7 +213,7 @@ impl BlockCacheConfig {
         if !self.shared {
             return None;
         }
-        let capacity = match self.capacity.0 {
+        let capacity = match self.capacity {
             None => {
                 let total_mem = SysQuota::memory_limit_in_bytes();
                 ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
@@ -254,27 +272,16 @@ pub struct IORateLimitConfig {
     /// turned on.
     #[online_config(skip)]
     pub strict: bool,
-    #[online_config(skip)]
     pub foreground_read_priority: IOPriority,
-    #[online_config(skip)]
     pub foreground_write_priority: IOPriority,
-    #[online_config(skip)]
     pub flush_priority: IOPriority,
-    #[online_config(skip)]
     pub level_zero_compaction_priority: IOPriority,
-    #[online_config(skip)]
     pub compaction_priority: IOPriority,
-    #[online_config(skip)]
     pub replication_priority: IOPriority,
-    #[online_config(skip)]
     pub load_balance_priority: IOPriority,
-    #[online_config(skip)]
     pub gc_priority: IOPriority,
-    #[online_config(skip)]
     pub import_priority: IOPriority,
-    #[online_config(skip)]
     pub export_priority: IOPriority,
-    #[online_config(skip)]
     pub other_priority: IOPriority,
 }
 
@@ -301,7 +308,7 @@ impl Default for IORateLimitConfig {
 
 impl IORateLimitConfig {
     pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
-        let mut limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
+        let limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
         limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
         limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);
@@ -346,5 +353,26 @@ impl IORateLimitConfig {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_storage_config() {
+        let mut cfg = Config::default();
+        assert!(cfg.validate().is_ok());
+
+        let max_pool_size = std::cmp::max(1, SysQuota::cpu_cores_quota() as usize);
+        cfg.scheduler_worker_pool_size = max_pool_size;
+        assert!(cfg.validate().is_ok());
+
+        cfg.scheduler_worker_pool_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg.scheduler_worker_pool_size = max_pool_size + 1;
+        assert!(cfg.validate().is_err());
     }
 }

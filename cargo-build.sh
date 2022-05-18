@@ -7,4 +7,9 @@ fi
 
 set -ex
 
-cargo build --no-default-features --features "${PROXY_ENABLE_FEATURES}" ${cargo_build_extra_parameter}
+if [[ -n "${PROXY_BUILD_STD}" && "${PROXY_BUILD_STD}" != "0" ]]; then
+  rustup component add rust-src
+  cargo build --no-default-features --features "${PROXY_ENABLE_FEATURES}" ${cargo_build_extra_parameter} ${PROXY_BUILD_STD_ARGS}
+else
+  cargo build --no-default-features --features "${PROXY_ENABLE_FEATURES}" ${cargo_build_extra_parameter}
+fi

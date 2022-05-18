@@ -46,7 +46,8 @@ pub const PIB: u64 = TIB * BINARY_DATA_MAGNITUDE;
 const TIME_MAGNITUDE_1: u64 = 1000;
 const TIME_MAGNITUDE_2: u64 = 60;
 const TIME_MAGNITUDE_3: u64 = 24;
-const MS: u64 = UNIT;
+const US: u64 = UNIT;
+const MS: u64 = US * TIME_MAGNITUDE_1;
 const SECOND: u64 = MS * TIME_MAGNITUDE_1;
 const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
@@ -59,7 +60,7 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, Copy, PartialEq, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {
@@ -74,42 +75,6 @@ impl From<ConfigValue> for ReadableSize {
             ReadableSize(s)
         } else {
             panic!("expect: ConfigValue::Size, got: {:?}", c);
-        }
-    }
-}
-
-/// This trivial type is needed, because we can't define the `From<Option<ReadableSize>>`
-/// and `Into<Option<ReadableSize>>` trait for `ConfigValue` which is needed to derive
-/// `OnlineConfig` trait for `BlockCacheConfig`
-#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
-#[serde(from = "Option<ReadableSize>")]
-#[serde(into = "Option<ReadableSize>")]
-pub struct OptionReadableSize(pub Option<ReadableSize>);
-
-impl From<Option<ReadableSize>> for OptionReadableSize {
-    fn from(s: Option<ReadableSize>) -> OptionReadableSize {
-        OptionReadableSize(s)
-    }
-}
-
-impl From<OptionReadableSize> for Option<ReadableSize> {
-    fn from(s: OptionReadableSize) -> Option<ReadableSize> {
-        s.0
-    }
-}
-
-impl From<OptionReadableSize> for ConfigValue {
-    fn from(size: OptionReadableSize) -> ConfigValue {
-        ConfigValue::OptionSize(size.0.map(|v| v.0))
-    }
-}
-
-impl From<ConfigValue> for OptionReadableSize {
-    fn from(s: ConfigValue) -> OptionReadableSize {
-        if let ConfigValue::OptionSize(s) = s {
-            OptionReadableSize(s.map(ReadableSize))
-        } else {
-            panic!("expect: ConfigValue::OptionSize, got: {:?}", s);
         }
     }
 }
@@ -361,15 +326,18 @@ impl FromStr for ReadableDuration {
         if !dur_str.is_ascii() {
             return Err(format!("unexpect ascii string: {}", dur_str));
         }
-        let err_msg = "valid duration, only d, h, m, s, ms are supported.".to_owned();
+        let err_msg = "valid duration, only d, h, m, s, ms, us are supported.".to_owned();
         let mut left = dur_str.as_bytes();
         let mut last_unit = DAY + 1;
         let mut dur = 0f64;
-        while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
+        while let Some(idx) = left.iter().position(|c| b"dhmsu".contains(c)) {
             let (first, second) = left.split_at(idx);
             let unit = if second.starts_with(b"ms") {
                 left = &left[idx + 2..];
                 MS
+            } else if second.starts_with(b"us") {
+                left = &left[idx + 2..];
+                US
             } else {
                 let u = match second[0] {
                     b'd' => DAY,
@@ -382,7 +350,7 @@ impl FromStr for ReadableDuration {
                 u
             };
             if unit >= last_unit {
-                return Err("d, h, m, s, ms should occur in given order.".to_owned());
+                return Err("d, h, m, s, ms, us should occur in given order.".to_owned());
             }
             // do we need to check 12h360m?
             let number_str = unsafe { str::from_utf8_unchecked(first) };
@@ -399,18 +367,22 @@ impl FromStr for ReadableDuration {
             return Err("duration should be positive.".to_owned());
         }
         let secs = dur as u64 / SECOND as u64;
-        let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
-        Ok(ReadableDuration(Duration::new(secs, millis)))
+        let micros = (dur as u64 % SECOND as u64) as u32 * 1_000;
+        Ok(ReadableDuration(Duration::new(secs, micros)))
     }
 }
 
 impl ReadableDuration {
-    pub const fn secs(secs: u64) -> ReadableDuration {
-        ReadableDuration(Duration::from_secs(secs))
+    pub const fn micros(micros: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_micros(micros))
     }
 
     pub const fn millis(millis: u64) -> ReadableDuration {
         ReadableDuration(Duration::from_millis(millis))
+    }
+
+    pub const fn secs(secs: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_secs(secs))
     }
 
     pub const fn minutes(minutes: u64) -> ReadableDuration {
@@ -429,8 +401,16 @@ impl ReadableDuration {
         self.0.as_secs()
     }
 
+    pub fn as_secs_f64(&self) -> f64 {
+        self.0.as_secs_f64()
+    }
+
     pub fn as_millis(&self) -> u64 {
         crate::time::duration_to_ms(self.0)
+    }
+
+    pub fn as_micros(&self) -> u64 {
+        crate::time::duration_to_us(self.0)
     }
 
     pub fn is_zero(&self) -> bool {
@@ -441,7 +421,7 @@ impl ReadableDuration {
 impl fmt::Display for ReadableDuration {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut dur = crate::time::duration_to_ms(self.0);
+        let mut dur = crate::time::duration_to_us(self.0);
         let mut written = false;
         if dur >= DAY {
             written = true;
@@ -463,9 +443,14 @@ impl fmt::Display for ReadableDuration {
             write!(f, "{}s", dur / SECOND)?;
             dur %= SECOND;
         }
+        if dur >= MS {
+            written = true;
+            write!(f, "{}ms", dur / MS)?;
+            dur %= MS;
+        }
         if dur > 0 {
             written = true;
-            write!(f, "{}ms", dur)?;
+            write!(f, "{}us", dur)?;
         }
         if !written {
             write!(f, "0s")?;
@@ -511,33 +496,33 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
-fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
-    fn normalize(path: &Path) -> PathBuf {
-        use std::path::Component;
-        let mut components = path.components().peekable();
-        let mut ret = PathBuf::new();
+pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
+    use std::path::Component;
+    let mut components = path.as_ref().components().peekable();
+    let mut ret = PathBuf::new();
 
-        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) =
-            components.peek().cloned()
-        {
-            components.next();
-            ret.push(c.as_os_str());
-        }
-
-        for component in components {
-            match component {
-                Component::Prefix(..) | Component::RootDir => unreachable!(),
-                Component::CurDir => {}
-                c @ Component::ParentDir => {
-                    if !ret.pop() {
-                        ret.push(c.as_os_str());
-                    }
-                }
-                Component::Normal(c) => ret.push(c),
-            }
-        }
-        ret
+    while let Some(c @ (Component::Prefix(..) | Component::RootDir)) = components.peek().cloned() {
+        components.next();
+        ret.push(c.as_os_str());
     }
+
+    for component in components {
+        match component {
+            Component::Prefix(..) | Component::RootDir => unreachable!(),
+            Component::CurDir => {}
+            c @ Component::ParentDir => {
+                if !ret.pop() {
+                    ret.push(c.as_os_str());
+                }
+            }
+            Component::Normal(c) => ret.push(c),
+        }
+    }
+    ret
+}
+
+/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
         use std::path::Component;
         let mut components = path.components().peekable();
@@ -585,13 +570,13 @@ fn canonicalize_fallback<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
         }
         Ok(ret)
     }
-    try_canonicalize_normalized_path(&normalize(path.as_ref()))
+    try_canonicalize_normalized_path(&normalize_path(path))
 }
 
 /// Normalizes the path and canonicalizes its longest physically existing sub-path.
 fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     match path.as_ref().canonicalize() {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_fallback(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_non_existing_path(path),
         other => other,
     }
 }
@@ -601,11 +586,7 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let path = Path::new(path);
-    let mut path = canonicalize_imp(path)?;
-    if !sub_path.is_empty() {
-        path = path.join(Path::new(sub_path));
-    }
+    let path = canonicalize_imp(Path::new(path).join(Path::new(sub_path)))?;
     if path.exists() && path.is_file() {
         return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
     }
@@ -1149,7 +1130,11 @@ impl<T> Tracker<T> {
                 Err(_) => {
                     let t = Instant::now_coarse();
                     let value = self.inner.value.read().unwrap();
-                    slow_log!(t.elapsed(), "{} tracker get updated value", self.tag);
+                    slow_log!(
+                        t.saturating_elapsed(),
+                        "{} tracker get updated value",
+                        self.tag
+                    );
                     Some(value)
                 }
             }
@@ -1189,7 +1174,7 @@ impl TomlLine {
     fn parse(s: &str) -> TomlLine {
         let s = s.trim();
         // try to parse table from format of "[`Keys`]"
-        if let Some(k) = s.strip_prefix('[').map(|s| s.strip_suffix(']')).flatten() {
+        if let Some(k) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             return match TomlLine::parse_key(k) {
                 Some(k) => TomlLine::Table(k),
                 None => TomlLine::Unknown,
@@ -1241,6 +1226,12 @@ pub struct TomlWriter {
     current_table: String,
 }
 
+impl Default for TomlWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TomlWriter {
     pub fn new() -> TomlWriter {
         TomlWriter {
@@ -1251,7 +1242,7 @@ impl TomlWriter {
 
     pub fn write_change(&mut self, src: String, mut change: HashMap<String, String>) {
         for line in src.lines() {
-            match TomlLine::parse(&line) {
+            match TomlLine::parse(line) {
                 TomlLine::Table(keys) => {
                     self.write_current_table(&mut change);
                     self.write(line.as_bytes());
@@ -1302,6 +1293,259 @@ impl TomlWriter {
 
     pub fn finish(self) -> Vec<u8> {
         self.dst
+    }
+}
+
+#[macro_export]
+macro_rules! numeric_enum_serializing_mod {
+    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
+        pub mod $name {
+            use std::fmt;
+
+            use serde::{Serializer, Deserializer};
+            use serde::de::{self, Unexpected, Visitor};
+            use super::$enum;
+            use case_macros::*;
+
+            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
+                where S: Serializer
+            {
+                match mode {
+                    $( $enum::$variant => serializer.serialize_i64($value as i64), )*
+                }
+            }
+
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
+                where D: Deserializer<'de>
+            {
+                struct EnumVisitor;
+
+                impl<'de> Visitor<'de> for EnumVisitor {
+                    type Value = $enum;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        write!(formatter, concat!("valid ", stringify!($enum)))
+                    }
+
+                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $( $value => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
+                        }
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $(kebab_case!($variant) => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Str(value), &self))
+                        }
+                    }
+                }
+
+                deserializer.deserialize_any(EnumVisitor)
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use toml;
+                use super::$enum;
+                use serde::{Deserialize, Serialize};
+
+                #[test]
+                fn test_serde() {
+                    #[derive(Serialize, Deserialize, PartialEq)]
+                    struct EnumHolder {
+                        #[serde(with = "super")]
+                        e: $enum,
+                    }
+
+                    let cases = vec![
+                        $(($enum::$variant, $value), )*
+                    ];
+                    for (e, v) in cases {
+                        let holder = EnumHolder { e };
+                        let res = toml::to_string(&holder).unwrap();
+                        let exp = format!("e = {}\n", v);
+                        assert_eq!(res, exp);
+                        let h: EnumHolder = toml::from_str(&exp).unwrap();
+                        assert!(h == holder);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Helper for migrating Raft data safely. Such migration is defined as
+/// multiple states that can be uniquely distinguished. And the transtions
+/// between these states are atomic.
+///
+/// States:
+///   1. Init - Only source directory contains Raft data.
+///   2. Migrating - A marker file contains the path of source directory. The source
+///      directory contains a complete copy of Raft data. Target directory may exist.
+///   3. Completed - Only target directory contains Raft data. Marker file may exist.
+pub struct RaftDataStateMachine {
+    root: PathBuf,
+    in_progress_marker: PathBuf,
+    source: PathBuf,
+    target: PathBuf,
+}
+
+impl RaftDataStateMachine {
+    pub fn new(root: &str, source: &str, target: &str) -> Self {
+        let root = PathBuf::from(root);
+        let in_progress_marker = root.join("MIGRATING-RAFT");
+        let source = PathBuf::from(source);
+        let target = PathBuf::from(target);
+        Self {
+            root,
+            in_progress_marker,
+            source,
+            target,
+        }
+    }
+
+    /// Checks if the current condition is a valid state.
+    pub fn validate(&self, should_exist: bool) -> std::result::Result<(), String> {
+        if Self::data_exists(&self.source)
+            && Self::data_exists(&self.target)
+            && !self.in_progress_marker.exists()
+        {
+            return Err(format!(
+                "Found multiple raft data sets: {}, {}",
+                self.source.display(),
+                self.target.display()
+            ));
+        }
+        let exists = Self::data_exists(&self.source) || Self::data_exists(&self.target);
+        if exists != should_exist {
+            if should_exist {
+                return Err("Cannot find raft data set.".to_owned());
+            } else {
+                return Err("Found raft data set when it should not exist.".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns whether a migration is needed. When it's needed, enters the `Migrating`
+    /// state. Otherwise prepares the target directory for opening.
+    pub fn before_open_target(&mut self) -> bool {
+        // Clean up trash directory if there is any.
+        for p in [&self.source, &self.target] {
+            let trash = p.with_extension("REMOVE");
+            if trash.exists() {
+                fs::remove_dir_all(&trash).unwrap();
+            }
+        }
+        if !Self::data_exists(&self.source) {
+            // Recover from Completed state.
+            if self.in_progress_marker.exists() {
+                Self::must_remove(&self.in_progress_marker);
+            }
+            return false;
+        } else if self.in_progress_marker.exists() {
+            if let Some(real_source) = self.read_marker() {
+                // Recover from Migrating state.
+                if real_source == self.target {
+                    if Self::data_exists(&self.target) {
+                        Self::must_remove(&self.source);
+                        return false;
+                    }
+                    // It's actually in Completed state, just in the reverse direction.
+                    // Equivalent to Init state.
+                } else {
+                    assert!(real_source == self.source);
+                    Self::must_remove(&self.target);
+                    return true;
+                }
+            } else {
+                // Halfway between Init and Migrating.
+                assert!(!Self::data_exists(&self.target));
+            }
+        }
+        // Init -> Migrating.
+        self.write_marker();
+        true
+    }
+
+    /// Exits the `Migrating` state and enters the `Completed` state.
+    pub fn after_dump_data(&mut self) {
+        assert!(Self::data_exists(&self.source));
+        assert!(Self::data_exists(&self.target));
+        Self::must_remove(&self.source); // Enters the `Completed` state.
+        Self::must_remove(&self.in_progress_marker);
+    }
+
+    // `after_dump_data` involves two atomic operations, insert a check point between
+    // them to test crash safety.
+    #[cfg(test)]
+    fn after_dump_data_with_check<F: Fn()>(&mut self, check: &F) {
+        assert!(Self::data_exists(&self.source));
+        assert!(Self::data_exists(&self.target));
+        Self::must_remove(&self.source); // Enters the `Completed` state.
+        check();
+        Self::must_remove(&self.in_progress_marker);
+    }
+
+    fn write_marker(&self) {
+        use std::io::Write;
+        let mut f = fs::File::create(&self.in_progress_marker).unwrap();
+        f.write_all(self.source.to_str().unwrap().as_bytes())
+            .unwrap();
+        f.sync_all().unwrap();
+        f.write_all(b"//").unwrap();
+        f.sync_all().unwrap();
+        Self::sync_dir(&self.root);
+    }
+
+    // Assumes there is a marker file. Returns None when the content of marker file is
+    // incomplete.
+    fn read_marker(&self) -> Option<PathBuf> {
+        let marker = fs::read_to_string(&self.in_progress_marker).unwrap();
+        if marker.ends_with("//") {
+            Some(PathBuf::from(&marker[..marker.len() - 2]))
+        } else {
+            None
+        }
+    }
+
+    fn must_remove(path: &Path) {
+        if path.exists() {
+            if path.is_dir() {
+                info!("Removing directory"; "path" => %path.display());
+                let trash = path.with_extension("REMOVE");
+                Self::must_rename_dir(path, &trash);
+                fs::remove_dir_all(&trash).unwrap();
+            } else {
+                info!("Removing file"; "path" => %path.display());
+                fs::remove_file(&path).unwrap();
+                Self::sync_dir(path.parent().unwrap());
+            }
+        }
+    }
+
+    fn must_rename_dir(from: &Path, to: &Path) {
+        fs::rename(from, to).unwrap();
+        let mut dir = to.to_path_buf();
+        assert!(dir.pop());
+        Self::sync_dir(&dir);
+    }
+
+    fn data_exists(path: &Path) -> bool {
+        if !path.exists() || !path.is_dir() {
+            return false;
+        }
+        fs::read_dir(&path).unwrap().next().is_some()
+    }
+
+    fn sync_dir(dir: &Path) {
+        fs::File::open(&dir).and_then(|d| d.sync_all()).unwrap();
     }
 }
 
@@ -1418,14 +1662,20 @@ mod tests {
 
     #[test]
     fn test_duration_construction() {
-        let mut dur = ReadableDuration::secs(1);
-        assert_eq!(dur.0, Duration::new(1, 0));
-        assert_eq!(dur.as_secs(), 1);
-        assert_eq!(dur.as_millis(), 1000);
+        let mut dur = ReadableDuration::micros(2_010_010);
+        assert_eq!(dur.0, Duration::new(2, 10_010_000));
+        assert_eq!(dur.as_secs(), 2);
+        assert!((dur.as_secs_f64() - 2.010_010).abs() < f64::EPSILON);
+        assert_eq!(dur.as_millis(), 2_010);
         dur = ReadableDuration::millis(1001);
         assert_eq!(dur.0, Duration::new(1, 1_000_000));
         assert_eq!(dur.as_secs(), 1);
+        assert!((dur.as_secs_f64() - 1.001).abs() < f64::EPSILON);
         assert_eq!(dur.as_millis(), 1001);
+        dur = ReadableDuration::secs(1);
+        assert_eq!(dur.0, Duration::new(1, 0));
+        assert_eq!(dur.as_secs(), 1);
+        assert_eq!(dur.as_millis(), 1000);
         dur = ReadableDuration::minutes(2);
         assert_eq!(dur.0, Duration::new(2 * 60, 0));
         assert_eq!(dur.as_secs(), 120);
@@ -1445,20 +1695,21 @@ mod tests {
 
         let legal_cases = vec![
             (0, 0, "0s"),
-            (0, 1, "1ms"),
+            (0, 1_000, "1ms"),
+            (0, 1, "1us"),
             (2, 0, "2s"),
             (24 * 3600, 0, "1d"),
-            (2 * 24 * 3600, 10, "2d10ms"),
+            (2 * 24 * 3600, 10_020, "2d10ms20us"),
             (4 * 60, 0, "4m"),
             (5 * 3600, 0, "5h"),
             (3600 + 2 * 60, 0, "1h2m"),
             (5 * 24 * 3600 + 3600 + 2 * 60, 0, "5d1h2m"),
-            (3600 + 2, 5, "1h2s5ms"),
-            (3 * 24 * 3600 + 7 * 3600 + 2, 5, "3d7h2s5ms"),
+            (3600 + 2, 5_600, "1h2s5ms600us"),
+            (3 * 24 * 3600 + 7 * 3600 + 2, 5_004, "3d7h2s5ms4us"),
         ];
-        for (secs, ms, exp) in legal_cases {
+        for (secs, us, exp) in legal_cases {
             let d = DurHolder {
-                d: ReadableDuration(Duration::new(secs, ms * 1_000_000)),
+                d: ReadableDuration(Duration::new(secs, us * 1_000)),
             };
             let res_str = toml::to_string(&d).unwrap();
             let exp_str = format!("d = {:?}\n", exp);
@@ -1500,7 +1751,7 @@ mod tests {
         let cases = vec![".", "/../../", "./../"];
         for case in &cases {
             assert_eq!(
-                Path::new(&canonicalize_fallback(case).unwrap()),
+                Path::new(&canonicalize_non_existing_path(case).unwrap()),
                 Path::new(case).canonicalize().unwrap(),
             );
         }
@@ -1519,22 +1770,21 @@ mod tests {
         };
         for first in nodes {
             for second in nodes {
-                let path = format!(
-                    "{}/{}/../{}/non_existing",
-                    tmp_dir.to_str().unwrap(),
-                    first,
-                    second
-                );
-                let res_path = canonicalize_path(&path).unwrap();
+                let base_path = format!("{}/{}/..", tmp_dir.to_str().unwrap(), first,);
+                let sub_path = format!("{}/non_existing", second);
+                let full_path = format!("{}/{}", &base_path, &sub_path);
+                let res_path1 = canonicalize_path(&full_path).unwrap();
+                let res_path2 = canonicalize_sub_path(&base_path, &sub_path).unwrap();
+                assert_eq!(Path::new(&res_path1), Path::new(&res_path2));
                 // resolve to second/non_existing
                 if *second == "non_existing" {
                     assert_eq!(
-                        Path::new(&res_path),
+                        Path::new(&res_path1),
                         tmp_dir.to_path_buf().join("non_existing/non_existing")
                     );
                 } else {
                     assert_eq!(
-                        Path::new(&res_path),
+                        Path::new(&res_path1),
                         tmp_dir.to_path_buf().join("dir/non_existing")
                     );
                 }
@@ -1554,7 +1804,6 @@ mod tests {
     #[test]
     fn test_check_kernel() {
         use super::check_kernel::{check_kernel_params, Checker};
-        use std::i64;
 
         // The range of vm.swappiness is from 0 to 100.
         let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![
@@ -1814,5 +2063,81 @@ yyy = 100
             toml_value["readpool"]["storage"]["normal-concurrency"].as_integer(),
             Some(2)
         );
+    }
+
+    #[test]
+    fn test_raft_data_migration() {
+        fn run_migration<F: Fn()>(root: &Path, source: &Path, target: &Path, check: F) {
+            let mut state = RaftDataStateMachine::new(
+                root.to_str().unwrap(),
+                source.to_str().unwrap(),
+                target.to_str().unwrap(),
+            );
+            state.validate(true).unwrap();
+            check();
+            // Dump to target.
+            if state.before_open_target() {
+                check();
+                // Simulate partial writes.
+                let marker = root.join("MIGRATING-RAFT");
+                if marker.exists() {
+                    let backup_marker = fs::read_to_string(&marker).unwrap();
+                    fs::write(&marker, "").unwrap();
+                    check();
+                    fs::write(&marker, backup_marker).unwrap();
+                }
+
+                let source_file = source.join("file");
+                let target_file = target.join("file");
+                if !target.exists() {
+                    fs::create_dir_all(&target).unwrap();
+                    check();
+                }
+                fs::copy(&source_file, &target_file).unwrap();
+                check();
+                state.after_dump_data_with_check(&check);
+            }
+            check();
+        }
+
+        fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+            if dst.exists() {
+                fs::remove_dir_all(dst)?;
+            }
+            fs::create_dir_all(&dst)?;
+            for entry in fs::read_dir(src)? {
+                let entry = entry?;
+                let ty = entry.file_type()?;
+                if ty.is_dir() {
+                    copy_dir(&entry.path(), &dst.join(entry.file_name()))?;
+                } else {
+                    fs::copy(entry.path(), &dst.join(entry.file_name()))?;
+                }
+            }
+            Ok(())
+        }
+
+        let dir = tempfile::Builder::new().tempdir().unwrap();
+        let root = dir.path().join("root");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        // Write some data into source.
+        let source_file = source.join("file");
+        File::create(&source_file).unwrap();
+
+        let backup = dir.path().join("backup");
+
+        run_migration(&root, &source, &target, || {
+            copy_dir(&root, &backup).unwrap();
+
+            // Simulate restart and migrate in halfway.
+            run_migration(&root, &source, &target, || {});
+            copy_dir(&backup, &root).unwrap();
+            //
+            run_migration(&root, &target, &source, || {});
+            copy_dir(&backup, &root).unwrap();
+        });
     }
 }

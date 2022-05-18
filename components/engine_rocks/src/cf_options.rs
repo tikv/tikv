@@ -98,6 +98,10 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
         self.0.get_disable_auto_compactions()
     }
 
+    fn get_disable_write_stall(&self) -> bool {
+        self.0.get_disable_write_stall()
+    }
+
     fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F) {
         self.0
             .set_sst_partitioner_factory(RocksSstPartitionerFactory(factory));

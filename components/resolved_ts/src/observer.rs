@@ -84,10 +84,10 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
 }
 
 impl<E: KvEngine> RoleObserver for Observer<E> {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         // Stop to advance resolved ts after peer steps down to follower or candidate.
         // Do not need to check observe id because we expect all role change events are scheduled in order.
-        if role != StateRole::Leader {
+        if role_change.state != StateRole::Leader {
             if let Err(e) = self.scheduler.schedule(Task::DeRegisterRegion {
                 region_id: ctx.region().id,
             }) {
@@ -139,7 +139,6 @@ mod test {
     use super::*;
     use engine_rocks::RocksSnapshot;
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::*;
     use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
@@ -193,7 +192,7 @@ mod test {
 
         // Both cdc and resolved-ts worker are observing
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
-        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
         observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
         // Observe all data
@@ -202,7 +201,7 @@ mod test {
         // Only cdc is observing
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
         observe_info.rts_id.stop_observing();
-        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
         observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
         // Still observe all data
@@ -211,7 +210,7 @@ mod test {
         // Only resolved-ts worker is observing
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
         observe_info.cdc_id.stop_observing();
-        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
         observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
         // Only observe lock related data
@@ -222,7 +221,7 @@ mod test {
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
         observe_info.rts_id.stop_observing();
         observe_info.cdc_id.stop_observing();
-        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd);
         observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
         // Observe no data

@@ -3,28 +3,16 @@ name = "resource_metering"
 version = "0.0.1"
 edition = "2018"
 
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "kvproto/protobuf-codec",
-  "grpcio/protobuf-codec",
-]
-prost-codec = [
-  "kvproto/prost-codec",
-  "grpcio/prost-codec",
-]
-
 [dependencies]
 lazy_static = "1.3"
 collections = { path = "../collections" }
 libc = "0.2"
 crossbeam = "0.8"
 pin-project = "1.0"
-prometheus = { version = "0.12", features = ["nightly"] }
-prometheus-static-metric = "0.5"
-kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+prometheus = { version = "0.13", features = ["nightly"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 tikv_util = { path = "../tikv_util" }
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 online_config = { path = "../online_config" }
 serde = "1.0"
 serde_derive = "1.0"
@@ -35,7 +23,14 @@ futures = "0.3"
 pdqselect = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+thread-id = "4"
 
 [dev-dependencies]
 rand = "0.8"
+
+[[test]]
+name = "test-recorder"
+path = "tests/recorder_test.rs"

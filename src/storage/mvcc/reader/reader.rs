@@ -1,12 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
+// #[PerformanceCriticalPath]
+use crate::storage::kv::{
+    Cursor, CursorBuilder, Error as KvError, ScanMode, Snapshot as EngineSnapshot, Statistics,
+};
 use crate::storage::mvcc::{
     default_not_found_error,
     reader::{OverlappedWrite, TxnCommitRecord},
     Result,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use kvproto::errorpb::{self, EpochNotMatch, StaleCommand};
+use kvproto::kvrpcpb::Context;
+use tikv_kv::SnapshotExt;
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
 /// Read from an MVCC snapshot, i.e., a logical view of the database at a specific timestamp (the
@@ -31,6 +37,13 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         }
     }
 
+    pub fn new_with_ctx(start_ts: TimeStamp, snapshot: S, ctx: &Context) -> Self {
+        SnapshotReader {
+            reader: MvccReader::new_with_ctx(snapshot, None, ctx),
+            start_ts,
+        }
+    }
+
     #[inline(always)]
     pub fn get_txn_commit_record(&mut self, key: &Key) -> Result<TxnCommitRecord> {
         self.reader.get_txn_commit_record(key, self.start_ts)
@@ -45,7 +58,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     pub fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self
             .reader
-            .get_write(&key, ts, Some(self.start_ts))?
+            .get_write(key, ts, Some(self.start_ts))?
             .is_some())
     }
 
@@ -57,6 +70,16 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn get_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Write>> {
         self.reader.get_write(key, ts, Some(self.start_ts))
+    }
+
+    #[inline(always)]
+    pub fn get_write_with_commit_ts(
+        &mut self,
+        key: &Key,
+        ts: TimeStamp,
+    ) -> Result<Option<(Write, TimeStamp)>> {
+        self.reader
+            .get_write_with_commit_ts(key, ts, Some(self.start_ts))
     }
 
     #[inline(always)]
@@ -103,6 +126,12 @@ pub struct MvccReader<S: EngineSnapshot> {
     current_key: Option<Key>,
 
     fill_cache: bool,
+
+    // The term and the epoch version when the snapshot is created. They will be zero
+    // if the two properties are not available.
+    term: u64,
+    #[allow(dead_code)]
+    version: u64,
 }
 
 impl<S: EngineSnapshot> MvccReader<S> {
@@ -116,6 +145,23 @@ impl<S: EngineSnapshot> MvccReader<S> {
             scan_mode,
             current_key: None,
             fill_cache,
+            term: 0,
+            version: 0,
+        }
+    }
+
+    pub fn new_with_ctx(snapshot: S, scan_mode: Option<ScanMode>, ctx: &Context) -> Self {
+        Self {
+            snapshot,
+            statistics: Statistics::default(),
+            data_cursor: None,
+            lock_cursor: None,
+            write_cursor: None,
+            scan_mode,
+            current_key: None,
+            fill_cache: !ctx.get_not_fill_cache(),
+            term: ctx.get_term(),
+            version: ctx.get_region_epoch().get_version(),
         }
     }
 
@@ -149,6 +195,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+        if let Some(pessimistic_lock) = self.load_in_memory_pessimistic_lock(key)? {
+            return Ok(Some(pessimistic_lock));
+        }
+
         if self.scan_mode.is_some() {
             self.create_lock_cursor()?;
         }
@@ -167,6 +217,39 @@ impl<S: EngineSnapshot> MvccReader<S> {
         };
 
         Ok(res)
+    }
+
+    fn load_in_memory_pessimistic_lock(&self, key: &Key) -> Result<Option<Lock>> {
+        self.snapshot
+            .ext()
+            .get_txn_ext()
+            .and_then(|txn_ext| {
+                // If the term or region version has changed, do not read the lock table.
+                // Instead, just return a StaleCommand or EpochNotMatch error, so the
+                // client will not receive a false error because the lock table has been
+                // cleared.
+                let locks = txn_ext.pessimistic_locks.read();
+                if self.term != 0 && locks.term != self.term {
+                    let mut err = errorpb::Error::default();
+                    err.set_stale_command(StaleCommand::default());
+                    return Some(Err(KvError::from(err).into()));
+                }
+                if self.version != 0 && locks.version != self.version {
+                    let mut err = errorpb::Error::default();
+                    // We don't know the current regions. Just return an empty EpochNotMatch error.
+                    err.set_epoch_not_match(EpochNotMatch::default());
+                    return Some(Err(KvError::from(err).into()));
+                }
+
+                locks.get(key).map(|(lock, _)| {
+                    // For write commands that are executed in serial, it should be impossible
+                    // to read a deleted lock.
+                    // For read commands in the scheduler, it should read the lock marked deleted
+                    // because the lock is not actually deleted from the underlying storage.
+                    Ok(lock.to_lock())
+                })
+            })
+            .transpose()
     }
 
     fn get_scan_mode(&self, allow_backward: bool) -> ScanMode {
@@ -245,9 +328,24 @@ impl<S: EngineSnapshot> MvccReader<S> {
     pub fn get_write(
         &mut self,
         key: &Key,
-        mut ts: TimeStamp,
+        ts: TimeStamp,
         gc_fence_limit: Option<TimeStamp>,
     ) -> Result<Option<Write>> {
+        Ok(self
+            .get_write_with_commit_ts(key, ts, gc_fence_limit)?
+            .map(|(w, _)| w))
+    }
+
+    /// Gets the write record of the specified key's latest version before specified `ts`, and
+    /// additionally the write record's `commit_ts`, if any.
+    ///
+    /// See also [`MvccReader::get_write`].
+    pub fn get_write_with_commit_ts(
+        &mut self,
+        key: &Key,
+        mut ts: TimeStamp,
+        gc_fence_limit: Option<TimeStamp>,
+    ) -> Result<Option<(Write, TimeStamp)>> {
         loop {
             match self.seek_write(key, ts)? {
                 Some((commit_ts, write)) => {
@@ -258,7 +356,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     }
                     match write.write_type {
                         WriteType::Put => {
-                            return Ok(Some(write));
+                            return Ok(Some((write, commit_ts)));
                         }
                         WriteType::Delete => {
                             return Ok(None);
@@ -377,7 +475,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
-            Some(ref x) => cursor.seek(x, &mut self.statistics.lock)?,
+            Some(x) => cursor.seek(x, &mut self.statistics.lock)?,
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
         if !ok {
@@ -426,6 +524,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
             if keys.len() >= limit {
                 self.statistics.write.processed_keys += keys.len();
+                resource_metering::record_read_keys(keys.len() as u32);
                 return Ok((keys, start));
             }
             let key =
@@ -529,7 +628,7 @@ pub mod tests {
     use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::{IterOptions, Mutable, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
     use std::ops::Bound;
@@ -545,7 +644,7 @@ pub mod tests {
     impl RegionEngine {
         pub fn new(db: &Arc<DB>, region: &Region) -> RegionEngine {
             RegionEngine {
-                db: Arc::clone(&db),
+                db: Arc::clone(db),
                 region: region.clone(),
             }
         }
@@ -562,7 +661,7 @@ pub mod tests {
             commit_ts: impl Into<TimeStamp>,
         ) {
             let start_ts = start_ts.into();
-            let m = Mutation::Put((Key::from_raw(pk), vec![]));
+            let m = Mutation::make_put(Key::from_raw(pk), vec![]);
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -574,7 +673,7 @@ pub mod tests {
             commit_ts: impl Into<TimeStamp>,
         ) {
             let start_ts = start_ts.into();
-            let m = Mutation::Lock(Key::from_raw(pk));
+            let m = Mutation::make_lock(Key::from_raw(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -586,7 +685,7 @@ pub mod tests {
             commit_ts: impl Into<TimeStamp>,
         ) {
             let start_ts = start_ts.into();
-            let m = Mutation::Delete(Key::from_raw(pk));
+            let m = Mutation::make_delete(Key::from_raw(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -595,7 +694,7 @@ pub mod tests {
             start_ts: TimeStamp,
             primary: &[u8],
             pessimistic: bool,
-        ) -> TransactionProperties {
+        ) -> TransactionProperties<'_> {
             let kind = if pessimistic {
                 TransactionKind::Pessimistic(TimeStamp::default())
             } else {
@@ -611,6 +710,8 @@ pub mod tests {
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
                 need_old_value: false,
+                is_retry_request: false,
+                assertion_level: AssertionLevel::Off,
             }
         }
 
@@ -679,6 +780,7 @@ pub mod tests {
                 0,
                 for_update_ts,
                 false,
+                false,
                 TimeStamp::zero(),
                 true,
             )
@@ -746,6 +848,11 @@ pub mod tests {
                         let k = keys::data_key(k.as_encoded());
                         wb.delete_cf(cf, &k).unwrap();
                     }
+                    Modify::PessimisticLock(k, lock) => {
+                        let k = keys::data_key(k.as_encoded());
+                        let v = lock.into_lock().to_bytes();
+                        wb.put_cf(CF_LOCK, &k, &v).unwrap();
+                    }
                     Modify::DeleteRange(cf, k1, k2, notify_only) => {
                         if !notify_only {
                             let k1 = keys::data_key(k1.as_encoded());
@@ -778,8 +885,10 @@ pub mod tests {
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_write_buffer_size(32 * 1024 * 1024);
         if with_properties {
-            let f = Box::new(MvccPropertiesCollectorFactory::default());
-            cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
+            cf_opts.add_table_properties_collector_factory(
+                "tikv.test-collector",
+                MvccPropertiesCollectorFactory::default(),
+            );
         }
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
@@ -877,7 +986,7 @@ pub mod tests {
         let path = dir.path().to_str().unwrap();
         let region = make_region(1, vec![0], vec![]);
 
-        let db = open_db(&path, true);
+        let db = open_db(path, true);
         let mut engine = RegionEngine::new(&db, &region);
 
         let key1 = &[1];
@@ -925,25 +1034,25 @@ pub mod tests {
         let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 10);
 
         engine.rollback(k, 5);
         engine.rollback(k, 20);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 25);
         engine.commit(k, 25, 30);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
         // Overlapped rollback on the commit record at 40.
         engine.rollback(k, 40);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 45, 45);
         engine.prewrite_pessimistic_lock(m, k, 45);
         engine.commit(k, 45, 50);
@@ -1048,7 +1157,7 @@ pub mod tests {
 
         let (k, v) = (b"k", b"v");
         let key = Key::from_raw(k);
-        let m = Mutation::Put((key.clone(), v.to_vec()));
+        let m = Mutation::make_put(key.clone(), v.to_vec());
 
         // txn: start_ts = 2, commit_ts = 3
         engine.acquire_pessimistic_lock(key.clone(), k, 2, 2);
@@ -1089,7 +1198,7 @@ pub mod tests {
         let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m.clone(), k, 1);
         engine.commit(k, 1, 5);
 
@@ -1111,7 +1220,7 @@ pub mod tests {
 
         // Timestamp overlap with the previous transaction.
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 10, 18);
-        engine.prewrite_pessimistic_lock(Mutation::Lock(Key::from_raw(k)), k, 10);
+        engine.prewrite_pessimistic_lock(Mutation::make_lock(Key::from_raw(k)), k, 10);
         engine.commit(k, 10, 20);
 
         engine.prewrite(m, k, 23);
@@ -1187,7 +1296,7 @@ pub mod tests {
 
         // Test seek_write should not see the next key.
         let (k2, v2) = (b"k2", b"v2");
-        let m2 = Mutation::Put((Key::from_raw(k2), v2.to_vec()));
+        let m2 = Mutation::make_put(Key::from_raw(k2), v2.to_vec());
         engine.prewrite(m2, k2, 1);
         engine.commit(k2, 1, 2);
 
@@ -1231,7 +1340,7 @@ pub mod tests {
         let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 2);
 
@@ -1241,26 +1350,26 @@ pub mod tests {
 
         engine.delete(k, 8, 9);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 12);
         engine.commit(k, 12, 14);
 
-        let m = Mutation::Lock(Key::from_raw(k));
+        let m = Mutation::make_lock(Key::from_raw(k));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 13, 15);
         engine.prewrite_pessimistic_lock(m, k, 13);
         engine.commit(k, 13, 15);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 18, 18);
         engine.prewrite_pessimistic_lock(m, k, 18);
         engine.commit(k, 18, 20);
 
-        let m = Mutation::Lock(Key::from_raw(k));
+        let m = Mutation::make_lock(Key::from_raw(k));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 17, 21);
         engine.prewrite_pessimistic_lock(m, k, 17);
         engine.commit(k, 17, 21);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 24);
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
@@ -1325,18 +1434,18 @@ pub mod tests {
 
         // Put some locks to the db.
         engine.prewrite(
-            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             b"k1",
             5,
         );
         engine.prewrite(
-            Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
+            Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             b"k1",
             10,
         );
-        engine.prewrite(Mutation::Delete(Key::from_raw(b"k3")), b"k1", 10);
-        engine.prewrite(Mutation::Lock(Key::from_raw(b"k3\x00")), b"k1", 10);
-        engine.prewrite(Mutation::Delete(Key::from_raw(b"k4")), b"k1", 12);
+        engine.prewrite(Mutation::make_delete(Key::from_raw(b"k3")), b"k1", 10);
+        engine.prewrite(Mutation::make_lock(Key::from_raw(b"k3\x00")), b"k1", 10);
+        engine.prewrite(Mutation::make_delete(Key::from_raw(b"k4")), b"k1", 12);
         engine.acquire_pessimistic_lock(Key::from_raw(b"k5"), b"k1", 10, 12);
         engine.acquire_pessimistic_lock(Key::from_raw(b"k6"), b"k1", 12, 12);
 

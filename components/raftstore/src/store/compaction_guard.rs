@@ -7,7 +7,7 @@ use engine_traits::{
     CfName, SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
     SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
-use keys::data_end_key;
+use keys::{data_end_key, origin_key};
 use lazy_static::lazy_static;
 use tikv_util::warn;
 
@@ -58,7 +58,7 @@ impl<P: RegionInfoProvider + Clone + 'static> SstPartitionerFactory
         &COMPACTION_GUARD
     }
 
-    fn create_partitioner(&self, context: &SstPartitionerContext) -> Option<Self::Partitioner> {
+    fn create_partitioner(&self, context: &SstPartitionerContext<'_>) -> Option<Self::Partitioner> {
         // create_partitioner can be called in RocksDB while holding db_mutex. It can block
         // other operations on RocksDB. To avoid such caces, we defer region info query to
         // the first time should_partition is called.
@@ -91,30 +91,54 @@ pub struct CompactionGuardGenerator<P: RegionInfoProvider> {
 
 impl<P: RegionInfoProvider> CompactionGuardGenerator<P> {
     fn initialize(&mut self) {
-        self.use_guard = match self
-            .provider
-            .get_regions_in_range(&self.smallest_key, &self.largest_key)
-        {
-            Ok(regions) => {
-                // The regions returned from region_info_provider should have been sorted,
-                // but we sort it again just in case.
-                COMPACTION_GUARD_ACTION_COUNTER.get(self.cf_name).init.inc();
-                let mut boundaries = regions
-                    .iter()
-                    .map(|region| data_end_key(&region.end_key))
-                    .collect::<Vec<Vec<u8>>>();
-                boundaries.sort();
-                self.boundaries = boundaries;
-                true
+        // The range may include non-data keys which are not included in any region,
+        // such as `STORE_IDENT_KEY`, `REGION_RAFT_KEY` and `REGION_META_KEY`,
+        // so check them and get covered regions only for the range of data keys.
+        let res = match (
+            self.smallest_key.starts_with(keys::DATA_PREFIX_KEY),
+            self.largest_key.starts_with(keys::DATA_PREFIX_KEY),
+        ) {
+            (true, true) => Some((
+                origin_key(&self.smallest_key),
+                origin_key(&self.largest_key),
+            )),
+            (true, false) => Some((origin_key(&self.smallest_key), "".as_bytes())),
+            (false, true) => Some(("".as_bytes(), origin_key(&self.largest_key))),
+            (false, false) => {
+                if self.smallest_key.as_slice() < keys::DATA_MIN_KEY
+                    && self.largest_key.as_slice() >= keys::DATA_MAX_KEY
+                {
+                    Some(("".as_bytes(), "".as_bytes()))
+                } else {
+                    None
+                }
             }
-            Err(e) => {
-                COMPACTION_GUARD_ACTION_COUNTER
-                    .get(self.cf_name)
-                    .init_failure
-                    .inc();
-                warn!("failed to initialize compaction guard generator"; "err" => ?e);
-                false
+        };
+        self.use_guard = if let Some((start, end)) = res {
+            match self.provider.get_regions_in_range(start, end) {
+                Ok(regions) => {
+                    // The regions returned from region_info_provider should have been sorted,
+                    // but we sort it again just in case.
+                    COMPACTION_GUARD_ACTION_COUNTER.get(self.cf_name).init.inc();
+                    let mut boundaries = regions
+                        .iter()
+                        .map(|region| data_end_key(&region.end_key))
+                        .collect::<Vec<Vec<u8>>>();
+                    boundaries.sort();
+                    self.boundaries = boundaries;
+                    true
+                }
+                Err(e) => {
+                    COMPACTION_GUARD_ACTION_COUNTER
+                        .get(self.cf_name)
+                        .init_failure
+                        .inc();
+                    warn!("failed to initialize compaction guard generator"; "err" => ?e);
+                    false
+                }
             }
+        } else {
+            false
         };
         self.pos = 0;
         self.initialized = true;
@@ -122,7 +146,7 @@ impl<P: RegionInfoProvider> CompactionGuardGenerator<P> {
 }
 
 impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
-    fn should_partition(&mut self, req: &SstPartitionerRequest) -> SstPartitionerResult {
+    fn should_partition(&mut self, req: &SstPartitionerRequest<'_>) -> SstPartitionerResult {
         if !self.initialized {
             self.initialize();
         }
@@ -185,6 +209,51 @@ mod tests {
     use kvproto::metapb::Region;
     use std::{str, sync::Arc};
     use tempfile::TempDir;
+
+    #[test]
+    fn test_compaction_guard_non_data() {
+        let mut guard = CompactionGuardGenerator {
+            cf_name: CfNames::default,
+            smallest_key: vec![],
+            largest_key: vec![],
+            min_output_file_size: 8 << 20, // 8MB
+            provider: MockRegionInfoProvider::new(vec![]),
+            initialized: false,
+            use_guard: false,
+            boundaries: vec![],
+            pos: 0,
+        };
+
+        guard.smallest_key = keys::LOCAL_MIN_KEY.to_vec();
+        guard.largest_key = keys::LOCAL_MAX_KEY.to_vec();
+        guard.initialize();
+        assert_eq!(guard.use_guard, false);
+
+        guard.smallest_key = keys::LOCAL_MIN_KEY.to_vec();
+        guard.largest_key = keys::DATA_MIN_KEY.to_vec();
+        guard.initialize();
+        assert_eq!(guard.use_guard, true);
+
+        guard.smallest_key = keys::LOCAL_MIN_KEY.to_vec();
+        guard.largest_key = keys::DATA_MAX_KEY.to_vec();
+        guard.initialize();
+        assert_eq!(guard.use_guard, true);
+
+        guard.smallest_key = keys::DATA_MIN_KEY.to_vec();
+        guard.largest_key = keys::DATA_MAX_KEY.to_vec();
+        guard.initialize();
+        assert_eq!(guard.use_guard, true);
+
+        guard.smallest_key = keys::DATA_MIN_KEY.to_vec();
+        guard.largest_key = vec![keys::DATA_PREFIX + 10];
+        guard.initialize();
+        assert_eq!(guard.use_guard, true);
+
+        guard.smallest_key = keys::DATA_MAX_KEY.to_vec();
+        guard.largest_key = vec![keys::DATA_PREFIX + 10];
+        guard.initialize();
+        assert_eq!(guard.use_guard, false);
+    }
 
     #[test]
     fn test_compaction_guard_should_partition() {

@@ -1,5 +1,5 @@
 use crate::router::RaftStoreRouter;
-use crate::store::{Callback, RaftRouter, ReadResponse};
+use crate::store::{Callback, RaftCmdExtraOpts, RaftRouter, ReadResponse};
 use engine_rocks::RocksEngine;
 use engine_traits::RaftEngine;
 use futures::executor::block_on;
@@ -120,7 +120,7 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
             if let Err(_) = self.routers[region_id as usize % self.routers.len()]
                 .lock()
                 .unwrap()
-                .send_command(cmd, Callback::Read(cb))
+                .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default())
             {
                 router_cbs.push_back((None, region_id));
             } else {
@@ -192,7 +192,7 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
             if let Err(_) = self.routers[region_id as usize % self.routers.len()]
                 .lock()
                 .unwrap()
-                .send_command(cmd, Callback::Read(cb))
+                .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default())
             {
                 return None;
             } else {

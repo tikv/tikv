@@ -20,13 +20,13 @@ impl RocksEngineIterator {
 }
 
 impl engine_traits::Iterator for RocksEngineIterator {
-    fn seek(&mut self, key: engine_traits::SeekKey) -> Result<bool> {
-        let k: RocksSeekKey = key.into();
+    fn seek(&mut self, key: engine_traits::SeekKey<'_>) -> Result<bool> {
+        let k: RocksSeekKey<'_> = key.into();
         self.0.seek(k.into_raw()).map_err(Error::Engine)
     }
 
-    fn seek_for_prev(&mut self, key: engine_traits::SeekKey) -> Result<bool> {
-        let k: RocksSeekKey = key.into();
+    fn seek_for_prev(&mut self, key: engine_traits::SeekKey<'_>) -> Result<bool> {
+        let k: RocksSeekKey<'_> = key.into();
         self.0.seek_for_prev(k.into_raw()).map_err(Error::Engine)
     }
 

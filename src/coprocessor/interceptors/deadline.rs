@@ -28,7 +28,7 @@ where
 {
     type Output = Result<F::Output, DeadlineError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.deadline.check()?;
         let this = self.project();
         this.fut.poll(cx).map(Ok)

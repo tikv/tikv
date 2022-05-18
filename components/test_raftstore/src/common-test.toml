@@ -65,10 +65,12 @@ raft-store-max-leader-lease = "240ms"
 allow-remove-leader = true
 merge-check-tick-interval = "100ms"
 pd-heartbeat-tick-interval = "20ms"
-raft-reject-transfer-leader-duration = "0s"
 dev-assert = true
 hibernate-regions = true
+store-io-pool-size = 0
 
+apply-pool-size = 1
+store-pool-size = 1
 [coprocessor]
 
 [rocksdb]

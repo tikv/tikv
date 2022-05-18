@@ -1,13 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use test_raftstore::*;
 
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 
 #[test]
+#[ignore]
 fn test_pending_peers() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
@@ -21,7 +22,9 @@ fn test_pending_peers() {
     let region_id = cluster.run_conf_change();
     pd_client.must_add_peer(region_id, new_peer(2, 2));
 
+    // To ensure peer 2 is not pending.
     cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
     fail::cfg(region_worker_fp, "sleep(2000)").unwrap();
     pd_client.must_add_peer(region_id, new_peer(3, 3));
@@ -82,7 +85,7 @@ fn test_pending_snapshot() {
     let start = Instant::now();
     loop {
         if cluster.pd_client.get_pending_peers().get(&1).is_none()
-            || start.elapsed() > election_timeout * 10
+            || start.saturating_elapsed() > election_timeout * 10
         {
             break;
         }

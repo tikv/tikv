@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::fmt::Display;
-use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
 // use crate::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
 use crate::{Collation, FieldTypeAccessor};
@@ -532,12 +531,12 @@ impl<'a> ToInt for JsonRef<'a> {
 
 #[inline]
 pub fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&'a str> {
-    let valid = match str::from_utf8(bytes) {
+    let valid = match std::str::from_utf8(bytes) {
         Ok(s) => s,
         Err(err) => {
             ctx.handle_truncate(true)?;
             let (valid, _) = bytes.split_at(err.valid_up_to());
-            unsafe { str::from_utf8_unchecked(valid) }
+            unsafe { std::str::from_utf8_unchecked(valid) }
         }
     };
     Ok(valid)
@@ -676,7 +675,7 @@ pub fn produce_float_with_specified_tp(
     let ul = crate::UNSPECIFIED_LENGTH;
 
     let res = if flen != ul && decimal != ul {
-        assert!(flen < std::u8::MAX as isize && decimal < std::u8::MAX as isize);
+        assert!(flen < u8::MAX as isize && decimal < u8::MAX as isize);
         let r = truncate_f64(num, flen as u8, decimal as u8);
         r.into_result_with_overflow_err(ctx, Error::overflow(num, "DOUBLE"))?
     } else {
@@ -806,9 +805,9 @@ impl ConvertTo<f64> for &[u8] {
         if val.is_infinite() {
             ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
             if val.is_sign_negative() {
-                return Ok(std::f64::MIN);
+                return Ok(f64::MIN);
             } else {
-                return Ok(std::f64::MAX);
+                return Ok(f64::MAX);
             }
         }
         Ok(val)
@@ -979,7 +978,7 @@ fn exp_float_str_to_int_str<'a>(
     let int_cnt: i64;
     match dot_idx {
         None => {
-            digits.extend_from_slice(&valid_float[..e_idx].as_bytes());
+            digits.extend_from_slice(valid_float[..e_idx].as_bytes());
             // if digits.len() > i64::MAX,
             // then the input str has at least 9223372036854775808 chars,
             // which make the str >= 8388608.0 TB,
@@ -987,9 +986,9 @@ fn exp_float_str_to_int_str<'a>(
             int_cnt = digits.len() as i64;
         }
         Some(dot_idx) => {
-            digits.extend_from_slice(&valid_float[..dot_idx].as_bytes());
+            digits.extend_from_slice(valid_float[..dot_idx].as_bytes());
             int_cnt = digits.len() as i64;
-            digits.extend_from_slice(&valid_float[(dot_idx + 1)..e_idx].as_bytes());
+            digits.extend_from_slice(valid_float[(dot_idx + 1)..e_idx].as_bytes());
         }
     }
     // make `digits` immutable
@@ -1104,7 +1103,6 @@ mod tests {
 
     use std::fmt::Debug;
     use std::sync::Arc;
-    use std::{f64, i64, isize, u64};
 
     use crate::codec::error::{
         ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,

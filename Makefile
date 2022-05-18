@@ -34,6 +34,32 @@
 SHELL := bash
 ENABLE_FEATURES ?=
 
+# Frame pointer is enabled by default.
+#
+# If you want to disable frame-pointer, please manually set the environment
+# variable `PROXY_FRAME_POINTER=0 make` (this will cause CPU Profiling to get
+# only the top function and not the full call stack).
+ifndef PROXY_FRAME_POINTER
+export PROXY_FRAME_POINTER=1
+endif
+
+# The Rust standard library is recompiled by default. (The purpose is to enable
+# frame pointers in std)
+#
+# If you want to avoid recompiling the Rust standard library, please manually
+# set the environment variable `PROXY_BUILD_STD=0 make` (this will lose CPU
+# Profiling samples related to Rust std functions).
+ifndef PROXY_BUILD_STD
+export PROXY_BUILD_STD=1
+endif
+
+ifeq ($(PROXY_FRAME_POINTER),1)
+# Enable frame pointers for stable CPU Profiling.
+export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
+export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+endif
+
 # Pick an allocator
 ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
@@ -59,6 +85,9 @@ endif
 ifeq ($(shell uname -p),arm)
 ROCKSDB_SYS_SSE=0
 endif
+ifeq ($(shell uname -p),arm64)
+ROCKSDB_SYS_SSE=0
+endif
 
 # Build portable binary by default unless disable explicitly
 ifneq ($(ROCKSDB_SYS_PORTABLE),0)
@@ -75,17 +104,6 @@ ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
 
-ifeq ($(BCC_IOSNOOP),1)
-ENABLE_FEATURES += bcc-iosnoop
-endif
-
-# Use Prost instead of rust-protobuf to encode and decode protocol buffers.
-ifeq ($(PROST),1)
-ENABLE_FEATURES += prost-codec
-else
-ENABLE_FEATURES += protobuf-codec
-endif
-
 # Set the storage engines used for testing
 ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
 ENABLE_FEATURES += test-engines-rocksdb
@@ -96,6 +114,7 @@ endif
 ifneq ($(NO_CLOUD),1)
 ENABLE_FEATURES += cloud-aws
 ENABLE_FEATURES += cloud-gcp
+ENABLE_FEATURES += cloud-azure
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -108,6 +127,7 @@ BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export PROXY_BUILD_TIME := $(shell date -u '+%Y-%m-%d %H:%M:%S')
 export PROXY_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export PROXY_BUILD_RUSTC_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }')
 export PROXY_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export PROXY_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
@@ -287,6 +307,7 @@ pre-clippy: unset-override
 
 clippy: pre-clippy
 	@./scripts/check-redact-log
+	@./scripts/check-docker-build
 	@./scripts/clippy-all
 
 pre-audit:
@@ -322,7 +343,7 @@ ctl:
 # Actually use make to track dependencies! This saves half a second.
 error_code_files := $(shell find $(PROJECT_DIR)/components/error_code/ -type f )
 etc/error_code.toml: $(error_code_files)
-	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
+	cargo run --manifest-path components/error_code/Cargo.toml
 
 error-code: etc/error_code.toml
 

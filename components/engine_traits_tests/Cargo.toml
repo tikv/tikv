@@ -9,16 +9,7 @@ publish = false
 doctest = false
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb"]
-
-protobuf-codec = [
-  "engine_test/protobuf-codec",
-  "engine_traits/protobuf-codec",
-]
-prost-codec = [
-  "engine_test/prost-codec",
-  "engine_traits/prost-codec",
-]
+default = ["test-engines-rocksdb"]
 
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",

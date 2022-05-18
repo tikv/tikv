@@ -34,7 +34,7 @@ fn proxy_version_info() -> String {
 }
 
 fn log_proxy_info() {
-    info!("Welcome To RaftStore Proxy");
+    info!("Welcome To RaftStore Proxy ZZZZZZZZZ");
     for line in proxy_version_info().lines() {
         info!("{}", line);
     }

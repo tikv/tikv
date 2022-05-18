@@ -15,54 +15,16 @@ sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 bcc-iosnoop = ["tikv/bcc-iosnoop"]
-cloud-aws = [ "encryption_export/cloud-aws" ]
-cloud-gcp = [ "encryption_export/cloud-gcp" ]
-protobuf-codec = [
-  "protobuf/bytes",
-  "concurrency_manager/protobuf-codec",
-  "encryption_export/protobuf-codec",
-  "engine_rocks/protobuf-codec",
-  "engine_traits/protobuf-codec",
-  "error_code/protobuf-codec",
-  "file_system/protobuf-codec",
-  "grpcio/protobuf-codec",
-  "keys/protobuf-codec",
-  "kvproto/protobuf-codec",
-  "pd_client/protobuf-codec",
-  "raft/protobuf-codec",
-  "raftstore/protobuf-codec",
-  "raft_log_engine/protobuf-codec",
-  "security/protobuf-codec",
-  "tikv/protobuf-codec",
-  "tikv_util/protobuf-codec",
-  "txn_types/protobuf-codec",
-]
-prost-codec = [
-  "concurrency_manager/prost-codec",
-  "encryption_export/prost-codec",
-  "engine_rocks/prost-codec",
-  "engine_traits/prost-codec",
-  "error_code/prost-codec",
-  "file_system/prost-codec",
-  "grpcio/prost-codec",
-  "keys/prost-codec",
-  "kvproto/prost-codec",
-  "pd_client/prost-codec",
-  "raft/prost-codec",
-  "raftstore/prost-codec",
-  "raft_log_engine/prost-codec",
-  "security/prost-codec",
-  "tikv/prost-codec",
-  "tikv_util/prost-codec",
-  "txn_types/prost-codec",
-]
+
+cloud-aws = ["encryption_export/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure"]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]
 test-engines-panic = [
   "tikv/test-engines-panic",
 ]
-
 nortcheck = ["engine_rocks/nortcheck"]
 
 [dependencies]
@@ -81,19 +43,18 @@ file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
-grpcio = { version = "0.9", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../keys", default-features = false }
-kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
-nix = "0.11"
+nix = "0.23"
 pd_client = { path = "../pd_client", default-features = false }
-prometheus = { version = "0.12", features = ["nightly"] }
-promptly = "0.3.0"
-protobuf = "2.8"
-raft = { version = "0.6.0-alpha", default-features = false }
+prometheus = { version = "0.13", features = ["nightly"] }
+protobuf = { version = "2.8", features = ["bytes"] }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../raft_log_engine", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
 rand = "0.8"
@@ -106,6 +67,5 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 toml = "0.5"
 txn_types = { path = "../txn_types", default-features = false }
-vlog = "0.1.4"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "../resource_metering" }

@@ -5,7 +5,7 @@ use std::sync::atomic::*;
 use futures::channel::mpsc;
 use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
-use kvproto::backup::*;
+use kvproto::brpb::*;
 use tikv_util::worker::*;
 use tikv_util::{error, info};
 
@@ -27,7 +27,7 @@ impl Service {
 impl Backup for Service {
     fn backup(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: BackupRequest,
         mut sink: ServerStreamingSink<BackupResponse>,
     ) {

@@ -25,8 +25,6 @@
 //! struct MyPlugin;
 //!
 //! impl CoprocessorPlugin for MyPlugin {
-//!     fn name(&self) -> &'static str { "my-plugin" }
-//!
 //!     fn on_raw_coprocessor_request(
 //!         &self,
 //!         ranges: Vec<Range<Key>>,

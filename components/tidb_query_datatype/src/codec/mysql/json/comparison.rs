@@ -202,8 +202,8 @@ mod tests {
             ),
             (Json::from_i64(2), Json::from_u64(1), Ordering::Greater),
             (
-                Json::from_i64(std::i64::MAX),
-                Json::from_u64(std::i64::MAX as u64),
+                Json::from_i64(i64::MAX),
+                Json::from_u64(i64::MAX as u64),
                 Ordering::Equal,
             ),
             (
@@ -218,8 +218,8 @@ mod tests {
             ),
             (Json::from_u64(1), Json::from_i64(2), Ordering::Less),
             (
-                Json::from_u64(std::i64::MAX as u64),
-                Json::from_i64(std::i64::MAX),
+                Json::from_u64(i64::MAX as u64),
+                Json::from_i64(i64::MAX),
                 Ordering::Equal,
             ),
             (Json::from_f64(9.0), Json::from_i64(9), Ordering::Equal),

@@ -7,5 +7,6 @@ define_error_codes!(
     BAD_PADDING => ("BadPadding", "", ""),
     KEY_LENGTH => ("KeyLength", "", ""),
     KEY_NOT_FOUND => ("KeyNotFound", "", ""),
-    VALUE_LENGTH => ("ValueLength", "", "")
+    VALUE_LENGTH => ("ValueLength", "", ""),
+    VALUE_META => ("ValueMeta", "", "")
 );

@@ -4,9 +4,9 @@
 extern crate lazy_static;
 #[macro_use]
 extern crate tikv_util;
-extern crate pd_client;
 
 mod cluster;
+mod config;
 mod node;
 mod pd;
 mod router;
@@ -15,6 +15,7 @@ mod transport_simulate;
 mod util;
 
 pub use crate::cluster::*;
+pub use crate::config::Config;
 pub use crate::node::*;
 pub use crate::pd::*;
 pub use crate::router::*;

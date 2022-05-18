@@ -8,8 +8,7 @@ use std::sync::{Arc, Mutex};
 use txn_types::Key;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
-use engine_traits::{CfName, CF_LOCK};
+use engine_traits::{CfName, KvEngine, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::CmdType;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
@@ -123,7 +122,7 @@ impl LockObserver {
         Self { state, sender }
     }
 
-    pub fn register(self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
+    pub fn register(self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
         coprocessor_host
             .registry
             .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(self.clone()));
@@ -392,7 +391,7 @@ pub struct AppliedLockCollector {
 
 impl AppliedLockCollector {
     pub fn new(
-        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
+        coprocessor_host: &mut CoprocessorHost<impl KvEngine>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<Self> {
         let worker = Mutex::new(WorkerBuilder::new("lock-collector").create());
@@ -483,6 +482,7 @@ impl Drop for AppliedLockCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_test::kv::KvTestEngine;
     use engine_traits::CF_DEFAULT;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::Op;
@@ -538,7 +538,7 @@ mod tests {
         Cmd::new(0, req, RaftCmdResponse::default())
     }
 
-    fn new_test_collector() -> (AppliedLockCollector, CoprocessorHost<RocksEngine>) {
+    fn new_test_collector() -> (AppliedLockCollector, CoprocessorHost<KvTestEngine>) {
         let mut coprocessor_host = CoprocessorHost::default();
         let collector =
             AppliedLockCollector::new(&mut coprocessor_host, ConcurrencyManager::new(1.into()))

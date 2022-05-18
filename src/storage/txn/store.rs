@@ -9,7 +9,7 @@ use crate::storage::mvcc::{
     EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState, PointGetter,
     PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
 };
-use txn_types::{Key, KvPair, TimeStamp, TsSet, Value, WriteRef};
+use txn_types::{Key, KvPair, OldValue, TimeStamp, TsSet, Value, WriteRef};
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -31,7 +31,7 @@ pub trait Store: Send {
     fn batch_get(
         &self,
         keys: &[Key],
-        statistics: &mut Statistics,
+        statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<Value>>>>;
 
     /// Retrieve a scanner over the bounds.
@@ -70,9 +70,7 @@ pub trait Scanner: Send {
                 }
                 Ok(None) => break,
                 Err(
-                    e
-                    @
-                    Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
+                    e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
                         ..
                     }))),
                 ) => {
@@ -135,14 +133,27 @@ pub enum TxnEntry {
     Prewrite {
         default: KvPair,
         lock: KvPair,
-        old_value: Option<Value>,
+        old_value: OldValue,
     },
     Commit {
         default: KvPair,
         write: KvPair,
-        old_value: Option<Value>,
+        old_value: OldValue,
     },
     // TOOD: Add more entry if needed.
+}
+
+impl TxnEntry {
+    pub fn old_value(&mut self) -> &mut OldValue {
+        match self {
+            TxnEntry::Prewrite {
+                ref mut old_value, ..
+            } => old_value,
+            TxnEntry::Commit {
+                ref mut old_value, ..
+            } => old_value,
+        }
+    }
 }
 
 impl TxnEntry {
@@ -162,7 +173,7 @@ impl TxnEntry {
                     let v = WriteRef::parse(&write.1)
                         .map_err(MvccError::from)?
                         .to_owned();
-                    let v = v.short_value.unwrap_or_else(Vec::default);
+                    let v = v.short_value.unwrap_or_default();
                     Ok((k, v))
                 }
             }
@@ -193,7 +204,7 @@ impl TxnEntry {
                 size += default.1.len();
                 size += write.0.len();
                 size += write.1.len();
-                size += old_value.as_ref().map_or(0, |v| v.len())
+                size += old_value.value_size();
             }
             TxnEntry::Prewrite {
                 default,
@@ -204,7 +215,7 @@ impl TxnEntry {
                 size += default.1.len();
                 size += lock.0.len();
                 size += lock.1.len();
-                size += old_value.as_ref().map_or(0, |v| v.len())
+                size += old_value.value_size();
             }
         }
         size
@@ -250,6 +261,8 @@ pub struct SnapshotStore<S: Snapshot> {
     isolation_level: IsolationLevel,
     fill_cache: bool,
     bypass_locks: TsSet,
+    access_locks: TsSet,
+
     check_has_newer_ts_data: bool,
 
     point_getter_cache: Option<PointGetter<S>>,
@@ -264,6 +277,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .isolation_level(self.isolation_level)
             .multi(false)
             .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
             .build()?;
         let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
@@ -278,6 +292,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .isolation_level(self.isolation_level)
                     .multi(true)
                     .bypass_locks(self.bypass_locks.clone())
+                    .access_locks(self.access_locks.clone())
                     .check_has_newer_ts_data(self.check_has_newer_ts_data)
                     .build()?,
             );
@@ -309,39 +324,27 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     fn batch_get(
         &self,
         keys: &[Key],
-        statistics: &mut Statistics,
+        statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<Value>>>> {
-        use std::mem::{self, MaybeUninit};
-        type Element = Result<Option<Value>>;
-
         if keys.len() == 1 {
-            return Ok(vec![self.get(&keys[0], statistics)]);
+            statistics.push(Statistics::default());
+            return Ok(vec![self.get(&keys[0], statistics.last_mut().unwrap())]);
         }
-
-        let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
-        order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
 
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .multi(true)
             .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
             .build()?;
 
-        let mut values: Vec<MaybeUninit<Element>> = Vec::with_capacity(keys.len());
-        for _ in 0..keys.len() {
-            values.push(MaybeUninit::uninit());
-        }
-        for (original_order, key) in order_and_keys {
+        let mut values = Vec::with_capacity(keys.len());
+        for key in keys {
             let value = point_getter.get(key).map_err(Error::from);
-            unsafe {
-                values[original_order].as_mut_ptr().write(value);
-            }
+            values.push(value);
+            statistics.push(point_getter.take_statistics());
         }
-
-        statistics.add(&point_getter.take_statistics());
-
-        let values = unsafe { mem::transmute::<Vec<MaybeUninit<Element>>, Vec<Element>>(values) };
         Ok(values)
     }
 
@@ -356,12 +359,14 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
-        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts, desc)
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+            .desc(desc)
             .range(lower_bound, upper_bound)
             .omit_value(key_only)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
+            .access_locks(self.access_locks.clone())
             .check_has_newer_ts_data(check_has_newer_ts_data)
             .build()?;
 
@@ -387,16 +392,15 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
             // Scan ts in (after_ts, start_ts].
             (Some(after_ts.next()), Some(self.start_ts))
         };
-        let scanner =
-            ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false /* desc */)
-                .range(lower_bound, upper_bound)
-                .omit_value(false)
-                .fill_cache(self.fill_cache)
-                .isolation_level(self.isolation_level)
-                .bypass_locks(self.bypass_locks.clone())
-                .hint_min_ts(min_ts)
-                .hint_max_ts(max_ts)
-                .build_entry_scanner(after_ts, output_delete)?;
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+            .range(lower_bound, upper_bound)
+            .omit_value(false)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .bypass_locks(self.bypass_locks.clone())
+            .hint_min_ts(min_ts)
+            .hint_max_ts(max_ts)
+            .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
     }
@@ -409,6 +413,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         isolation_level: IsolationLevel,
         fill_cache: bool,
         bypass_locks: TsSet,
+        access_locks: TsSet,
         check_has_newer_ts_data: bool,
     ) -> Self {
         SnapshotStore {
@@ -417,6 +422,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             isolation_level,
             fill_cache,
             bypass_locks,
+            access_locks,
             check_has_newer_ts_data,
 
             point_getter_cache: None,
@@ -445,7 +451,7 @@ impl<S: Snapshot> SnapshotStore<S> {
                     REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::from(ErrorInner::InvalidReqRange {
                         start: Some(l.as_encoded().clone()),
-                        end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
+                        end: upper_bound.as_ref().map(|b| b.as_encoded().clone()),
                         lower_bound: Some(b.to_vec()),
                         upper_bound: self.snapshot.upper_bound().map(|b| b.to_vec()),
                     }));
@@ -457,7 +463,7 @@ impl<S: Snapshot> SnapshotStore<S> {
                 if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
                     REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::from(ErrorInner::InvalidReqRange {
-                        start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
+                        start: lower_bound.as_ref().map(|b| b.as_encoded().clone()),
                         end: Some(u.as_encoded().clone()),
                         lower_bound: self.snapshot.lower_bound().map(|b| b.to_vec()),
                         upper_bound: Some(b.to_vec()),
@@ -532,9 +538,15 @@ impl Store for FixtureStore {
     fn batch_get(
         &self,
         keys: &[Key],
-        statistics: &mut Statistics,
+        statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<Vec<u8>>>>> {
-        Ok(keys.iter().map(|key| self.get(key, statistics)).collect())
+        Ok(keys
+            .iter()
+            .map(|key| {
+                statistics.push(Statistics::default());
+                self.get(key, statistics.last_mut().unwrap())
+            })
+            .collect())
     }
 
     #[inline]
@@ -635,8 +647,9 @@ mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use std::sync::Arc;
+    use tikv_kv::DummySnapshotExt;
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: TimeStamp = TimeStamp::new(10);
@@ -692,8 +705,10 @@ mod tests {
                             lock_ttl: 0,
                             min_commit_ts: TimeStamp::default(),
                             need_old_value: false,
+                            is_retry_request: false,
+                            assertion_level: AssertionLevel::Off,
                         },
-                        Mutation::Put((Key::from_raw(key), key.to_vec())),
+                        Mutation::make_put(Key::from_raw(key), key.to_vec()),
                         &None,
                         false,
                     )
@@ -733,6 +748,7 @@ mod tests {
                 COMMIT_TS.next(),
                 IsolationLevel::Si,
                 true,
+                Default::default(),
                 Default::default(),
                 false,
             )
@@ -790,6 +806,7 @@ mod tests {
 
     impl Snapshot for MockRangeSnapshot {
         type Iter = MockRangeSnapshotIter;
+        type Ext<'a> = DummySnapshotExt;
 
         fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
@@ -811,6 +828,9 @@ mod tests {
         }
         fn upper_bound(&self) -> Option<&[u8]> {
             Some(self.end.as_slice())
+        }
+        fn ext(&self) -> DummySnapshotExt {
+            DummySnapshotExt
         }
     }
 
@@ -834,7 +854,7 @@ mod tests {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut statistics = Statistics::default();
+        let mut statistics = Vec::default();
         let mut keys_list = Vec::new();
         for key in &store.keys {
             keys_list.push(Key::from_raw(key.as_bytes()));
@@ -948,6 +968,7 @@ mod tests {
             IsolationLevel::Si,
             true,
             Default::default(),
+            Default::default(),
             false,
         );
         let bound_a = Key::from_encoded(b"a".to_vec());
@@ -1001,6 +1022,7 @@ mod tests {
             TimeStamp::zero(),
             IsolationLevel::Si,
             true,
+            Default::default(),
             Default::default(),
             false,
         );
@@ -1323,7 +1345,7 @@ mod tests {
             TxnEntry::Prewrite {
                 default: (vec![0; 10], vec![0; 10]),
                 lock: (vec![0; 10], vec![0; 10]),
-                old_value: None,
+                old_value: OldValue::None,
             }
             .size(),
             40
@@ -1333,7 +1355,7 @@ mod tests {
             TxnEntry::Prewrite {
                 default: (vec![0; 10], vec![0; 10]),
                 lock: (vec![0; 10], vec![0; 10]),
-                old_value: Some(vec![0; 10]),
+                old_value: OldValue::value(vec![0; 10]),
             }
             .size(),
             50
@@ -1343,7 +1365,7 @@ mod tests {
             TxnEntry::Commit {
                 default: (vec![0; 10], vec![0; 10]),
                 write: (vec![0; 10], vec![0; 10]),
-                old_value: None,
+                old_value: OldValue::None,
             }
             .size(),
             40
@@ -1353,7 +1375,7 @@ mod tests {
             TxnEntry::Commit {
                 default: (vec![0; 10], vec![0; 10]),
                 write: (vec![0; 10], vec![0; 10]),
-                old_value: Some(vec![0; 10]),
+                old_value: OldValue::value(vec![0; 10]),
             }
             .size(),
             50
@@ -1410,7 +1432,7 @@ mod benches {
         let store = FixtureStore::new(data);
         b.iter(|| {
             let store = test::black_box(&store);
-            let mut statistics = Statistics::default();
+            let mut statistics = Vec::default();
             let value = store.batch_get(test::black_box(&batch_get_keys), &mut statistics);
             test::black_box(value.unwrap());
         })

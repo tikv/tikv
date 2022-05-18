@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
@@ -27,14 +28,17 @@ use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
+use resource_metering::CollectorRegHandle;
 use test_raftstore::*;
+use tikv::config::QuotaConfig;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::Config as ImportConfig;
 use tikv::import::SSTImporter;
 use tikv::server;
 use tikv::server::gc_worker::sync_gc;
 use tikv::server::service::{batch_commands_request, batch_commands_response};
-use tikv_util::worker::{dummy_scheduler, FutureWorker};
+use tikv_util::config::ReadableSize;
+use tikv_util::worker::{dummy_scheduler, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -242,12 +246,18 @@ fn test_rawkv_ttl() {
     std::thread::sleep(Duration::from_secs(1));
 
     let mut get_req = RawGetRequest::default();
-    get_req.set_context(ctx);
+    get_req.set_context(ctx.clone());
     get_req.key = k;
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
     assert!(get_resp.value.is_empty());
+
+    // Can't run transaction commands with TTL enabled.
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx);
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(!prewrite_resp.get_errors().is_empty());
 }
 
 #[test]
@@ -941,14 +951,14 @@ fn test_double_run_node() {
     let router = cluster.sim.rl().get_router(id).unwrap();
     let mut sim = cluster.sim.wl();
     let node = sim.get_node(id).unwrap();
-    let pd_worker = FutureWorker::new("test-pd-worker");
+    let pd_worker = LazyWorker::new("test-pd-worker");
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None).unwrap())
+        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -965,6 +975,7 @@ fn test_double_run_node() {
             split_check_scheduler,
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
+            CollectorRegHandle::new_for_test(),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
@@ -1042,14 +1053,7 @@ fn test_check_txn_status_with_max_ts() {
     must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), lock_ts);
 
     // Should return MinCommitTsPushed even if caller_start_ts is max.
-    let status = must_check_txn_status(
-        &client,
-        ctx.clone(),
-        &k,
-        lock_ts,
-        std::u64::MAX,
-        lock_ts + 1,
-    );
+    let status = must_check_txn_status(&client, ctx.clone(), &k, lock_ts, u64::MAX, lock_ts + 1);
     assert_eq!(status.lock_ttl, 3000);
     assert_eq!(status.action, Action::MinCommitTsPushed);
 
@@ -1147,7 +1151,7 @@ fn test_empty_commands() {
             }
         }
     });
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
 #[test]
@@ -1661,10 +1665,10 @@ fn test_forwarding_reconnect() {
     let mut req = RawGetRequest::default();
     req.set_context(ctx);
     // Large timeout value to ensure the error is from proxy instead of client.
-    let timer = std::time::Instant::now();
+    let timer = tikv_util::time::Instant::now();
     let timeout = Duration::from_secs(5);
     let res = client.raw_get_opt(&req, call_opt.clone().timeout(timeout));
-    let elapsed = timer.elapsed();
+    let elapsed = timer.saturating_elapsed();
     assert!(elapsed < timeout, "{:?}", elapsed);
     // Because leader server is shutdown, reconnecting has to be timeout.
     match res {
@@ -1705,16 +1709,16 @@ fn test_get_lock_wait_info_api() {
 
     let mut ctx1 = ctx.clone();
     ctx1.set_resource_group_tag(b"resource_group_tag1".to_vec());
-    must_kv_pessimistic_lock(&client, ctx1, b"a".to_vec(), 20);
+    kv_pessimistic_lock_with_ttl(&client, ctx1, vec![b"a".to_vec()], 20, 20, false, 5000);
     let mut ctx2 = ctx.clone();
     let handle = thread::spawn(move || {
         ctx2.set_resource_group_tag(b"resource_group_tag2".to_vec());
-        kv_pessimistic_lock_with_ttl(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false, 1000);
+        kv_pessimistic_lock_with_ttl(&client2, ctx2, vec![b"a".to_vec()], 30, 30, false, 5000);
     });
 
     let mut entries = None;
-    for _retry in 0..100 {
-        thread::sleep(Duration::from_millis(10));
+    for _retry in 0..200 {
+        thread::sleep(Duration::from_millis(25));
         // The lock should be in waiting state here.
         let req = GetLockWaitInfoRequest::default();
         let resp = client.get_lock_wait_info(&req).unwrap();
@@ -1735,4 +1739,272 @@ fn test_get_lock_wait_info_api() {
     );
     must_kv_pessimistic_rollback(&client, ctx, b"a".to_vec(), 20);
     handle.join().unwrap();
+}
+
+// Test API version verification for transaction requests.
+// See the following for detail:
+//   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+#[test]
+fn test_txn_api_version() {
+    const TIDB_KEY_CASE: &[u8] = b"t_a";
+    const TXN_KEY_CASE: &[u8] = b"x\0a";
+    const RAW_KEY_CASE: &[u8] = b"r\0a";
+
+    let test_data = vec![
+        // config api_version = V1|V1ttl, for backward compatible.
+        (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, None),
+        (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, None),
+        (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, None),
+        // storage api_version = V1ttl, allow RawKV request only. Any key cases will be rejected.
+        (
+            ApiVersion::V1ttl,
+            ApiVersion::V1,
+            TXN_KEY_CASE,
+            Some("ApiVersionNotMatched"),
+        ),
+        // config api_version = V1, reject all V2 requests.
+        (
+            ApiVersion::V1,
+            ApiVersion::V2,
+            TIDB_KEY_CASE,
+            Some("ApiVersionNotMatched"),
+        ),
+        // config api_version = V2.
+        // backward compatible for TiDB request, and TiDB request only.
+        (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, None),
+        (
+            ApiVersion::V2,
+            ApiVersion::V1,
+            TXN_KEY_CASE,
+            Some("InvalidKeyMode"),
+        ),
+        (
+            ApiVersion::V2,
+            ApiVersion::V1,
+            RAW_KEY_CASE,
+            Some("InvalidKeyMode"),
+        ),
+        // V2 api validation.
+        (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, None),
+        (
+            ApiVersion::V2,
+            ApiVersion::V2,
+            RAW_KEY_CASE,
+            Some("InvalidKeyMode"),
+        ),
+        (
+            ApiVersion::V2,
+            ApiVersion::V2,
+            TIDB_KEY_CASE,
+            Some("InvalidKeyMode"),
+        ),
+    ];
+
+    for (i, (storage_api_version, req_api_version, key, errcode)) in
+        test_data.into_iter().enumerate()
+    {
+        let (cluster, leader, mut ctx) = must_new_and_configure_cluster(|cluster| {
+            cluster.cfg.storage.set_api_version(storage_api_version)
+        });
+        let env = Arc::new(Environment::new(1));
+        let channel =
+            ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+        let client = TikvClient::new(channel);
+
+        ctx.set_api_version(req_api_version);
+
+        let (k, v) = (key.to_vec(), b"value".to_vec());
+        let mut ts = 0;
+
+        if let Some(errcode) = errcode {
+            let expect_err = |errs: &[KeyError]| {
+                let expect_prefix = format!("Error({}", errcode);
+                assert!(!errs.is_empty(), "case {}", i);
+                assert!(
+                    errs[0].get_abort().starts_with(&expect_prefix), // e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 })
+                    "case {}: errs[0]: {:?}, expected: {}",
+                    i,
+                    errs[0],
+                    expect_prefix,
+                );
+            };
+
+            // Prewrite
+            ts += 1;
+            let prewrite_start_version = ts;
+            let mut mutation = Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(k.clone());
+            mutation.set_value(v.clone());
+            let res = try_kv_prewrite(
+                &client,
+                ctx.clone(),
+                vec![mutation],
+                k.clone(),
+                prewrite_start_version,
+            );
+            expect_err(res.get_errors());
+
+            // Prewrite Pessimistic
+            ts += 1;
+            let mut mutation = Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(k.clone());
+            mutation.set_value(v.clone());
+            let res =
+                try_kv_prewrite_pessimistic(&client, ctx.clone(), vec![mutation], k.clone(), ts);
+            expect_err(res.get_errors());
+
+            // Pessimistic Lock
+            ts += 1;
+            let resp = kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], ts, ts, false);
+            assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+            assert_eq!(resp.errors.len(), 1);
+            assert!(!resp.errors[0].has_locked(), "{:?}", resp.get_errors());
+            expect_err(resp.get_errors());
+        } else {
+            {
+                // Prewrite
+                ts += 1;
+                let prewrite_start_version = ts;
+                let mut mutation = Mutation::default();
+                mutation.set_op(Op::Put);
+                mutation.set_key(k.clone());
+                mutation.set_value(v.clone());
+                must_kv_prewrite(
+                    &client,
+                    ctx.clone(),
+                    vec![mutation],
+                    k.clone(),
+                    prewrite_start_version,
+                );
+
+                // Pessimistic Lock
+                ts += 1;
+                let lock_ts = ts;
+                let resp = kv_pessimistic_lock(
+                    &client,
+                    ctx.clone(),
+                    vec![k.clone()],
+                    lock_ts,
+                    lock_ts,
+                    false,
+                );
+                assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+                assert_eq!(resp.errors.len(), 1);
+                assert!(resp.errors[0].has_locked());
+                assert!(resp.values.is_empty());
+                assert!(resp.not_founds.is_empty());
+
+                // Commit
+                ts += 1;
+                let commit_version = ts;
+                must_kv_commit(
+                    &client,
+                    ctx.clone(),
+                    vec![k.clone()],
+                    prewrite_start_version,
+                    commit_version,
+                    commit_version,
+                );
+
+                // Get
+                ts += 1;
+                let get_version = ts;
+                let mut get_req = GetRequest::default();
+                get_req.set_context(ctx.clone());
+                get_req.key = k.clone();
+                get_req.version = get_version;
+                let get_resp = client.kv_get(&get_req).unwrap();
+                assert!(!get_resp.has_region_error());
+                assert!(!get_resp.has_error());
+                assert!(get_resp.get_exec_details_v2().has_time_detail());
+            }
+            {
+                // Pessimistic Lock
+                ts += 1;
+                let lock_ts = ts;
+                let _resp = must_kv_pessimistic_lock(&client, ctx.clone(), k.clone(), lock_ts);
+
+                // Prewrite Pessimistic
+                let mut mutation = Mutation::default();
+                mutation.set_op(Op::Put);
+                mutation.set_key(k.clone());
+                mutation.set_value(v.clone());
+                must_kv_prewrite_pessimistic(
+                    &client,
+                    ctx.clone(),
+                    vec![mutation],
+                    k.clone(),
+                    lock_ts,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_storage_with_quota_limiter_enable() {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
+        // write_bandwidth is limited to 1, which means that every write request will trigger the limit.
+        let quota_config = QuotaConfig {
+            foreground_cpu_time: 2000,
+            foreground_write_bandwidth: ReadableSize(10),
+            ..Default::default()
+        };
+        cluster.cfg.quota = quota_config;
+        cluster.cfg.storage.scheduler_worker_pool_size = 1;
+    });
+
+    let env = Arc::new(Environment::new(1));
+    let leader_store = leader.get_store_id();
+    let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
+    let client = TikvClient::new(channel);
+
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let mut ts = 0;
+    let begin = Instant::now();
+
+    // Prewrite
+    ts += 1;
+    let prewrite_start_version = ts;
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v);
+    must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
+
+    // 500 only represents quota enabled, no specific significance
+    assert!(begin.elapsed() > Duration::from_millis(500));
+}
+
+#[test]
+fn test_storage_with_quota_limiter_disable() {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
+        // all limit set to 0, which means quota limiter not work.
+        let quota_config = QuotaConfig::default();
+        cluster.cfg.quota = quota_config;
+        cluster.cfg.storage.scheduler_worker_pool_size = 1;
+    });
+
+    let env = Arc::new(Environment::new(1));
+    let leader_store = leader.get_store_id();
+    let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
+    let client = TikvClient::new(channel);
+
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let mut ts = 0;
+    let begin = Instant::now();
+
+    // Prewrite
+    ts += 1;
+    let prewrite_start_version = ts;
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v);
+    must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
+
+    assert!(begin.elapsed() < Duration::from_millis(500));
 }

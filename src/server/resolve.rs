@@ -3,7 +3,6 @@
 use std::fmt::{self, Display, Formatter};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use collections::HashMap;
 use engine_traits::KvEngine;
@@ -11,6 +10,7 @@ use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::GlobalReplicationState;
+use tikv_util::time::Instant;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::metrics::*;
@@ -72,7 +72,7 @@ where
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
-            let elapsed = now.duration_since(s.last_update);
+            let elapsed = now.saturating_duration_since(s.last_update);
             if elapsed.as_secs() < store_address_refresh_interval_secs() {
                 return Ok(s.addr.clone());
             }
@@ -134,9 +134,11 @@ where
 {
     type Task = Task;
     fn run(&mut self, task: Task) {
+        let start = Instant::now();
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
-        (task.cb)(resp)
+        (task.cb)(resp);
+        ADDRESS_RESOLVE_HISTOGRAM.observe(start.saturating_elapsed_secs());
     }
 }
 
@@ -193,7 +195,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use collections::HashMap;
     use engine_test::kv::KvTestEngine;
@@ -220,7 +222,7 @@ mod tests {
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
-            sock.set_port(tikv_util::time::duration_to_ms(self.start.elapsed()) as u16);
+            sock.set_port(tikv_util::time::duration_to_ms(self.start.saturating_elapsed()) as u16);
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
             Ok(store)
         }

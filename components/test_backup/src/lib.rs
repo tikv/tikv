@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 use std::{cmp, fs};
 
 use futures::channel::mpsc as future_mpsc;
@@ -15,7 +14,7 @@ use collections::HashMap;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage_export::make_local_backend;
-use kvproto::backup::*;
+use kvproto::brpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use rand::Rng;
@@ -28,6 +27,7 @@ use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::config::ReadableSize;
+use tikv_util::time::Instant;
 use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -49,7 +49,7 @@ macro_rules! retry_req {
         let start = Instant::now();
         let timeout = Duration::from_millis($timeout);
         let mut tried_times = 0;
-        while tried_times < $retry || start.elapsed() < timeout {
+        while tried_times < $retry || start.saturating_elapsed() < timeout {
             if $check_resp {
                 break;
             } else {
@@ -76,15 +76,17 @@ impl TestSuite {
             let sim = cluster.sim.rl();
             let backup_endpoint = backup::Endpoint::new(
                 *id,
-                sim.storages[&id].clone(),
-                sim.region_info_accessors[&id].clone(),
+                sim.storages[id].clone(),
+                sim.region_info_accessors[id].clone(),
                 engines.kv.as_inner().clone(),
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,
                     sst_max_size: ReadableSize(sst_max_size),
+                    ..Default::default()
                 },
                 sim.get_concurrency_manager(*id),
+                ApiVersion::V1,
             );
             let mut worker = bg_worker.lazy_build(format!("backup-{}", id));
             worker.start(backup_endpoint);
@@ -297,6 +299,7 @@ impl TestSuite {
             backup_ts,
             IsolationLevel::Si,
             false,
+            Default::default(),
             Default::default(),
             false,
         );

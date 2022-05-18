@@ -36,7 +36,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     /// Gets a reference to the inner physical vector value.
     pub fn as_ref(&self) -> &VectorValue {
         match self {
-            RpnStackNodeVectorValue::Generated { physical_value, .. } => &physical_value,
+            RpnStackNodeVectorValue::Generated { physical_value, .. } => physical_value,
             RpnStackNodeVectorValue::Ref { physical_value, .. } => *physical_value,
         }
     }
@@ -99,7 +99,7 @@ impl<'a> RpnStackNode<'a> {
     pub fn vector_value(&self) -> Option<&RpnStackNodeVectorValue<'_>> {
         match self {
             RpnStackNode::Scalar { .. } => None,
-            RpnStackNode::Vector { value, .. } => Some(&value),
+            RpnStackNode::Vector { value, .. } => Some(value),
         }
     }
 
@@ -224,7 +224,7 @@ impl RpnExpression {
                     assert_eq!(input_logical_rows.len(), output_rows);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Ref {
-                            physical_value: &decoded_physical_column,
+                            physical_value: decoded_physical_column,
                             logical_rows: input_logical_rows,
                         },
                         field_type,

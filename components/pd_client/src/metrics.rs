@@ -65,4 +65,9 @@ lazy_static! {
         &["host"]
     )
     .unwrap();
+    pub static ref PD_PENDING_TSO_REQUEST_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_pd_pending_tso_request_total",
+        "Total number of pending tso requests"
+    )
+    .unwrap();
 }

@@ -5,22 +5,12 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
 failpoints = ["fail/failpoints"]
-protobuf-codec = [
-  "protobuf/bytes",
-  "error_code/protobuf-codec",
-  "grpcio/protobuf-codec",
-  "kvproto/protobuf-codec",
-]
-prost-codec = [
-  "error_code/prost-codec",
-  "grpcio/prost-codec",
-  "kvproto/prost-codec",
-]
+test-cgroup = []
 
 [dependencies]
-async-speed-limit = "0.3"
+nix = "0.23"
+async-speed-limit = "0.4.0"
 backtrace = "0.3.9"
 byteorder = "1.2"
 bytes = "1.0"
@@ -31,19 +21,20 @@ crc32fast = "1.2"
 crossbeam = "0.8"
 error_code = { path = "../error_code", default-features = false }
 derive_more = "0.99.3"
-fail = "0.4"
-fs2 = "0.4"
+fail = "0.5"
 futures = { version = "0.3", features = ["compat"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 http = "0.2.0"
 lazy_static = "1.3"
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"
+num-traits = "0.2"
 openssl = "0.10"
-prometheus = { version = "0.12", features = ["nightly"] }
+prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 rand = "0.8"
 rusoto_core = "0.46.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -60,25 +51,23 @@ collections = { path = "../collections" }
 time = "0.1"
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-executor = "0.1"
-tokio-timer = "0.2"
+tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 url = "2"
-kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 protobuf = "2"
+cpu-time = "1.0.0"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 page_size = "0.4"
-procfs = "0.7"
+procfs = { version = "0.12", default-features = false }
 
 [dev-dependencies]
+gag = "1.0"
 panic_hook = { path = "../panic_hook" }
 protobuf = "2"
 regex = "1.0"
 tempfile = "3.0"
 toml = "0.5"
 utime = "0.2"
-
-[target.'cfg(unix)'.dev-dependencies]
-gag = "0.1.10"
-nix = "0.11"

@@ -82,10 +82,6 @@
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
 
-#[cfg(feature = "mem-profiling")]
-#[macro_use]
-extern crate log;
-
 #[cfg(feature = "jemalloc")]
 #[macro_use]
 extern crate lazy_static;
@@ -125,6 +121,7 @@ mod imp;
 mod imp;
 
 pub use crate::imp::*;
+pub use crate::trace::*;
 
 #[global_allocator]
 static ALLOC: imp::Allocator = imp::allocator();

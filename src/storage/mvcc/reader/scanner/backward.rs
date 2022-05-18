@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
@@ -8,7 +9,9 @@ use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
+use crate::storage::mvcc::ErrorInner::WriteConflict;
 use crate::storage::mvcc::{Error, NewerTsCheckState, Result};
+use crate::storage::need_check_locks;
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -27,7 +30,7 @@ const REVERSE_SEEK_BOUND: u64 = 16;
 /// Use `ScannerBuilder` to build `BackwardKvScanner`.
 pub struct BackwardKvScanner<S: Snapshot> {
     cfg: ScannerConfig<S>,
-    lock_cursor: Cursor<S::Iter>,
+    lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Cursor<S::Iter>,
     /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
@@ -40,7 +43,7 @@ pub struct BackwardKvScanner<S: Snapshot> {
 impl<S: Snapshot> BackwardKvScanner<S> {
     pub fn new(
         cfg: ScannerConfig<S>,
-        lock_cursor: Cursor<S::Iter>,
+        lock_cursor: Option<Cursor<S::Iter>>,
         write_cursor: Cursor<S::Iter>,
     ) -> BackwardKvScanner<S> {
         BackwardKvScanner {
@@ -83,13 +86,17 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                     self.cfg.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
-                self.lock_cursor.reverse_seek(
-                    self.cfg.upper_bound.as_ref().unwrap(),
-                    &mut self.statistics.lock,
-                )?;
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.reverse_seek(
+                        self.cfg.upper_bound.as_ref().unwrap(),
+                        &mut self.statistics.lock,
+                    )?;
+                }
             } else {
                 self.write_cursor.seek_to_last(&mut self.statistics.write);
-                self.lock_cursor.seek_to_last(&mut self.statistics.lock);
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.seek_to_last(&mut self.statistics.lock);
+                }
             }
             self.is_started = true;
         }
@@ -98,14 +105,18 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         // cursor and lock cursor. Please refer to `ForwardKvScanner` for details.
 
         loop {
-            let (current_user_key, has_write, has_lock) = {
+            let (current_user_key, mut has_write, has_lock) = {
                 let w_key = if self.write_cursor.valid()? {
                     Some(self.write_cursor.key(&mut self.statistics.write))
                 } else {
                     None
                 };
-                let l_key = if self.lock_cursor.valid()? {
-                    Some(self.lock_cursor.key(&mut self.statistics.lock))
+                let l_key = if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    if lock_cursor.valid()? {
+                        Some(lock_cursor.key(&mut self.statistics.lock))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -143,30 +154,49 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             let ts = self.cfg.ts;
 
             if has_lock {
-                match self.cfg.isolation_level {
-                    IsolationLevel::Si => {
-                        let lock = {
-                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)?
-                        };
-                        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
-                            self.met_newer_ts_data = NewerTsCheckState::Met;
-                        }
-                        result = Lock::check_ts_conflict(
-                            Cow::Owned(lock),
-                            &current_user_key,
-                            ts,
-                            &self.cfg.bypass_locks,
-                        )
-                        .map(|_| None)
-                        .map_err(Into::into);
-                        if result.is_err() {
-                            self.statistics.lock.processed_keys += 1;
+                if need_check_locks(self.cfg.isolation_level) {
+                    let lock = {
+                        let lock_value = self
+                            .lock_cursor
+                            .as_mut()
+                            .unwrap()
+                            .value(&mut self.statistics.lock);
+                        Lock::parse(lock_value)?
+                    };
+                    if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                        self.met_newer_ts_data = NewerTsCheckState::Met;
+                    }
+                    result = Lock::check_ts_conflict(
+                        Cow::Borrowed(&lock),
+                        &current_user_key,
+                        ts,
+                        &self.cfg.bypass_locks,
+                        self.cfg.isolation_level,
+                    )
+                    .map(|_| None)
+                    .map_err(Into::into);
+                    if result.is_err() {
+                        self.statistics.lock.processed_keys += 1;
+                        if self.cfg.access_locks.contains(lock.ts) {
+                            self.ensure_default_cursor()?;
+                            result = super::load_data_by_lock(
+                                &current_user_key,
+                                &self.cfg,
+                                self.default_cursor.as_mut().unwrap(),
+                                lock,
+                                &mut self.statistics,
+                            );
+                            if has_write {
+                                // Skip current_user_key because this key is either blocked or handled.
+                                has_write = false;
+                                self.move_write_cursor_to_prev_user_key(&current_user_key)?;
+                            }
                         }
                     }
-                    IsolationLevel::Rc => {}
                 }
-                self.lock_cursor.prev(&mut self.statistics.lock);
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.prev(&mut self.statistics.lock);
+                }
             }
             if has_write {
                 if result.is_ok() {
@@ -181,6 +211,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             if let Some(v) = result? {
                 self.statistics.write.processed_keys += 1;
                 self.statistics.processed_size += current_user_key.len() + v.len();
+                resource_metering::record_read_keys(1);
                 return Ok(Some((current_user_key, v)));
             }
         }
@@ -231,6 +262,18 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                     is_done = true;
                     if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                         self.met_newer_ts_data = NewerTsCheckState::Met;
+                    }
+                    if self.cfg.isolation_level == IsolationLevel::RcCheckTs {
+                        // TODO: the more write recent version with `LOCK` or `ROLLBACK` write type
+                        //       could be skipped.
+                        return Err(WriteConflict {
+                            start_ts: self.cfg.ts,
+                            conflict_start_ts: Default::default(),
+                            conflict_commit_ts: last_checked_commit_ts,
+                            key: current_key.into(),
+                            primary: vec![],
+                        }
+                        .into());
                     }
                 }
             }
@@ -384,7 +427,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 // Value is in the default CF.
                 self.ensure_default_cursor()?;
                 let value = super::near_reverse_load_data_by_write(
-                    &mut self.default_cursor.as_mut().unwrap(),
+                    self.default_cursor.as_mut().unwrap(),
                     user_key,
                     write.start_ts,
                     &mut self.statistics,
@@ -446,7 +489,8 @@ mod tests {
     use crate::storage::kv::{Engine, Modify, TestEngineBuilder};
     use crate::storage::mvcc::tests::write;
     use crate::storage::txn::tests::{
-        must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
+        must_acquire_pessimistic_lock, must_commit, must_gc, must_prewrite_delete,
+        must_prewrite_lock, must_prewrite_put, must_rollback,
     };
     use crate::storage::Scanner;
     use engine_traits::{CF_LOCK, CF_WRITE};
@@ -552,7 +596,8 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND.into())
+            .desc(true)
             .range(None, Some(Key::from_raw(&[11_u8])))
             .build()
             .unwrap();
@@ -778,7 +823,8 @@ mod tests {
         );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -863,7 +909,8 @@ mod tests {
         );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -939,7 +986,8 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 1.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, 1.into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1019,7 +1067,8 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 1.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, 1.into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1107,7 +1156,8 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND + 1).into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND + 1).into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1203,7 +1253,8 @@ mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
+            .desc(true)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build()
             .unwrap();
@@ -1225,7 +1276,8 @@ mod tests {
         );
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
+            .desc(true)
             .range(None, Some(Key::from_raw(&[3u8])))
             .build()
             .unwrap();
@@ -1247,7 +1299,8 @@ mod tests {
         );
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into())
+            .desc(true)
             .range(Some(Key::from_raw(&[5u8])), None)
             .build()
             .unwrap();
@@ -1269,7 +1322,8 @@ mod tests {
         );
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), true)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into())
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1339,7 +1393,8 @@ mod tests {
 
         // Call reverse scan
         let ts = 2.into();
-        let mut scanner = ScannerBuilder::new(snapshot, ts, true)
+        let mut scanner = ScannerBuilder::new(snapshot, ts)
+            .desc(true)
             .range(None, Some(k))
             .build()
             .unwrap();
@@ -1362,7 +1417,8 @@ mod tests {
             .collect();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, read_ts, true)
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts)
+            .desc(true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1373,5 +1429,94 @@ mod tests {
             .map(|result| result.unwrap())
             .collect();
         assert_eq!(result, expected_result);
+    }
+
+    #[test]
+    fn test_rc_read_check_ts() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (key0, val0) = (b"k0", b"v0");
+        must_prewrite_put(&engine, key0, val0, key0, 60);
+
+        let (key1, val1) = (b"k1", b"v1");
+        must_prewrite_put(&engine, key1, val1, key1, 25);
+        must_commit(&engine, key1, 25, 30);
+
+        let (key2, val2, val22) = (b"k2", b"v2", b"v22");
+        must_prewrite_put(&engine, key2, val2, key2, 6);
+        must_commit(&engine, key2, 6, 9);
+        must_prewrite_put(&engine, key2, val22, key2, 10);
+        must_commit(&engine, key2, 10, 20);
+
+        let (key3, val3) = (b"k3", b"v3");
+        must_prewrite_put(&engine, key3, val3, key3, 5);
+        must_commit(&engine, key3, 5, 6);
+
+        let (key4, val4) = (b"k4", b"val4");
+        must_prewrite_put(&engine, key4, val4, key4, 3);
+        must_commit(&engine, key4, 3, 4);
+        must_prewrite_lock(&engine, key4, key4, 5);
+
+        let (key5, val5) = (b"k5", b"val5");
+        must_prewrite_put(&engine, key5, val5, key5, 1);
+        must_commit(&engine, key5, 1, 2);
+        must_acquire_pessimistic_lock(&engine, key5, key5, 3, 3);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 29.into())
+            .range(None, None)
+            .desc(true)
+            .isolation_level(IsolationLevel::RcCheckTs)
+            .build()
+            .unwrap();
+
+        // Scanner has met a more recent version.
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key5), val5.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key4), val4.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key3), val3.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key2), val22.to_vec()))
+        );
+        assert!(scanner.next().is_err());
+
+        // Scanner has met a lock though lock.ts > read_ts.
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 55.into())
+            .range(None, None)
+            .desc(true)
+            .isolation_level(IsolationLevel::RcCheckTs)
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key5), val5.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key4), val4.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key3), val3.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key2), val22.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key1), val1.to_vec()))
+        );
+        assert!(scanner.next().is_err());
     }
 }

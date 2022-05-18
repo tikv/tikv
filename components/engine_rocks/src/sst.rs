@@ -63,6 +63,14 @@ impl RocksSstReader {
         let inner = Rc::new(reader);
         Ok(RocksSstReader { inner })
     }
+
+    pub fn compression_name(&self) -> String {
+        let mut result = String::new();
+        self.inner.read_table_properties(|p| {
+            result = p.compression_name().to_owned();
+        });
+        result
+    }
 }
 
 impl SstReader for RocksSstReader {
@@ -103,21 +111,29 @@ pub struct RocksSstIterator(DBIterator<Rc<SstFileReader>>);
 unsafe impl Send for RocksSstIterator {}
 
 impl Iterator for RocksSstIterator {
-    fn seek(&mut self, key: SeekKey) -> Result<bool> {
-        let k: RocksSeekKey = key.into();
+    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
+        let k: RocksSeekKey<'_> = key.into();
         self.0.seek(k.into_raw()).map_err(Error::Engine)
     }
 
-    fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
-        let k: RocksSeekKey = key.into();
+    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
+        let k: RocksSeekKey<'_> = key.into();
         self.0.seek_for_prev(k.into_raw()).map_err(Error::Engine)
     }
 
     fn prev(&mut self) -> Result<bool> {
+        #[cfg(not(feature = "nortcheck"))]
+        if !self.valid()? {
+            return Err(Error::Engine("Iterator invalid".to_string()));
+        }
         self.0.prev().map_err(Error::Engine)
     }
 
     fn next(&mut self) -> Result<bool> {
+        #[cfg(not(feature = "nortcheck"))]
+        if !self.valid()? {
+            return Err(Error::Engine("Iterator invalid".to_string()));
+        }
         self.0.next().map_err(Error::Engine)
     }
 
@@ -334,6 +350,15 @@ fn to_rocks_compression_type(ct: SstCompressionType) -> DBCompressionType {
         SstCompressionType::Lz4 => DBCompressionType::Lz4,
         SstCompressionType::Snappy => DBCompressionType::Snappy,
         SstCompressionType::Zstd => DBCompressionType::Zstd,
+    }
+}
+
+pub fn from_rocks_compression_type(ct: DBCompressionType) -> Option<SstCompressionType> {
+    match ct {
+        DBCompressionType::Lz4 => Some(SstCompressionType::Lz4),
+        DBCompressionType::Snappy => Some(SstCompressionType::Snappy),
+        DBCompressionType::Zstd => Some(SstCompressionType::Zstd),
+        _ => None,
     }
 }
 

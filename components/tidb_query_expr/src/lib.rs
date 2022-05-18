@@ -7,13 +7,13 @@
 //! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
 //! standalone.
 
+#![allow(elided_lifetimes_in_paths)] // Necessary until rpn_fn accepts functions annotated with lifetimes.
 #![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
-#![feature(const_fn)]
 #![feature(test)]
-#![feature(int_error_matching)]
 #![feature(const_fn_fn_ptr_basics)]
+#![feature(const_fn_trait_bound)]
 #![feature(const_mut_refs)]
 
 #[macro_use(box_err, box_try, try_opt)]
@@ -44,11 +44,12 @@ pub mod impl_time;
 
 pub use self::types::*;
 
-use tidb_query_datatype::{Collation, FieldTypeAccessor, FieldTypeFlag};
+use tidb_query_datatype::{Charset, Collation, FieldTypeAccessor, FieldTypeFlag};
 use tipb::{Expr, FieldType, ScalarFuncSig};
 
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::match_template_charset;
 use tidb_query_datatype::match_template_collator;
 
 use self::impl_arithmetic::*;
@@ -65,6 +66,25 @@ use self::impl_op::*;
 use self::impl_other::*;
 use self::impl_string::*;
 use self::impl_time::*;
+
+fn map_to_binary_fn_sig(expr: &Expr) -> Result<RpnFnMeta> {
+    let children = expr.get_children();
+    let ret_field_type = children[0].get_field_type();
+    Ok(match_template_charset! {
+        TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+            Charset::TT => to_binary_fn_meta::<TT>(),
+        }
+    })
+}
+
+fn map_from_binary_fn_sig(expr: &Expr) -> Result<RpnFnMeta> {
+    let ret_field_type = expr.get_field_type();
+    Ok(match_template_charset! {
+        TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+            Charset::TT => from_binary_fn_meta::<TT>(),
+        }
+    })
+}
 
 fn map_string_compare_sig<Cmp: CmpOp>(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     Ok(match_template_collator! {
@@ -292,8 +312,45 @@ fn map_lower_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
     if children[0].get_field_type().is_binary_string_like() {
         Ok(lower_fn_meta())
     } else {
-        Ok(lower_utf8_fn_meta())
+        let ret_field_type = children[0].get_field_type();
+        Ok(match_template_charset! {
+            TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+                Charset::TT => lower_utf8_fn_meta::<TT>(),
+            }
+        })
     }
+}
+
+fn map_upper_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    let ret_field_type = children[0].get_field_type();
+    Ok(match_template_charset! {
+     TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+           Charset::TT => upper_utf8_fn_meta::<TT>(),
+        }
+    })
+}
+
+fn map_lower_utf8_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    let ret_field_type = children[0].get_field_type();
+    Ok(match_template_charset! {
+     TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+           Charset::TT => lower_utf8_fn_meta::<TT>(),
+        }
+    })
 }
 
 #[rustfmt::skip]
@@ -324,6 +381,11 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
         ScalarFuncSig::ModDecimal => arithmetic_with_ctx_fn_meta::<DecimalMod>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
+        ScalarFuncSig::ModIntUnsignedUnsigned => arithmetic_fn_meta::<UintUintMod>(),
+        ScalarFuncSig::ModIntUnsignedSigned => arithmetic_fn_meta::<UintIntMod>(),
+        ScalarFuncSig::ModIntSignedUnsigned => arithmetic_fn_meta::<IntUintMod>(),
+        ScalarFuncSig::ModIntSignedSigned => arithmetic_fn_meta::<IntIntMod>(),
+                
         // impl_cast
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
@@ -374,6 +436,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CastJsonAsTime |
         ScalarFuncSig::CastJsonAsDuration |
         ScalarFuncSig::CastJsonAsJson => map_cast_func(expr)?,
+        ScalarFuncSig::ToBinary => map_to_binary_fn_sig(expr)?,
+        ScalarFuncSig::FromBinary => map_from_binary_fn_sig(expr)?,
+
         // impl_compare
         ScalarFuncSig::LtInt => map_int_sig(value, children, compare_mapper::<CmpOpLT>)?,
         ScalarFuncSig::LtReal => compare_fn_meta::<BasicComparer<Real, CmpOpLT>>(),
@@ -393,14 +458,22 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::GreatestDecimal => greatest_decimal_fn_meta(),
         ScalarFuncSig::GreatestString => greatest_string_fn_meta(),
         ScalarFuncSig::GreatestReal => greatest_real_fn_meta(),
-        ScalarFuncSig::GreatestTime => greatest_time_fn_meta(),
+        ScalarFuncSig::GreatestTime |
+        ScalarFuncSig::GreatestDate => greatest_datetime_fn_meta(),
+        ScalarFuncSig::GreatestCmpStringAsDate => greatest_cmp_string_as_date_fn_meta(),
+        ScalarFuncSig::GreatestCmpStringAsTime => greatest_cmp_string_as_time_fn_meta(),
+        ScalarFuncSig::GreatestDuration => greatest_duration_fn_meta(),
         ScalarFuncSig::LeastInt => least_int_fn_meta(),
         ScalarFuncSig::IntervalInt => interval_int_fn_meta(),
         ScalarFuncSig::LeastDecimal => least_decimal_fn_meta(),
         ScalarFuncSig::LeastString => least_string_fn_meta(),
         ScalarFuncSig::LeastReal => least_real_fn_meta(),
+        ScalarFuncSig::LeastTime |
+        ScalarFuncSig::LeastDate=> least_datetime_fn_meta(),
+        ScalarFuncSig::LeastCmpStringAsDate => least_cmp_string_as_date_fn_meta(),
+        ScalarFuncSig::LeastCmpStringAsTime=> least_cmp_string_as_time_fn_meta(),
+        ScalarFuncSig::LeastDuration => least_duration_fn_meta(),
         ScalarFuncSig::IntervalReal => interval_real_fn_meta(),
-        ScalarFuncSig::LeastTime => least_time_fn_meta(),
         ScalarFuncSig::GtInt => map_int_sig(value, children, compare_mapper::<CmpOpGT>)?,
         ScalarFuncSig::GtReal => compare_fn_meta::<BasicComparer<Real, CmpOpGT>>(),
         ScalarFuncSig::GtDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpGT>>(),
@@ -636,10 +709,12 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
         ScalarFuncSig::Right => right_fn_meta(),
         ScalarFuncSig::Insert => insert_fn_meta(),
+        ScalarFuncSig::InsertUtf8 => insert_utf8_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
-        ScalarFuncSig::UpperUtf8 => upper_utf8_fn_meta(),
+        ScalarFuncSig::UpperUtf8 => map_upper_sig(value, children)?,
         ScalarFuncSig::Upper => upper_fn_meta(),
         ScalarFuncSig::Lower => map_lower_sig(value, children)?,
+        ScalarFuncSig::LowerUtf8 => map_lower_utf8_sig(value, children)?,
         ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
         ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
         ScalarFuncSig::FieldInt => field_fn_meta::<Int>(),
@@ -662,9 +737,13 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Repeat => repeat_fn_meta(),
         ScalarFuncSig::Substring2Args => substring_2_args_fn_meta(),
         ScalarFuncSig::Substring3Args => substring_3_args_fn_meta(),
+        ScalarFuncSig::Substring2ArgsUtf8 => substring_2_args_utf8_fn_meta(),
+        ScalarFuncSig::Substring3ArgsUtf8 => substring_3_args_utf8_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::Date => date_fn_meta(),
+        ScalarFuncSig::SysDateWithFsp => sysdate_with_fsp_fn_meta(),
+        ScalarFuncSig::SysDateWithoutFsp => sysdate_without_fsp_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),
         ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
         ScalarFuncSig::DayOfWeek => day_of_week_fn_meta(),
@@ -681,6 +760,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::AddDatetimeAndDuration => add_datetime_and_duration_fn_meta(),
         ScalarFuncSig::AddDatetimeAndString => add_datetime_and_string_fn_meta(),
         ScalarFuncSig::AddDateAndString => add_date_and_string_fn_meta(),
+        ScalarFuncSig::AddTimeDateTimeNull => add_time_datetime_null_fn_meta(),
+        ScalarFuncSig::AddTimeDurationNull => add_time_duration_null_fn_meta(),
+        ScalarFuncSig::AddTimeStringNull => add_time_string_null_fn_meta(),
         ScalarFuncSig::SubDatetimeAndDuration => sub_datetime_and_duration_fn_meta(),
         ScalarFuncSig::SubDatetimeAndString => sub_datetime_and_string_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
@@ -700,8 +782,13 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::AddDurationAndDuration => add_duration_and_duration_fn_meta(),
         ScalarFuncSig::AddDurationAndString => add_duration_and_string_fn_meta(),
         ScalarFuncSig::SubDurationAndDuration => sub_duration_and_duration_fn_meta(),
+        ScalarFuncSig::SubDurationAndString => sub_duration_and_string_fn_meta(),
         ScalarFuncSig::MakeTime => make_time_fn_meta(),
         ScalarFuncSig::DurationDurationTimeDiff => duration_duration_time_diff_fn_meta(),
+        ScalarFuncSig::StringDurationTimeDiff => string_duration_time_diff_fn_meta(),
+        ScalarFuncSig::StringStringTimeDiff => string_string_time_diff_fn_meta(),
+        ScalarFuncSig::DurationStringTimeDiff => duration_string_time_diff_fn_meta(),
+        ScalarFuncSig::Quarter => quarter_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

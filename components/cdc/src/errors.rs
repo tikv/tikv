@@ -4,9 +4,10 @@ use std::io::Error as IoError;
 use std::{error, result};
 
 use engine_traits::Error as EngineTraitsError;
+use kvproto::cdcpb::Error as ErrorEvent;
 use kvproto::errorpb;
 use thiserror::Error;
-use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
+use tikv::storage::kv::{Error as KvError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use txn_types::Error as TxnTypesError;
@@ -23,7 +24,7 @@ pub enum Error {
     #[error("IO error {0}")]
     Io(#[from] IoError),
     #[error("Engine error {0}")]
-    Engine(#[from] EngineError),
+    Kv(#[from] KvError),
     #[error("Transaction error {0}")]
     Txn(#[from] TxnError),
     #[error("Mvcc error {0}")]
@@ -63,12 +64,12 @@ impl Error {
     pub fn has_region_error(&self) -> bool {
         matches!(
             self,
-            Error::Engine(EngineError(box EngineErrorInner::Request(_)))
-                | Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+            Error::Kv(KvError(box EngineErrorInner::Request(_)))
+                | Error::Txn(TxnError(box TxnErrorInner::Engine(KvError(
                     box EngineErrorInner::Request(_),
                 ))))
                 | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-                    box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(_))),
+                    box MvccErrorInner::Kv(KvError(box EngineErrorInner::Request(_))),
                 ))))
                 | Error::Request(_)
         )
@@ -76,13 +77,13 @@ impl Error {
 
     pub fn extract_region_error(self) -> errorpb::Error {
         match self {
-            Error::Engine(EngineError(box EngineErrorInner::Request(e)))
-            | Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+            Error::Kv(KvError(box EngineErrorInner::Request(e)))
+            | Error::Txn(TxnError(box TxnErrorInner::Engine(KvError(
                 box EngineErrorInner::Request(e),
             ))))
-            | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(e))),
-            ))))
+            | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::Kv(
+                KvError(box EngineErrorInner::Request(e)),
+            )))))
             | Error::Request(box e) => e,
             // TODO: it should be None, add more cdc errors.
             other => {
@@ -91,5 +92,23 @@ impl Error {
                 e
             }
         }
+    }
+
+    pub fn into_error_event(self, region_id: u64) -> ErrorEvent {
+        let mut err_event = ErrorEvent::default();
+        let mut err = self.extract_region_error();
+        if err.has_not_leader() {
+            let not_leader = err.take_not_leader();
+            err_event.set_not_leader(not_leader);
+        } else if err.has_epoch_not_match() {
+            let epoch_not_match = err.take_epoch_not_match();
+            err_event.set_epoch_not_match(epoch_not_match);
+        } else {
+            // TODO: Add more errors to the cdc protocol
+            let mut region_not_found = errorpb::RegionNotFound::default();
+            region_not_found.set_region_id(region_id);
+            err_event.set_region_not_found(region_not_found);
+        }
+        err_event
     }
 }

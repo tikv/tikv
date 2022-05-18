@@ -34,13 +34,19 @@ macro_rules! fatal {
 // TODO: There is a very small chance that duplicate files will be generated if there are
 // a lot of logs written in a very short time. Consider rename the rotated file with a version
 // number while rotate by size.
+//
+// The file name format after rotated is as follows: "{original name}.{"%Y-%m-%dT%H-%M-%S%.3f"}"
 fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
-    let mut new_path = path.to_path_buf().into_os_string();
-    new_path.push(format!(
-        ".{}",
-        Local::now().format(logger::DATETIME_ROTATE_SUFFIX)
-    ));
-    Ok(PathBuf::from(new_path))
+    let mut new_path = path.parent().unwrap().to_path_buf();
+    let mut new_fname = path.file_stem().unwrap().to_os_string();
+    let dt = Local::now().format("%Y-%m-%dT%H-%M-%S%.3f");
+    new_fname.push(format!("-{}", dt));
+    if let Some(ext) = path.extension() {
+        new_fname.push(".");
+        new_fname.push(ext);
+    };
+    new_path.push(new_fname);
+    Ok(new_path)
 }
 
 fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
@@ -58,7 +64,7 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
     config::ensure_dir_exist(path).unwrap_or_else(|e| {
         fatal!("failed to create engine log dir: {}", e);
     });
-    config::canonicalize_log_dir(&path, filename).unwrap_or_else(|e| {
+    config::canonicalize_log_dir(path, filename).unwrap_or_else(|e| {
         fatal!("failed to canonicalize engine log dir {:?}: {}", path, e);
     })
 }
@@ -78,8 +84,9 @@ pub fn initial_logger(config: &TiKvConfig) {
     };
     let rocksdb = logger::file_writer(
         &rocksdb_info_log_path,
-        config.log_rotation_timespan,
-        config.log_rotation_size,
+        config.log.file.max_size,
+        config.log.file.max_backups,
+        config.log.file.max_days,
         rename_by_timestamp,
     )
     .unwrap_or_else(|e| {
@@ -92,8 +99,9 @@ pub fn initial_logger(config: &TiKvConfig) {
 
     let raftdb = logger::file_writer(
         &raftdb_info_log_path,
-        config.log_rotation_timespan,
-        config.log_rotation_size,
+        config.log.file.max_size,
+        config.log.file.max_backups,
+        config.log.file.max_days,
         rename_by_timestamp,
     )
     .unwrap_or_else(|e| {
@@ -109,8 +117,9 @@ pub fn initial_logger(config: &TiKvConfig) {
     } else {
         let slow_log_writer = logger::file_writer(
             &config.slow_log_file,
-            config.log_rotation_timespan,
-            config.log_rotation_size,
+            config.log.file.max_size,
+            config.log.file.max_backups,
+            config.log.file.max_days,
             rename_by_timestamp,
         )
         .unwrap_or_else(|e| {
@@ -137,7 +146,7 @@ pub fn initial_logger(config: &TiKvConfig) {
     {
         // Use async drainer and init std log.
         let drainer = logger::LogDispatcher::new(normal, rocksdb, raftdb, slow);
-        let level = config.log_level;
+        let level = config.log.level;
         let slow_threshold = config.slow_log_threshold.as_millis();
         logger::init_log(drainer, level, true, true, vec![], slow_threshold).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
@@ -145,44 +154,57 @@ pub fn initial_logger(config: &TiKvConfig) {
     }
 
     macro_rules! do_build {
-        ($log:expr, $rocksdb:expr, $raftdb:expr, $slow:expr) => {
-            match config.log_format {
+        ($log:expr, $rocksdb:expr, $raftdb:expr, $slow:expr, $enable_timestamp:expr) => {
+            match config.log.format {
                 config::LogFormat::Text => build_logger_with_slow_log(
-                    logger::text_format($log),
-                    logger::rocks_text_format($rocksdb),
-                    logger::rocks_text_format($raftdb),
-                    $slow.map(logger::text_format),
+                    logger::text_format($log, $enable_timestamp),
+                    logger::rocks_text_format($rocksdb, $enable_timestamp),
+                    logger::rocks_text_format($raftdb, $enable_timestamp),
+                    $slow.map(logger::slow_log_text_format),
                     config,
                 ),
                 config::LogFormat::Json => build_logger_with_slow_log(
-                    logger::json_format($log),
-                    logger::json_format($rocksdb),
-                    logger::json_format($raftdb),
-                    $slow.map(logger::json_format),
+                    logger::json_format($log, $enable_timestamp),
+                    logger::json_format($rocksdb, $enable_timestamp),
+                    logger::json_format($raftdb, $enable_timestamp),
+                    $slow.map(logger::slow_log_json_format),
                     config,
                 ),
             }
         };
     }
 
-    if config.log_file.is_empty() {
+    if config.log.file.filename.is_empty() {
         let log = logger::term_writer();
-        do_build!(log, rocksdb, raftdb, slow_log_writer);
+        do_build!(
+            log,
+            rocksdb,
+            raftdb,
+            slow_log_writer,
+            config.log.enable_timestamp
+        );
     } else {
         let log = logger::file_writer(
-            &config.log_file,
-            config.log_rotation_timespan,
-            config.log_rotation_size,
+            &config.log.file.filename,
+            config.log.file.max_size,
+            config.log.file.max_backups,
+            config.log.file.max_days,
             rename_by_timestamp,
         )
         .unwrap_or_else(|e| {
             fatal!(
                 "failed to initialize log with file {}: {}",
-                config.log_file,
+                config.log.file.filename,
                 e
             );
         });
-        do_build!(log, rocksdb, raftdb, slow_log_writer);
+        do_build!(
+            log,
+            rocksdb,
+            raftdb,
+            slow_log_writer,
+            config.log.enable_timestamp
+        );
     }
 
     // Set redact_info_log.
@@ -211,11 +233,13 @@ pub fn initial_metric(cfg: &MetricConfig) {
 #[allow(dead_code)]
 pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches<'_>) {
     if let Some(level) = matches.value_of("log-level") {
-        config.log_level = logger::get_level_by_string(level).unwrap();
+        config.log.level = logger::get_level_by_string(level).unwrap();
+        config.log_level = slog::Level::Info;
     }
 
     if let Some(file) = matches.value_of("log-file") {
-        config.log_file = file.to_owned();
+        config.log.file.filename = file.to_owned();
+        config.log_file = "".to_owned();
     }
 
     if let Some(addr) = matches.value_of("addr") {
@@ -301,7 +325,7 @@ pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
     }
 
     if persist {
-        if let Err(e) = persist_config(&config) {
+        if let Err(e) = persist_config(config) {
             fatal!("persist critical config failed: {}", e);
         }
     }

@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -114,6 +115,14 @@ impl<T: Display + Send> Scheduler<T> {
         if self.counter.load(Ordering::Acquire) >= self.pending_capacity {
             return Err(ScheduleError::Full(task));
         }
+        self.schedule_force(task)
+    }
+
+    /// Schedules a task to run.
+    ///
+    /// Different from the `schedule` function, the task will still be scheduled
+    /// if pending task number exceeds capacity.
+    pub fn schedule_force(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.counter.fetch_add(1, Ordering::SeqCst);
         self.metrics_pending_task_count.inc();
         if let Err(e) = self.sender.unbounded_send(Msg::Task(task)) {
@@ -133,6 +142,10 @@ impl<T: Display + Send> Scheduler<T> {
 
     pub fn stop(&self) {
         self.sender.close_channel();
+    }
+
+    pub fn pending_tasks(&self) -> usize {
+        self.counter.load(Ordering::Acquire)
     }
 }
 
@@ -197,6 +210,10 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
     pub fn stop_worker(mut self) {
         self.stop();
         self.worker.stop()
+    }
+
+    pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
+        self.worker.remote.clone()
     }
 }
 
@@ -265,11 +282,13 @@ impl<S: Into<String>> Builder<S> {
     }
 
     /// Pending tasks won't exceed `pending_capacity`.
+    #[must_use]
     pub fn pending_capacity(mut self, pending_capacity: usize) -> Self {
         self.pending_capacity = pending_capacity;
         self
     }
 
+    #[must_use]
     pub fn thread_count(mut self, thread_count: usize) -> Self {
         self.thread_count = thread_count;
         self
@@ -278,7 +297,7 @@ impl<S: Into<String>> Builder<S> {
     pub fn create(self) -> Worker {
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(self.name)
-            .thread_count(self.thread_count, self.thread_count)
+            .thread_count(self.thread_count, self.thread_count, self.thread_count)
             .build_single_level_pool();
         let remote = pool.remote().clone();
         let pool = Arc::new(Mutex::new(Some(pool)));
@@ -378,13 +397,13 @@ impl Worker {
         &self,
         name: S,
     ) -> LazyWorker<T> {
-        let (rx, receiver) = unbounded();
+        let (tx, rx) = unbounded();
         let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
         LazyWorker {
-            receiver: Some(receiver),
+            receiver: Some(rx),
             worker: self.clone(),
             scheduler: Scheduler::new(
-                rx,
+                tx,
                 self.counter.clone(),
                 self.pending_capacity,
                 metrics_pending_task_count.clone(),

@@ -17,6 +17,7 @@ use kvproto::tikvpb::BatchRaftMessage;
 use raft::eraftpb::Entry;
 use raftstore::errors::DiscardReason;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter};
+use tikv::server::load_statistics::ThreadLoadPool;
 use tikv::server::resolve::Callback;
 use tikv::server::{
     self, resolve, Config, ConnectionBuilder, RaftClient, StoreAddrResolver, TestRaftStoreRouter,
@@ -51,8 +52,16 @@ where
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
-    let builder =
-        ConnectionBuilder::new(env, cfg, security_mgr, resolver, router, worker.scheduler());
+    let loads = Arc::new(ThreadLoadPool::with_threshold(1000));
+    let builder = ConnectionBuilder::new(
+        env,
+        cfg,
+        security_mgr,
+        resolver,
+        router,
+        worker.scheduler(),
+        loads,
+    );
     RaftClient::new(builder)
 }
 
@@ -217,6 +226,45 @@ fn test_batch_size_limit() {
     assert_eq!(msg_count.load(Ordering::SeqCst), 10);
 }
 
+/// In edge case that the estimated size may be inaccurate, we need to ensure connection
+/// will not be broken in this case.
+#[test]
+fn test_batch_size_edge_limit() {
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (mock_server, port) = create_mock_server(service, 60200, 60300).unwrap();
+
+    let mut raft_client = get_raft_client_by_port(port);
+
+    // Put them in buffer so sibling messages will be likely be batched during sending.
+    let mut msgs = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let mut raft_m = RaftMessage::default();
+        // Magic number, this can make estimated size about 4940000, hence two messages will be
+        // batched together, but the total size will be way largher than 10MiB as there are many
+        // indexes and terms.
+        for _ in 0..38000 {
+            let mut e = Entry::default();
+            e.set_term(1);
+            e.set_index(256);
+            e.set_data(vec![b'a'; 130].into());
+            raft_m.mut_message().mut_entries().push(e);
+        }
+        msgs.push(raft_m);
+    }
+    for m in msgs {
+        raft_client.send(m).unwrap();
+    }
+    raft_client.flush();
+
+    check_msg_count(10000, &msg_count, 5);
+    // The final received message count should be 5 exactly.
+    drop(raft_client);
+    drop(mock_server);
+    assert_eq!(msg_count.load(Ordering::SeqCst), 5);
+}
+
 // Try to create a mock server with `service`. The server will be binded wiht a random
 // port chosen between [`min_port`, `max_port`]. Return `None` if no port is available.
 fn create_mock_server<T>(service: T, min_port: u16, max_port: u16) -> Option<(Server, u16)>
@@ -317,4 +365,60 @@ fn test_tombstone_block_list() {
         DiscardReason::Disconnected,
         raft_client.send(message).unwrap_err()
     );
+}
+
+#[test]
+fn test_store_allowlist() {
+    let pd_server = test_pd::Server::new(1);
+    let eps = pd_server.bind_addrs();
+    let pd_client = Arc::new(test_pd::util::new_client(eps, None));
+    let bg_worker = WorkerBuilder::new(thd_name!("background"))
+        .thread_count(2)
+        .create();
+    let resolver =
+        resolve::new_resolver::<_, _, RocksEngine>(pd_client, &bg_worker, RaftStoreBlackHole).0;
+    let mut raft_client = get_raft_client(RaftStoreBlackHole, resolver);
+
+    let msg_count1 = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count1 = Arc::new(AtomicUsize::new(0));
+    let service1 = MockKvForRaft::new(Arc::clone(&msg_count1), Arc::clone(&batch_msg_count1), true);
+    let (_mock_server1, port1) = create_mock_server(service1, 60200, 60300).unwrap();
+
+    let msg_count2 = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count2 = Arc::new(AtomicUsize::new(0));
+    let service2 = MockKvForRaft::new(Arc::clone(&msg_count2), Arc::clone(&batch_msg_count2), true);
+    let (_mock_server2, port2) = create_mock_server(service2, 60300, 60400).unwrap();
+
+    let mut store1 = metapb::Store::default();
+    store1.set_id(1);
+    store1.set_address(format!("127.0.0.1:{}", port1));
+    pd_server.default_handler().add_store(store1.clone());
+
+    let mut store2 = metapb::Store::default();
+    store2.set_id(2);
+    store2.set_address(format!("127.0.0.1:{}", port2));
+    pd_server.default_handler().add_store(store2.clone());
+
+    for _ in 0..10 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(1);
+        raft_client.send(raft_m).unwrap();
+    }
+    raft_client.flush();
+    check_msg_count(500, &msg_count1, 10);
+
+    raft_client.set_store_allowlist(vec![2, 3]);
+    for _ in 0..3 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(1);
+        assert!(raft_client.send(raft_m).is_err());
+    }
+    for _ in 0..5 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(2);
+        raft_client.send(raft_m).unwrap();
+    }
+    raft_client.flush();
+    check_msg_count(500, &msg_count1, 10);
+    check_msg_count(500, &msg_count2, 5);
 }

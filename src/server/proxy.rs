@@ -23,7 +23,7 @@ use std::time::Duration;
 const FORWARD_METADATA_KEY: &str = "tikv-forwarded-host";
 
 /// Checks if the message is supposed to send to another address.
-pub fn get_target_address<'a>(ctx: &'a RpcContext) -> &'a str {
+pub fn get_target_address<'a>(ctx: &'a RpcContext<'_>) -> &'a str {
     let metadata = ctx.request_headers();
     // In most case, forwarding is unnecessary.
     if metadata.is_empty() {

@@ -249,7 +249,7 @@ fn test_collect_applying_locks() {
 
     // Write 1 lock.
     must_kv_prewrite(
-        &store_1_client,
+        store_1_client,
         ctx,
         vec![new_mutation(Op::Put, b"k1", b"v")],
         b"k1".to_vec(),
@@ -315,7 +315,7 @@ fn test_error_in_compaction_filter() {
     let mut gc_runner = TestGCRunner::new(200);
     gc_runner.gc(&raw_engine);
 
-    match gc_runner.gc_receiver.try_next().unwrap().unwrap().unwrap() {
+    match gc_runner.gc_receiver.recv().unwrap() {
         GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.as_inner().count(), 2),
         GcTask::GcKeys { .. } => {}
         _ => unreachable!(),

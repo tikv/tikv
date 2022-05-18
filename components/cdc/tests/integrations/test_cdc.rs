@@ -3,26 +3,21 @@
 use std::sync::*;
 use std::time::Duration;
 
-use crate::{new_event_feed, TestSuite};
+use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
 use concurrency_manager::ConcurrencyManager;
 use futures::executor::block_on;
 use futures::SinkExt;
 use grpcio::WriteFlags;
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataEvent,
-};
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
-use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {
@@ -55,7 +50,7 @@ fn test_cdc_basic() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams.len(), 1);
+                assert_eq!(d.downstreams().len(), 1);
             }),
         )))
         .unwrap();
@@ -148,7 +143,7 @@ fn test_cdc_basic() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams.len(), 1);
+                assert_eq!(d.downstreams().len(), 1);
             }),
         )))
         .unwrap();
@@ -170,7 +165,7 @@ fn test_cdc_basic() {
     let mut req = suite.new_changedata_request(1);
     req.set_region_epoch(Default::default()); // Zero region epoch.
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     event_feed_wrap.replace(Some(resp_rx));
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -221,7 +216,7 @@ fn test_cdc_not_leader() {
             1,
             Box::new(move |delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams.len(), 1);
+                assert_eq!(d.downstreams().len(), 1);
                 tx_.send(()).unwrap();
             }),
         )))
@@ -244,22 +239,23 @@ fn test_cdc_not_leader() {
         .into_iter()
         .find(|p| *p != leader)
         .unwrap();
-    suite.cluster.must_transfer_leader(1, peer);
+    suite.cluster.must_transfer_leader(1, peer.clone());
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
+            assert_eq!(*err.get_not_leader().get_leader(), peer, "{:?}", err);
         }
         other => panic!("unknown event {:?}", other),
     }
     assert!(
-        !suite
+        suite
             .obs
             .get(&leader.get_store_id())
             .unwrap()
             .is_subscribed(1)
-            .is_some()
+            .is_none()
     );
 
     // Sleep a while to make sure the stream is deregistered.
@@ -276,24 +272,70 @@ fn test_cdc_not_leader() {
     rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
     // Try to subscribe again.
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     // Should failed with not leader error.
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
+            assert_eq!(*err.get_not_leader().get_leader(), peer, "{:?}", err);
         }
         other => panic!("unknown event {:?}", other),
     }
     assert!(
-        !suite
+        suite
             .obs
             .get(&leader.get_store_id())
             .unwrap()
             .is_subscribed(1)
-            .is_some()
+            .is_none()
     );
+
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_cluster_id_mismatch() {
+    let mut suite = TestSuite::new(3);
+
+    // Send request with mismatched cluster id.
+    let mut req = suite.new_changedata_request(1);
+    req.mut_header().set_ticdc_version("5.3.0".into());
+    req.mut_header().set_cluster_id(DEFAULT_CLUSTER_ID + 1);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+
+    // Assert mismatch.
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Error(err) => {
+            assert!(err.has_cluster_id_mismatch(), "{:?}", err);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Low version request.
+    req.mut_header().set_ticdc_version("4.0.8".into());
+    req.mut_header().set_cluster_id(DEFAULT_CLUSTER_ID + 1);
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1);
+
+    // Should without error.
+    match events.pop().unwrap().event.unwrap() {
+        // Even if there is no write,
+        // it should always outputs an Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
 
     event_feed_wrap.replace(None);
     suite.stop();
@@ -439,7 +481,7 @@ fn test_cdc_scan() {
     req.checkpoint_ts = checkpoint_ts.into_inner();
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.replace(Some(resp_rx));
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     if events.len() == 1 {
         events.extend(receive_event(false).events.to_vec());
@@ -531,7 +573,7 @@ fn test_cdc_tso_failure() {
 fn test_region_split() {
     let cluster = new_server_cluster(1, 1);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(1, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let region = suite.cluster.get_region(&[]);
     let mut req = suite.new_changedata_request(region.get_id());
@@ -641,7 +683,7 @@ fn test_duplicate_subscribe() {
         other => panic!("unknown event {:?}", other),
     }
     // Try to subscribe again.
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     // Should receive duplicate request error.
@@ -754,7 +796,7 @@ fn test_old_value_basic() {
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     sleep_ms(1000);
 
     // Insert value
@@ -866,7 +908,7 @@ fn test_old_value_basic() {
 
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.replace(Some(resp_rx));
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut event_count = 0;
     loop {
         let event = receive_event(false);
@@ -911,12 +953,12 @@ fn test_old_value_multi_changefeeds() {
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx_1, event_feed_wrap_1, receive_event_1) =
         new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx_1 = block_on(req_tx_1.send((req.clone(), WriteFlags::default()))).unwrap();
+    block_on(req_tx_1.send((req.clone(), WriteFlags::default()))).unwrap();
 
     req.set_extra_op(ExtraOp::Noop);
     let (mut req_tx_2, event_feed_wrap_2, receive_event_2) =
         new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx_2 = block_on(req_tx_2.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx_2.send((req, WriteFlags::default()))).unwrap();
 
     sleep_ms(1000);
     // Insert value
@@ -929,6 +971,7 @@ fn test_old_value_multi_changefeeds() {
     suite.must_kv_prewrite(1, vec![m1], k1.clone(), ts1);
     let ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k1.clone()], ts1, ts2);
+
     // Update value
     let mut m2 = Mutation::default();
     m2.set_op(Op::Put);
@@ -938,6 +981,8 @@ fn test_old_value_multi_changefeeds() {
     suite.must_kv_prewrite(1, vec![m2], k1.clone(), ts3);
     let ts4 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k1], ts3, ts4);
+
+    // The downstream 1 can get old values as expected.
     let mut event_count = 0;
     loop {
         let events = receive_event_1(false).events.to_vec();
@@ -963,6 +1008,7 @@ fn test_old_value_multi_changefeeds() {
         }
     }
 
+    // The downstream 2 can also get old values because `req`.`extra_op` field is ignored now.
     event_count = 0;
     loop {
         let events = receive_event_2(false).events.to_vec();
@@ -971,7 +1017,11 @@ fn test_old_value_multi_changefeeds() {
                 Event_oneof_event::Entries(mut es) => {
                     for row in es.take_entries().to_vec() {
                         if row.get_type() == EventLogType::Prewrite {
-                            assert_eq!(row.get_old_value(), b"");
+                            if row.get_start_ts() == ts3.into_inner() {
+                                assert_eq!(row.get_old_value(), b"v1");
+                            } else {
+                                assert_eq!(row.get_old_value(), b"");
+                            }
                             event_count += 1;
                         }
                     }
@@ -1019,7 +1069,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     req.set_checkpoint_ts(100);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     // Make sure region 1 is registered.
     let mut events = receive_event(false).events;
     assert_eq!(events.len(), 1);
@@ -1063,7 +1113,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
 
     let _guard = lock_key(b"a", 90);
     // The resolved_ts should be blocked by the mem lock but it's already greater than 90.
-    // Retry until receiving an unchanged resovled_ts because the first several resolved ts received
+    // Retry until receiving an unchanged resolved_ts because the first several resolved ts received
     // might be updated before acquiring the lock.
     let mut last_resolved_ts = 0;
     let mut success = false;
@@ -1176,7 +1226,7 @@ fn test_old_value_1pc() {
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
 
     // Insert value
     let mut m1 = Mutation::default();
@@ -1237,7 +1287,7 @@ fn test_old_value_cache_hit() {
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(mut es) => {
@@ -1271,7 +1321,7 @@ fn test_old_value_cache_hit() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1313,7 +1363,7 @@ fn test_old_value_cache_hit() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1355,7 +1405,7 @@ fn test_old_value_cache_hit() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1386,7 +1436,7 @@ fn test_old_value_cache_hit_pessimistic() {
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(mut es) => {
@@ -1409,7 +1459,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1436,7 +1486,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1468,7 +1518,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1495,7 +1545,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1522,7 +1572,7 @@ fn test_old_value_cache_hit_pessimistic() {
 fn test_region_created_replicate() {
     let cluster = new_server_cluster(0, 2);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(2, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let region = suite.cluster.get_region(&[]);
     suite
@@ -1844,7 +1894,7 @@ fn test_cdc_extract_rollback_if_gc_fence_set() {
 fn test_term_change() {
     let cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(3, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let region = suite.cluster.get_region(&[]);
     suite
         .cluster
@@ -1896,7 +1946,7 @@ fn test_cdc_no_write_corresponding_to_lock() {
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
 
     // Txn1 commit_ts = 15
     let mut m1 = Mutation::default();
@@ -1941,7 +1991,7 @@ fn test_cdc_write_rollback_when_no_lock() {
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
 
     // Txn1 commit_ts = 15
     let mut m1 = Mutation::default();
@@ -2004,7 +2054,7 @@ fn test_resolved_ts_cluster_upgrading() {
             .reset_version("4.0.0")
             .unwrap();
     }
-    let mut suite = TestSuite::with_cluster(3, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let region = suite.cluster.get_region(&[]);
     let req = suite.new_changedata_request(region.id);
@@ -2035,4 +2085,32 @@ fn test_resolved_ts_cluster_upgrading() {
 
     event_feed_wrap.replace(None);
     suite.stop();
+}
+
+#[test]
+fn test_resolved_ts_with_learners() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new()
+        .cluster(cluster)
+        .build_with_cluster_runner(|cluster| {
+            let r = cluster.run_conf_change();
+            cluster.pd_client.must_add_peer(r, new_learner_peer(2, 2));
+        });
+
+    let rid = suite.cluster.get_region(&[]).id;
+    let req = suite.new_changedata_request(rid);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    for _ in 0..10 {
+        let event = receive_event(true);
+        if event.has_resolved_ts() {
+            assert!(event.get_resolved_ts().regions == vec![rid]);
+            drop(receive_event);
+            suite.stop();
+            return;
+        }
+    }
+    panic!("resolved timestamp should be advanced correctly");
 }

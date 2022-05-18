@@ -3,12 +3,13 @@
 use std::sync::atomic::*;
 use std::sync::*;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 #[test]
@@ -87,7 +88,7 @@ fn test_proposal_prevent_sleep() {
         RegionPacketFilter::new(1, 1).direction(Direction::Send),
     ));
     let conf_change = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));
-    let mut admin_req = new_admin_request(1, &region.get_region_epoch(), conf_change);
+    let mut admin_req = new_admin_request(1, region.get_region_epoch(), conf_change);
     admin_req.mut_header().set_peer(new_peer(1, 1));
     let (cb, _rx) = make_cb(&admin_req);
     cluster
@@ -184,7 +185,8 @@ fn test_transfer_leader_delay() {
 
     cluster.transfer_leader(1, new_peer(3, 3));
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(3) && messages.lock().unwrap().is_empty() {
+    while timer.saturating_elapsed() < Duration::from_secs(3) && messages.lock().unwrap().is_empty()
+    {
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(messages.lock().unwrap().len(), 1);
@@ -206,7 +208,7 @@ fn test_transfer_leader_delay() {
         .unwrap();
 
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(3) {
+    while timer.saturating_elapsed() < Duration::from_secs(3) {
         let resp = cluster.request(
             b"k2",
             vec![new_put_cmd(b"k2", b"v2")],
@@ -308,6 +310,8 @@ fn test_inconsistent_configuration() {
     cluster.stop_node(3);
     cluster.run_node(3).unwrap();
     cluster.must_put(b"k2", b"v2");
+    // In case leader changes.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Wait till leader peer goes to sleep.
     thread::sleep(
@@ -464,7 +468,7 @@ fn test_leader_demoted_when_hibernated() {
                 break;
             }
         }
-        if timer.elapsed() > Duration::from_secs(5) {
+        if timer.saturating_elapsed() > Duration::from_secs(5) {
             panic!("peer 3 is still not leader after 5 seconds.");
         }
         let region = cluster.get_region(b"k1");

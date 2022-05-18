@@ -287,9 +287,10 @@ pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
 
 #[cfg(test)]
 mod tests {
+    use crate::time::Instant;
     use crossbeam::channel::*;
     use std::thread;
-    use std::time::*;
+    use std::time::Duration;
 
     #[test]
     fn test_bounded() {
@@ -310,7 +311,7 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         drop(rx);
@@ -360,11 +361,11 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx1.recv(), Ok(10));
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
         let timer = Instant::now();
         tx2.send(2).unwrap();
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(50), "{:?}", elapsed);
     }
 
@@ -382,7 +383,7 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         drop(rx);
@@ -406,7 +407,7 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx.recv(), Ok(10));
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         let (tx, rx) = super::unbounded::<u64>();
@@ -457,7 +458,7 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         tx.force_send(1).unwrap();
@@ -486,7 +487,7 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx.recv(), Ok(10));
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
     }
 }
