@@ -1,6 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::AsRef, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    convert::AsRef,
+    fmt,
+    marker::PhantomData,
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
@@ -664,6 +671,11 @@ where
                 return;
             }
             concurrency_manager.update_max_ts(TimeStamp::new(rts));
+            let in_flight = crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.load(Ordering::SeqCst);
+            if in_flight > 0 {
+                warn!("inflight leader detected, skipping advancing resolved ts"; "in_flight" => %in_flight);
+                return;
+            }
             if let Err(err) = pd_cli
                 .update_service_safe_point(
                     format!("backup-stream-{}-{}", task, store_id),
@@ -805,6 +817,7 @@ where
                 metrics::INITIAL_SCAN_REASON
                     .with_label_values(&["leader-changed"])
                     .inc();
+                crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_sub(1, Ordering::SeqCst);
             }
             ObserveOp::Stop { ref region } => {
                 self.subs.deregister_region(region, |_, _| true);
