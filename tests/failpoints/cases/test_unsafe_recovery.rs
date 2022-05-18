@@ -19,7 +19,7 @@ fn test_unsafe_recovery_send_report() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    configure_for_lease_read(&mut cluster, None, None);
+    // configure_for_lease_read(&mut cluster, None, None);
 
     // Makes the leadership definite.
     let store2_peer = find_peer(&region, nodes[1]).unwrap().to_owned();
@@ -76,9 +76,7 @@ fn test_unsafe_recovery_send_report() {
 fn test_unsafe_recovery_execution_result_report() {
     let mut cluster = new_server_cluster(0, 3);
     // Prolong force leader time.
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
-    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::minutes(10);
-    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(2);
+    configure_for_unsafe_recovery(&mut cluster);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -86,7 +84,6 @@ fn test_unsafe_recovery_execution_result_report() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    configure_for_lease_read(&mut cluster, None, None);
 
     // Makes the leadership definite.
     let store2_peer = find_peer(&region, nodes[1]).unwrap().to_owned();
@@ -283,6 +280,8 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
 #[test]
 fn test_unsafe_recovery_demotion_reentrancy() {
     let mut cluster = new_server_cluster(0, 3);
+    configure_for_unsafe_recovery(&mut cluster);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -290,7 +289,6 @@ fn test_unsafe_recovery_demotion_reentrancy() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    configure_for_lease_read(&mut cluster, None, None);
 
     // Makes the leadership definite.
     let store2_peer = find_peer(&region, nodes[2]).unwrap().to_owned();
@@ -375,6 +373,7 @@ fn test_unsafe_recovery_demotion_reentrancy() {
 #[test]
 fn test_unsafe_recovery_create_destroy_reentrancy() {
     let mut cluster = new_server_cluster(0, 3);
+    configure_for_unsafe_recovery(&mut cluster);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -382,7 +381,6 @@ fn test_unsafe_recovery_create_destroy_reentrancy() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    configure_for_lease_read(&mut cluster, None, None);
 
     // Makes the leadership definite.
     let store2_peer = find_peer(&region, nodes[1]).unwrap().to_owned();
