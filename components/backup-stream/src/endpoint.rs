@@ -22,7 +22,7 @@ use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
     config::ReadableDuration,
-    debug, error, info,
+    debug, defer, error, info,
     time::Instant,
     warn,
     worker::{Runnable, Scheduler},
@@ -45,7 +45,7 @@ use crate::{
         store::{EtcdStore, MetaStore},
         MetadataClient, MetadataEvent, StreamTask,
     },
-    metrics,
+    metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL},
     subscription_track::SubscriptionTracer,
@@ -236,7 +236,8 @@ where
     fn on_fatal_error(&self, task: String, err: Box<Error>) {
         // Let's pause the task locally first.
         let start_ts = self.unload_task(&task).map(|task| task.start_ts);
-        err.report(format_args!("fatal for task {}", err));
+        err.report_fatal();
+        metrics::update_task_status(TaskStatus::Error, &task);
 
         let meta_cli = self.get_meta_client();
         let store_id = self.store_id;
@@ -244,7 +245,6 @@ where
         let register_safepoint = self
             .register_service_safepoint(task.clone(), TimeStamp::new(start_ts.unwrap_or_default()));
         self.pool.block_on(async move {
-            // TODO: also pause the task using the meta client.
             let err_fut = async {
                 register_safepoint.await?;
                 meta_cli.pause(&task).await?;
@@ -505,6 +505,7 @@ where
                 "register backup stream task";
                 "task" => ?task,
             );
+            let task_name = task.info.get_name().to_owned();
             // clean the safepoint created at pause(if there is)
             self.pool.spawn(
                 self.pd_client
@@ -564,6 +565,7 @@ where
                     }
                 }
             });
+            metrics::update_task_status(TaskStatus::Running, &task_name);
         };
     }
 
@@ -593,6 +595,8 @@ where
                     }),
             );
         }
+
+        metrics::update_task_status(TaskStatus::Paused, task);
     }
 
     pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
@@ -966,6 +970,12 @@ where
 
     pub fn run_task(&self, task: Task) {
         debug!("run backup stream task"; "task" => ?task);
+        let now = Instant::now_coarse();
+        let label = task.label();
+        defer! {
+            metrics::INTERNAL_ACTOR_MESSAGE_HANDLE_DURATION.with_label_values(&[label])
+                .observe(now.saturating_elapsed_secs())
+        }
         match task {
             Task::WatchTask(op) => self.handle_watch_task(op),
             Task::BatchEvent(events) => self.do_backup(events),
@@ -1106,6 +1116,32 @@ impl fmt::Debug for Task {
 impl fmt::Display for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl Task {
+    fn label(&self) -> &'static str {
+        match self {
+            Task::WatchTask(w) => match w {
+                TaskOp::AddTask(_) => "watch_task.add",
+                TaskOp::RemoveTask(_) => "watch_task.remove",
+                TaskOp::PauseTask(_) => "watch_task.pause",
+                TaskOp::ResumeTask(_) => "watch_task.resume",
+            },
+            Task::BatchEvent(_) => "batch_event",
+            Task::ChangeConfig(_) => "change_config",
+            Task::Flush(_) => "flush",
+            Task::ModifyObserve(o) => match o {
+                ObserveOp::Start { .. } => "modify_observe.start",
+                ObserveOp::Stop { .. } => "modify_observe.stop",
+                ObserveOp::CheckEpochAndStop { .. } => "modify_observe.check_epoch_and_stop",
+                ObserveOp::RefreshResolver { .. } => "modify_observe.refresh_resolver",
+                ObserveOp::NotifyFailToStartObserve { .. } => "modify_observe.retry",
+            },
+            Task::ForceFlush(_) => "force_flush",
+            Task::FatalError(..) => "fatal_error",
+            Task::Sync(..) => "sync",
+        }
     }
 }
 
