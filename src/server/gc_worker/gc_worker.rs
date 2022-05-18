@@ -736,7 +736,6 @@ where
 
         for (cf, details) in stats.details_enum().iter() {
             for (tag, count) in details.iter() {
-                println!("cf:{},tag:{},count:{}", cf, tag, count);
                 GC_KEYS_COUNTER_STATIC
                     .get(*cf)
                     .get(*tag)
@@ -1900,7 +1899,6 @@ mod tests {
         runner
             .raw_gc_keys(to_gc_keys, TimeStamp::new(120), Some((1, ri_provider)))
             .unwrap();
-        runner.update_statistics_metrics();
 
         assert_eq!(7, runner.stats.data.next);
         assert_eq!(2, runner.stats.data.seek);
