@@ -233,7 +233,7 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
             batch_commands(&ctx, &client, get_command, &start_key);
             check_split_key(
                 cluster,
-                F::encode_raw_key_owned(start_key.clone(), None).into_encoded(),
+                F::encode_raw_key_owned(start_key, None).into_encoded(),
                 None,
             );
             check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1000)
