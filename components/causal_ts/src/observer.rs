@@ -54,18 +54,9 @@ impl<Ts: CausalTsProvider> Clone for CausalObserver<Ts> {
 const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
 
 impl<Ts: CausalTsProvider> CausalObserver<Ts> {
-    #[cfg(not(test))]
-    fn region_is_leader(&self, region_id: u64) -> bool {
-        let region_map = self.region_map.read();
-        region_map
-            .get(&region_id)
-            .unwrap()
-            .is_leader
-            .load(Ordering::Relaxed)
-    }
-
-    #[cfg(test)]
-    // `region_id` not in `region_map` should happen only in test.
+    // Note that `region_id` not in `region_map` would happen in test.
+    // Some test cases do not have coprocessor to deal with "on_region_changed".
+    // TODO: make test cases handle "on_region_changed".
     fn region_is_leader(&self, region_id: u64) -> bool {
         let region_map = self.region_map.read();
         region_map
