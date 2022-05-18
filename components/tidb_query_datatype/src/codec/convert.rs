@@ -708,19 +708,18 @@ pub fn produce_str_with_specified_tp<'a>(
     // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
     // char count and truncate to flen chars if it is too long.
     if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
-        let truncate_info = {
+        let (char_count, truncate_pos) = {
             let s = &String::from_utf8_lossy(&s);
             let mut truncate_pos = 0;
-            s.char_indices().take(flen).for_each(|(_, utf8_char)| {
+            s.chars().take(flen).for_each(|utf8_char| {
                 if utf8_char == char::REPLACEMENT_CHARACTER {
                     truncate_pos += 1;
                 } else {
                     truncate_pos += utf8_char.len_utf8();
                 }
             });
-            (s.char_indices().count(), truncate_pos)
+            (s.chars().count(), truncate_pos)
         };
-        let (char_count, truncate_pos) = truncate_info;
         if char_count <= flen {
             return Ok(s);
         }
