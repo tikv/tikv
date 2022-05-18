@@ -3959,7 +3959,7 @@ mod tests {
 
         let old = TiKvConfig::default();
         let mut incoming = TiKvConfig::default();
-        incoming.coprocessor.region_split_keys = 10000;
+        incoming.coprocessor.region_split_keys = Some(10000);
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
         incoming.storage.io_rate_limit.import_priority = file_system::IOPriority::High;

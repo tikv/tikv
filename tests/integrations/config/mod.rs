@@ -686,7 +686,7 @@ fn test_serde_custom_tikv_config() {
         region_max_size: Some(ReadableSize::mb(12)),
         region_split_size: ReadableSize::mb(12),
         region_max_keys: Some(100000),
-        region_split_keys: 100000,
+        region_split_keys: Some(100000),
         consistency_check_method: ConsistencyCheckMethod::Raw,
         perf_level: PerfLevel::Uninitialized,
         enable_region_bucket: true,

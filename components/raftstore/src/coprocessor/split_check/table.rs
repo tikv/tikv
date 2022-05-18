@@ -328,7 +328,7 @@ mod tests {
             region_split_size: ReadableSize::gb(1),
             // Try to "disable" keys split
             region_max_keys: Some(2000000000),
-            region_split_keys: 1000000000,
+            region_split_keys: Some(1000000000),
             ..Default::default()
         };
 

@@ -32,7 +32,7 @@ pub struct Config {
     /// And the number of keys in [a,b), [b,c), [c,d) will be region_split_keys.
     /// by default, region_max_keys = region_split_keys * 2 / 3.
     pub region_max_keys: Option<u64>,
-    pub region_split_keys: u64,
+    pub region_split_keys: Option<u64>,
 
     /// ConsistencyCheckMethod can not be chanaged dynamically.
     #[online_config(skip)]
@@ -85,7 +85,7 @@ impl Default for Config {
             batch_split_limit: BATCH_SPLIT_LIMIT,
             region_split_size: split_size,
             region_max_size: None,
-            region_split_keys: SPLIT_KEYS,
+            region_split_keys: None,
             region_max_keys: None,
             consistency_check_method: ConsistencyCheckMethod::Mvcc,
             perf_level: PerfLevel::Uninitialized,
@@ -100,7 +100,7 @@ impl Default for Config {
 impl Config {
     pub fn region_max_keys(&self) -> u64 {
         self.region_max_keys
-            .unwrap_or(self.region_split_keys / 2 * 3)
+            .unwrap_or(self.region_split_size.0 / 1024 / 1024 * 10000 / 2 * 3)
     }
 
     pub fn region_max_size(&self) -> ReadableSize {
@@ -108,7 +108,17 @@ impl Config {
             .unwrap_or(self.region_split_size / 2 * 3)
     }
 
+    pub fn region_split_keys(&self) -> u64 {
+        // Assume the average size of KVs is 100B.
+        self.region_split_keys
+            .unwrap_or((self.region_split_size.as_mb_f64() * 10000.0) as u64)
+    }
+
     pub fn validate(&mut self) -> Result<()> {
+        if self.region_split_keys.is_none() {
+            self.region_split_keys = Some((self.region_split_size.as_mb_f64() * 10000.0) as u64);
+        }
+
         match self.region_max_size {
             Some(region_max_size) => {
                 if region_max_size.0 < self.region_split_size.0 {
@@ -124,15 +134,15 @@ impl Config {
 
         match self.region_max_keys {
             Some(region_max_keys) => {
-                if region_max_keys < self.region_split_keys {
+                if region_max_keys < self.region_split_keys() {
                     return Err(box_err!(
                         "region max keys {} must >= split keys {}",
                         region_max_keys,
-                        self.region_split_keys
+                        self.region_split_keys()
                     ));
                 }
             }
-            None => self.region_max_keys = Some(self.region_split_keys / 2 * 3),
+            None => self.region_max_keys = Some(self.region_split_keys() / 2 * 3),
         }
         if self.enable_region_bucket {
             if self.region_split_size.0 < self.region_bucket_size.0 {
@@ -206,12 +216,12 @@ mod tests {
 
         cfg = Config::default();
         cfg.region_max_keys = Some(10);
-        cfg.region_split_keys = 20;
+        cfg.region_split_keys = Some(20);
         assert!(cfg.validate().is_err());
 
         cfg = Config::default();
         cfg.region_max_keys = None;
-        cfg.region_split_keys = 20;
+        cfg.region_split_keys = Some(20);
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.region_max_keys, Some(25));
 
@@ -220,5 +230,10 @@ mod tests {
         cfg.region_split_size = ReadableSize(20);
         cfg.region_bucket_size = ReadableSize(30);
         assert!(cfg.validate().is_ok());
+
+        cfg = Config::default();
+        cfg.region_split_size = ReadableSize::mb(20);
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.region_split_keys, Some(200000));
     }
 }

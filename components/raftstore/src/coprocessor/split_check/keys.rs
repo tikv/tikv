@@ -137,7 +137,7 @@ where
                 // Need to check keys.
                 host.add_checker(Box::new(Checker::new(
                     host.cfg.region_max_keys(),
-                    host.cfg.region_split_keys,
+                    host.cfg.region_split_keys(),
                     host.cfg.batch_split_limit,
                     policy,
                 )));
@@ -166,7 +166,7 @@ where
             // Need to check keys.
             host.add_checker(Box::new(Checker::new(
                 host.cfg.region_max_keys(),
-                host.cfg.region_split_keys,
+                host.cfg.region_split_keys(),
                 host.cfg.batch_split_limit,
                 policy,
             )));
@@ -270,7 +270,7 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
             region_max_keys: Some(100),
-            region_split_keys: 80,
+            region_split_keys: Some(80),
             batch_split_limit: 5,
             ..Default::default()
         };
