@@ -24,6 +24,7 @@ use crate::CausalTsProvider;
 
 #[derive(Default, Debug)]
 struct RegionInfo {
+    // Note that `is_leader` is observed by `on_role_change`. It would differ from current raft state.
     pub is_leader: AtomicBool,
     // TODO: Add more fields to indicate flush state of region.
     // To help regions without leader change to utilize existing batches.
@@ -51,6 +52,27 @@ impl<Ts: CausalTsProvider> Clone for CausalObserver<Ts> {
 
 // Causal observer's priority should be higher than all other observers, to avoid being bypassed.
 const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
+
+impl<Ts: CausalTsProvider> CausalObserver<Ts> {
+    #[cfg(not(test))]
+    fn region_is_leader(&self, region_id: u64) -> bool {
+        let region_map = self.region_map.read();
+        region_map
+            .get(&region_id)
+            .unwrap()
+            .is_leader
+            .load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    // `region_id` not in `region_map` should happen only in test.
+    fn region_is_leader(&self, region_id: u64) -> bool {
+        let region_map = self.region_map.read();
+        region_map
+            .get(&region_id)
+            .map_or(true, |info| info.is_leader.load(Ordering::Relaxed))
+    }
+}
 
 impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
     pub fn new(causal_ts_provider: Arc<Ts>) -> Self {
@@ -91,14 +113,7 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
         }) {
             if ts.is_none() {
                 let region_id = ctx.region().get_id();
-                let is_leader = self
-                    .region_map
-                    .read()
-                    .get(&region_id)
-                    .unwrap()
-                    .is_leader
-                    .load(Ordering::Relaxed);
-                if !is_leader {
+                if !self.region_is_leader(region_id) {
                     // Fix issue #12498.
                     // In scenario of frequent leader transfer, the observing of change from
                     // follower to leader by `on_role_change` would be later than the real role
@@ -106,6 +121,8 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
                     // As raft state must be leader when reach here, `!is_leader` just indicates that
                     // the change from follower to leader is not observed yet.
                     // So it is necessary to flush timestamp here for causality correctness.
+                    // TODO: reduce the duplicated flush in following `on_role_change`.
+                    // TODO: `flush()` return a ts.
                     self.causal_ts_provider
                         .flush()
                         .map_err(|err| -> coprocessor::Error {
