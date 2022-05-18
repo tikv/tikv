@@ -2018,18 +2018,25 @@ where
                                 "Unsafe recovery, exiting joint state";
                                 "region_id" => self.region().get_id()
                             );
-                            self.propose_raft_command_internal(
-                                exit_joint_request(self.region(), &self.fsm.peer.peer),
-                                Callback::<EK::Snapshot>::write(Box::new(|resp| {
-                                    if resp.response.get_header().has_error() {
-                                        error!(
-                                            "Unsafe recovery, fail to exit joint state";
-                                            "err" => ?resp.response.get_header().get_error(),
-                                        );
-                                    }
-                                })),
-                                DiskFullOpt::AllowedOnAlmostFull,
-                            );
+                            if self.fsm.peer.is_force_leader() {
+                                self.propose_raft_command_internal(
+                                    exit_joint_request(self.region(), &self.fsm.peer.peer),
+                                    Callback::<EK::Snapshot>::write(Box::new(|resp| {
+                                        if resp.response.get_header().has_error() {
+                                            error!(
+                                                "Unsafe recovery, fail to exit joint state";
+                                                "err" => ?resp.response.get_header().get_error(),
+                                            );
+                                        }
+                                    })),
+                                    DiskFullOpt::AllowedOnAlmostFull,
+                                );
+                            } else {
+                                error!(
+                                    "Unsafe recovery, lost forced leadership while trying to exit joint state";
+                                    "region_id" => self.region().get_id(),
+                                );
+                            }
                         }
 
                         self.fsm.peer.unsafe_recovery_state = None;
@@ -5500,6 +5507,10 @@ where
             // If the force leader state lasts a long time, it probably means PD recovery process aborts for some reasons.
             // So just exit to avoid blocking the read and write requests for this peer.
             if time.saturating_elapsed() > self.ctx.cfg.peer_stale_state_check_interval.0 {
+                warn!(
+                    "Unsafe recovery, step down as force leader due to holding it too long";
+                    "duration" => ?time.saturating_elapsed(),
+                );
                 self.on_exit_force_leader();
             }
         }

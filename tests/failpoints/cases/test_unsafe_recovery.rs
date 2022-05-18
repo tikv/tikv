@@ -75,6 +75,10 @@ fn test_unsafe_recovery_send_report() {
 #[test]
 fn test_unsafe_recovery_execution_result_report() {
     let mut cluster = new_server_cluster(0, 3);
+    // Prolong force leader time.
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::minutes(10);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(2);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
