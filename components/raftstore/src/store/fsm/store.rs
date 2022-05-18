@@ -2140,7 +2140,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_compaction_finished(&mut self, event: EK::CompactedEvent) {
-        if event.is_size_declining_trivial(self.ctx.cfg.region_split_check_diff.0) {
+        if event.is_size_declining_trivial(self.ctx.cfg.region_split_check_diff().0) {
             return;
         }
 
@@ -2154,7 +2154,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             let meta = self.ctx.store_meta.lock().unwrap();
             event.calc_ranges_declined_bytes(
                 &meta.region_ranges,
-                self.ctx.cfg.region_split_check_diff.0 / 16,
+                self.ctx.cfg.region_split_check_diff().0 / 16,
             )
         };
 
