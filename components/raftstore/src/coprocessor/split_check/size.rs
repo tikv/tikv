@@ -256,7 +256,7 @@ pub mod tests {
     };
     use tempfile::Builder;
     use tikv_util::{config::ReadableSize, worker::Runnable};
-    use txn_types::Key;
+    use txn_types::{Key, TimeStamp};
 
     use super::{Checker, *};
     use crate::{
@@ -341,6 +341,7 @@ pub mod tests {
         bucket_range: Option<BucketRange>,
         min_leap: i32,
         max_leap: i32,
+        mvcc: bool,
     ) {
         loop {
             if let Ok((
@@ -363,14 +364,22 @@ pub mod tests {
                 }
                 if bucket_keys.len() >= 2 {
                     for i in 0..bucket_keys.len() - 1 {
-                        let start: i32 = std::str::from_utf8(&bucket_keys[i])
-                            .unwrap()
-                            .parse()
-                            .unwrap();
-                        let end: i32 = std::str::from_utf8(&bucket_keys[i + 1])
-                            .unwrap()
-                            .parse()
-                            .unwrap();
+                        let start_vec = if !mvcc {
+                            bucket_keys[i].clone()
+                        } else {
+                            Key::from_encoded(bucket_keys[i].clone())
+                                .into_raw()
+                                .unwrap()
+                        };
+                        let end_vec = if !mvcc {
+                            bucket_keys[i + 1].clone()
+                        } else {
+                            Key::from_encoded(bucket_keys[i + 1].clone())
+                                .into_raw()
+                                .unwrap()
+                        };
+                        let start: i32 = std::str::from_utf8(&start_vec).unwrap().parse().unwrap();
+                        let end: i32 = std::str::from_utf8(&end_vec).unwrap().parse().unwrap();
                         assert!(end - start >= min_leap && end - start < max_leap);
                     }
                 }
@@ -505,7 +514,7 @@ pub mod tests {
         ));
     }
 
-    fn test_generate_bucket_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
+    fn test_generate_bucket_impl(cfs_with_range_prop: &[CfName], data_cf: CfName, mvcc: bool) {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::default();
@@ -547,11 +556,19 @@ pub mod tests {
             ..Default::default()
         };
 
+        let key_gen = |bytes: &[u8], mvcc: bool, ts: TimeStamp| {
+            if !mvcc {
+                keys::data_key(bytes)
+            } else {
+                keys::data_key(Key::from_raw(bytes).append_ts(ts).as_encoded())
+            }
+        };
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
         for i in 0..2000 {
-            // kv size is (6+1)*2 = 10, given bucket size is 3000, expect each bucket has about 210 keys
-            let s = keys::data_key(format!("{:04}00", i).as_bytes());
+            // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has about 210 keys
+            // if mvcc, kv size is about 18*2 = 36, expect each bucket has about 80 keys
+            let s = key_gen(format!("{:04}00", i).as_bytes(), mvcc, i.into());
             engine.put_cf(data_cf, &s, &s).unwrap();
             if i % 10 == 0 && i > 0 {
                 engine.flush_cf(data_cf, true).unwrap();
@@ -565,7 +582,11 @@ pub mod tests {
             None,
         ));
 
-        must_generate_buckets_approximate(&rx, None, 15000, 45000);
+        if !mvcc {
+            must_generate_buckets_approximate(&rx, None, 15000, 45000, mvcc);
+        } else {
+            must_generate_buckets_approximate(&rx, None, 7000, 15000, mvcc);
+        }
 
         let start = format!("{:04}", 0).into_bytes();
         let end = format!("{:04}", 20).into_bytes();
@@ -573,7 +594,8 @@ pub mod tests {
         // insert keys into 0000 ~ 0020 with 000000 ~ 002000
         for i in 0..2000 {
             // kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has about 210 keys
-            let s = keys::data_key(format!("{:06}", i).as_bytes());
+            // if mvcc, kv size is about 18*2 = 36, expect each bucket has about 80 keys
+            let s = key_gen(format!("{:06}", i).as_bytes(), mvcc, i.into());
             engine.put_cf(data_cf, &s, &s).unwrap();
             if i % 10 == 0 {
                 engine.flush_cf(data_cf, true).unwrap();
@@ -587,7 +609,11 @@ pub mod tests {
             Some(vec![BucketRange(start.clone(), end.clone())]),
         ));
 
-        must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 150, 450);
+        if !mvcc {
+            must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 150, 450, mvcc);
+        } else {
+            must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 70, 150, mvcc);
+        }
         drop(rx);
     }
 
@@ -602,10 +628,15 @@ pub mod tests {
 
     #[test]
     fn test_generate_bucket_by_approximate() {
-        test_generate_bucket_impl(&[CF_DEFAULT, CF_WRITE], CF_DEFAULT);
-        test_generate_bucket_impl(&[CF_DEFAULT, CF_WRITE], CF_WRITE);
         for cf in LARGE_CFS {
-            test_generate_bucket_impl(LARGE_CFS, cf);
+            test_generate_bucket_impl(LARGE_CFS, cf, false);
+        }
+    }
+
+    #[test]
+    fn test_generate_bucket_mvcc_by_approximate() {
+        for cf in LARGE_CFS {
+            test_generate_bucket_impl(LARGE_CFS, cf, true);
         }
     }
 
