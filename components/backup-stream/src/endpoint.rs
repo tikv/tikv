@@ -658,6 +658,8 @@ where
         // NOTE: Maybe push down the resolve step to the router?
         //       Or if there are too many duplicated `Flush` command, we may do some useless works.
         let new_rts = Self::try_resolve(&concurrency_manager, pd_cli.clone(), resolvers).await;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("delay_on_flush");
         metrics::FLUSH_DURATION
             .with_label_values(&["resolve_by_now"])
             .observe(start.saturating_elapsed_secs());
@@ -813,6 +815,8 @@ where
                 region,
                 needs_initial_scanning,
             } => {
+                #[cfg(feature = "failpoints")]
+                fail::fail_point!("delay_on_start_observe");
                 self.start_observe(region, needs_initial_scanning);
                 metrics::INITIAL_SCAN_REASON
                     .with_label_values(&["leader-changed"])
@@ -982,7 +986,7 @@ where
     }
 
     pub fn run_task(&self, task: Task) {
-        debug!("run backup stream task"; "task" => ?task);
+        debug!("run backup stream task"; "task" => ?task, "store_id" => %self.store_id);
         let now = Instant::now_coarse();
         let label = task.label();
         defer! {
