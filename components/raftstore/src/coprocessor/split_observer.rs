@@ -24,7 +24,7 @@ pub fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     key
 }
 
-fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
+pub fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
     if key.is_empty() {
         warn!(
             "skip invalid split key: key is empty";

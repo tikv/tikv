@@ -256,7 +256,6 @@ mod tests {
         // now insert a few keys to grow the bucket 0001
         let start = format!("{:04}", 1).into_bytes();
         let end = format!("{:04}", 2).into_bytes();
-        exp_bucket_keys.push(Key::from_raw(&start).as_encoded().clone());
         let bucket_range = BucketRange(
             Key::from_raw(&start).as_encoded().clone(),
             Key::from_raw(&end).as_encoded().clone(),
@@ -284,7 +283,6 @@ mod tests {
 
         // now insert a few keys to grow the bucket 0010
         let start = format!("{:04}", 10).into_bytes();
-        exp_bucket_keys.push(Key::from_raw(&start).as_encoded().clone());
         let bucket_range = BucketRange(Key::from_raw(&start).as_encoded().clone(), vec![]);
         for i in 11..20 {
             let k = format!("{:04}", i).into_bytes();
@@ -376,9 +374,9 @@ mod tests {
         exp_bucket_keys.clear();
 
         // use non-existing bucket-range to simulate deleted data
-        // [0001,0002] [00032, 00035], [0004,0006], [0012, 0015], [0016, 0017]
+        // [0000,0002] [00032, 00035], [0004,0006], [0012, 0015], [0016, 0017]
         //  non-empty       empty         non-empty     empty       empty
-        let mut starts = vec![format!("{:04}", 1).into_bytes()];
+        let mut starts = vec![format!("{:04}", 0).into_bytes()];
         let mut ends = vec![format!("{:04}", 2).into_bytes()];
         starts.push(format!("{:05}", 32).into_bytes());
         ends.push(format!("{:05}", 35).into_bytes());
