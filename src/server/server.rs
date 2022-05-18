@@ -164,7 +164,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
-            Arc::new(cfg.value().clone()),
+            Arc::clone(cfg),
             security_mgr.clone(),
             resolver,
             raft_router.clone(),
