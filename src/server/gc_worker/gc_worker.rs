@@ -495,6 +495,7 @@ where
         let mut raw_modifies = MvccRaw::new();
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
+        let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
@@ -512,6 +513,21 @@ where
             }
 
             if gc_info.is_completed {
+                if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
+                    debug!(
+                        "RawKV GC found plenty versions for a key";
+                        "key" => %key,
+                        "versions" => gc_info.found_versions,
+                    );
+                }
+                if gc_info.found_versions > 0 {
+                    handled_keys += 1;
+                } else {
+                    wasted_keys += 1;
+                }
+
+                gc_info.report_metrics();
+
                 next_gc_key = keys.next();
                 gc_info = GcInfo::default();
             } else {
@@ -524,8 +540,7 @@ where
 
         Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
 
-        // TODO: To implement the metrics.
-        Ok((0, 0))
+        Ok((handled_keys, wasted_keys))
     }
 
     fn raw_gc_key(
@@ -546,6 +561,7 @@ where
         let current_ts = ttl_current_ts();
 
         while cursor.valid()? {
+            gc_info.found_versions += 1;
             let current_key = cursor.key(&mut statistics);
             if !Key::is_user_key_eq(current_key, key.as_encoded()) {
                 break;
@@ -557,7 +573,7 @@ where
             }
 
             if remove_older {
-                self.delete_raws(Key::from_encoded_slice(current_key), raw_modifies);
+                self.delete_raws(Key::from_encoded_slice(current_key), raw_modifies, gc_info);
             } else {
                 remove_older = true;
 
@@ -575,16 +591,17 @@ where
         self.stats.data.add(&statistics);
 
         if let Some(to_del_key) = latest_version_key {
-            self.delete_raws(to_del_key, raw_modifies);
+            self.delete_raws(to_del_key, raw_modifies, gc_info);
         }
 
         Ok(())
     }
 
-    fn delete_raws(&mut self, key: Key, raw_modifies: &mut MvccRaw) {
+    fn delete_raws(&mut self, key: Key, raw_modifies: &mut MvccRaw, gc_info: &mut GcInfo) {
         let write = Modify::Delete(CF_DEFAULT, key);
         raw_modifies.write_size += write.size();
         raw_modifies.modifies.push(write);
+        gc_info.deleted_versions += 1;
     }
 
     fn flush_raw_gc(raw_modifies: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
