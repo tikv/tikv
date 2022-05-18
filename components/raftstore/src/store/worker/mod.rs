@@ -23,7 +23,8 @@ pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
 pub use self::pd::{
-    FlowStatistics, FlowStatsReporter, HeartbeatTask, Runner as PdRunner, Task as PdTask,
+    new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
+    Runner as PdRunner, Task as PdTask,
 };
 pub use self::query_stats::QueryStats;
 pub use self::raftlog_fetch::{Runner as RaftlogFetchRunner, Task as RaftlogFetchTask};
