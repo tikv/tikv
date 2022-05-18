@@ -704,9 +704,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
-                StoreMsg::UnsafeRecoveryCreatePeer { syncer: _, create } => {
+                StoreMsg::UnsafeRecoveryCreatePeer { syncer, create } => {
                     self.on_unsafe_recovery_create_peer(create);
-                    // syncer's destruction triggers the next step.
+                    drop(syncer);
                 }
                 StoreMsg::GcSnapshotFinish => self.register_snap_mgr_gc_tick(),
             }
@@ -2706,7 +2706,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             let exist_region = &meta.regions[id];
             if enc_start_key(exist_region) < data_end_key(region.get_end_key()) {
                 if exist_region.get_id() == region.get_id() {
-                    warn!("Unsafe recovery, region has already been created."; "region"=>?region);
+                    warn!(
+                        "Unsafe recovery, region has already been created.";
+                        "region"=>?region,
+                        "exist_region" => ?exist_region,
+                    );
                     return;
                 } else {
                     error!(
@@ -2772,12 +2776,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             &[Range::new(&start_key, &end_key)],
         ) {
             panic!(
-                "unsafe recovery, fail to clean up stale data while creating the new region {:?}, the error is {:?}",
+                "Unsafe recovery, fail to clean up stale data while creating the new region {:?}, the error is {:?}",
                 region, e,
             );
         }
         let mut kv_wb = self.ctx.engines.kv.write_batch();
-
         if let Err(e) = peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None)
         {
             panic!(
@@ -2793,6 +2796,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 region, e,
             );
         }
+
         let mailbox = BasicMailbox::new(sender, peer, self.ctx.router.state_cnt().clone());
         self.ctx.router.register(region.get_id(), mailbox);
         self.ctx
