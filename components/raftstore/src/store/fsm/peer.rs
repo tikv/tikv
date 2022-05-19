@@ -4118,6 +4118,8 @@ where
         source: metapb::Region,
     ) {
         self.register_split_region_check_tick();
+        self.fsm.peer.region_buckets = None;
+        self.fsm.peer.last_region_buckets = None;
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
         let prev = meta.region_ranges.remove(&enc_end_key(&source));
