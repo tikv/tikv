@@ -430,7 +430,7 @@ impl WriteResultLockInfo {
 }
 
 #[derive(Default)]
-pub(super) struct ReleasedLocks(pub Vec<ReleasedLock>);
+pub struct ReleasedLocks(pub Vec<ReleasedLock>);
 
 impl ReleasedLocks {
     pub fn new() -> Self {

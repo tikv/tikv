@@ -282,7 +282,7 @@ impl LockManagerTrait for LockManager {
         if !is_first_lock {
             self.add_to_detected(start_ts);
             self.detector_scheduler
-                .detect(token, start_ts, wait_info.clone(), diag_ctx); // TODO: Try to avoid cloning.
+                .detect(token, start_ts, wait_info.clone(), diag_ctx.clone()); // TODO: Try to avoid cloning.
         }
         self.waiter_mgr_scheduler.wait_for(
             token,
@@ -293,7 +293,7 @@ impl LockManagerTrait for LockManager {
             wait_info,
             timeout,
             cancel_callback,
-            diag_ctx.clone(),
+            diag_ctx,
         );
 
         token

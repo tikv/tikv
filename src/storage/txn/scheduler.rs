@@ -1463,7 +1463,7 @@ impl PartialPessimisticLockRequestContext {
     }
 
     fn finish_request(&self, external_error: Option<StorageError>) {
-        let ctx_inner = if let Some(inner) = self.shared_states.0.lock().take() {
+        let mut ctx_inner = if let Some(inner) = self.shared_states.0.lock().take() {
             inner
         } else {
             info!("shared state for partial pessimistic lock already taken, perhaps due to error";

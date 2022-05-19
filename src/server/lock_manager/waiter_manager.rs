@@ -439,7 +439,7 @@ impl WaitTable {
             .entry(waiter.region_id)
             .or_insert_with(|| {
                 (
-                    RegionState::new(waiter.region_epoch, waiter.term),
+                    RegionState::new(waiter.region_epoch.clone(), waiter.term),
                     HashSet::default(),
                 )
             });
@@ -450,7 +450,7 @@ impl WaitTable {
                     .region_waiters
                     .entry(waiter.region_id)
                     .insert_entry((
-                        RegionState::new(waiter.region_epoch, waiter.term),
+                        RegionState::new(waiter.region_epoch.clone(), waiter.term),
                         HashSet::default(),
                     ))
                     .get_mut();
@@ -498,7 +498,7 @@ impl WaitTable {
         let count = tokens.len();
         for token in tokens {
             let waiter = self.waiter_pool.remove(&token).unwrap();
-            for waiting_item in waiter.wait_info {
+            for waiting_item in &waiter.wait_info {
                 self.wait_table
                     .remove(&(waiting_item.lock_digest.hash, waiter.start_ts));
             }
@@ -535,8 +535,8 @@ impl WaitTable {
         lock: LockDigest,
         waiter_ts: TimeStamp,
     ) -> Option<Waiter> {
-        let token = self.wait_table.get(&(lock.hash, waiter_ts))?;
-        self.take_waiter(*token)
+        let token = *self.wait_table.get(&(lock.hash, waiter_ts))?;
+        self.take_waiter(token)
     }
 
     // /// Removes the `Waiter` with the smallest start ts and returns it with remaining waiters.
@@ -576,7 +576,7 @@ impl WaitTable {
         self.waiter_pool
             .iter()
             .flat_map(|(_, waiter)| {
-                waiter.wait_info.iter().map(|waiting_item| {
+                waiter.wait_info.iter().map(move |waiting_item| {
                     let mut wait_for_entry = WaitForEntry::default();
                     wait_for_entry.set_txn(waiter.start_ts.into_inner());
                     wait_for_entry.set_wait_for_txn(waiting_item.lock_digest.ts.into_inner());
@@ -734,7 +734,7 @@ impl WaiterManager {
 
     // TODO: Change this to cleaning up entries from memory only.
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
-        let mut wait_table = self.wait_table.borrow_mut();
+        let wait_table = self.wait_table.borrow_mut();
         if wait_table.is_empty() {
             return;
         }
@@ -785,7 +785,7 @@ impl WaiterManager {
                 .borrow_mut()
                 .take_waiter_by_lock_digest(lock, waiter_ts)
         };
-        if let Some(mut waiter) = waiter {
+        if let Some(waiter) = waiter {
             // waiter.deadlock_with(deadlock_key_hash, wait_chain);
             // waiter.cancel();
             waiter.cancel_for_deadlock(lock, key, wait_chain);

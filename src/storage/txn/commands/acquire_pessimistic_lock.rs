@@ -215,7 +215,7 @@ impl AcquirePessimisticLock {
         // let (start_ts, ctx, keys) = (self.start_ts, pb_ctx, self.keys);
         let mut modifies = vec![];
         let mut txn = None; // MvccTxn::new(start_ts, context.concurrency_manager);
-        let mut reader = None;
+        let mut reader: Option<SnapshotReader<S>> = None;
         // ReaderWithStats::new(
         // SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx),
         // context.statistics,
@@ -252,9 +252,13 @@ impl AcquirePessimisticLock {
                     context.concurrency_manager.clone(),
                 ));
                 // TODO: Is it possible to reuse the same reader but change the start_ts stored in it?
-                reader = Some(ReaderWithStats::new(
-                    SnapshotReader::new_with_ctx(params.start_ts, snapshot.clone(), &pb_ctx),
-                    context.statistics,
+                if let Some(mut reader) = reader {
+                    context.statistics.add(&reader.take_statistics());
+                }
+                reader = Some(SnapshotReader::new_with_ctx(
+                    params.start_ts,
+                    snapshot.clone(),
+                    &pb_ctx,
                 ));
             }
             let txn = txn.as_mut().unwrap();
@@ -306,6 +310,9 @@ impl AcquirePessimisticLock {
             if txn.write_size() > 0 {
                 modifies.extend(txn.into_modifies());
             }
+        }
+        if let Some(mut reader) = reader {
+            context.statistics.add(&reader.take_statistics());
         }
 
         // // Some values may be read, update max_ts

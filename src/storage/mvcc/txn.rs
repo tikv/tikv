@@ -127,8 +127,8 @@ impl MvccTxn {
         pessimistic: bool,
         commit_ts: Option<TimeStamp>,
     ) -> Option<ReleasedLock> {
-        let released = ReleasedLock::new(self.start_ts, commit_ts, key, pessimistic);
-        let write = Modify::Delete(CF_LOCK, key.clone());
+        let released = ReleasedLock::new(self.start_ts, commit_ts, key.clone(), pessimistic);
+        let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
         self.modifies.push(write);
         Some(released)

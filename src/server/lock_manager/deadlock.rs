@@ -296,11 +296,11 @@ impl DetectTable {
                 if let Some(matching_locks) = wait_for.get_mut(&lock.ts) {
                     if matching_locks.remove(lock.hash) {
                         wait_for.remove(&lock.ts);
-                        if wait_for.is_empty() {
-                            self.wait_for_map.remove(&txn_ts);
-                        }
                     }
                 }
+            }
+            if wait_for.is_empty() {
+                self.wait_for_map.remove(&txn_ts);
             }
         }
         TASK_COUNTER_METRICS.clean_up_wait_for.inc();
@@ -786,11 +786,12 @@ where
                 hash: entry.key_hash,
             };
             let mut wait_chain: Vec<_> = resp.take_wait_chain().into();
+            let key = entry.get_key().to_vec();
             wait_chain.push(entry);
             waiter_mgr_scheduler.deadlock(
                 LockWaitToken(None),
                 txn,
-                entry.take_key(),
+                key,
                 lock,
                 resp.get_deadlock_key_hash(),
                 wait_chain,
