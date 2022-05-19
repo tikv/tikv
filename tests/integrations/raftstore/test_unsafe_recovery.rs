@@ -483,7 +483,6 @@ fn test_force_leader_five_nodes() {
 #[test]
 fn test_force_leader_for_learner() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
