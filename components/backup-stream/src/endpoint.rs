@@ -243,7 +243,8 @@ where
         let store_id = self.store_id;
         let sched = self.scheduler.clone();
         let register_safepoint = self
-            .register_service_safepoint(task.clone(), TimeStamp::new(start_ts.unwrap_or_default()));
+            .register_guard_service_safepoint(&task, TimeStamp::new(start_ts.unwrap_or_default()));
+
         self.pool.block_on(async move {
             let err_fut = async {
                 register_safepoint.await?;
@@ -505,18 +506,12 @@ where
                 "register backup stream task";
                 "task" => ?task,
             );
+
             let task_name = task.info.get_name().to_owned();
             // clean the safepoint created at pause(if there is)
             self.pool.spawn(
-                self.pd_client
-                    .update_service_safe_point(
-                        format!("{}-pause-guard", task.info.name),
-                        TimeStamp::zero(),
-                        Duration::new(0, 0),
-                    )
-                    .map(|r| {
-                        r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
-                    }),
+                self.deregister_guard_service_safepoint(task.info.get_name())
+                    .map(|r| r.map_err(|err| err.report("removing safe point for pausing"))),
             );
             self.pool.block_on(async move {
                 let task_name = task.info.get_name();
@@ -569,34 +564,40 @@ where
         };
     }
 
-    fn register_service_safepoint(
+    fn register_guard_service_safepoint(
         &self,
-        task_name: String,
+        task_name: &str,
         // hint for make optimized safepoint when we cannot get that from `SubscriptionTracker`
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<()>> + Send + 'static {
         self.pd_client
             .update_service_safe_point(
-                format!("{}-pause-guard", task_name),
+                format!("{}-{}-guard", task_name, self.store_id),
                 self.subs.safepoint().max(start_ts),
                 ReadableDuration::hours(24).0,
             )
             .map(|r| r.map_err(|err| err.into()))
     }
 
-    pub fn on_pause(&self, task: &str) {
-        let t = self.unload_task(task);
+    fn deregister_guard_service_safepoint(
+        &self,
+        task_name: &str,
+    ) -> impl Future<Output = Result<()>> + Send + 'static {
+        self.pd_client
+            .update_service_safe_point(
+                format!("{}-{}-guard", task_name, self.store_id),
+                TimeStamp::zero(),
+                Duration::new(0, 0),
+            )
+            .map(|r| r.map_err(|err| err.into()))
+    }
 
-        if let Some(task) = t {
-            self.pool.spawn(
-                self.register_service_safepoint(task.name, TimeStamp::new(task.start_ts))
-                    .map(|r| {
-                        r.map_err(|err| err.report("during setting service safepoint for task"))
-                    }),
-            );
+    pub fn on_pause(&self, task_name: &str) {
+        let task = self.unload_task(task_name);
+        if let Some(t) = task {
+            info!("pause backup stream task."; "task" => %t.name);
         }
-
-        metrics::update_task_status(TaskStatus::Paused, task);
+        metrics::update_task_status(TaskStatus::Paused, task_name);
     }
 
     pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
@@ -668,9 +669,9 @@ where
                 .update_service_safe_point(
                     format!("backup-stream-{}-{}", task, store_id),
                     TimeStamp::new(rts),
-                    // Add a service safe point for 10mins (2x the default flush interval).
+                    // Add a service safe point for 30 mins (6x the default flush interval).
                     // It would probably be safe.
-                    Duration::from_secs(600),
+                    Duration::from_secs(1800),
                 )
                 .await
             {
