@@ -340,7 +340,8 @@ struct PdCluster {
     pub check_merge_target_integrity: bool,
 
     unsafe_recovery_require_report: bool,
-    unsafe_recovery_store_reported: HashMap<u64, i32>,
+    unsafe_recovery_store_reports: HashMap<u64, pdpb::StoreReport>,
+    unsafe_recovery_plan: HashMap<u64, pdpb::RecoveryPlan>,
 }
 
 impl PdCluster {
@@ -375,7 +376,8 @@ impl PdCluster {
             region_replication_status: HashMap::default(),
             check_merge_target_integrity: true,
             unsafe_recovery_require_report: false,
-            unsafe_recovery_store_reported: HashMap::default(),
+            unsafe_recovery_store_reports: HashMap::default(),
+            unsafe_recovery_plan: HashMap::default(),
             buckets: HashMap::default(),
         }
     }
@@ -533,11 +535,11 @@ impl PdCluster {
             region.get_region_epoch().clone(),
         );
         assert!(end_key > start_key);
-        let created_by_unsafe_recover = (!start_key.is_empty() || !end_key.is_empty())
-            && incoming_epoch.get_version() == 1
-            && incoming_epoch.get_conf_ver() == 1;
+        let created_by_unsafe_recovery = (!start_key.is_empty() || !end_key.is_empty())
+            && incoming_epoch.get_version() == 0
+            && incoming_epoch.get_conf_ver() == 0;
         let overlaps = self.get_overlap(start_key, end_key);
-        if created_by_unsafe_recover {
+        if created_by_unsafe_recovery {
             // Allow recreated region by unsafe recover to overwrite other regions with a "older"
             // epoch.
             return Ok(overlaps);
@@ -743,10 +745,14 @@ impl PdCluster {
         self.min_resolved_ts
     }
 
-    fn handle_store_heartbeat(&mut self) -> Result<pdpb::StoreHeartbeatResponse> {
+    fn handle_store_heartbeat(&mut self, store_id: u64) -> Result<pdpb::StoreHeartbeatResponse> {
         let mut resp = pdpb::StoreHeartbeatResponse::default();
         resp.set_require_detailed_report(self.unsafe_recovery_require_report);
         self.unsafe_recovery_require_report = false;
+        if let Some((_, plan)) = self.unsafe_recovery_plan.remove_entry(&store_id) {
+            debug!("Unsafe recovery, sending recovery plan"; "store_id" => store_id, "plan" => ?plan);
+            resp.set_recovery_plan(plan);
+        }
 
         Ok(resp)
     }
@@ -755,19 +761,16 @@ impl PdCluster {
         self.unsafe_recovery_require_report = require_report;
     }
 
-    fn get_store_reported(&self, store_id: &u64) -> i32 {
-        *self
-            .unsafe_recovery_store_reported
-            .get(store_id)
-            .unwrap_or(&0)
+    fn set_unsafe_recovery_plan(&mut self, store_id: u64, recovery_plan: pdpb::RecoveryPlan) {
+        self.unsafe_recovery_plan.insert(store_id, recovery_plan);
     }
 
-    fn store_reported_inc(&mut self, store_id: u64) {
-        let reported = self
-            .unsafe_recovery_store_reported
-            .entry(store_id)
-            .or_insert(0);
-        *reported += 1;
+    fn get_store_report(&mut self, store_id: u64) -> Option<pdpb::StoreReport> {
+        self.unsafe_recovery_store_reports.remove(&store_id)
+    }
+
+    fn set_store_report(&mut self, store_id: u64, report: pdpb::StoreReport) {
+        let _ = self.unsafe_recovery_store_reports.insert(store_id, report);
     }
 }
 
@@ -1331,8 +1334,12 @@ impl TestPdClient {
         self.cluster.wl().set_require_report(require_report);
     }
 
-    pub fn must_get_store_reported(&self, store_id: &u64) -> i32 {
-        self.cluster.rl().get_store_reported(store_id)
+    pub fn must_get_store_report(&self, store_id: u64) -> Option<pdpb::StoreReport> {
+        self.cluster.wl().get_store_report(store_id)
+    }
+
+    pub fn must_set_unsafe_recovery_plan(&self, store_id: u64, plan: pdpb::RecoveryPlan) {
+        self.cluster.wl().set_unsafe_recovery_plan(store_id, plan)
     }
 
     pub fn get_buckets(&self, region_id: u64) -> Option<BucketStat> {
@@ -1623,11 +1630,11 @@ impl PdClient for TestPdClient {
 
         cluster.store_stats.insert(store_id, stats);
 
-        if report.is_some() {
-            cluster.store_reported_inc(store_id);
+        if let Some(store_report) = report {
+            cluster.set_store_report(store_id, store_report);
         }
 
-        let mut resp = cluster.handle_store_heartbeat().unwrap();
+        let mut resp = cluster.handle_store_heartbeat(store_id).unwrap();
 
         if let Some(ref status) = cluster.replication_status {
             resp.set_replication_status(status.clone());
