@@ -22,6 +22,50 @@ use crate::{
     *,
 };
 
+/// `RfEngine` is a persistent storage engine for multi-raft logs.
+/// It stores part of raft logs and states(key/value pair) in memory and persists them to disk.
+///
+/// A typical directory structure is:
+///   .
+///   ├── {epoch}.wal
+///   ├── {epoch}.states
+///   ├── {epoch}_{region_id}_{first_log_index}_{last_log_index}.rlog
+///   ├── {epoch}_{region_id}_{first_log_index}_{last_log_index}.rlog
+///   ├── ...
+///   └── recycle
+///       └── {epoch}.wal
+///       └── {epoch}.wal
+///       └── ...
+///
+/// # Memory Layout
+///
+/// `RfEngine` contains all raft group states and non-truncated logs in memory, so that it
+/// can get raft logs quickly.
+///
+/// # WAL
+///
+/// `RfEngine` writes all raft groups' logs and states to a WAL file sequentially.
+/// When the WAL file size exceeds the threshold, it triggers rotation and switching to a new WAL file.
+/// The name of a WAL file is `{epoch}.wal`. Epoch increases when rotating.
+///
+/// ## Rotation
+///
+/// Rotation splits the data of a WAL file to several files:
+///   - `{epoch}.states`: Contains **all** raft groups states, not just states in the corresponding WAL file.
+///   The old states file will be removed after rewriting.
+///
+///   - `{epoch}_{region_id}_{first_log_index}_{last_log_index}.rlog`: Contains logs in
+///   [first_log_index, last_log_index) of a single raft group.
+///
+/// After splitting, the WAL file is moved to the `recycle` directory for later use.
+/// `RfEngine` recycles old WAL files for better I/O performance. To distinguish between
+/// old data and new data, the data format of WAL contains epoch, i.e., valid data's epoch equals the
+/// epoch in the WAL file name.
+///
+/// # Garbage Collection
+///
+/// Raft logs that has been applied and persisted to FSM can be truncated. All in-memory logs and `rlog` files before the
+/// truncated index will be removed.
 #[derive(Clone)]
 pub struct RfEngine {
     pub dir: PathBuf,
