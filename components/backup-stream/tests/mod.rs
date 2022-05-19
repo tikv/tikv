@@ -638,7 +638,8 @@ mod test {
             safepoints
                 .iter()
                 .take(3)
-                .all(|sp| { sp.safepoint.into_inner() <= checkpoint }),
+                // They are choosing the lock safepoint, it must greater than the global checkpoint.
+                .all(|sp| { sp.safepoint.into_inner() >= checkpoint }),
             "{:?}",
             safepoints
         );
@@ -647,7 +648,7 @@ mod test {
         assert!(sp.serivce.contains(&format!("{}", victim)), "{:?}", sp);
         assert!(sp.ttl >= Duration::from_secs(60 * 60 * 24), "{:?}", sp);
         assert!(
-            sp.safepoint.into_inner() <= checkpoint,
+            sp.safepoint.into_inner() == checkpoint,
             "{:?} vs {}",
             sp,
             checkpoint
