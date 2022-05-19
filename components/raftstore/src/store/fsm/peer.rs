@@ -5503,18 +5503,6 @@ where
             return;
         }
 
-        if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
-            // If the force leader state lasts a long time, it probably means PD recovery process aborts for some reasons.
-            // So just exit to avoid blocking the read and write requests for this peer.
-            if time.saturating_elapsed() > self.ctx.cfg.peer_stale_state_check_interval.0 {
-                warn!(
-                    "Unsafe recovery, step down as force leader due to holding it too long";
-                    "duration" => ?time.saturating_elapsed(),
-                );
-                self.on_exit_force_leader();
-            }
-        }
-
         if self.ctx.cfg.hibernate_regions {
             let group_state = self.fsm.hibernate_state.group_state();
             if group_state == GroupState::Idle {

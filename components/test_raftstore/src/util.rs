@@ -761,11 +761,6 @@ pub fn configure_for_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
-pub fn configure_for_unsafe_recovery<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::minutes(5);
-    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::minutes(10);
-    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(2);
-}
 /// Keep putting random kvs until specified size limit is reached.
 pub fn put_till_size<T: Simulator>(
     cluster: &mut Cluster<T>,

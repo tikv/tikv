@@ -29,7 +29,6 @@ fn confirm_quorum_is_lost<T: Simulator>(cluster: &mut Cluster<T>, region: &metap
 #[test]
 fn test_unsafe_recovery_demote_failed_voters() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -85,7 +84,6 @@ fn test_unsafe_recovery_demote_failed_voters() {
 #[test]
 fn test_unsafe_recovery_demote_non_exist_voters() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -151,7 +149,6 @@ fn test_unsafe_recovery_demote_non_exist_voters() {
 #[test]
 fn test_unsafe_recovery_auto_promote_learner() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -225,7 +222,6 @@ fn test_unsafe_recovery_auto_promote_learner() {
 #[test]
 fn test_unsafe_recovery_already_in_joint_state() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -550,7 +546,6 @@ fn test_force_leader_for_learner() {
 #[test]
 fn test_force_leader_on_hibernated_leader() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_hibernate(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -599,7 +594,6 @@ fn test_force_leader_on_hibernated_leader() {
 fn test_force_leader_on_hibernated_follower() {
     test_util::init_log_for_test();
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_hibernate(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -647,7 +641,6 @@ fn test_force_leader_on_hibernated_follower() {
 #[test]
 fn test_force_leader_trigger_snapshot() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_snapshot(&mut cluster);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
@@ -694,7 +687,7 @@ fn test_force_leader_trigger_snapshot() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 5,
     );
-    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
 
     sleep_ms(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
@@ -923,18 +916,16 @@ fn test_force_leader_twice_on_different_peers() {
 
     cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // enter force leader on a different peer
-    cluster.must_enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
-    // leader is the peer of store 2
+    cluster.enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
     assert_eq!(
         cluster.leader_of_region(region.get_id()).unwrap(),
-        *find_peer(&region, 2).unwrap()
+        *find_peer(&region, 1).unwrap()
     );
 
-    // peer of store 1 should exit force leader state, and propose conf-change on it should fail
     let conf_change = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));
     let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), conf_change);
     req.mut_header()
-        .set_peer(find_peer(&region, 1).unwrap().clone());
+        .set_peer(find_peer(&region, 2).unwrap().clone());
     let resp = cluster
         .call_command(req, Duration::from_millis(10))
         .unwrap();
@@ -942,7 +933,7 @@ fn test_force_leader_twice_on_different_peers() {
         region_id: region.get_id(),
         ..Default::default()
     };
-    not_leader.set_leader(find_peer(&region, 2).unwrap().clone());
+    not_leader.set_leader(find_peer(&region, 1).unwrap().clone());
     assert_eq!(resp.get_header().get_error().get_not_leader(), &not_leader,);
 
     // remove the peers on failed nodes
@@ -955,7 +946,7 @@ fn test_force_leader_twice_on_different_peers() {
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
-    cluster.exit_force_leader(region.get_id(), 2);
+    cluster.exit_force_leader(region.get_id(), 1);
 
     // quorum is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
