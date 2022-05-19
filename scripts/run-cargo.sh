@@ -70,12 +70,33 @@ if [[ -n "$X_RUSTFLAGS" ]]; then
     packages="--package=tikv"
 fi
 
+build_std_args=""
+if [[ -n "$TIKV_FRAME_POINTER" && "$TIKV_FRAME_POINTER" != "0" ]]; then
+    # When `-Z build-std` is enabled, `--target` must be specified explicitly,
+    # and specifying `--target` will cause the generated binary to be located
+    # in the `target/${TARGET}/release` directory instead of `target/release`,
+    # so we need to explicitly specify `--out-dir` here, to avoid errors when
+    # copying the output binary later.
+    build_std_args="$build_std_args -Z build-std=core,std,alloc,proc_macro,test --target=$TIKV_BUILD_RUSTC_TARGET"
+    if [[ -n "$X_CARGO_RELEASE" && "$X_CARGO_RELEASE" != "0" ]]; then
+        build_std_args="$build_std_args -Z unstable-options --out-dir=$X_CARGO_TARGET_DIR/release"
+    else
+        build_std_args="$build_std_args -Z unstable-options --out-dir=$X_CARGO_TARGET_DIR/debug"
+    fi
+fi
+
 # Turn off error -> exit
 set +e
 
 # Print commands
 set -x
-cargo $args $packages --features="$features" $X_CARGO_ARGS
+
+if [[ -n "$TIKV_FRAME_POINTER" && "$TIKV_FRAME_POINTER" != "0" ]]; then
+    rustup component add rust-src
+    cargo $args $packages --features="$features" $X_CARGO_ARGS $build_std_args
+else
+    cargo $args $packages --features="$features" $X_CARGO_ARGS
+fi
 
 # Store the exit code
 r=$?
