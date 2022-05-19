@@ -231,6 +231,12 @@ impl<Store: MetaStore> MetadataClient<Store> {
         })
     }
 
+    // get the reveresion from meta store.
+    pub async fn get_reversion(&self) -> Result<i64> {
+        let snap = self.meta_store.snapshot().await?;
+        Ok(snap.revision())
+    }
+
     /// watch event stream from the revision(exclusive).
     /// the revision would usually come from a WithRevision struct(which indices the revision of the inner item).
     pub async fn events_from(&self, revision: i64) -> Result<Subscription<MetadataEvent>> {

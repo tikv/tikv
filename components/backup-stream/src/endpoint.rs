@@ -319,22 +319,33 @@ where
         scheduler: Scheduler<Task>,
         revision: i64,
     ) -> Result<()> {
-        let mut watcher = meta_client.events_from(revision).await?;
+        let mut revision_new = revision;
         loop {
-            if let Some(event) = watcher.stream.next().await {
-                info!("backup stream watch event from etcd"; "event" => ?event);
-                match event {
-                    MetadataEvent::AddTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
+            let mut watcher = meta_client.events_from(revision_new).await?;
+
+            loop {
+                if let Some(event) = watcher.stream.next().await {
+                    info!("backup stream watch event from etcd"; "event" => ?event);
+
+                    let revision = meta_client.get_reversion().await;
+                    if let Ok(r) = revision {
+                        revision_new = r;
                     }
-                    MetadataEvent::RemoveTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
+
+                    match event {
+                        MetadataEvent::AddTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
+                        }
+                        MetadataEvent::RemoveTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
+                        }
+                        MetadataEvent::Error { err } => {
+                            err.report("metadata client watch meet error");
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            break;
+                        }
+                        _ => panic!("BUG: invalid event {:?}", event),
                     }
-                    MetadataEvent::Error { err } => {
-                        err.report("metadata client watch meet error");
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                    }
-                    _ => panic!("BUG: invalid event {:?}", event),
                 }
             }
         }
@@ -345,22 +356,32 @@ where
         scheduler: Scheduler<Task>,
         revision: i64,
     ) -> Result<()> {
-        let mut watcher = meta_client.events_from_pause(revision).await?;
+        let mut revision_new = revision;
+
         loop {
-            if let Some(event) = watcher.stream.next().await {
-                info!("backup stream watch event from etcd"; "event" => ?event);
-                match event {
-                    MetadataEvent::PauseTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::PauseTask(task)))?;
+            let mut watcher = meta_client.events_from_pause(revision_new).await?;
+            loop {
+                if let Some(event) = watcher.stream.next().await {
+                    info!("backup stream watch event from etcd"; "event" => ?event);
+                    let revision = meta_client.get_reversion().await;
+                    if let Ok(r) = revision {
+                        revision_new = r;
                     }
-                    MetadataEvent::ResumeTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::ResumeTask(task)))?;
+
+                    match event {
+                        MetadataEvent::PauseTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::PauseTask(task)))?;
+                        }
+                        MetadataEvent::ResumeTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::ResumeTask(task)))?;
+                        }
+                        MetadataEvent::Error { err } => {
+                            err.report("metadata client watch meet error");
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            break;
+                        }
+                        _ => panic!("BUG: invalid event {:?}", event),
                     }
-                    MetadataEvent::Error { err } => {
-                        err.report("metadata client watch meet error");
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                    }
-                    _ => panic!("BUG: invalid event {:?}", event),
                 }
             }
         }
