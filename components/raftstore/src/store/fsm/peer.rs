@@ -4118,8 +4118,6 @@ where
         source: metapb::Region,
     ) {
         self.register_split_region_check_tick();
-        self.fsm.peer.region_buckets = None;
-        self.fsm.peer.last_region_buckets = None;
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
         let prev = meta.region_ranges.remove(&enc_end_key(&source));
@@ -4165,6 +4163,8 @@ where
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
         self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff().0;
+        self.fsm.peer.region_buckets = None;
+        self.fsm.peer.last_region_buckets = None;
         if self.fsm.peer.is_leader() {
             info!(
                 "notify pd with merge";
