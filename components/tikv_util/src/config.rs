@@ -147,7 +147,7 @@ impl Serialize for ReadableSize {
         } else if size % KIB as u64 == 0 {
             write!(buffer, "{}KiB", size / KIB).unwrap();
         } else {
-            write!(buffer, "{}", size).unwrap();
+            write!(buffer, "{}B", size).unwrap();
         }
         serializer.serialize_str(&buffer)
     }
