@@ -573,7 +573,7 @@ mod test {
                 .global_progress_of_task("test_async_commit")
                 .await
                 .unwrap();
-            assert!(cp > 514, "it is {:?}", cp);
+            assert!(cp > 256, "it is {:?}", cp);
         });
         suite.cluster.shutdown();
     }
