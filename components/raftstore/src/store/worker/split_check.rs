@@ -259,7 +259,16 @@ where
                 .filter_map(|(i, key)| {
                     let key = strip_timestamp_if_exists(key);
                     if is_valid_split_key(&key, i, &bucket_region) {
-                        assert!(is_valid_split_key(&key, i, region));
+                        assert!(
+                            is_valid_split_key(&key, i, region),
+                            "region_id={}, key={}, region start_key={}, end_key={}, bucket_range start_key={}, end_key={}",
+                            region.get_id(),
+                            log_wrappers::Value::key(&key),
+                            log_wrappers::Value::key(region.get_start_key()),
+                            log_wrappers::Value::key(region.get_end_key()),
+                            log_wrappers::Value::key(&bucket_range.0),
+                            log_wrappers::Value::key(&bucket_range.1),
+                        );
                         Some(key)
                     } else {
                         None
