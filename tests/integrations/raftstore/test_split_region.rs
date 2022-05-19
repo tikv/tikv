@@ -1195,4 +1195,17 @@ fn test_gen_split_check_bucket_ranges() {
     // because the diff between last_bucket_regions and bucket_regions is zero, bucket range for split check should be empty.
     let expected_bucket_ranges = vec![];
     cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
+
+    // split the region
+    pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![b"k11".to_vec()]);
+
+    let left = pd_client.get_region(b"k10").unwrap();
+    let right = pd_client.get_region(b"k12").unwrap();
+    if right.get_id() == 1 {
+        // the bucket_ranges should be None to refresh the bucket
+        cluster.send_half_split_region_message(&right, None);
+    } else {
+        // the bucket_ranges should be None to refresh the bucket
+        cluster.send_half_split_region_message(&left, None);
+    }
 }
