@@ -25,7 +25,10 @@ pub use self::{
     cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
     compact::{Runner as CompactRunner, Task as CompactTask},
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
-    pd::{FlowStatistics, FlowStatsReporter, HeartbeatTask, Runner as PdRunner, Task as PdTask},
+    pd::{
+        new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
+        Runner as PdRunner, Task as PdTask,
+    },
     query_stats::QueryStats,
     raftlog_fetch::{Runner as RaftlogFetchRunner, Task as RaftlogFetchTask},
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},

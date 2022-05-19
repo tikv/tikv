@@ -519,6 +519,7 @@ where
                 "register backup stream task";
                 "task" => ?task,
             );
+
             let task_name = task.info.get_name().to_owned();
             // clean the safepoint created at pause(if there is)
             self.pool.spawn(
@@ -673,9 +674,9 @@ where
                 .update_service_safe_point(
                     format!("backup-stream-{}-{}", task, store_id),
                     TimeStamp::new(rts),
-                    // Add a service safe point for 10mins (2x the default flush interval).
+                    // Add a service safe point for 30 mins (6x the default flush interval).
                     // It would probably be safe.
-                    Duration::from_secs(600),
+                    Duration::from_secs(1800),
                 )
                 .await
             {
