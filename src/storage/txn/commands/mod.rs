@@ -449,7 +449,7 @@ impl ReleasedLocks {
 
     // Wake up pessimistic transactions that waiting for these locks.
     #[deprecated = "wake up invocations may need to be updated"]
-    pub fn wake_up<L: LockManager>(&self, lock_mgr: &L) {
+    pub fn wake_up<L: LockManager>(&self, _lock_mgr: &L) {
         unimplemented!();
         // lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
     }

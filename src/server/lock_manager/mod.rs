@@ -398,17 +398,19 @@ mod tests {
         assert!(!lock_mgr.has_waiter());
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
         lock_mgr.wait_for(
+            1,
+            RegionEpoch::default(),
+            NonZeroU64::new(1).unwrap(),
             waiter.start_ts,
-            waiter.cb,
-            waiter.pr,
-            waiter.lock,
+            waiter.wait_info,
             true,
             Some(WaitTimeout::Default),
+            waiter.cancel_callback,
             DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
-            || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
+            || expect_key_is_locked(block_on(f).unwrap(), lock_info),
             2500,
             3500,
         );
@@ -424,12 +426,14 @@ mod tests {
         );
         let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
         lock_mgr.wait_for(
+            1,
+            RegionEpoch::default(),
+            NonZeroU64::new(1).unwrap(),
             waiter.start_ts,
-            waiter.cb,
-            waiter.pr,
-            waiter.lock,
+            waiter.wait_info,
             true,
             Some(WaitTimeout::Default),
+            waiter.cancel_callback,
             DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
@@ -444,23 +448,27 @@ mod tests {
         // Deadlock
         let (waiter1, lock_info1, f1) = new_test_waiter(10.into(), 20.into(), 20);
         lock_mgr.wait_for(
+            1,
+            RegionEpoch::default(),
+            NonZeroU64::new(1).unwrap(),
             waiter1.start_ts,
-            waiter1.cb,
-            waiter1.pr,
-            waiter1.lock,
+            waiter1.wait_info,
             false,
             Some(WaitTimeout::Default),
+            waiter1.cancel_callback,
             diag_ctx(b"k1", b"tag1"),
         );
         assert!(lock_mgr.has_waiter());
         let (waiter2, lock_info2, f2) = new_test_waiter(20.into(), 10.into(), 10);
         lock_mgr.wait_for(
+            1,
+            RegionEpoch::default(),
+            NonZeroU64::new(1).unwrap(),
             waiter2.start_ts,
-            waiter2.cb,
-            waiter2.pr,
-            waiter2.lock,
+            waiter2.wait_info,
             false,
             Some(WaitTimeout::Default),
+            waiter2.cancel_callback,
             diag_ctx(b"k2", b"tag2"),
         );
         assert!(lock_mgr.has_waiter());
@@ -491,18 +499,20 @@ mod tests {
         for is_first_lock in &[true, false] {
             let (waiter, _, f) = new_test_waiter(30.into(), 40.into(), 40);
             lock_mgr.wait_for(
+                1,
+                RegionEpoch::default(),
+                NonZeroU64::new(1).unwrap(),
                 waiter.start_ts,
-                waiter.cb,
-                waiter.pr,
-                waiter.lock,
+                waiter.wait_info,
                 *is_first_lock,
                 Some(WaitTimeout::Default),
+                waiter.cancel_callback,
                 DiagnosticContext::default(),
             );
             assert!(lock_mgr.has_waiter());
             assert_eq!(lock_mgr.remove_from_detected(30.into()), !is_first_lock);
             lock_mgr.wake_up(40.into(), vec![40], 40.into(), false);
-            block_on(f).unwrap().unwrap_err();
+            // block_on(f).unwrap().unwrap_err();
         }
         assert!(!lock_mgr.has_waiter());
 
@@ -525,16 +535,18 @@ mod tests {
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
         let prev_wait_for = TASK_COUNTER_METRICS.wait_for.get();
         lock_mgr.wait_for(
+            1,
+            RegionEpoch::default(),
+            NonZeroU64::new(1).unwrap(),
             waiter.start_ts,
-            waiter.cb,
-            waiter.pr,
-            waiter.lock,
+            waiter.wait_info,
             false,
             None,
+            waiter.cancel_callback,
             DiagnosticContext::default(),
         );
         assert_elapsed(
-            || expect_key_is_locked(block_on(f).unwrap().unwrap(), lock_info),
+            || expect_key_is_locked(block_on(f).unwrap(), lock_info),
             0,
             500,
         );

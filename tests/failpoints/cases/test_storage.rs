@@ -385,7 +385,7 @@ fn test_pipelined_pessimistic_lock() {
             new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
-                PessimisticLockResults::Values(vec![None]),
+                PessimisticLockResults(vec![PessimisticLockKeyResult::Value(None)]),
             ),
         )
         .unwrap();
@@ -445,7 +445,9 @@ fn test_pipelined_pessimistic_lock() {
                 ),
                 expect_pessimistic_lock_res_callback(
                     tx.clone(),
-                    PessimisticLockResults::Values(vec![Some(val.clone())]),
+                    PessimisticLockResults(vec![PessimisticLockKeyResult::Value(Some(
+                        val.clone(),
+                    ))]),
                 ),
             )
             .unwrap();
@@ -468,7 +470,7 @@ fn test_pipelined_pessimistic_lock() {
             new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
-                PessimisticLockResults::Values(vec![Some(val.clone())]),
+                PessimisticLockResults(vec![PessimisticLockKeyResult::Value(Some(val.clone()))]),
             ),
         )
         .unwrap();
@@ -490,7 +492,10 @@ fn test_pipelined_pessimistic_lock() {
             ),
             expect_pessimistic_lock_res_callback(
                 tx,
-                PessimisticLockResults::Values(vec![Some(val), None]),
+                PessimisticLockResults(vec![
+                    PessimisticLockKeyResult::Value(Some(val)),
+                    PessimisticLockKeyResult::Value(None),
+                ]),
             ),
         )
         .unwrap();

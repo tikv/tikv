@@ -61,7 +61,8 @@ pub use self::{
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{
-        PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus,
+        PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus,
+        StorageCallback, TxnStatus,
     },
 };
 use self::{kv::SnapContext, test_util::latest_feature_gate};
@@ -3146,6 +3147,7 @@ mod tests {
         lock_manager::{LockDigest, WaitTimeout},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
+        types::PessimisticLockKeyResult,
     };
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
@@ -6595,16 +6597,33 @@ mod tests {
         let (key, val) = (Key::from_raw(b"key"), b"val".to_vec());
         let (key2, val2) = (Key::from_raw(b"key2"), b"val2".to_vec());
 
+        let results_values = |res: Vec<Option<Value>>| {
+            PessimisticLockResults(
+                res.into_iter()
+                    .map(|v| PessimisticLockKeyResult::Value(v))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let results_existence = |res: Vec<bool>| {
+            PessimisticLockResults(
+                res.into_iter()
+                    .map(|v| PessimisticLockKeyResult::Existence(v))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let results_empty =
+            |len| PessimisticLockResults(vec![PessimisticLockKeyResult::Empty; len]);
+
         // Key not exist
         for &(return_values, check_existence) in
             &[(false, false), (false, true), (true, false), (true, true)]
         {
             let pessimistic_lock_res = if return_values {
-                PessimisticLockResults::Values(vec![None])
+                results_values(vec![None])
             } else if check_existence {
-                PessimisticLockResults::Existence(vec![false])
+                results_existence(vec![false])
             } else {
-                PessimisticLockResults::Empty
+                results_empty(1)
             };
 
             storage
@@ -6652,7 +6671,7 @@ mod tests {
                     false,
                     false,
                 ),
-                expect_pessimistic_lock_res_callback(tx.clone(), PessimisticLockResults::Empty),
+                expect_pessimistic_lock_res_callback(tx.clone(), results_empty(1)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -6754,11 +6773,11 @@ mod tests {
             &[(false, false), (false, true), (true, false), (true, true)]
         {
             let pessimistic_lock_res = if return_values {
-                PessimisticLockResults::Values(vec![Some(val.clone()), Some(val2.clone()), None])
+                results_values(vec![Some(val.clone()), Some(val2.clone()), None])
             } else if check_existence {
-                PessimisticLockResults::Existence(vec![true, true, false])
+                results_existence(vec![true, true, false])
             } else {
-                PessimisticLockResults::Empty
+                results_empty(3)
             };
             storage
                 .sched_txn_command(

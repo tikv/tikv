@@ -855,7 +855,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tag = task.cmd.tag();
         let cid = task.cid;
         let priority = task.cmd.priority();
-        let ts = task.cmd.ts();
+        // let ts = task.cmd.ts();
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample();
@@ -1332,7 +1332,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         &self,
         cid: u64,
         pr: &mut ProcessResult,
-        lock_info: &mut Vec<WriteResultLockInfo>,
+        lock_info: &mut [WriteResultLockInfo],
     ) {
         let results = match pr {
             ProcessResult::PessimisticLockRes {
@@ -1421,13 +1421,12 @@ impl PartialPessimisticLockRequestContext {
     fn get_callback_for_first_write_batch(&self, first_batch_size: usize) -> StorageCallback {
         let ctx = self.clone();
         StorageCallback::Boolean(Box::new(move |res| {
-            // TODO: Handle error properly
             let prev = ctx
                 .shared_states
                 .1
                 .fetch_sub(first_batch_size, Ordering::SeqCst);
             if prev == first_batch_size {
-                ctx.finish_request(None);
+                ctx.finish_request(res.err(), true);
             }
         }))
     }
@@ -1450,7 +1449,7 @@ impl PartialPessimisticLockRequestContext {
             let prev = ctx.shared_states.1.fetch_sub(1, Ordering::SeqCst);
             if prev == 1 {
                 // All keys are finished.
-                ctx.finish_request(None);
+                ctx.finish_request(None, false);
             }
         }
     }
@@ -1458,11 +1457,11 @@ impl PartialPessimisticLockRequestContext {
     fn get_callback_for_cancellation(&self) -> impl FnOnce(StorageError) {
         let ctx = self.clone();
         move |e| {
-            ctx.finish_request(Some(e));
+            ctx.finish_request(Some(e), false);
         }
     }
 
-    fn finish_request(&self, external_error: Option<StorageError>) {
+    fn finish_request(&self, external_error: Option<StorageError>, fail_all_on_error: bool) {
         let mut ctx_inner = if let Some(inner) = self.shared_states.0.lock().take() {
             inner
         } else {
@@ -1490,7 +1489,7 @@ impl PartialPessimisticLockRequestContext {
         if let Some(e) = external_error {
             let e = Arc::new(e);
             for r in results {
-                if matches!(r, PessimisticLockKeyResult::Waiting) {
+                if fail_all_on_error || matches!(r, PessimisticLockKeyResult::Waiting) {
                     *r = PessimisticLockKeyResult::Failed(e.clone());
                 }
             }
@@ -1648,7 +1647,7 @@ mod tests {
             if id != 0 {
                 assert!(latches.acquire(&mut lock, id));
             }
-            let unlocked = latches.release(&lock, id);
+            let unlocked = latches.release(&lock, id, None, None).0;
             if id as u64 == max_id {
                 assert!(unlocked.is_empty());
             } else {
@@ -1703,7 +1702,7 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
-        scheduler.release_latches(&lock, cid, None);
+        scheduler.release_latches(&lock, cid, None, None);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
@@ -1885,7 +1884,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         // When releasing the lock, the queuing tasks should be all waken up without stack overflow.
-        scheduler.release_latches(&lock, cid, None);
+        scheduler.release_latches(&lock, cid, None, None);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();

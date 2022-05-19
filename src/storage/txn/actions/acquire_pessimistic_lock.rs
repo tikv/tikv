@@ -317,8 +317,18 @@ pub mod tests {
                 .write(&ctx, WriteData::from_modifies(modifies))
                 .unwrap();
         }
-        // res.0
-        todo!()
+        // TODO: Adapt to new interface
+        match res.0 {
+            PessimisticLockKeyResult::Value(v) => v,
+            PessimisticLockKeyResult::Existence(e) => {
+                if e {
+                    Some(vec![])
+                } else {
+                    None
+                }
+            }
+            _ => todo!(),
+        }
     }
 
     pub fn must_succeed<E: Engine>(

@@ -290,9 +290,13 @@ impl DetectTable {
     }
 
     /// Removes the corresponding wait_for_entry.
-    fn clean_up_wait_for(&mut self, txn_ts: TimeStamp, locks: impl Iterator<Item = LockDigest>) {
+    fn clean_up_wait_for(
+        &mut self,
+        txn_ts: TimeStamp,
+        locks: impl IntoIterator<Item = LockDigest>,
+    ) {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
-            for lock in locks {
+            for lock in locks.into_iter() {
                 if let Some(matching_locks) = wait_for.get_mut(&lock.ts) {
                     if matching_locks.remove(lock.hash) {
                         wait_for.remove(&lock.ts);
@@ -814,7 +818,7 @@ where
         tp: DetectType,
         _token: LockWaitToken,
         txn_ts: TimeStamp,
-        wait_info: &Vec<KeyLockWaitInfo>,
+        wait_info: &[KeyLockWaitInfo],
         diag_ctx: DiagnosticContext,
     ) -> bool {
         assert!(!self.is_leader() && self.leader_info.is_some());
@@ -1212,7 +1216,13 @@ pub mod tests {
         );
 
         // Clean up entries shrinking the map.
-        detect_table.clean_up_wait_for(3.into(), 1.into(), 1);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            vec![LockDigest {
+                ts: 1.into(),
+                hash: 1,
+            }],
+        );
         assert_eq!(
             detect_table
                 .wait_for_map
@@ -1224,14 +1234,32 @@ pub mod tests {
                 .len(),
             1
         );
-        detect_table.clean_up_wait_for(3.into(), 1.into(), 2);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            vec![LockDigest {
+                ts: 1.into(),
+                hash: 2,
+            }],
+        );
         assert_eq!(detect_table.wait_for_map.get(&3.into()).unwrap().len(), 1);
-        detect_table.clean_up_wait_for(3.into(), 2.into(), 2);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            vec![LockDigest {
+                ts: 2.into(),
+                hash: 2,
+            }],
+        );
         assert_eq!(detect_table.wait_for_map.contains_key(&3.into()), false);
 
         // Clean up non-exist entry
         detect_table.clean_up(3.into());
-        detect_table.clean_up_wait_for(3.into(), 1.into(), 1);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            vec![LockDigest {
+                ts: 1.into(),
+                hash: 1,
+            }],
+        );
     }
 
     #[test]

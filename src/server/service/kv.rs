@@ -1903,7 +1903,7 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
 }});
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
     match v {
-        Ok(Ok(res)) => {
+        Ok(Ok(_res)) => {
             // TODO: Adapt to new protocol.
             // let (values, not_founds) = res.into_values_and_not_founds();
             // resp.set_values(values.into());
