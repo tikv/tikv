@@ -627,16 +627,25 @@ mod test {
         let paused = run_async_test(meta_cli.check_task_paused("test_fatal_error")).unwrap();
         assert!(paused);
         let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
-        assert_eq!(safepoints.len(), 1, "{:?}", safepoints);
-        let sp = &safepoints[0];
-        assert!(sp.serivce.contains(&format!("{}", victim)), "{:?}", sp);
-        assert!(sp.ttl >= Duration::from_secs(60 * 60 * 24), "{:?}", sp);
         let checkpoint = run_async_test(
             suite
                 .get_meta_cli()
                 .global_progress_of_task("test_fatal_error"),
         )
         .unwrap();
+        assert_eq!(safepoints.len(), 4, "{:?}", safepoints);
+        assert!(
+            safepoints
+                .iter()
+                .take(3)
+                .all(|sp| { sp.safepoint.into_inner() <= checkpoint }),
+            "{:?}",
+            safepoints
+        );
+
+        let sp = &safepoints[3];
+        assert!(sp.serivce.contains(&format!("{}", victim)), "{:?}", sp);
+        assert!(sp.ttl >= Duration::from_secs(60 * 60 * 24), "{:?}", sp);
         assert!(
             sp.safepoint.into_inner() <= checkpoint,
             "{:?} vs {}",
