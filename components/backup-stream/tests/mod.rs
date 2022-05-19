@@ -452,7 +452,7 @@ impl Suite {
 
     pub fn wait_for_flush(&self) {
         use std::ffi::OsString;
-        for _ in 0..10 {
+        for _ in 0..100 {
             if !walkdir::WalkDir::new(&self.temp_files)
                 .into_iter()
                 .any(|x| x.unwrap().path().extension() == Some(&OsString::from("log")))
