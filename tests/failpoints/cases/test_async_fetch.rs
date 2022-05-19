@@ -19,9 +19,9 @@ fn test_node_async_fetch() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
 
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100000);
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.raft_log_reserve_max_ticks = 2;
     cluster.cfg.raft_store.raft_entry_cache_life_time = ReadableDuration::millis(100);
@@ -124,9 +124,9 @@ fn test_node_async_fetch_remove_peer() {
     let mut cluster = new_node_cluster(0, count);
     cluster.pd_client.disable_default_operator();
 
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100000);
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.raft_log_reserve_max_ticks = 2;
     cluster.cfg.raft_store.raft_entry_cache_life_time = ReadableDuration::millis(100);
@@ -174,9 +174,9 @@ fn test_node_async_fetch_leader_change() {
     let mut cluster = new_node_cluster(0, count);
     cluster.pd_client.disable_default_operator();
 
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 80;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(80);
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.raft_log_reserve_max_ticks = 2;
     cluster.cfg.raft_store.raft_entry_cache_life_time = ReadableDuration::millis(100);

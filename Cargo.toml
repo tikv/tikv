@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure", "pprof-dwarf"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -53,6 +53,8 @@ test-engines-panic = [
 ]
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
+pprof-dwarf = ["pprof/backtrace-rs"]
+pprof-fp = ["pprof/frame-pointer"]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -123,6 +125,7 @@ paste = "1.0"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "1.0"
 pnet_datalink = "0.23"
+pprof = { git = "https://github.com/tikv/pprof-rs.git", rev = "a5a993a33a23557b27e633f18723366281d3b1c0", default-features = false, features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
@@ -167,9 +170,6 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf-codec"] }
-
 [dev-dependencies]
 api_version = { path = "components/api_version", features = ["testexport"] }
 example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" } # should be a binary dependency
@@ -187,7 +187,6 @@ raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
-pprof = { git = "https://github.com/tikv/pprof-rs.git" }
 
 # TODO: remove this replacement after rusoto_s3 truly supports virtual-host style (https://github.com/rusoto/rusoto/pull/1823).
 rusoto_core = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
