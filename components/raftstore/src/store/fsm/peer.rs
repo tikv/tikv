@@ -3586,7 +3586,7 @@ where
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
-                new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
+                new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff().0;
             }
             let mailbox = BasicMailbox::new(sender, new_peer, self.ctx.router.state_cnt().clone());
             self.ctx.router.register(new_region_id, mailbox);
@@ -4049,7 +4049,7 @@ where
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
-        self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
+        self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff().0;
         if self.fsm.peer.is_leader() {
             info!(
                 "notify pd with merge";
@@ -4795,8 +4795,8 @@ where
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
         } else if (applied_idx > first_idx
-            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
-            || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
+            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
+            || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0)
         {
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
@@ -4900,8 +4900,8 @@ where
         // We assume that `may_skip_split_check` is only set true after the split check task is
         // scheduled.
         if self.fsm.peer.may_skip_split_check
-            && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
-            && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
+            && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff().0
+            && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff().0
         {
             return;
         }
@@ -5246,7 +5246,7 @@ where
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
         self.fsm.peer.compaction_declined_bytes += declined_bytes;
-        if self.fsm.peer.compaction_declined_bytes >= self.ctx.cfg.region_split_check_diff.0 {
+        if self.fsm.peer.compaction_declined_bytes >= self.ctx.cfg.region_split_check_diff().0 {
             UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
         }
         self.register_split_region_check_tick();

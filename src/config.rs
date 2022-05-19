@@ -2316,7 +2316,7 @@ impl Default for BackupConfig {
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             batch_size: 8,
-            sst_max_size: default_coprocessor.region_max_size,
+            sst_max_size: default_coprocessor.region_max_size(),
             enable_auto_tune: true,
             auto_tune_remain_threads: (cpu_num * 0.2).round() as usize,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
@@ -2769,7 +2769,6 @@ impl TiKvConfig {
         config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
     }
 
-    // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.log.validate()?;
         self.readpool.validate()?;
@@ -2863,9 +2862,10 @@ impl TiKvConfig {
         self.raftdb.validate()?;
         self.raft_engine.validate()?;
         self.server.validate()?;
-        self.raft_store.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
+        self.raft_store
+            .validate(self.coprocessor.region_split_size)?;
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
@@ -3049,7 +3049,7 @@ impl TiKvConfig {
                     "override coprocessor.region-max-size with raftstore.region-max-size, {:?}",
                     self.raft_store.region_max_size
                 );
-                self.coprocessor.region_max_size = self.raft_store.region_max_size;
+                self.coprocessor.region_max_size = Some(self.raft_store.region_max_size);
             }
             self.raft_store.region_max_size = default_raft_store.region_max_size;
         }
@@ -3131,18 +3131,18 @@ impl TiKvConfig {
                     + self.raftdb.defaultcf.block_cache_size.0,
             ));
         }
-        if self.backup.sst_max_size.0 < default_coprocessor.region_max_size.0 / 10 {
+        if self.backup.sst_max_size.0 < default_coprocessor.region_max_size().0 / 10 {
             warn!(
                 "override backup.sst-max-size with min sst-max-size, {:?}",
-                default_coprocessor.region_max_size / 10
+                default_coprocessor.region_max_size() / 10
             );
-            self.backup.sst_max_size = default_coprocessor.region_max_size / 10;
-        } else if self.backup.sst_max_size.0 > default_coprocessor.region_max_size.0 * 2 {
+            self.backup.sst_max_size = default_coprocessor.region_max_size() / 10;
+        } else if self.backup.sst_max_size.0 > default_coprocessor.region_max_size().0 * 2 {
             warn!(
                 "override backup.sst-max-size with max sst-max-size, {:?}",
-                default_coprocessor.region_max_size * 2
+                default_coprocessor.region_max_size() * 2
             );
-            self.backup.sst_max_size = default_coprocessor.region_max_size * 2;
+            self.backup.sst_max_size = default_coprocessor.region_max_size() * 2;
         }
 
         self.readpool.adjust_use_unified_pool();
@@ -3699,6 +3699,7 @@ mod tests {
     use case_macros::*;
     use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
     use futures::executor::block_on;
+    use grpcio::ResourceQuota;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
@@ -3706,6 +3707,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_kv::RocksEngine as RocksDBEngine;
     use tikv_util::{
+        config::VersionTrack,
         quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
         sys::SysQuota,
         worker::{dummy_scheduler, ReceiverWrapper},
@@ -3713,7 +3715,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        server::ttl::TtlCheckerTask,
+        server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
             config_manager::StorageConfigManger, lock_manager::DummyLockManager,
             txn::flow_controller::FlowController, Storage, TestStorageBuilder,
@@ -3957,7 +3959,7 @@ mod tests {
 
         let old = TiKvConfig::default();
         let mut incoming = TiKvConfig::default();
-        incoming.coprocessor.region_split_keys = 10000;
+        incoming.coprocessor.region_split_keys = Some(10000);
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
         incoming.storage.io_rate_limit.import_priority = file_system::IOPriority::High;
@@ -4511,6 +4513,41 @@ mod tests {
     }
 
     #[test]
+    fn test_change_server_config() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.validate().unwrap();
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let (scheduler, _receiver) = dummy_scheduler();
+        let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
+        cfg_controller.register(
+            Module::Server,
+            Box::new(ServerConfigManager::new(
+                scheduler,
+                version_tracker.clone(),
+                ResourceQuota::new(None),
+            )),
+        );
+
+        let check_cfg = |cfg: &TiKvConfig| {
+            assert_eq!(&cfg_controller.get_current(), cfg);
+            assert_eq!(&*version_tracker.value(), &cfg.server);
+        };
+
+        cfg_controller
+            .update_config("server.max-grpc-send-msg-len", "10000")
+            .unwrap();
+        cfg.server.max_grpc_send_msg_len = 10000;
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("server.raft-msg-max-batch-size", "32")
+            .unwrap();
+        cfg.server.raft_msg_max_batch_size = 32;
+        assert_eq!(cfg_controller.get_current(), cfg);
+        check_cfg(&cfg);
+    }
+
+    #[test]
     fn test_compatible_adjust_validate_equal() {
         // After calling many time of `compatible_adjust` and `validate` should has
         // the same effect as calling `compatible_adjust` and `validate` one time
@@ -4652,11 +4689,13 @@ mod tests {
     #[test]
     fn test_validate_tikv_config() {
         let mut cfg = TiKvConfig::default();
-        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff.0;
-        cfg.raft_store.region_split_check_diff.0 += 1;
+        assert!(cfg.validate().is_ok());
+        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff().0;
+        cfg.raft_store.region_split_check_diff =
+            Some(ReadableSize(cfg.raft_store.region_split_check_diff().0 + 1));
         assert!(cfg.validate().is_ok());
         assert_eq!(
-            cfg.raft_store.region_split_check_diff.0,
+            cfg.raft_store.region_split_check_diff().0,
             default_region_split_check_diff + 1
         );
 
@@ -4912,6 +4951,16 @@ mod tests {
         default_cfg.readpool.storage.adjust_use_unified_pool();
         default_cfg.readpool.coprocessor.adjust_use_unified_pool();
         default_cfg.security.redact_info_log = Some(false);
+        default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
+        default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
+        default_cfg.coprocessor.region_split_keys =
+            Some(default_cfg.coprocessor.region_split_keys());
+        default_cfg.raft_store.raft_log_gc_size_limit =
+            Some(default_cfg.coprocessor.region_split_size * 3 / 4);
+        default_cfg.raft_store.raft_log_gc_count_limit =
+            Some(default_cfg.coprocessor.region_split_size * 3 / 4 / ReadableSize::kb(1));
+        default_cfg.raft_store.region_split_check_diff =
+            Some(default_cfg.coprocessor.region_split_size / 16);
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
