@@ -406,6 +406,24 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn address_apply_result(&self, region: &Region, cmd: &Cmd) {
+        if !cmd.response.has_admin_response() {
+            loop_ob!(
+                region,
+                &self.registry.query_observers,
+                address_apply_result,
+                cmd,
+            );
+        } else {
+            loop_ob!(
+                region,
+                &self.registry.admin_observers,
+                address_apply_result,
+                cmd
+            );
+        }
+    }
+
     pub fn post_apply_plain_kvs_from_snapshot(
         &self,
         region: &Region,
