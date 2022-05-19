@@ -124,7 +124,7 @@ where
         let region_keys = match get_region_approximate_keys(
             engine,
             region,
-            host.cfg.region_max_keys * host.cfg.batch_split_limit,
+            host.cfg.region_max_keys() * host.cfg.batch_split_limit,
         ) {
             Ok(keys) => keys,
             Err(e) => {
@@ -136,8 +136,8 @@ where
                 );
                 // Need to check keys.
                 host.add_checker(Box::new(Checker::new(
-                    host.cfg.region_max_keys,
-                    host.cfg.region_split_keys,
+                    host.cfg.region_max_keys(),
+                    host.cfg.region_split_keys(),
                     host.cfg.batch_split_limit,
                     policy,
                 )));
@@ -156,7 +156,7 @@ where
         }
 
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
-        if region_keys >= host.cfg.region_max_keys {
+        if region_keys >= host.cfg.region_max_keys() {
             info!(
                 "approximate keys over threshold, need to do split check";
                 "region_id" => region.get_id(),
@@ -165,8 +165,8 @@ where
             );
             // Need to check keys.
             host.add_checker(Box::new(Checker::new(
-                host.cfg.region_max_keys,
-                host.cfg.region_split_keys,
+                host.cfg.region_max_keys(),
+                host.cfg.region_split_keys(),
                 host.cfg.batch_split_limit,
                 policy,
             )));
@@ -269,8 +269,8 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_keys: 100,
-            region_split_keys: 80,
+            region_max_keys: Some(100),
+            region_split_keys: Some(80),
             batch_split_limit: 5,
             ..Default::default()
         };
