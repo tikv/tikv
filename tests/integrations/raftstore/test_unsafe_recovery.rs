@@ -380,7 +380,6 @@ fn must_get_error_recovery_in_progress<T: Simulator>(
 #[test]
 fn test_force_leader_three_nodes() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -429,7 +428,6 @@ fn test_force_leader_three_nodes() {
 #[test]
 fn test_force_leader_five_nodes() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -552,7 +550,6 @@ fn test_force_leader_for_learner() {
 #[test]
 fn test_force_leader_on_hibernated_leader() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     configure_for_hibernate(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
@@ -602,7 +599,6 @@ fn test_force_leader_on_hibernated_leader() {
 fn test_force_leader_on_hibernated_follower() {
     test_util::init_log_for_test();
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     configure_for_hibernate(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
@@ -651,7 +647,6 @@ fn test_force_leader_on_hibernated_follower() {
 #[test]
 fn test_force_leader_trigger_snapshot() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     configure_for_snapshot(&mut cluster);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
@@ -746,7 +741,6 @@ fn test_force_leader_trigger_snapshot() {
 #[test]
 fn test_force_leader_with_uncommitted_conf_change() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
@@ -817,7 +811,6 @@ fn test_force_leader_with_uncommitted_conf_change() {
 #[test]
 fn test_force_leader_on_healthy_region() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(30);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
@@ -856,7 +849,6 @@ fn test_force_leader_on_healthy_region() {
 #[test]
 fn test_force_leader_on_wrong_leader() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -907,7 +899,6 @@ fn test_force_leader_on_wrong_leader() {
 #[test]
 fn test_force_leader_twice_on_different_peers() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -976,7 +967,6 @@ fn test_force_leader_twice_on_different_peers() {
 #[test]
 fn test_force_leader_twice_on_same_peer() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -1022,7 +1012,6 @@ fn test_force_leader_twice_on_same_peer() {
 #[test]
 fn test_force_leader_multiple_election_rounds() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_unsafe_recovery(&mut cluster);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(30);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
