@@ -194,7 +194,7 @@ fn test_unsafe_recovery_execution_result_report() {
 #[test]
 fn test_unsafe_recover_wait_for_snapshot_apply() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
     cluster.cfg.raft_store.merge_max_log_gap = 3;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.run();

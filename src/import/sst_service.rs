@@ -8,7 +8,7 @@ use std::{
 };
 
 use collections::HashSet;
-use engine_traits::{KvEngine, CF_WRITE};
+use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::{
     executor::{ThreadPool, ThreadPoolBuilder},
@@ -38,7 +38,7 @@ use tikv_util::{
     future::{create_stream_with_buffer, paired_future_callback},
     time::{Instant, Limiter},
 };
-use txn_types::Key;
+use txn_types::{Key, WriteRef, WriteType};
 
 use super::make_rpc_error;
 use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_GAUGE};
@@ -164,77 +164,6 @@ where
             return Some(errorpb);
         }
         None
-    }
-
-    // we need to remove duplicate keys in here, since
-    // in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
-    // will panic if found duplicated entry during Vec<PutRequest>.
-    fn build_apply_request<'a, 'b>(
-        raft_size: u64,
-        reqs: &'a mut HashMap<Vec<u8>, (Request, u64)>,
-        cmd_reqs: &'a mut Vec<RaftCmdRequest>,
-        is_delete: bool,
-        cf: &'b str,
-        context: Context,
-    ) -> Box<dyn FnMut(Vec<u8>, Vec<u8>) + 'b>
-    where
-        'a: 'b,
-    {
-        let mut req_size = 0_u64;
-
-        // use callback to collect kv data.
-        if is_delete {
-            Box::new(move |k: Vec<u8>, _v: Vec<u8>| {
-                let mut req = Request::default();
-                let mut del = DeleteRequest::default();
-
-                let (encoded_key, ts) = Key::split_on_ts_for(&k).expect("key without ts");
-                del.set_key(k.clone());
-                del.set_cf(cf.to_string());
-                req.set_cmd_type(CmdType::Delete);
-                req.set_delete(del);
-                req_size += req.compute_size() as u64;
-                if reqs
-                    .get(encoded_key)
-                    .map(|(_, old_ts)| *old_ts < ts.into_inner())
-                    .unwrap_or(true)
-                {
-                    reqs.insert(encoded_key.to_owned(), (req, ts.into_inner()));
-                };
-                // When the request size get grow to half of the max request size,
-                // build the request and add it to a batch.
-                if req_size > raft_size / 2 {
-                    req_size = 0;
-                    let cmd = make_request(reqs, context.clone());
-                    cmd_reqs.push(cmd);
-                }
-            })
-        } else {
-            Box::new(move |k: Vec<u8>, v: Vec<u8>| {
-                let mut req = Request::default();
-                let mut put = PutRequest::default();
-
-                let (encoded_key, ts) = Key::split_on_ts_for(&k).expect("key without ts");
-                put.set_key(k.clone());
-                put.set_value(v);
-                put.set_cf(cf.to_string());
-                req.set_cmd_type(CmdType::Put);
-                req.set_put(put);
-                req_size += req.compute_size() as u64;
-                if reqs
-                    .get(encoded_key)
-                    .map(|(_, old_ts)| *old_ts < ts.into_inner())
-                    .unwrap_or(true)
-                {
-                    reqs.insert(encoded_key.to_owned(), (req, ts.into_inner()));
-                };
-                if req_size > raft_size / 2 {
-                    req_size = 0;
-                    let cmd = make_request(reqs, context.clone());
-                    cmd_reqs.push(cmd);
-                }
-            })
-        }
     }
 
     fn ingest_files(
@@ -521,9 +450,9 @@ where
             let result = (|| -> Result<()> {
                 let temp_file =
                     importer.do_download_kv_file(meta, req.get_storage_backend(), &limiter)?;
-                let mut reqs = HashMap::<Vec<u8>, (Request, u64)>::default();
+                let mut reqs = RequestCollector::from_cf(meta.get_cf());
                 let mut cmd_reqs = vec![];
-                let mut build_req_fn = Self::build_apply_request(
+                let mut build_req_fn = build_apply_request(
                     raft_size.0,
                     &mut reqs,
                     cmd_reqs.as_mut(),
@@ -926,6 +855,78 @@ fn pb_error_inc(type_: &str, e: &errorpb::Error) {
     IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
 }
 
+enum RequestCollector {
+    /// Retain the last ts of each key in each request.
+    /// This is used for write CF because resolved ts observer hates duplicated key in the same request.
+    RetainLastTs(HashMap<Vec<u8>, (Request, u64)>),
+    /// Collector favor that simple collect all items.
+    /// This is used for default CF.
+    KeepAll(Vec<Request>),
+}
+
+impl RequestCollector {
+    fn from_cf(cf: &str) -> Self {
+        match cf {
+            CF_DEFAULT | "" => Self::KeepAll(Default::default()),
+            CF_WRITE => Self::RetainLastTs(Default::default()),
+            _ => {
+                warn!("unknown cf name, using default request collector"; "cf" => %cf);
+                Self::RetainLastTs(Default::default())
+            }
+        }
+    }
+
+    fn accept(&mut self, req: Request) {
+        match self {
+            RequestCollector::RetainLastTs(ref mut reqs) => {
+                let k = key_from_request(&req);
+                let (encoded_key, ts) = match Key::split_on_ts_for(k) {
+                    Ok(k) => k,
+                    Err(err) => {
+                        warn!("key without ts, skipping"; "key" => %log_wrappers::Value::key(k), "err" => %err);
+                        return;
+                    }
+                };
+                if reqs
+                    .get(encoded_key)
+                    .map(|(_, old_ts)| *old_ts < ts.into_inner())
+                    .unwrap_or(true)
+                {
+                    reqs.insert(encoded_key.to_owned(), (req, ts.into_inner()));
+                }
+            }
+            RequestCollector::KeepAll(ref mut a) => a.push(req),
+        }
+    }
+
+    fn drain(&mut self) -> Vec<Request> {
+        match self {
+            RequestCollector::RetainLastTs(ref mut reqs) => {
+                reqs.drain().map(|(_, (req, _))| req).collect()
+            }
+            RequestCollector::KeepAll(ref mut reqs) => std::mem::take(reqs),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            RequestCollector::RetainLastTs(reqs) => reqs.is_empty(),
+            RequestCollector::KeepAll(reqs) => reqs.is_empty(),
+        }
+    }
+}
+
+fn key_from_request(req: &Request) -> &[u8] {
+    if req.has_put() {
+        return req.get_put().get_key();
+    }
+    if req.has_delete() {
+        return req.get_delete().get_key();
+    }
+    warn!("trying to extract key from request is neither put nor delete.");
+    b""
+}
+
 fn make_request_header(mut context: Context) -> RaftRequestHeader {
     let region_id = context.get_region_id();
     let mut header = RaftRequestHeader::default();
@@ -935,7 +936,7 @@ fn make_request_header(mut context: Context) -> RaftRequestHeader {
     header
 }
 
-fn make_request(reqs: &mut HashMap<Vec<u8>, (Request, u64)>, context: Context) -> RaftCmdRequest {
+fn make_request(reqs: &mut RequestCollector, context: Context) -> RaftCmdRequest {
     let mut cmd = RaftCmdRequest::default();
     let mut header = make_request_header(context);
     // Set the UUID of header to prevent raftstore batching our requests.
@@ -944,12 +945,220 @@ fn make_request(reqs: &mut HashMap<Vec<u8>, (Request, u64)>, context: Context) -
     // because the latches reject concurrency write to keys. However we have bypassed the latch layer :(
     header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
     cmd.set_header(header);
-    cmd.set_requests(
-        std::mem::take(reqs)
-            .into_values()
-            .map(|(req, _)| req)
-            .collect::<Vec<Request>>()
-            .into(),
-    );
+    cmd.set_requests(reqs.drain().into());
     cmd
+}
+
+// we need to remove duplicate keys in here, since
+// in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
+// will panic if found duplicated entry during Vec<PutRequest>.
+fn build_apply_request<'a, 'b>(
+    raft_size: u64,
+    reqs: &'a mut RequestCollector,
+    cmd_reqs: &'a mut Vec<RaftCmdRequest>,
+    is_delete: bool,
+    cf: &'b str,
+    context: Context,
+) -> Box<dyn FnMut(Vec<u8>, Vec<u8>) + 'b>
+where
+    'a: 'b,
+{
+    let mut req_size = 0_u64;
+
+    // use callback to collect kv data.
+    if is_delete {
+        Box::new(move |k: Vec<u8>, _v: Vec<u8>| {
+            let mut req = Request::default();
+            let mut del = DeleteRequest::default();
+
+            del.set_key(k);
+            del.set_cf(cf.to_string());
+            req.set_cmd_type(CmdType::Delete);
+            req.set_delete(del);
+            req_size += req.compute_size() as u64;
+            reqs.accept(req);
+            // When the request size get grow to half of the max request size,
+            // build the request and add it to a batch.
+            if req_size > raft_size / 2 {
+                req_size = 0;
+                let cmd = make_request(reqs, context.clone());
+                cmd_reqs.push(cmd);
+            }
+        })
+    } else {
+        Box::new(move |k: Vec<u8>, v: Vec<u8>| {
+            if cf == CF_WRITE && !write_needs_restore(&v) {
+                return;
+            }
+
+            let mut req = Request::default();
+            let mut put = PutRequest::default();
+
+            put.set_key(k);
+            put.set_value(v);
+            put.set_cf(cf.to_string());
+            req.set_cmd_type(CmdType::Put);
+            req.set_put(put);
+            req_size += req.compute_size() as u64;
+            reqs.accept(req);
+            if req_size > raft_size / 2 {
+                req_size = 0;
+                let cmd = make_request(reqs, context.clone());
+                cmd_reqs.push(cmd);
+            }
+        })
+    }
+}
+
+fn write_needs_restore(write: &[u8]) -> bool {
+    let w = WriteRef::parse(write);
+    match w {
+        Ok(w)
+            if matches!(
+                w.write_type,
+                WriteType::Put | WriteType::Delete | WriteType::Rollback
+            ) =>
+        {
+            true
+        }
+        Ok(w) => {
+            debug!("skip unnecessary write."; "type" => ?w.write_type);
+            false
+        }
+        Err(err) => {
+            warn!("write cannot be parsed, skipping"; "err" => %err, 
+                        "write" => %log_wrappers::Value::key(write));
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+
+    use engine_traits::{CF_DEFAULT, CF_WRITE};
+    use kvproto::{kvrpcpb::Context, raft_cmdpb::*};
+    use txn_types::{Key, TimeStamp, Write, WriteType};
+
+    use crate::import::sst_service::{
+        build_apply_request, key_from_request, make_request, RequestCollector,
+    };
+
+    fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
+        let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
+        let v = Write::new(ty, TimeStamp::new(start_ts), None);
+        (k.into_encoded(), v.as_ref().to_bytes())
+    }
+
+    fn default(key: &[u8], val: &[u8], start_ts: u64) -> (Vec<u8>, Vec<u8>) {
+        let k = Key::from_raw(key).append_ts(TimeStamp::new(start_ts));
+        (k.into_encoded(), val.to_owned())
+    }
+
+    fn default_req(key: &[u8], val: &[u8], start_ts: u64) -> Request {
+        let (k, v) = default(key, val, start_ts);
+        req(k, v, CF_DEFAULT)
+    }
+
+    fn write_req(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> Request {
+        let (k, v) = write(key, ty, commit_ts, start_ts);
+        req(k, v, CF_WRITE)
+    }
+
+    fn req(k: Vec<u8>, v: Vec<u8>, cf: &str) -> Request {
+        let mut req = Request::default();
+        let mut put = PutRequest::default();
+
+        put.set_key(k);
+        put.set_value(v);
+        put.set_cf(cf.to_string());
+        req.set_cmd_type(CmdType::Put);
+        req.set_put(put);
+        req
+    }
+
+    #[test]
+    fn test_build_request() {
+        #[derive(Debug)]
+        struct Case {
+            cf: &'static str,
+            mutations: Vec<(Vec<u8>, Vec<u8>)>,
+            expected_reqs: Vec<Request>,
+        }
+
+        fn run_case(c: &Case) {
+            let mut v = vec![];
+            let mut coll = RequestCollector::from_cf(c.cf);
+            let mut builder =
+                build_apply_request(1024, &mut coll, &mut v, false, c.cf, Context::new());
+
+            for (k, v) in c.mutations.clone() {
+                builder(k, v);
+            }
+            drop(builder);
+            if !coll.is_empty() {
+                let cmd = make_request(&mut coll, Context::new());
+                v.push(cmd);
+            }
+
+            let mut req1: HashMap<_, _> = v
+                .into_iter()
+                .flat_map(|mut x| x.take_requests().into_iter())
+                .map(|req| {
+                    let key = key_from_request(&req).to_owned();
+                    (key, req)
+                })
+                .collect();
+            for req in c.expected_reqs.iter() {
+                let r = req1.remove(key_from_request(req));
+                assert_eq!(r.as_ref(), Some(req), "{:?}", c);
+            }
+            assert!(req1.is_empty(), "{:?}\ncase = {:?}", req1, c);
+        }
+
+        use WriteType::*;
+        let cases = vec![
+            Case {
+                cf: CF_WRITE,
+                mutations: vec![
+                    write(b"foo", Lock, 42, 41),
+                    write(b"foo", Put, 40, 39),
+                    write(b"bar", Put, 38, 37),
+                    write(b"baz", Put, 34, 31),
+                    write(b"bar", Delete, 28, 17),
+                ],
+                expected_reqs: vec![
+                    write_req(b"foo", Put, 40, 39),
+                    write_req(b"bar", Put, 38, 37),
+                    write_req(b"baz", Put, 34, 31),
+                ],
+            },
+            Case {
+                cf: CF_DEFAULT,
+                mutations: vec![
+                    default(b"aria", b"The planet where flowers bloom.", 123),
+                    default(
+                        b"aria",
+                        b"Even a small breeze can still bring small happiness.",
+                        178,
+                    ),
+                    default(b"beyond", b"Calling your name.", 278),
+                ],
+                expected_reqs: vec![
+                    default_req(b"aria", b"The planet where flowers bloom.", 123),
+                    default_req(
+                        b"aria",
+                        b"Even a small breeze can still bring small happiness.",
+                        178,
+                    ),
+                    default_req(b"beyond", b"Calling your name.", 278),
+                ],
+            },
+        ];
+
+        for case in cases {
+            run_case(&case);
+        }
+    }
 }

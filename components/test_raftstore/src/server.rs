@@ -447,7 +447,9 @@ impl ServerCluster {
         let apply_router = system.apply_router();
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
+        raft_store
+            .validate(cfg.coprocessor.region_split_size)
+            .unwrap();
         let health_service = HealthService::default();
         let mut node = Node::new(
             system,

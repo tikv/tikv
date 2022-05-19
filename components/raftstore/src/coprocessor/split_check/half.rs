@@ -90,7 +90,7 @@ where
             return;
         }
         host.add_checker(Box::new(Checker::new(
-            half_split_bucket_size(host.cfg.region_max_size.0),
+            half_split_bucket_size(host.cfg.region_max_size().0),
             policy,
         )))
     }
@@ -166,7 +166,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_size: ReadableSize(BUCKET_NUMBER_LIMIT as u64),
+            region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
             ..Default::default()
         };
         let mut runnable =
@@ -218,7 +218,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_size: ReadableSize(BUCKET_NUMBER_LIMIT as u64),
+            region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
             enable_region_bucket: true,
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
@@ -345,7 +345,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_size: ReadableSize(BUCKET_NUMBER_LIMIT as u64),
+            region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
             enable_region_bucket: true,
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()

@@ -337,7 +337,7 @@ fn test_safe_tombstone_gc() {
 #[test]
 fn test_destroy_clean_up_logs_with_log_gc() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 50;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(50);
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
     let pd_client = cluster.pd_client.clone();
 
