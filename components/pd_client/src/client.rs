@@ -727,7 +727,7 @@ impl PdClient for RpcClient {
     fn store_heartbeat(
         &self,
         mut stats: pdpb::StoreStats,
-        report_opt: Option<pdpb::StoreReport>,
+        store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         let timer = Instant::now();
@@ -738,7 +738,7 @@ impl PdClient for RpcClient {
             .mut_interval()
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
-        if let Some(report) = report_opt {
+        if let Some(report) = store_report {
             req.set_store_report(report);
         }
         if let Some(status) = dr_autosync_status {
