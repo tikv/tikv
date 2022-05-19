@@ -185,6 +185,107 @@ where
         }
     }
 
+<<<<<<< HEAD
+=======
+    fn approximate_check_bucket(
+        &self,
+        region: &Region,
+        host: &mut SplitCheckerHost<'_, E>,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    ) -> Result<()> {
+        let ranges = bucket_ranges.clone().unwrap_or_else(|| {
+            vec![BucketRange(
+                region.get_start_key().to_vec(),
+                region.get_end_key().to_vec(),
+            )]
+        });
+        let mut buckets = vec![];
+        for range in &ranges {
+            let mut bucket = region.clone();
+            bucket.set_start_key(range.0.clone());
+            bucket.set_end_key(range.1.clone());
+            let bucket_entry = host.approximate_bucket_keys(&bucket, &self.engine)?;
+            debug!(
+                "bucket_entry size {} keys count {}",
+                bucket_entry.size,
+                bucket_entry.keys.len()
+            );
+            buckets.push(bucket_entry);
+        }
+
+        self.on_buckets_created(&mut buckets, region, &ranges);
+        self.refresh_region_buckets(buckets, region, bucket_ranges);
+        Ok(())
+    }
+
+    fn on_buckets_created(
+        &self,
+        buckets: &mut [Bucket],
+        region: &Region,
+        bucket_ranges: &Vec<BucketRange>,
+    ) {
+        for (mut bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
+            let mut bucket_region = region.clone();
+            bucket_region.set_start_key(bucket_range.0.clone());
+            bucket_region.set_end_key(bucket_range.1.clone());
+            let adjusted_keys = std::mem::take(&mut bucket.keys)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, key)| {
+                    let key = strip_timestamp_if_exists(key);
+                    if is_valid_split_key(&key, i, &bucket_region) {
+                        assert!(
+                            is_valid_split_key(&key, i, region),
+                            "region_id={}, key={}, region start_key={}, end_key={}, bucket_range start_key={}, end_key={}",
+                            region.get_id(),
+                            log_wrappers::Value::key(&key),
+                            log_wrappers::Value::key(region.get_start_key()),
+                            log_wrappers::Value::key(region.get_end_key()),
+                            log_wrappers::Value::key(&bucket_range.0),
+                            log_wrappers::Value::key(&bucket_range.1),
+                        );
+                        Some(key)
+                    } else {
+                        None
+                    }
+                })
+                .coalesce(|prev, curr| {
+                    // Make sure that the split keys are sorted and unique.
+                    if prev < curr {
+                        Err((prev, curr))
+                    } else {
+                        warn!(
+                            "skip invalid split key: key should not be larger than the previous.";
+                            "region_id" => region.id,
+                            "key" => log_wrappers::Value::key(&curr),
+                            "previous" => log_wrappers::Value::key(&prev),
+                        );
+                        Ok(prev)
+                    }
+                })
+                .collect::<Vec<_>>();
+            bucket.keys = adjusted_keys;
+        }
+    }
+
+    fn refresh_region_buckets(
+        &self,
+        buckets: Vec<Bucket>,
+        region: &Region,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    ) {
+        let _ = self.router.send(
+            region.get_id(),
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch: region.get_region_epoch().clone(),
+                buckets,
+                bucket_ranges,
+                cb: Callback::None,
+            },
+        );
+    }
+
+>>>>>>> 2accd27c2... Raftstore: reset the bucket after split region (#12575)
     /// Checks a Region with split and bucket checkers to produce split keys and buckets keys and generates split admin command.
     fn check_split_and_bucket(&mut self, region: &Region, auto_split: bool, policy: CheckPolicy) {
         let region_id = region.get_id();
