@@ -401,7 +401,7 @@ fn test_split_isolation() {
     // Use long election timeout and short lease.
     configure_for_hibernate(&mut cluster);
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -419,7 +419,7 @@ fn test_split_isolation() {
     cluster.must_split(&r1, b"k2");
     let idx = cluster.truncated_state(1, 1).get_index();
     // Trigger a log compaction, so the left region ['', 'k2'] cannot created through split cmd.
-    for i in 2..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+    for i in 2..cluster.cfg.raft_store.raft_log_gc_count_limit() * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
     cluster.wait_log_truncated(1, 1, idx + 1);
@@ -458,7 +458,8 @@ fn test_read_local_after_snapshpot_replace_peer() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
+
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -521,7 +522,7 @@ fn test_malformed_read_index() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
     cluster.cfg.raft_store.hibernate_regions = true;
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
     let pd_client = Arc::clone(&cluster.pd_client);
