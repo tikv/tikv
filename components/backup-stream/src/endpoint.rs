@@ -330,7 +330,10 @@ where
                     MetadataEvent::RemoveTask { task } => {
                         scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
                     }
-                    MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
+                    MetadataEvent::Error { err } => {
+                        err.report("metadata client watch meet error");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
                     _ => panic!("BUG: invalid event {:?}", event),
                 }
             }
@@ -351,10 +354,12 @@ where
                         scheduler.schedule(Task::WatchTask(TaskOp::PauseTask(task)))?;
                     }
                     MetadataEvent::ResumeTask { task } => {
-                        let task = meta_client.get_task(&task).await?;
                         scheduler.schedule(Task::WatchTask(TaskOp::ResumeTask(task)))?;
                     }
-                    MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
+                    MetadataEvent::Error { err } => {
+                        err.report("metadata client watch meet error");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
                     _ => panic!("BUG: invalid event {:?}", event),
                 }
             }
@@ -442,7 +447,7 @@ where
                 self.on_pause(&task_name);
             }
             TaskOp::ResumeTask(task) => {
-                self.load_task(task);
+                self.on_resume(task);
             }
         }
     }
@@ -598,6 +603,26 @@ where
             info!("pause backup stream task."; "task" => %t.name);
         }
         metrics::update_task_status(TaskStatus::Paused, task_name);
+    }
+
+    pub fn on_resume(&self, task_name: String) {
+        if let Some(cli) = self.meta_client.as_ref() {
+            let task = self.pool.block_on(cli.get_task(&task_name));
+            match task {
+                Ok(t) => match t {
+                    Some(stream_task) => self.load_task(stream_task),
+                    None => {
+                        info!("backup stream task not existed"; "task" => %task_name);
+                    }
+                },
+                Err(err) => {
+                    err.report(format!("failed to resume backup stream task {}", task_name));
+                    let _ = self
+                        .scheduler
+                        .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)));
+                }
+            }
+        }
     }
 
     pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
@@ -1066,7 +1091,7 @@ pub enum TaskOp {
     AddTask(StreamTask),
     RemoveTask(String),
     PauseTask(String),
-    ResumeTask(StreamTask),
+    ResumeTask(String),
 }
 
 #[derive(Debug)]
