@@ -230,7 +230,9 @@ impl Simulator for NodeCluster {
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
+        raft_store
+            .validate(cfg.coprocessor.region_split_size)
+            .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let mut node = Node::new(
             system,
@@ -327,8 +329,9 @@ impl Simulator for NodeCluster {
                 .map(|p| p.path().to_str().unwrap().to_owned())
         );
 
+        let region_split_size = cfg.coprocessor.region_split_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.validate().unwrap();
+        raftstore_cfg.validate(region_split_size).unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,
