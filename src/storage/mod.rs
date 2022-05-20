@@ -1263,6 +1263,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
+                // Remove the check_api_version_ranges,
+                // because of resolve locks range from TiDB is invalid key range mode
+
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 concurrency_manager.update_max_ts(max_ts);
