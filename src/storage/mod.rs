@@ -6309,10 +6309,15 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_lock() {
+    fn test_resolve_lock_apiv2() {
+        test_resolve_lock_impl::<ApiV1>();
+        test_resolve_lock_impl::<ApiV2>();
+    }
+
+    fn test_resolve_lock_impl<F: KvFormat>() {
         use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -6322,11 +6327,11 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
-                        Mutation::make_put(Key::from_raw(b"a"), b"foo".to_vec()),
-                        Mutation::make_put(Key::from_raw(b"b"), b"foo".to_vec()),
-                        Mutation::make_put(Key::from_raw(b"c"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"ta"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"tb"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"tc"), b"foo".to_vec()),
                     ],
-                    b"c".to_vec(),
+                    b"tc".to_vec(),
                     99.into(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6337,23 +6342,23 @@ mod tests {
         let (lock_a, lock_b, lock_c) = (
             {
                 let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"c".to_vec());
+                lock.set_primary_lock(b"tc".to_vec());
                 lock.set_lock_version(99);
-                lock.set_key(b"a".to_vec());
+                lock.set_key(b"ta".to_vec());
                 lock
             },
             {
                 let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"c".to_vec());
+                lock.set_primary_lock(b"tc".to_vec());
                 lock.set_lock_version(99);
-                lock.set_key(b"b".to_vec());
+                lock.set_key(b"tb".to_vec());
                 lock
             },
             {
                 let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"c".to_vec());
+                lock.set_primary_lock(b"tc".to_vec());
                 lock.set_lock_version(99);
-                lock.set_key(b"c".to_vec());
+                lock.set_key(b"tc".to_vec());
                 lock
             },
         );
@@ -6381,14 +6386,14 @@ mod tests {
                 let mut mutations = vec![];
                 for i in 0..scanned_locks {
                     mutations.push(Mutation::make_put(
-                        Key::from_raw(format!("x{:08}", i).as_bytes()),
+                        Key::from_raw(format!("tx{:08}", i).as_bytes()),
                         b"foo".to_vec(),
                     ));
                 }
 
                 storage
                     .sched_txn_command(
-                        commands::Prewrite::with_defaults(mutations, b"x".to_vec(), ts),
+                        commands::Prewrite::with_defaults(mutations, b"tx".to_vec(), ts),
                         expect_ok_callback(tx.clone(), 0),
                     )
                     .unwrap();
