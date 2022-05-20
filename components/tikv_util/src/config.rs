@@ -144,11 +144,11 @@ impl Serialize for ReadableSize {
             write!(buffer, "{}PiB", size / PIB).unwrap();
         } else if size % TIB == 0 {
             write!(buffer, "{}TiB", size / TIB).unwrap();
-        } else if size % GIB as u64 == 0 {
+        } else if size % GIB == 0 {
             write!(buffer, "{}GiB", size / GIB).unwrap();
-        } else if size % MIB as u64 == 0 {
+        } else if size % MIB == 0 {
             write!(buffer, "{}MiB", size / MIB).unwrap();
-        } else if size % KIB as u64 == 0 {
+        } else if size % KIB == 0 {
             write!(buffer, "{}KiB", size / KIB).unwrap();
         } else {
             write!(buffer, "{}B", size).unwrap();
@@ -187,7 +187,12 @@ impl FromStr for ReadableSize {
             "G" | "GB" | "GiB" => GIB,
             "T" | "TB" | "TiB" => TIB,
             "P" | "PB" | "PiB" => PIB,
-            "B" | "" => UNIT,
+            "B" | "" => {
+                return size
+                    .parse::<u64>()
+                    .map(|n| ReadableSize(n))
+                    .map_err(|_| format!("invalid size string: {:?}", s));
+            }
             _ => {
                 return Err(format!(
                     "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
@@ -1612,10 +1617,10 @@ mod tests {
         }
 
         let c = SizeHolder {
-            s: ReadableSize(512),
+            s: ReadableSize((isize::MAX) as u64),
         };
         let res_str = toml::to_string(&c).unwrap();
-        assert_eq!(res_str, "s = \"512B\"\n");
+        assert_eq!(res_str, "s = \"9223372036854775807B\"\n");
         let res_size: SizeHolder = toml::from_str(&res_str).unwrap();
         assert_eq!(res_size.s.0, c.s.0);
 
