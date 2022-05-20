@@ -43,9 +43,9 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100);
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");
@@ -109,7 +109,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
     let gc_limit: u64 = 100;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = gc_limit;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(gc_limit);
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
     cluster.run();
@@ -177,8 +177,8 @@ fn test_node_compact_many_times() {
 }
 
 fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(1);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100000);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(1));
     cluster.run();
     cluster.stop_node(1);
 
@@ -252,9 +252,9 @@ fn test_node_compact_size_limit() {
 }
 
 fn test_compact_reserve_max_ticks<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100);
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
     cluster.cfg.raft_store.raft_log_reserve_max_ticks = 2;
     cluster.run();
     let apply_key = keys::apply_state_key(1);
