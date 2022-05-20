@@ -1615,7 +1615,7 @@ mod tests {
             s: ReadableSize(512),
         };
         let res_str = toml::to_string(&c).unwrap();
-        assert_eq!(res_str, "s = 512\n");
+        assert_eq!(res_str, "s = \"512B\"\n");
         let res_size: SizeHolder = toml::from_str(&res_str).unwrap();
         assert_eq!(res_size.s.0, c.s.0);
 
