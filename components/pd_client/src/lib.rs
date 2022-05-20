@@ -126,13 +126,13 @@ impl BucketMeta {
 pub struct BucketStat {
     pub meta: Arc<BucketMeta>,
     pub stats: metapb::BucketStats,
-    pub last_report_time: Instant,
+    pub create_time: Instant,
 }
 
 impl Default for BucketStat {
     fn default() -> Self {
         Self {
-            last_report_time: Instant::now(),
+            create_time: Instant::now(),
             meta: Arc::default(),
             stats: metapb::BucketStats::default(),
         }
@@ -144,7 +144,7 @@ impl BucketStat {
         Self {
             meta,
             stats,
-            last_report_time: Instant::now(),
+            create_time: Instant::now(),
         }
     }
 
@@ -412,6 +412,16 @@ pub trait PdClient: Send + Sync {
     /// Return a timestamp with (physical, logical), indicating that timestamps allocated are:
     /// [Timestamp(physical, logical - count + 1), Timestamp(physical, logical)]
     fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
+        unimplemented!()
+    }
+
+    /// Set a service safe point.
+    fn update_service_safe_point(
+        &self,
+        _name: String,
+        _safepoint: TimeStamp,
+        _ttl: Duration,
+    ) -> PdFuture<()> {
         unimplemented!()
     }
 

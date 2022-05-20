@@ -31,6 +31,7 @@ concurrency_manager = { path = "../concurrency_manager", default-features = fals
 crossbeam = "0.8"
 encryption_export = { path = "../encryption/export", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_rocks_helper = { path = "../engine_rocks_helper" }
 engine_test = { path = "../engine_test", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 fail = "0.5"

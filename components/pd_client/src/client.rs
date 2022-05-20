@@ -548,7 +548,7 @@ impl PdClient for RpcClient {
                     .with_label_values(&["get_region_by_id"])
                     .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
-                if resp.has_region() {
+                if resp.has_region() && resp.has_leader() {
                     Ok(Some((resp.take_region(), resp.take_leader())))
                 } else {
                     Ok(None)
@@ -727,7 +727,7 @@ impl PdClient for RpcClient {
     fn store_heartbeat(
         &self,
         mut stats: pdpb::StoreStats,
-        report_opt: Option<pdpb::StoreReport>,
+        store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         let timer = Instant::now();
@@ -738,7 +738,7 @@ impl PdClient for RpcClient {
             .mut_interval()
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
-        if let Some(report) = report_opt {
+        if let Some(report) = store_report {
             req.set_store_report(report);
         }
         if let Some(status) = dr_autosync_status {
@@ -905,6 +905,44 @@ impl PdClient for RpcClient {
         };
         self.pd_client
             .request((), executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn update_service_safe_point(
+        &self,
+        name: String,
+        safe_point: TimeStamp,
+        ttl: Duration,
+    ) -> PdFuture<()> {
+        let begin = Instant::now();
+        let mut req = pdpb::UpdateServiceGcSafePointRequest::default();
+        req.set_header(self.header());
+        req.set_service_id(name.into());
+        req.set_ttl(ttl.as_secs() as _);
+        req.set_safe_point(safe_point.into_inner());
+        let executor = move |client: &Client, r: pdpb::UpdateServiceGcSafePointRequest| {
+            let handler = client
+                .inner
+                .rl()
+                .client_stub
+                .update_service_gc_safe_point_async_opt(&r, Self::call_option(client))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fail to request PD {} err {:?}",
+                        "update_service_safe_point", e
+                    )
+                });
+            Box::pin(async move {
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["update_service_safe_point"])
+                    .observe(duration_to_sec(begin.saturating_elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(())
+            }) as PdFuture<_>
+        };
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
 

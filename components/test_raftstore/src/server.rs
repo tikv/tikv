@@ -279,11 +279,6 @@ impl ServerCluster {
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-        if ApiVersion::V2 == F::TAG {
-            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(&mut coprocessor_host);
-        }
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
@@ -347,6 +342,13 @@ impl ServerCluster {
             None
         };
 
+        if ApiVersion::V2 == F::TAG {
+            let causal_ts_provider =
+                Arc::new(causal_ts::SimpleTsoProvider::new(self.pd_client.clone()));
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(&mut coprocessor_host);
+        }
+
         // Start resource metering.
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
@@ -393,6 +395,7 @@ impl ServerCluster {
         };
         let import_service = ImportSstService::new(
             cfg.import.clone(),
+            cfg.raft_store.raft_entry_max_size,
             sim_router.clone(),
             engines.kv.clone(),
             Arc::clone(&importer),
@@ -408,6 +411,7 @@ impl ServerCluster {
             .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
             .max_total_size(cfg.server.snap_max_total_size.0)
             .encryption_key_manager(key_manager)
+            .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -446,7 +450,9 @@ impl ServerCluster {
         let apply_router = system.apply_router();
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
+        raft_store
+            .validate(cfg.coprocessor.region_split_size)
+            .unwrap();
         let health_service = HealthService::default();
         let mut node = Node::new(
             system,

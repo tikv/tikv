@@ -7,7 +7,7 @@ publish = false
 [[test]]
 name = "failpoints"
 path = "failpoints/mod.rs"
-required-features = ["failpoints"]
+required-features = ["failpoints", "testexport"]
 
 [[test]]
 name = "integrations"
@@ -80,6 +80,7 @@ collections = { path = "../components/collections" }
 crc64fast = "0.1"
 crossbeam = "0.8"
 encryption = { path = "../components/encryption", default-features = false }
+engine_rocks_helper = { path = "../components/engine_rocks_helper" }
 error_code = { path = "../components/error_code", default-features = false }
 fail = "0.5"
 file_system = { path = "../components/file_system" }

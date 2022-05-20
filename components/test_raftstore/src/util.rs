@@ -49,7 +49,7 @@ use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
-use tikv_util::{config::*, escape, time::ThreadReadId, HandyRwLock};
+use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
 use txn_types::Key;
 
 use crate::{Cluster, Config, ServerCluster, Simulator, TestPdClient};
@@ -630,6 +630,7 @@ pub fn create_test_engine(
     Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
+    LazyWorker<String>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
@@ -645,9 +646,13 @@ pub fn create_test_engine(
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();
 
+    let sst_worker = LazyWorker::new("sst-recovery");
+    let scheduler = sst_worker.scheduler();
+
     let raft_engine = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+    let mut builder =
+        KvEngineFactoryBuilder::new(env, &cfg, dir.path()).sst_recovery_sender(Some(scheduler));
     if let Some(cache) = cache {
         builder = builder.block_cache(cache);
     }
@@ -657,14 +662,14 @@ pub fn create_test_engine(
     let factory = builder.build();
     let engine = factory.create_tablet().unwrap();
     let engines = Engines::new(engine, raft_engine);
-    (engines, key_manager, dir)
+    (engines, key_manager, dir, sst_worker)
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // We don't want to generate snapshots due to compact log.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
 }
 
 pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -677,7 +682,7 @@ pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
@@ -685,8 +690,8 @@ pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid log compaction which will prevent merge.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
     // Make merge check resume quickly.
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     // When isolated, follower relies on stale check tick to detect failure leader,

@@ -1,0 +1,69 @@
+[package]
+name = "backup-stream"
+version = "0.1.0"
+edition = "2018"
+
+[features]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+test-engine-kv-rocksdb = ["tikv/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["tikv/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+failpoints = ["fail/failpoints"]
+backup-stream-debug = []
+
+[dependencies]
+async-trait = { version = "0.1" }
+bytes = "1"
+chrono = "0.4"
+concurrency_manager = { path = "../concurrency_manager" }
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+dashmap = "5"
+engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+error_code = { path = "../error_code" }
+etcd-client = { version = "0.7", features = ["pub-response-field"] }
+external_storage = { path = "../external_storage", default-features = false }
+external_storage_export = { path = "../external_storage/export", default-features = false }
+fail = "0.5"
+
+file_system = { path = "../file_system" }
+futures = "0.3"
+hex = "0.4"
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+lazy_static = "1.4"
+log_wrappers = { path = "../log_wrappers" }
+online_config = { path = "../online_config" }
+openssl = "0.10"
+pd_client = { path = "../pd_client" }
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+protobuf = { version = "2.8", features = ["bytes"] }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raftstore = { path = "../raftstore", default-features = false }
+regex = "1"
+resolved_ts = { path = "../resolved_ts" }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+thiserror = "1"
+tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
+tikv = { path = "../../", default-features = false }
+tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
+tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["compat"] } 
+txn_types = { path = "../txn_types", default-features = false }
+uuid = "0.8"
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+
+[dev-dependencies]
+async-trait = "0.1"
+engine_panic = { path = "../engine_panic" }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+hex = "0.4"
+rand = "0.8.0"
+tempdir = "0.3"
+test_raftstore = { path = "../test_raftstore", default-features = false }
+test_util = { path = "../test_util", default-features = false }
+url = "2"
+walkdir = "2"

@@ -26,6 +26,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
+use backup_stream::{config::BackupStreamConfigManager, observer::BackupStreamObserver};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -34,6 +35,7 @@ use engine_rocks::{
     raw::{Cache, Env},
     FlowInfo, RocksEngine,
 };
+use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
     RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -62,7 +64,9 @@ use raftstore::{
     store::{
         config::RaftstoreConfigManager,
         fsm,
-        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
+        fsm::store::{
+            RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
+        },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
@@ -101,7 +105,7 @@ use tikv_util::{
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
-    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
 use tokio::runtime::Builder;
 
@@ -199,6 +203,7 @@ struct TiKvServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
 }
 
@@ -297,6 +302,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             background_worker,
             flow_info_sender: None,
             flow_info_receiver: None,
+            sst_worker: None,
             quota_limiter,
         }
     }
@@ -589,6 +595,16 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let pd_worker = LazyWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
+        if let Some(sst_worker) = &mut self.sst_worker {
+            let sst_runner = RecoveryRunner::new(
+                engines.engines.kv.get_sync_db(),
+                engines.store_meta.clone(),
+                self.config.storage.background_error_recovery_window.into(),
+                DEFAULT_CHECK_INTERVAL,
+            );
+            sst_worker.start_with_timer(sst_runner);
+        }
+
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
@@ -697,6 +713,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .encryption_key_manager(self.encryption_key_manager.clone())
+            .max_per_file_size(self.config.raft_store.max_snapshot_file_raw_size.0)
+            .enable_multi_snapshot_files(
+                self.pd_client
+                    .feature_gate()
+                    .can_enable(MULTI_FILES_SNAPSHOT_FEATURE),
+            )
             .build(snap_path);
 
         // Create coprocessor endpoint.
@@ -773,7 +795,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         self.config
             .raft_store
-            .validate()
+            .validate(self.config.coprocessor.region_split_size)
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
         let health_service = HealthService::default();
@@ -821,8 +843,39 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             Box::new(ServerConfigManager::new(
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
+                server.get_grpc_mem_quota().clone(),
             )),
         );
+
+        // Start backup stream
+        if self.config.backup_stream.enable {
+            // Create backup stream.
+            let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
+            let backup_stream_scheduler = backup_stream_worker.scheduler();
+
+            // Register backup-stream observer.
+            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
+            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager.
+            cfg_controller.register(
+                tikv::config::Module::BackupStream,
+                Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
+            );
+
+            let backup_stream_endpoint = backup_stream::Endpoint::new::<String>(
+                node.id(),
+                &self.config.pd.endpoints,
+                self.config.backup_stream.clone(),
+                backup_stream_scheduler,
+                backup_stream_ob,
+                self.region_info_accessor.clone(),
+                self.router.clone(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+            );
+            backup_stream_worker.start(backup_stream_endpoint);
+            self.to_stop.push(backup_stream_worker);
+        }
 
         let import_path = self.store_path.join("import");
         let mut importer = SstImporter::new(
@@ -925,6 +978,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,
+            self.config.storage.api_version(),
             self.pd_client.clone(),
             cdc_scheduler.clone(),
             self.router.clone(),
@@ -985,6 +1039,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         // Import SST service.
         let import_service = ImportSstService::new(
             self.config.import.clone(),
+            self.config.raft_store.raft_entry_max_size,
             self.router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
@@ -1228,6 +1283,22 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             })
     }
 
+    fn init_sst_recovery_sender(&mut self) -> Option<Scheduler<String>> {
+        if !self
+            .config
+            .storage
+            .background_error_recovery_window
+            .is_zero()
+        {
+            let sst_worker = Box::new(LazyWorker::new("sst-recovery"));
+            let scheduler = sst_worker.scheduler();
+            self.sst_worker = Some(sst_worker);
+            Some(scheduler)
+        } else {
+            None
+        }
+    }
+
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
         let server = self.servers.as_mut().unwrap();
         server
@@ -1278,6 +1349,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         self.region_info_accessor.stop();
 
         servers.lock_mgr.stop();
+
+        if let Some(sst_worker) = self.sst_worker {
+            sst_worker.stop_worker();
+        }
 
         self.to_stop.into_iter().for_each(|s| s.stop());
     }
@@ -1404,6 +1479,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
             .compaction_filter_router(self.router.clone())
             .region_info_accessor(self.region_info_accessor.clone())
+            .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);

@@ -30,10 +30,12 @@ test-engines-panic = [
   "tikv/test-engines-panic",
 ]
 nortcheck = ["engine_rocks/nortcheck"]
+backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
 [dependencies]
 api_version = { path = "../api_version" }
 backup = { path = "../backup", default-features = false }
+backup-stream = { path = "../backup-stream", default-features = false }
 causal_ts = { path = "../causal_ts" }
 cdc = { path = "../cdc", default-features = false }
 chrono = "0.4"
@@ -44,6 +46,7 @@ crossbeam = "0.8"
 encryption = { path = "../encryption", default-features = false }
 encryption_export = { path = "../encryption/export", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_rocks_helper = { path = "../engine_rocks_helper" }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 file_system = { path = "../file_system", default-features = false }
