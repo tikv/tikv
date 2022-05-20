@@ -3,11 +3,13 @@
 #[macro_use]
 extern crate serde_derive;
 
-use std::error::Error;
-use std::fs::{self, File};
-use std::io::Read;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::{
+    error::Error,
+    fs::{self, File},
+    io::Read,
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
 use collections::HashSet;
 use encryption::EncryptionConfig;
@@ -95,7 +97,7 @@ impl SecurityConfig {
 
     /// Determine if the cert file has been modified.
     /// If modified, update the timestamp of this modification.
-    fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
+    pub fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
         let this = fs::metadata(&self.cert_path)?.modified()?;
         if let Some(last) = last {
             if *last == this {
@@ -255,11 +257,11 @@ pub fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{fs, io::Write};
 
-    use std::fs;
-    use std::io::Write;
     use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_security() {

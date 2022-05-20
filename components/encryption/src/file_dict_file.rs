@@ -1,5 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    io::{BufRead, Read, Write},
+    path::{Path, PathBuf},
+};
+
 use byteorder::{BigEndian, ByteOrder};
 use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
@@ -7,15 +12,12 @@ use protobuf::Message;
 use rand::{thread_rng, RngCore};
 use tikv_util::{box_err, set_panic_mark, warn};
 
-use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
-use crate::master_key::{Backend, PlaintextBackend};
-use crate::metrics::*;
-use crate::Error;
-use crate::Result;
-
-use std::io::BufRead;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use crate::{
+    encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX},
+    master_key::{Backend, PlaintextBackend},
+    metrics::*,
+    Error, Result,
+};
 
 #[derive(Debug)]
 enum LogRecord {
@@ -384,11 +386,10 @@ impl FileDictionaryFile {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::crypter::compat;
-    use crate::encrypted_file::EncryptedFile;
-    use crate::Error;
     use kvproto::encryptionpb::EncryptionMethod;
+
+    use super::*;
+    use crate::{crypter::compat, encrypted_file::EncryptedFile, Error};
 
     fn test_file_dict_file_normal(enable_log: bool) {
         let tempdir = tempfile::tempdir().unwrap();

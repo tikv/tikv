@@ -1,14 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 use collections::HashMap;
-use kvproto::kvrpcpb::Context;
-use kvproto::resource_usage_agent::ResourceUsageRecord;
-use resource_metering::error::Result;
-use resource_metering::{init_recorder, init_reporter, Config, DataSink};
+use kvproto::{kvrpcpb::Context, resource_usage_agent::ResourceUsageRecord};
+use resource_metering::{error::Result, init_recorder, init_reporter, Config, DataSink};
 use tikv_util::config::ReadableDuration;
 
 const PRECISION_MS: u64 = 1000;

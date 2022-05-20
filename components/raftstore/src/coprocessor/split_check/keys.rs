@@ -1,17 +1,23 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::{CasualMessage, CasualRouter};
+use std::{
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+};
+
 use engine_traits::{KvEngine, Range};
 use error_code::ErrorCodeExt;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
 use tikv_util::{box_try, debug, info, warn};
 
-use super::super::error::Result;
-use super::super::metrics::*;
-use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
-use super::Host;
+use super::{
+    super::{
+        error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
+        SplitChecker,
+    },
+    Host,
+};
+use crate::store::{CasualMessage, CasualRouter};
 
 pub struct Checker {
     max_keys_count: u64,
@@ -118,7 +124,7 @@ where
         let region_keys = match get_region_approximate_keys(
             engine,
             region,
-            host.cfg.region_max_keys * host.cfg.batch_split_limit,
+            host.cfg.region_max_keys() * host.cfg.batch_split_limit,
         ) {
             Ok(keys) => keys,
             Err(e) => {
@@ -130,8 +136,8 @@ where
                 );
                 // Need to check keys.
                 host.add_checker(Box::new(Checker::new(
-                    host.cfg.region_max_keys,
-                    host.cfg.region_split_keys,
+                    host.cfg.region_max_keys(),
+                    host.cfg.region_split_keys(),
                     host.cfg.batch_split_limit,
                     policy,
                 )));
@@ -150,7 +156,7 @@ where
         }
 
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
-        if region_keys >= host.cfg.region_max_keys {
+        if region_keys >= host.cfg.region_max_keys() {
             info!(
                 "approximate keys over threshold, need to do split check";
                 "region_id" => region.get_id(),
@@ -159,8 +165,8 @@ where
             );
             // Need to check keys.
             host.add_checker(Box::new(Checker::new(
-                host.cfg.region_max_keys,
-                host.cfg.region_split_keys,
+                host.cfg.region_max_keys(),
+                host.cfg.region_split_keys(),
                 host.cfg.batch_split_limit,
                 policy,
             )));
@@ -192,22 +198,23 @@ pub fn get_region_approximate_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::super::size::tests::must_split_at;
-    use crate::coprocessor::{Config, CoprocessorHost};
-    use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
+    use std::{cmp, sync::mpsc, u64};
+
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
-    use engine_traits::{KvEngine, MiscExt, SyncMutable};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
-    use kvproto::metapb::{Peer, Region};
-    use kvproto::pdpb::CheckPolicy;
-    use std::cmp;
-    use std::sync::mpsc;
-    use std::u64;
+    use engine_traits::{KvEngine, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use kvproto::{
+        metapb::{Peer, Region},
+        pdpb::CheckPolicy,
+    };
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::*;
+    use super::{super::size::tests::must_split_at, *};
+    use crate::{
+        coprocessor::{Config, CoprocessorHost},
+        store::{CasualMessage, SplitCheckRunner, SplitCheckTask},
+    };
 
     fn put_data(engine: &impl KvEngine, mut start_idx: u64, end_idx: u64, fill_short_value: bool) {
         let write_value = if fill_short_value {
@@ -244,7 +251,7 @@ mod tests {
     fn test_split_check() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let cf_opts = ColumnFamilyOptions::new();
         let cfs_opts = ALL_CFS
             .iter()
@@ -262,8 +269,8 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_keys: 100,
-            region_split_keys: 80,
+            region_max_keys: Some(100),
+            region_split_keys: Some(80),
             batch_split_limit: 5,
             ..Default::default()
         };
@@ -277,6 +284,7 @@ mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
@@ -292,6 +300,7 @@ mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         must_split_at(
             &rx,
@@ -304,6 +313,7 @@ mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         must_split_at(
             &rx,
@@ -320,6 +330,7 @@ mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         must_split_at(
             &rx,
@@ -335,7 +346,12 @@ mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::split_check(region, true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region,
+            true,
+            CheckPolicy::Scan,
+            None,
+        ));
     }
 
     #[test]
@@ -345,7 +361,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS
@@ -385,7 +401,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS

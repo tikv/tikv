@@ -1,17 +1,22 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+use std::{
+    path::Path,
+    sync::*,
+    thread,
+    time::{Duration, Instant},
+};
 
+use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::{raw::Writable, Compat};
+use engine_traits::{
+    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
+};
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
-use grpcio_health::proto::HealthCheckRequest;
-use grpcio_health::*;
-use tempfile::Builder;
-
+use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
@@ -20,26 +25,30 @@ use kvproto::{
     raft_serverpb::*,
     tikvpb::*,
 };
-use raft::eraftpb;
-
-use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{raw::Writable, Compat};
-use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
+use raft::eraftpb;
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{fsm::store::StoreMeta, AutoSplitController, SnapManager},
+};
 use resource_metering::CollectorRegHandle;
+use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::QuotaConfig;
-use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv::import::Config as ImportConfig;
-use tikv::import::SSTImporter;
-use tikv::server;
-use tikv::server::gc_worker::sync_gc;
-use tikv::server::service::{batch_commands_request, batch_commands_response};
-use tikv_util::config::ReadableSize;
-use tikv_util::worker::{dummy_scheduler, LazyWorker};
-use tikv_util::HandyRwLock;
+use tikv::{
+    config::QuotaConfig,
+    coprocessor::REQ_TYPE_DAG,
+    import::{Config as ImportConfig, SstImporter},
+    server,
+    server::{
+        gc_worker::sync_gc,
+        service::{batch_commands_request, batch_commands_response},
+    },
+};
+use tikv_util::{
+    config::ReadableSize,
+    worker::{dummy_scheduler, LazyWorker},
+    HandyRwLock,
+};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 #[test]
@@ -601,21 +610,38 @@ fn test_coprocessor() {
 
 #[test]
 fn test_split_region() {
-    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    test_split_region_impl::<ApiV1>(false);
+    test_split_region_impl::<ApiV2>(false);
+    test_split_region_impl::<ApiV1>(true);
+    test_split_region_impl::<ApiV1Ttl>(true); // APIV1TTL for RawKV only.
+    test_split_region_impl::<ApiV2>(true);
+}
+
+fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
+    let encode_key = |k: &[u8]| -> Vec<u8> {
+        if !is_raw_kv || F::TAG == ApiVersion::V2 {
+            Key::from_raw(k).into_encoded()
+        } else {
+            k.to_vec()
+        }
+    };
+
+    let (mut cluster, leader, mut ctx) =
+        must_new_and_configure_cluster(|cluster| cluster.cfg.storage.set_api_version(F::TAG));
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+    ctx.set_api_version(F::CLIENT_TAG);
 
     // Split region commands
     let key = b"b";
     let mut req = SplitRegionRequest::default();
     req.set_context(ctx);
+    req.set_is_raw_kv(is_raw_kv);
     req.set_split_key(key.to_vec());
     let resp = client.split_region(&req).unwrap();
-    assert_eq!(
-        Key::from_encoded(resp.get_left().get_end_key().to_vec())
-            .into_raw()
-            .unwrap()
-            .as_slice(),
-        key
-    );
+    assert_eq!(resp.get_left().get_end_key().to_vec(), encode_key(key));
     assert_eq!(
         resp.get_left().get_end_key(),
         resp.get_right().get_start_key()
@@ -630,21 +656,21 @@ fn test_split_region() {
     ctx.set_region_epoch(resp.get_right().get_region_epoch().to_owned());
     let mut req = SplitRegionRequest::default();
     req.set_context(ctx);
+    req.set_is_raw_kv(is_raw_kv);
     let split_keys = vec![b"e".to_vec(), b"c".to_vec(), b"d".to_vec()];
     req.set_split_keys(split_keys.into());
     let resp = client.split_region(&req).unwrap();
     let result_split_keys: Vec<_> = resp
         .get_regions()
         .iter()
-        .map(|x| {
-            Key::from_encoded(x.get_start_key().to_vec())
-                .into_raw()
-                .unwrap()
-        })
+        .map(|x| x.get_start_key().to_vec())
         .collect();
     assert_eq!(
         result_split_keys,
-        vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec(), b"e".to_vec()]
+        vec![b"b", b"c", b"d", b"e",]
+            .into_iter()
+            .map(|k| encode_key(&k[..]))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -709,15 +735,14 @@ fn test_debug_raft_log() {
     // Put some data.
     let engine = cluster.get_raft_engine(store_id);
     let (region_id, log_index) = (200, 200);
-    let key = keys::raft_log_key(region_id, log_index);
     let mut entry = eraftpb::Entry::default();
     entry.set_term(1);
-    entry.set_index(1);
+    entry.set_index(log_index);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42].into());
-    engine.c().put_msg(&key, &entry).unwrap();
+    engine.append(region_id, vec![entry.clone()]).unwrap();
     assert_eq!(
-        engine.c().get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
+        engine.get_entry(region_id, log_index).unwrap().unwrap(),
         entry
     );
 
@@ -747,19 +772,11 @@ fn test_debug_region_info() {
     let kv_engine = cluster.get_engine(store_id);
 
     let region_id = 100;
-    let raft_state_key = keys::raft_state_key(region_id);
     let mut raft_state = raft_serverpb::RaftLocalState::default();
     raft_state.set_last_index(42);
-    raft_engine
-        .c()
-        .put_msg(&raft_state_key, &raft_state)
-        .unwrap();
+    raft_engine.put_raft_state(region_id, &raft_state).unwrap();
     assert_eq!(
-        raft_engine
-            .c()
-            .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
-            .unwrap()
-            .unwrap(),
+        raft_engine.get_raft_state(region_id).unwrap().unwrap(),
         raft_state
     );
 
@@ -958,7 +975,7 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
+        Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -1951,7 +1968,7 @@ fn test_storage_with_quota_limiter_enable() {
         let quota_config = QuotaConfig {
             foreground_cpu_time: 2000,
             foreground_write_bandwidth: ReadableSize(10),
-            foreground_read_bandwidth: ReadableSize(0),
+            ..Default::default()
         };
         cluster.cfg.quota = quota_config;
         cluster.cfg.storage.scheduler_worker_pool_size = 1;
@@ -1975,19 +1992,15 @@ fn test_storage_with_quota_limiter_enable() {
     mutation.set_value(v);
     must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
 
-    // 800 only represents quota enabled, no specific significance
-    assert!(begin.elapsed() > Duration::from_millis(800));
+    // 500 only represents quota enabled, no specific significance
+    assert!(begin.elapsed() > Duration::from_millis(500));
 }
 
 #[test]
 fn test_storage_with_quota_limiter_disable() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
         // all limit set to 0, which means quota limiter not work.
-        let quota_config = QuotaConfig {
-            foreground_cpu_time: 0,
-            foreground_write_bandwidth: ReadableSize(0),
-            foreground_read_bandwidth: ReadableSize(0),
-        };
+        let quota_config = QuotaConfig::default();
         cluster.cfg.quota = quota_config;
         cluster.cfg.storage.scheduler_worker_pool_size = 1;
     });
@@ -2010,5 +2023,5 @@ fn test_storage_with_quota_limiter_disable() {
     mutation.set_value(v);
     must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
 
-    assert!(begin.elapsed() < Duration::from_millis(800));
+    assert!(begin.elapsed() < Duration::from_millis(500));
 }

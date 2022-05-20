@@ -42,8 +42,7 @@ mod misc;
 pub use crate::misc::*;
 pub mod range_properties;
 mod snapshot;
-pub use crate::range_properties::*;
-pub use crate::snapshot::*;
+pub use crate::{range_properties::*, snapshot::*};
 mod sst;
 pub use crate::sst::*;
 mod sst_partitioner;
@@ -57,6 +56,9 @@ pub use crate::mvcc_properties::*;
 pub mod perf_context;
 pub use crate::perf_context::*;
 mod perf_context_impl;
+pub use crate::perf_context_impl::{
+    PerfStatisticsInstant, ReadPerfContext, ReadPerfInstant, WritePerfContext, WritePerfInstant,
+};
 mod perf_context_metrics;
 
 mod engine_iterator;
@@ -101,9 +103,7 @@ pub mod file_system;
 
 mod raft_engine;
 
-pub use rocksdb::set_perf_level;
-pub use rocksdb::PerfContext;
-pub use rocksdb::PerfLevel;
+pub use rocksdb::{set_perf_flags, set_perf_level, PerfContext, PerfFlag, PerfFlags, PerfLevel};
 
 pub mod flow_control_factors;
 pub use flow_control_factors::*;

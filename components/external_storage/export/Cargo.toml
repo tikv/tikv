@@ -72,7 +72,7 @@ protobuf = { optional = true, version = "2" }
 slog-global = { optional = true, version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_util = { path = "../../tikv_util" }
 tokio = { version = "1.5", features = ["time", "rt", "net"], optional = true }
-tokio-util = { version = "0.6", features = ["compat"], optional = true }
+tokio-util = { version = "0.7", features = ["compat"], optional = true }
 url = "2.0"
 async-trait = "0.1"
 

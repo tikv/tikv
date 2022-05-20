@@ -1,9 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    fmt,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use collections::HashSet;
-use std::fmt;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
@@ -32,6 +35,11 @@ impl TimeStamp {
     /// Extracts physical part of a timestamp, in milliseconds.
     pub fn physical(self) -> u64 {
         self.0 >> TSO_PHYSICAL_SHIFT_BITS
+    }
+
+    /// Extracts logical part of a timestamp.
+    pub fn logical(self) -> u64 {
+        self.0 & ((1 << TSO_PHYSICAL_SHIFT_BITS) - 1)
     }
 
     #[must_use]
@@ -191,6 +199,9 @@ mod tests {
 
         let extracted_physical = ts.physical();
         assert_eq!(extracted_physical, physical);
+
+        let extracted_logical = ts.logical();
+        assert_eq!(extracted_logical, logical);
     }
 
     #[test]

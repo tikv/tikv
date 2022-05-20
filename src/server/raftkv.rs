@@ -12,21 +12,17 @@ use std::{
     time::Duration,
 };
 
-use raft::eraftpb::{self, MessageType};
-use raft::StateRole;
-use thiserror::Error;
-
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_LOCK};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{
     errorpb,
-    kvrpcpb::Context,
-    kvrpcpb::IsolationLevel,
+    kvrpcpb::{Context, IsolationLevel},
     metapb,
-    raft_cmdpb::{
-        CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-        RaftRequestHeader, Request, Response,
-    },
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
+};
+use raft::{
+    eraftpb::{self, MessageType},
+    StateRole,
 };
 use raftstore::{
     coprocessor::{
@@ -39,16 +35,18 @@ use raftstore::{
         RegionSnapshot, WriteResponse,
     },
 };
-use tikv_util::codec::number::NumberEncoder;
-use tikv_util::time::Instant;
-use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
+use thiserror::Error;
+use tikv_util::{codec::number::NumberEncoder, time::Instant};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
-use crate::storage::kv::{
-    write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner, ExtCallback,
-    Modify, SnapContext, WriteData,
+use crate::storage::{
+    self, kv,
+    kv::{
+        write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner,
+        ExtCallback, Modify, SnapContext, WriteData,
+    },
 };
-use crate::storage::{self, kv};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -252,7 +250,7 @@ where
             raftkv_early_error_report_fp()?;
         }
 
-        let reqs = modifies_to_requests(batch.modifies);
+        let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
         let mut header = self.new_request_header(ctx);
         if txn_extra.one_pc {
@@ -263,11 +261,7 @@ where
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
 
-        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
-            if !txn_extra.is_empty() {
-                tx.schedule(txn_extra);
-            }
-        }
+        self.schedule_txn_extra(txn_extra);
 
         let cb = StoreCallback::write_ext(
             Box::new(move |resp| {
@@ -487,6 +481,14 @@ where
         self.engine
             .get_mvcc_properties_cf(cf, safe_point, &start, &end)
     }
+
+    fn schedule_txn_extra(&self, txn_extra: TxnExtra) {
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !txn_extra.is_empty() {
+                tx.schedule(txn_extra);
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -565,59 +567,12 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
     }
 }
 
-pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
-    let mut reqs = Vec::with_capacity(modifies.len());
-    for m in modifies {
-        let mut req = Request::default();
-        match m {
-            Modify::Delete(cf, k) => {
-                let mut delete = DeleteRequest::default();
-                delete.set_key(k.into_encoded());
-                if cf != CF_DEFAULT {
-                    delete.set_cf(cf.to_string());
-                }
-                req.set_cmd_type(CmdType::Delete);
-                req.set_delete(delete);
-            }
-            Modify::Put(cf, k, v) => {
-                let mut put = PutRequest::default();
-                put.set_key(k.into_encoded());
-                put.set_value(v);
-                if cf != CF_DEFAULT {
-                    put.set_cf(cf.to_string());
-                }
-                req.set_cmd_type(CmdType::Put);
-                req.set_put(put);
-            }
-            Modify::PessimisticLock(k, lock) => {
-                let v = lock.into_lock().to_bytes();
-                let mut put = PutRequest::default();
-                put.set_key(k.into_encoded());
-                put.set_value(v);
-                put.set_cf(CF_LOCK.to_string());
-                req.set_cmd_type(CmdType::Put);
-                req.set_put(put);
-            }
-            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
-                let mut delete_range = DeleteRangeRequest::default();
-                delete_range.set_cf(cf.to_string());
-                delete_range.set_start_key(start_key.into_encoded());
-                delete_range.set_end_key(end_key.into_encoded());
-                delete_range.set_notify_only(notify_only);
-                req.set_cmd_type(CmdType::DeleteRange);
-                req.set_delete_range(delete_range);
-            }
-        }
-        reqs.push(req);
-    }
-    reqs
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use kvproto::raft_cmdpb;
     use uuid::Uuid;
+
+    use super::*;
 
     // This test ensures `ReplicaReadLockChecker` won't change UUID context of read index.
     #[test]

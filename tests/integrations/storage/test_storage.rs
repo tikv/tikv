@@ -1,22 +1,26 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::repeat;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
-use std::u64;
+use std::{
+    iter::repeat,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+    time::Duration,
+    u64,
+};
 
-use rand::random;
-
-use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
-
+use api_version::{dispatch_api_version, KvFormat};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
+use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
+use rand::random;
 use test_storage::*;
-use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
-use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
-use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
-use tikv::storage::Engine;
+use tikv::{
+    coprocessor::checksum_crc64_xor,
+    server::gc_worker::DEFAULT_GC_BATCH_KEYS,
+    storage::{mvcc::MAX_TXN_WRITE_SIZE, txn::RESOLVE_LOCK_BATCH_SIZE, Engine},
+};
 use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
@@ -676,7 +680,7 @@ fn test_store_resolve_with_illegal_tso() {
 fn test_txn_store_gc() {
     let key = "k";
     let store = AssertionStorage::default();
-    let (_cluster, raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
+    let (_cluster, raft_store) = AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
     store.test_txn_store_gc(key);
     raft_store.test_txn_store_gc(key);
 }
@@ -702,7 +706,7 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
 
 pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String) {
     let (mut cluster, mut store) =
-        AssertionStorage::new_raft_storage_with_store_count(3, prefix.as_str());
+        AssertionStorageApiV1::new_raft_storage_with_store_count(3, prefix.as_str());
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
     if !keys.is_empty() {
         store.batch_put_ok_for_cluster(&mut cluster, &keys, repeat(b"v1" as &[u8]), 5, 10);
@@ -750,7 +754,8 @@ fn test_txn_store_gc3() {
     let key = "k";
     let store = AssertionStorage::default();
     store.test_txn_store_gc3(key.as_bytes()[0]);
-    let (mut cluster, mut raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
+    let (mut cluster, mut raft_store) =
+        AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
     raft_store.test_txn_store_gc3_for_cluster(&mut cluster, key.as_bytes()[0]);
 }
 
@@ -932,38 +937,40 @@ fn test_txn_store_txnkv_api_version() {
     ];
 
     for (storage_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new(storage_api_version);
-        store.ctx.set_api_version(req_api_version);
+        dispatch_api_version!(storage_api_version, {
+            let mut store = AssertionStorage::<_, API>::new();
+            store.ctx.set_api_version(req_api_version);
 
-        let mut end_key = key.to_vec();
-        if let Some(end_key) = end_key.last_mut() {
-            *end_key = 0xff;
-        }
+            let mut end_key = key.to_vec();
+            if let Some(end_key) = end_key.last_mut() {
+                *end_key = 0xff;
+            }
 
-        if is_legal {
-            store.get_none(key, 10);
-            store.put_ok(key, b"x", 5, 10);
-            store.get_none(key, 9);
-            store.get_ok(key, 10, b"x");
+            if is_legal {
+                store.get_none(key, 10);
+                store.put_ok(key, b"x", 5, 10);
+                store.get_none(key, 9);
+                store.get_ok(key, 10, b"x");
 
-            store.batch_get_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
-            store.batch_get_command_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
+                store.batch_get_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
+                store.batch_get_command_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
 
-            store.scan_ok(key, Some(&end_key), 100, 10, vec![Some((key, b"x"))]);
-            store.scan_locks_ok(20, key, &end_key, 10, vec![]);
+                store.scan_ok(key, Some(&end_key), 100, 10, vec![Some((key, b"x"))]);
+                store.scan_locks_ok(20, key, &end_key, 10, vec![]);
 
-            store.delete_range_ok(key, key);
-        } else {
-            store.get_err(key, 10);
-            // check api version at service tier: store.put_err(key, b"x", 5, 10);
-            store.batch_get_err(&[key, key, key], 10);
-            store.batch_get_command_err(&[key, key, key], 10);
+                store.delete_range_ok(key, key);
+            } else {
+                store.get_err(key, 10);
+                // check api version at service tier: store.put_err(key, b"x", 5, 10);
+                store.batch_get_err(&[key, key, key], 10);
+                store.batch_get_command_err(&[key, key, key], 10);
 
-            store.scan_err(key, None, 100, 10);
-            store.scan_locks_err(20, key, &end_key, 10);
+                store.scan_err(key, None, 100, 10);
+                store.scan_locks_err(20, key, &end_key, 10);
 
-            store.delete_range_err(key, key);
-        }
+                store.delete_range_err(key, key);
+            }
+        });
     }
 }
 
@@ -995,134 +1002,141 @@ fn test_txn_store_rawkv_api_version() {
     let cf = "";
 
     for (storage_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new(storage_api_version);
-        store.ctx.set_api_version(req_api_version);
+        dispatch_api_version!(storage_api_version, {
+            let mut store = AssertionStorage::<_, API>::new();
+            store.ctx.set_api_version(req_api_version);
 
-        let mut end_key = key.to_vec();
-        if let Some(end_key) = end_key.last_mut() {
-            *end_key = 0xff;
-        }
-
-        let mut range = KeyRange::default();
-        range.set_start_key(key.to_vec());
-
-        let mut range_bounded = KeyRange::default();
-        range_bounded.set_start_key(key.to_vec());
-        range_bounded.set_end_key(end_key.clone());
-
-        if is_legal {
-            store.raw_get_ok(cf.to_owned(), key.to_vec(), None);
-            store.raw_put_ok(cf.to_owned(), key.to_vec(), b"value".to_vec());
-            store.raw_get_ok(cf.to_owned(), key.to_vec(), Some(b"value".to_vec()));
-            if !matches!(storage_api_version, ApiVersion::V1) {
-                store.raw_get_key_ttl_ok(cf.to_owned(), key.to_vec(), Some(0));
+            let mut end_key = key.to_vec();
+            if let Some(last_byte) = end_key.last_mut() {
+                *last_byte = 0xff;
             }
 
-            store.raw_batch_get_ok(
-                cf.to_owned(),
-                vec![key.to_vec(), key.to_vec()],
-                vec![(key, b"value"), (key, b"value")],
-            );
-            store.raw_batch_get_command_ok(
-                cf.to_owned(),
-                vec![key.to_vec(), key.to_vec()],
-                vec![b"value", b"value"],
-            );
+            let mut range = KeyRange::default();
+            range.set_start_key(key.to_vec());
 
-            store.raw_delete_ok(cf.to_owned(), key.to_vec());
-            store.raw_delete_range_ok(cf.to_owned(), key.to_vec(), key.to_vec());
-            store.raw_batch_delete_ok(cf.to_owned(), vec![key.to_vec()]);
+            let mut range_bounded = KeyRange::default();
+            range_bounded.set_start_key(key.to_vec());
+            range_bounded.set_end_key(end_key.clone());
 
-            store.raw_batch_put_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+            if is_legal {
+                store.raw_get_ok(cf.to_owned(), key.to_vec(), None);
+                store.raw_put_ok(cf.to_owned(), key.to_vec(), b"value".to_vec());
+                store.raw_get_ok(cf.to_owned(), key.to_vec(), Some(b"value".to_vec()));
+                if !matches!(storage_api_version, ApiVersion::V1) {
+                    store.raw_get_key_ttl_ok(cf.to_owned(), key.to_vec(), Some(0));
+                }
 
-            store.raw_scan_ok(
-                cf.to_owned(),
-                key.to_vec(),
-                Some(end_key.clone()),
-                100,
-                vec![(key, b"value")],
-            );
-            store.raw_batch_scan_ok(
-                cf.to_owned(),
-                vec![range_bounded.clone()],
-                100,
-                vec![(key, b"value")],
-            );
-            {
-                // unbounded end key
-                match storage_api_version {
-                    ApiVersion::V1 | ApiVersion::V1ttl => {
-                        store.raw_scan_ok(
-                            cf.to_owned(),
-                            key.to_vec(),
-                            None,
-                            100,
-                            vec![(key, b"value")],
-                        );
-                        store.raw_batch_scan_ok(
-                            cf.to_owned(),
-                            vec![range.clone()],
-                            100,
-                            vec![(key, b"value")],
-                        );
-                    }
-                    ApiVersion::V2 => {
-                        // unbounded key is prohibitted in V2.
-                        store.raw_scan_err(cf.to_owned(), key.to_vec(), None, 100);
-                        store.raw_batch_scan_err(cf.to_owned(), vec![range.clone()], 100);
+                store.raw_batch_get_ok(
+                    cf.to_owned(),
+                    vec![key.to_vec(), key.to_vec()],
+                    vec![(key, b"value"), (key, b"value")],
+                );
+                store.raw_batch_get_command_ok(
+                    cf.to_owned(),
+                    vec![key.to_vec(), key.to_vec()],
+                    vec![b"value", b"value"],
+                );
+
+                store.raw_delete_ok(cf.to_owned(), key.to_vec());
+                store.raw_delete_range_ok(cf.to_owned(), key.to_vec(), key.to_vec());
+                store.raw_batch_delete_ok(cf.to_owned(), vec![key.to_vec()]);
+
+                store.raw_batch_put_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+
+                store.raw_scan_ok(
+                    cf.to_owned(),
+                    key.to_vec(),
+                    Some(end_key.clone()),
+                    100,
+                    vec![(key, b"value")],
+                );
+                store.raw_batch_scan_ok(
+                    cf.to_owned(),
+                    vec![range_bounded.clone()],
+                    100,
+                    vec![(key, b"value")],
+                );
+                {
+                    // unbounded end key
+                    match storage_api_version {
+                        ApiVersion::V1 | ApiVersion::V1ttl => {
+                            store.raw_scan_ok(
+                                cf.to_owned(),
+                                key.to_vec(),
+                                None,
+                                100,
+                                vec![(key, b"value")],
+                            );
+                            store.raw_batch_scan_ok(
+                                cf.to_owned(),
+                                vec![range.clone()],
+                                100,
+                                vec![(key, b"value")],
+                            );
+                        }
+                        ApiVersion::V2 => {
+                            // unbounded key is prohibitted in V2.
+                            store.raw_scan_err(cf.to_owned(), key.to_vec(), None, 100);
+                            store.raw_batch_scan_err(cf.to_owned(), vec![range.clone()], 100);
+                        }
                     }
                 }
+
+                store.raw_compare_and_swap_atomic_ok(
+                    cf.to_owned(),
+                    key.to_vec(),
+                    Some(b"value".to_vec()),
+                    b"new_value".to_vec(),
+                    (Some(b"value".to_vec()), true),
+                );
+
+                store.raw_batch_delete_atomic_ok(cf.to_owned(), vec![key.to_vec()]);
+                store.raw_batch_put_atomic_ok(
+                    cf.to_owned(),
+                    vec![(key.to_vec(), b"value".to_vec())],
+                );
+
+                let digest = crc64fast::Digest::new();
+                let checksum = checksum_crc64_xor(0, digest.clone(), key, b"value");
+                store.raw_checksum_ok(
+                    vec![range_bounded.clone()],
+                    (checksum, 1, (key.len() + b"value".len()) as u64),
+                );
+            } else {
+                store.raw_get_err(cf.to_owned(), key.to_vec());
+                if !matches!(storage_api_version, ApiVersion::V1) {
+                    store.raw_get_key_ttl_err(cf.to_owned(), key.to_vec());
+                }
+                store.raw_put_err(cf.to_owned(), key.to_vec(), b"value".to_vec());
+
+                store.raw_batch_get_err(cf.to_owned(), vec![key.to_vec(), key.to_vec()]);
+                store.raw_batch_get_command_err(cf.to_owned(), vec![key.to_vec(), key.to_vec()]);
+
+                store.raw_delete_err(cf.to_owned(), key.to_vec());
+                store.raw_delete_range_err(cf.to_owned(), key.to_vec(), key.to_vec());
+                store.raw_batch_delete_err(cf.to_owned(), vec![key.to_vec()]);
+
+                store.raw_batch_put_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
+
+                store.raw_scan_err(cf.to_owned(), key.to_vec(), Some(end_key.clone()), 100);
+                store.raw_batch_scan_err(cf.to_owned(), vec![range_bounded.clone()], 100);
+
+                store.raw_compare_and_swap_atomic_err(
+                    cf.to_owned(),
+                    key.to_vec(),
+                    None,
+                    b"value".to_vec(),
+                );
+
+                store.raw_batch_delete_atomic_err(cf.to_owned(), vec![key.to_vec()]);
+                store.raw_batch_put_atomic_err(
+                    cf.to_owned(),
+                    vec![(key.to_vec(), b"value".to_vec())],
+                );
+
+                store.raw_checksum_err(vec![range_bounded.clone()]);
             }
-
-            store.raw_compare_and_swap_atomic_ok(
-                cf.to_owned(),
-                key.to_vec(),
-                Some(b"value".to_vec()),
-                b"new_value".to_vec(),
-                (Some(b"value".to_vec()), true),
-            );
-
-            store.raw_batch_delete_atomic_ok(cf.to_owned(), vec![key.to_vec()]);
-            store.raw_batch_put_atomic_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
-
-            let mut digest = crc64fast::Digest::new();
-            digest.write(key);
-            digest.write(b"value");
-            store.raw_checksum_ok(
-                vec![range_bounded.clone()],
-                (digest.sum64(), 1, (key.len() + b"value".len()) as u64),
-            );
-        } else {
-            store.raw_get_err(cf.to_owned(), key.to_vec());
-            if !matches!(storage_api_version, ApiVersion::V1) {
-                store.raw_get_key_ttl_err(cf.to_owned(), key.to_vec());
-            }
-            store.raw_put_err(cf.to_owned(), key.to_vec(), b"value".to_vec());
-
-            store.raw_batch_get_err(cf.to_owned(), vec![key.to_vec(), key.to_vec()]);
-            store.raw_batch_get_command_err(cf.to_owned(), vec![key.to_vec(), key.to_vec()]);
-
-            store.raw_delete_err(cf.to_owned(), key.to_vec());
-            store.raw_delete_range_err(cf.to_owned(), key.to_vec(), key.to_vec());
-            store.raw_batch_delete_err(cf.to_owned(), vec![key.to_vec()]);
-
-            store.raw_batch_put_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
-
-            store.raw_scan_err(cf.to_owned(), key.to_vec(), Some(end_key.clone()), 100);
-            store.raw_batch_scan_err(cf.to_owned(), vec![range_bounded.clone()], 100);
-
-            store.raw_compare_and_swap_atomic_err(
-                cf.to_owned(),
-                key.to_vec(),
-                None,
-                b"value".to_vec(),
-            );
-
-            store.raw_batch_delete_atomic_err(cf.to_owned(), vec![key.to_vec()]);
-            store.raw_batch_put_atomic_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
-
-            store.raw_checksum_err(vec![range_bounded.clone()]);
-        }
+        });
     }
 }
 
@@ -1144,7 +1158,11 @@ impl Oracle {
 
 const INC_MAX_RETRY: usize = 100;
 
-fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
+fn inc<E: Engine, F: KvFormat>(
+    store: &SyncTestStorage<E, F>,
+    oracle: &Oracle,
+    key: &[u8],
+) -> Result<i32, ()> {
     let key_address = Key::from_raw(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
@@ -1225,7 +1243,11 @@ fn format_key(x: usize) -> Vec<u8> {
     format!("k{}", x).into_bytes()
 }
 
-fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -> bool {
+fn inc_multi<E: Engine, F: KvFormat>(
+    store: &SyncTestStorage<E, F>,
+    oracle: &Oracle,
+    n: usize,
+) -> bool {
     'retry: for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
         let keys: Vec<Key> = (0..n).map(format_key).map(|x| Key::from_raw(&x)).collect();

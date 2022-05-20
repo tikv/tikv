@@ -1,22 +1,29 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath] called by raftstore
-use std::cmp::Ordering;
-use std::convert::TryInto;
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::Arc;
-
-use crate::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
-use engine_traits::{
-    IterOptions, Iterable, Iterator as EngineIterator, KvEngine, Peekable, SeekKey,
+use std::{
+    cmp::Ordering,
+    convert::TryInto,
+    marker::PhantomData,
+    sync::{
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        Arc,
+    },
 };
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+
+use engine_traits::{
+    IterOptions, Iterable, Iterator as EngineIterator, KvEngine, Peekable, SeekKey, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE,
+};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
-use raftstore::coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor};
-use raftstore::Result;
+use raftstore::{
+    coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor},
+    Result,
+};
 use tikv_util::keybuilder::KeyBuilder;
 use txn_types::Key;
+
+use crate::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 
 const PHYSICAL_SHIFT_BITS: usize = 18;
 const SAFE_POINT_WINDOW: usize = 120;
@@ -417,11 +424,13 @@ impl MvccInfoObserver for MvccChecksum {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::kv::TestEngineBuilder;
-    use crate::storage::txn::tests::must_rollback;
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_test::kv::KvTestEngine;
+
+    use super::*;
+    use crate::storage::{
+        kv::TestEngineBuilder,
+        txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put, must_rollback},
+    };
 
     #[test]
     fn test_update_context() {
@@ -471,10 +480,11 @@ mod tests {
 
     #[test]
     fn test_mvcc_info_collector() {
-        use crate::storage::mvcc::Write;
         use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
         use engine_traits::SyncMutable;
         use txn_types::TimeStamp;
+
+        use crate::storage::mvcc::Write;
 
         let tmp = tempfile::Builder::new()
             .prefix("test_debug")
@@ -483,7 +493,7 @@ mod tests {
         let path = tmp.path().to_str().unwrap();
         let engine = engine_test::kv::new_engine_opt(
             path,
-            DBOptions::new(),
+            DBOptions::default(),
             vec![
                 CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
                 CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),

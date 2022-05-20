@@ -1,26 +1,38 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    sync::{
+        mpsc::{channel, sync_channel},
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
+
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{
-    self as pb, ApiVersion, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
+use kvproto::{
+    kvrpcpb::{self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest},
+    tikvpb::TikvClient,
 };
-use kvproto::tikvpb::TikvClient;
-use raftstore::store::util::new_peer;
-use raftstore::store::LocksStatus;
-use std::sync::Arc;
-use std::{sync::mpsc::channel, thread, time::Duration};
-use storage::mvcc::tests::must_get;
-use storage::mvcc::{self, tests::must_locked};
-use storage::txn::{self, commands};
+use raftstore::store::{util::new_peer, LocksStatus};
+use storage::{
+    mvcc::{
+        self,
+        tests::{must_get, must_locked},
+    },
+    txn::{self, commands},
+};
 use test_raftstore::new_server_cluster;
-use tikv::storage::kv::SnapshotExt;
-use tikv::storage::txn::tests::{
-    must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
-    must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
-};
 use tikv::storage::{
-    self, lock_manager::DummyLockManager, Snapshot, TestEngineBuilder, TestStorageBuilder,
+    self,
+    kv::SnapshotExt,
+    lock_manager::DummyLockManager,
+    txn::tests::{
+        must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
+        must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
+    },
+    Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
@@ -54,17 +66,18 @@ fn test_txn_failpoints() {
 #[test]
 fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let (prewrite_tx, prewrite_rx) = channel();
+    let (fp_tx, fp_rx) = sync_channel(1);
     // sleep a while between getting max ts and store the lock in memory
-    fail::cfg("before-set-lock-in-memory", "sleep(500)").unwrap();
+    fail::cfg_callback("before-set-lock-in-memory", move || {
+        fp_tx.send(()).unwrap();
+        thread::sleep(Duration::from_millis(200));
+    })
+    .unwrap();
     storage
         .sched_txn_command(
             commands::Prewrite::new(
@@ -86,8 +99,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
             }),
         )
         .unwrap();
-    // sleep a while so prewrite gets max ts before get is triggered
-    thread::sleep(Duration::from_millis(200));
+    fp_rx.recv().unwrap();
     match block_on(storage.get(Context::default(), Key::from_raw(b"k"), 100.into())) {
         // In this case, min_commit_ts is smaller than the start ts, but the lock is visible
         // to the get.
@@ -105,13 +117,9 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
 #[test]
 fn test_snapshot_must_be_later_than_updating_max_ts() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite should complete.
     fail::cfg("after-snapshot", "sleep(500)").unwrap();
@@ -150,13 +158,9 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
 #[test]
 fn test_update_max_ts_before_scan_memory_locks() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     fail::cfg("before-storage-check-memory-locks", "sleep(500)").unwrap();
     let get_fut = storage.get(Context::default(), Key::from_raw(b"k"), 100.into());
@@ -200,13 +204,10 @@ macro_rules! lock_release_test {
         #[test]
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();
-            let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-                engine,
-                DummyLockManager {},
-                ApiVersion::V1,
-            )
-            .build()
-            .unwrap();
+            let storage =
+                TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+                    .build()
+                    .unwrap();
 
             let key = Key::from_raw(b"k");
             let cm = storage.get_concurrency_manager();
@@ -280,13 +281,9 @@ lock_release_test!(
 #[test]
 fn test_max_commit_ts_error() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
     let cm = storage.get_concurrency_manager();
 
     fail::cfg("after_prewrite_one_key", "sleep(500)").unwrap();
@@ -339,13 +336,9 @@ fn test_max_commit_ts_error() {
 #[test]
 fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
     let cm = storage.get_concurrency_manager();
 
     let (prewrite_tx, prewrite_rx) = channel();
@@ -448,7 +441,11 @@ fn test_pessimistic_lock_check_epoch() {
     ctx.set_peer(leader.clone());
     ctx.set_region_epoch(epoch);
 
-    fail::cfg("acquire_pessimistic_lock", "pause").unwrap();
+    let (fp_tx, fp_rx) = sync_channel(0);
+    fail::cfg_callback("acquire_pessimistic_lock", move || {
+        fp_tx.send(()).unwrap();
+    })
+    .unwrap();
 
     let env = Arc::new(Environment::new(1));
     let channel =
@@ -476,7 +473,7 @@ fn test_pessimistic_lock_check_epoch() {
     // Transfer leader out and back, so the term should have changed.
     cluster.must_transfer_leader(1, new_peer(2, 2));
     cluster.must_transfer_leader(1, new_peer(1, 1));
-    fail::remove("acquire_pessimistic_lock");
+    fp_rx.recv().unwrap();
 
     let resp = lock_resp.join().unwrap();
     // Region leader changes, so we should get a StaleCommand error.

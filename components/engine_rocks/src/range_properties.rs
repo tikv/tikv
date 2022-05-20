@@ -1,12 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::RocksEngine;
-use crate::properties::{get_range_entries_and_versions, RangeProperties};
+use std::path::Path;
+
 use engine_traits::{
     MiscExt, Range, RangePropertiesExt, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
 };
-use std::path::Path;
 use tikv_util::{box_err, box_try, debug, info};
+
+use crate::{
+    engine::RocksEngine,
+    properties::{get_range_entries_and_versions, RangeProperties},
+};
 
 impl RangePropertiesExt for RocksEngine {
     fn get_range_approximate_keys(&self, range: Range<'_>, large_threshold: u64) -> Result<u64> {

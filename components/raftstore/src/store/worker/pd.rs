@@ -1,56 +1,67 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering as CmpOrdering;
-use std::fmt::{self, Display, Formatter};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-use std::thread::{Builder, JoinHandle};
-use std::time::{Duration, Instant};
-use std::{cmp, io};
+use std::{
+    cmp,
+    cmp::Ordering as CmpOrdering,
+    fmt::{self, Display, Formatter},
+    io, mem,
+    sync::{
+        atomic::Ordering,
+        mpsc::{self, Receiver, Sender},
+        Arc,
+    },
+    thread::{Builder, JoinHandle},
+    time::{Duration, Instant},
+};
 
-use engine_traits::{KvEngine, RaftEngine, CF_RAFT};
+use collections::{HashMap, HashSet};
+use concurrency_manager::ConcurrencyManager;
+use engine_traits::{KvEngine, RaftEngine};
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
-use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
-    SplitRequest,
+use futures::{compat::Future01CompatExt, FutureExt};
+use grpcio_health::{HealthService, ServingStatus};
+use kvproto::{
+    kvrpcpb::DiskFullOpt,
+    metapb, pdpb,
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
+        SplitRequest,
+    },
+    raft_serverpb::RaftMessage,
+    replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
 };
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use kvproto::replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus};
-use kvproto::{metapb, pdpb};
 use ordered_float::OrderedFloat;
+use pd_client::{merge_bucket_stats, metrics::*, BucketStat, Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
+use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
+use tikv_util::{
+    box_err, debug, error, info,
+    metrics::ThreadInfoStatistics,
+    thd_name,
+    time::{Instant as TiInstant, UnixSecs},
+    timer::GLOBAL_TIMER_HANDLE,
+    topn::TopN,
+    warn,
+    worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
+};
 use yatp::Remote;
 
-use crate::store::cmd_resp::new_error;
-use crate::store::metrics::*;
-use crate::store::util::{
-    is_epoch_stale, ConfChangeKind, KeysInfoFormatter, LatencyInspector, RaftstoreDuration,
-};
-use crate::store::worker::query_stats::QueryStats;
-use crate::store::worker::split_controller::{SplitInfo, TOP_N};
-use crate::store::worker::{AutoSplitController, ReadStats, WriteStats};
 use crate::store::{
+    cmd_resp::new_error,
+    metrics::*,
+    peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
+    transport::SignificantRouter,
+    util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
+    worker::{
+        query_stats::QueryStats,
+        split_controller::{SplitInfo, TOP_N},
+        AutoSplitController, ReadStats, WriteStats,
+    },
     Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-    RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
+    RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
 };
-
-use collections::HashMap;
-use concurrency_manager::ConcurrencyManager;
-use futures::compat::Future01CompatExt;
-use futures::FutureExt;
-use pd_client::metrics::*;
-use pd_client::{Error, PdClient, RegionStat};
-use protobuf::Message;
-use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
-use tikv_util::metrics::ThreadInfoStatistics;
-use tikv_util::time::UnixSecs;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::topn::TopN;
-use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
-use tikv_util::{box_err, box_try, debug, error, info, thd_name, warn};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -135,7 +146,7 @@ where
     StoreHeartbeat {
         stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        send_detailed_report: bool,
+        report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     },
     ReportBatchSplit {
@@ -176,6 +187,7 @@ where
         store_id: u64,
         min_resolved_ts: u64,
     },
+    ReportBuckets(BucketStat),
 }
 
 pub struct StoreStat {
@@ -238,6 +250,58 @@ pub struct PeerStat {
     pub last_store_report_query_stats: QueryStats,
     pub approximate_keys: u64,
     pub approximate_size: u64,
+}
+
+#[derive(Default)]
+pub struct ReportBucket {
+    current_stat: BucketStat,
+    last_report_stat: Option<BucketStat>,
+    last_report_ts: UnixSecs,
+}
+
+impl ReportBucket {
+    fn new(current_stat: BucketStat) -> Self {
+        Self {
+            current_stat,
+            ..Default::default()
+        }
+    }
+
+    fn new_report(&mut self, report_ts: UnixSecs) -> BucketStat {
+        self.last_report_ts = report_ts;
+        match self.last_report_stat.replace(self.current_stat.clone()) {
+            Some(last) => {
+                let mut delta = BucketStat::new(
+                    self.current_stat.meta.clone(),
+                    pd_client::new_bucket_stats(&self.current_stat.meta),
+                );
+                // Buckets may be changed, recalculate last stats according to current meta.
+                merge_bucket_stats(
+                    &delta.meta.keys,
+                    &mut delta.stats,
+                    &last.meta.keys,
+                    &last.stats,
+                );
+                for i in 0..delta.meta.keys.len() - 1 {
+                    delta.stats.write_bytes[i] =
+                        self.current_stat.stats.write_bytes[i] - delta.stats.write_bytes[i];
+                    delta.stats.write_keys[i] =
+                        self.current_stat.stats.write_keys[i] - delta.stats.write_keys[i];
+                    delta.stats.write_qps[i] =
+                        self.current_stat.stats.write_qps[i] - delta.stats.write_qps[i];
+
+                    delta.stats.read_bytes[i] =
+                        self.current_stat.stats.read_bytes[i] - delta.stats.read_bytes[i];
+                    delta.stats.read_keys[i] =
+                        self.current_stat.stats.read_keys[i] - delta.stats.read_keys[i];
+                    delta.stats.read_qps[i] =
+                        self.current_stat.stats.read_qps[i] - delta.stats.read_qps[i];
+                }
+                delta
+            }
+            None => self.current_stat.clone(),
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -352,6 +416,9 @@ where
                     "report min resolved ts: store {}, resolved ts {}",
                     store_id, min_resolved_ts
                 )
+            }
+            Task::ReportBuckets(ref buckets) => {
+                write!(f, "report buckets: {:?}", buckets)
             }
         }
     }
@@ -627,6 +694,7 @@ fn hotspot_query_num_report_threshold() -> u64 {
 // If there is not any timeout inspecting requests, the score will go back to 1 in at least 5min.
 struct SlowScore {
     value: OrderedFloat<f64>,
+    last_record_time: Instant,
     last_update_time: Instant,
 
     timeout_requests: usize,
@@ -657,6 +725,7 @@ impl SlowScore {
             inspect_interval,
             ratio_thresh: OrderedFloat(0.1),
             min_ttr: Duration::from_secs(5 * 60),
+            last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             round_ticks: 30,
             last_tick_id: 0,
@@ -665,6 +734,7 @@ impl SlowScore {
     }
 
     fn record(&mut self, id: u64, duration: Duration) {
+        self.last_record_time = Instant::now();
         if id != self.last_tick_id {
             return;
         }
@@ -694,7 +764,7 @@ impl SlowScore {
     fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
         if self.timeout_requests == 0 {
             let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
-            if OrderedFloat(desc) > self.value {
+            if OrderedFloat(desc) > self.value - OrderedFloat(1.0) {
                 self.value = 1.0.into();
             } else {
                 self.value -= desc;
@@ -755,6 +825,7 @@ where
     pd_client: Arc<T>,
     router: RaftRouter<EK, ER>,
     region_peers: HashMap<u64, PeerStat>,
+    region_buckets: HashMap<u64, ReportBucket>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
     // Records the boot time.
@@ -774,6 +845,10 @@ where
     snap_mgr: SnapManager,
     remote: Remote<yatp::task::future::TaskCell>,
     slow_score: SlowScore,
+
+    // The health status of the store is updated by the slow score mechanism.
+    health_service: Option<HealthService>,
+    curr_health_status: ServingStatus,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -797,6 +872,7 @@ where
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
+        health_service: Option<HealthService>,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(
@@ -819,6 +895,7 @@ where
             router,
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
+            region_buckets: HashMap::default(),
             store_stat: StoreStat::default(),
             start_ts: UnixSecs::now(),
             scheduler,
@@ -829,6 +906,8 @@ where
             snap_mgr,
             remote,
             slow_score: SlowScore::new(cfg.inspect_interval.0),
+            health_service,
+            curr_health_status: ServingStatus::Serving,
         }
     }
 
@@ -1020,7 +1099,7 @@ where
         &mut self,
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        send_detailed_report: bool,
+        store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
@@ -1138,119 +1217,72 @@ where
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
 
-        let mut optional_report = None;
-        if send_detailed_report {
-            let mut store_report = pdpb::StoreReport::new();
-            store_info
-                .kv_engine
-                .scan_cf(
-                    CF_RAFT,
-                    keys::REGION_META_MIN_KEY,
-                    keys::REGION_META_MAX_KEY,
-                    false,
-                    |key, value| {
-                        let (_, suffix) = box_try!(keys::decode_region_meta_key(key));
-                        if suffix != keys::REGION_STATE_SUFFIX {
-                            return Ok(true);
-                        }
-
-                        let mut region_local_state = RegionLocalState::default();
-                        region_local_state.merge_from_bytes(value)?;
-                        if region_local_state.get_state() == PeerState::Tombstone {
-                            return Ok(true);
-                        }
-                        let raft_local_state = match store_info
-                            .raft_engine
-                            .get_raft_state(region_local_state.get_region().get_id())
-                            .unwrap()
-                        {
-                            None => return Ok(true),
-                            Some(value) => value,
-                        };
-                        let mut peer_report = pdpb::PeerReport::new();
-                        peer_report.set_region_state(region_local_state);
-                        peer_report.set_raft_state(raft_local_state);
-                        store_report.mut_peer_reports().push(peer_report);
-                        Ok(true)
-                    },
-                )
-                .unwrap();
-            optional_report = Some(store_report);
-        }
         let router = self.router.clone();
-        let scheduler = self.scheduler.clone();
-        let stats_copy = stats.clone();
-        let resp =
-            self.pd_client
-                .store_heartbeat(stats, optional_report, dr_autosync_status.clone());
+        let resp = self
+            .pd_client
+            .store_heartbeat(stats, store_report, dr_autosync_status);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
-                    if resp.get_require_detailed_report() {
-                        // This store needs to report detailed info of hosted regions to PD.
-                        //
-                        // The info has to be up to date, meaning that all committed changes til now have to be applied before the report is sent.
-                        // The entire process may include:
-                        // 1.	`broadcast_normal` "wait apply" messsages to all peers.
-                        // 2.	`on_unsafe_recovery_wait_apply` examines whether the peer have not-yet-applied entries, if so, memorize the target index.
-                        // 3.	`on_apply_res` checks whether entries before the "unsafe recovery report target commit index" have all been applied.
-                        // The one who finally finds out the number of remaining tasks is 0 schedules an unsafe recovery reporting store heartbeat.
-                        info!("required to send detailed report in the next heartbeat");
-                        // Init the counter with 1 in case the msg processing is faster than the distributing thus cause FSMs race to send a report.
-                        let counter = Arc::new(AtomicUsize::new(1));
-                        let counter_clone = counter.clone();
-                        router.broadcast_normal(|| {
-                            let _ = counter_clone.fetch_add(1, Ordering::Relaxed);
-                            PeerMsg::UnsafeRecoveryWaitApply(counter_clone.clone())
-                        });
-                        // Reporting needs to be triggered here in case there is no message to be sent or messages processing finished before above function returns.
-                        if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
-                            let task = Task::StoreHeartbeat {
-                                stats: stats_copy,
-                                store_info,
-                                send_detailed_report: true,
-                                dr_autosync_status,
-                            };
-                            if let Err(e) = scheduler.schedule(task) {
-                                error!("notify pd failed"; "err" => ?e);
+                    if let Some(mut plan) = resp.recovery_plan.take() {
+                        info!("Unsafe recovery, received a recovery plan");
+                        if plan.has_force_leader() {
+                            let mut failed_stores = HashSet::default();
+                            for failed_store in plan.get_force_leader().get_failed_stores() {
+                                failed_stores.insert(*failed_store);
                             }
-                        }
-                    } else if resp.has_plan() {
-                        info!("asked to execute recovery plan");
-                        for create in resp.get_plan().get_creates() {
-                            info!("asked to create region"; "region" => ?create);
-                            if let Err(e) =
-                                router.send_control(StoreMsg::CreatePeer(create.clone()))
-                            {
-                                error!("fail to send creat peer message for recovery"; "err" => ?e);
+                            let syncer = UnsafeRecoveryForceLeaderSyncer::new(
+                                plan.get_step(),
+                                router.clone(),
+                            );
+                            for region in plan.get_force_leader().get_enter_force_leaders() {
+                                if let Err(e) = router.significant_send(
+                                    *region,
+                                    SignificantMsg::EnterForceLeaderState {
+                                        syncer: syncer.clone(),
+                                        failed_stores: failed_stores.clone(),
+                                    },
+                                ) {
+                                    error!("fail to send force leader message for recovery"; "err" => ?e);
+                                }
                             }
-                        }
-                        for delete in resp.get_plan().get_deletes() {
-                            info!("asked to delete peer"; "peer" => delete);
-                            if let Err(e) = router.force_send(*delete, PeerMsg::Destroy(*delete)) {
-                                error!("fail to send delete peer message for recovery"; "err" => ?e);
+                        } else {
+                            let syncer = UnsafeRecoveryExecutePlanSyncer::new(
+                                plan.get_step(),
+                                router.clone(),
+                            );
+                            for create in plan.take_creates().into_iter() {
+                                if let Err(e) =
+                                    router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
+                                        syncer: syncer.clone(),
+                                        create,
+                                    })
+                                {
+                                    error!("fail to send create peer message for recovery"; "err" => ?e);
+                                }
                             }
-                        }
-                        for update in resp.get_plan().get_updates() {
-                            info!("asked to update region's range"; "region" => ?update);
-                            if let Err(e) = router.force_send(
-                                update.get_id(),
-                                PeerMsg::UpdateRegionForUnsafeRecover(update.clone()),
-                            ) {
-                                error!("fail to send update range message for recovery"; "err" => ?e);
+                            for delete in plan.take_tombstones().into_iter() {
+                                if let Err(e) = router.significant_send(
+                                    delete,
+                                    SignificantMsg::UnsafeRecoveryDestroy(syncer.clone()),
+                                ) {
+                                    error!("fail to send delete peer message for recovery"; "err" => ?e);
+                                }
                             }
-                        }
-                        let task = Task::StoreHeartbeat {
-                            stats: stats_copy,
-                            store_info,
-                            send_detailed_report: true,
-                            dr_autosync_status,
-                        };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!("notify pd failed"; "err" => ?e);
+                            for mut demote in plan.take_demotes().into_iter() {
+                                if let Err(e) = router.significant_send(
+                                    demote.get_region_id(),
+                                    SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
+                                        syncer: syncer.clone(),
+                                        failed_voters: demote.take_failed_voters().into_vec(),
+                                    },
+                                ) {
+                                    error!("fail to send update peer list message for recovery"; "err" => ?e);
+                                }
+                            }
                         }
                     }
                 }
@@ -1379,7 +1411,6 @@ where
                         "try to change peer";
                         "region_id" => region_id,
                         "changes" => ?change_peer_v2.get_changes(),
-                        "kind" => ?ConfChangeKind::confchange_kind(change_peer_v2.get_changes().len()),
                     );
                     let req = new_change_peer_v2_request(change_peer_v2.take_changes().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
@@ -1417,6 +1448,7 @@ where
                             region_epoch: epoch,
                             policy: split_region.get_policy(),
                             source: "pd",
+                            cb: Callback::None,
                         }
                     };
                     if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
@@ -1467,6 +1499,9 @@ where
             self.store_stat
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
+        }
+        for (_, region_buckets) in mem::take(&mut read_stats.region_buckets) {
+            self.merge_buckets(region_buckets);
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
@@ -1577,9 +1612,11 @@ where
         let f = async move {
             match resp.await {
                 Ok(Some((region, leader))) => {
-                    let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
-                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                        error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                    if leader.get_store_id() != 0 {
+                        let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
+                        if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                            error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                        }
                     }
                 }
                 Ok(None) => {}
@@ -1611,6 +1648,62 @@ where
             }
         };
         self.remote.spawn(f);
+    }
+
+    fn handle_report_region_buckets(&mut self, region_buckets: BucketStat) {
+        let region_id = region_buckets.meta.region_id;
+        self.merge_buckets(region_buckets);
+        let report_buckets = self.region_buckets.get_mut(&region_id).unwrap();
+        let last_report_ts = if report_buckets.last_report_ts.is_zero() {
+            self.start_ts
+        } else {
+            report_buckets.last_report_ts
+        };
+        let now = UnixSecs::now();
+        let interval_second = now.into_inner() - last_report_ts.into_inner();
+        let delta = report_buckets.new_report(now);
+        let resp = self
+            .pd_client
+            .report_region_buckets(&delta, Duration::from_secs(interval_second));
+        let f = async move {
+            if let Err(e) = resp.await {
+                debug!(
+                    "failed to send buckets";
+                    "region_id" => region_id,
+                    "version" => delta.meta.version,
+                    "region_epoch" => ?delta.meta.region_epoch,
+                    "err" => ?e
+                );
+            }
+        };
+        self.remote.spawn(f);
+    }
+
+    fn merge_buckets(&mut self, mut buckets: BucketStat) {
+        let region_id = buckets.meta.region_id;
+        self.region_buckets
+            .entry(region_id)
+            .and_modify(|report_bucket| {
+                let current = &mut report_bucket.current_stat;
+                if current.meta < buckets.meta {
+                    mem::swap(current, &mut buckets);
+                }
+
+                merge_bucket_stats(
+                    &current.meta.keys,
+                    &mut current.stats,
+                    &buckets.meta.keys,
+                    &buckets.stats,
+                );
+            })
+            .or_insert_with(|| ReportBucket::new(buckets));
+    }
+
+    fn update_health_status(&mut self, status: ServingStatus) {
+        self.curr_health_status = status;
+        if let Some(health_service) = &self.health_service {
+            health_service.set_serving_status("", status);
+        }
     }
 }
 
@@ -1808,14 +1901,9 @@ where
             Task::StoreHeartbeat {
                 stats,
                 store_info,
-                send_detailed_report,
+                report,
                 dr_autosync_status,
-            } => self.handle_store_heartbeat(
-                stats,
-                store_info,
-                send_detailed_report,
-                dr_autosync_status,
-            ),
+            } => self.handle_store_heartbeat(stats, store_info, report, dr_autosync_status),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
@@ -1838,6 +1926,9 @@ where
                 store_id,
                 min_resolved_ts,
             } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
+            Task::ReportBuckets(buckets) => {
+                self.handle_report_region_buckets(buckets);
+            }
         };
     }
 
@@ -1853,6 +1944,13 @@ where
     T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
+        // The health status is recovered to serving as long as any tick
+        // does not timeout.
+        if self.curr_health_status == ServingStatus::ServiceUnknown
+            && self.slow_score.last_tick_finished
+        {
+            self.update_health_status(ServingStatus::Serving);
+        }
         if !self.slow_score.last_tick_finished {
             self.slow_score.record_timeout();
         }
@@ -1860,7 +1958,15 @@ where
         let id = self.slow_score.last_tick_id + 1;
         self.slow_score.last_tick_id += 1;
         self.slow_score.last_tick_finished = false;
+
         if self.slow_score.last_tick_id % self.slow_score.round_ticks == 0 {
+            // `last_update_time` is refreshed every round. If no update happens in a whole round,
+            // we set the status to unknown.
+            if self.curr_health_status == ServingStatus::Serving
+                && self.slow_score.last_record_time < self.slow_score.last_update_time
+            {
+                self.update_health_status(ServingStatus::ServiceUnknown);
+            }
             let slow_score = self.slow_score.update();
             STORE_SLOW_SCORE_GAUGE.set(slow_score);
         }
@@ -1889,7 +1995,7 @@ where
             }),
         );
         let msg = StoreMsg::LatencyInspect {
-            send_time: tikv_util::time::Instant::now(),
+            send_time: TiInstant::now(),
             inspector,
         };
         if let Err(e) = self.router.send_control(msg) {
@@ -1910,7 +2016,7 @@ fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> A
     req
 }
 
-fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
+pub fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ChangePeerV2);
     let change_peer_reqs = changes
@@ -2087,8 +2193,10 @@ fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use kvproto::{kvrpcpb, pdpb::QueryKind};
     use std::thread::sleep;
+
+    use kvproto::{kvrpcpb, pdpb::QueryKind};
+    use pd_client::{new_bucket_stats, BucketMeta};
 
     use super::*;
 
@@ -2097,12 +2205,12 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn test_collect_stats() {
-        use crate::store::fsm::StoreMeta;
+        use std::{sync::Mutex, time::Instant};
 
         use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
-        use std::sync::Mutex;
-        use std::time::Instant;
         use tikv_util::worker::LazyWorker;
+
+        use crate::store::fsm::StoreMeta;
 
         struct RunnerTest {
             store_stat: Arc<Mutex<StoreStat>>,
@@ -2260,6 +2368,13 @@ mod tests {
             OrderedFloat(19.0),
             slow_score.update_impl(Duration::from_secs(15))
         );
+
+        slow_score.timeout_requests = 0;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(1.0),
+            slow_score.update_impl(Duration::from_secs(57))
+        );
     }
 
     use metapb::Peer;
@@ -2312,6 +2427,60 @@ mod tests {
 
         for region_id in 1..region_num + 1 {
             assert!(*region_cpu_records.get(&region_id).unwrap_or(&0) > 0)
+        }
+    }
+
+    #[test]
+    fn test_report_bucket_stats() {
+        #[allow(clippy::type_complexity)]
+        let cases: &[((Vec<&[_]>, _), (Vec<&[_]>, _), _)] = &[
+            (
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![2, 2, 2, 2]),
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
+                vec![1, 1, 1, 1],
+            ),
+            (
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![2, 2, 2, 2]),
+                (vec![b"k0", b"k6", b"k8"], vec![1, 1]),
+                vec![1, 1, 0, 1],
+            ),
+            (
+                (vec![b"k4", b"k6", b"kb"], vec![5, 5]),
+                (
+                    vec![b"k1", b"k3", b"k5", b"k7", b"k9", b"ka"],
+                    vec![1, 1, 1, 1, 1],
+                ),
+                vec![3, 2],
+            ),
+        ];
+        for (current, last, expected) in cases {
+            let cur_keys = &current.0;
+            let last_keys = &last.0;
+
+            let mut cur_meta = BucketMeta::default();
+            cur_meta.keys = cur_keys.iter().map(|k| k.to_vec()).collect();
+            let mut cur_stats = new_bucket_stats(&cur_meta);
+            cur_stats.set_read_qps(current.1.to_vec());
+
+            let mut last_meta = BucketMeta::default();
+            last_meta.keys = last_keys.iter().map(|k| k.to_vec()).collect();
+            let mut last_stats = new_bucket_stats(&last_meta);
+            last_stats.set_read_qps(last.1.to_vec());
+            let mut bucket = ReportBucket {
+                current_stat: BucketStat {
+                    meta: Arc::new(cur_meta),
+                    stats: cur_stats,
+                    create_time: TiInstant::now(),
+                },
+                last_report_stat: Some(BucketStat {
+                    meta: Arc::new(last_meta),
+                    stats: last_stats,
+                    create_time: TiInstant::now(),
+                }),
+                last_report_ts: UnixSecs::now(),
+            };
+            let report = bucket.new_report(UnixSecs::now());
+            assert_eq!(report.stats.get_read_qps(), expected);
         }
     }
 }

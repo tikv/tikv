@@ -1,14 +1,15 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::coprocessor::{KeyRange, Request};
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use kvproto::{
+    coprocessor::{KeyRange, Request},
+    kvrpcpb::{Context, IsolationLevel},
+};
 use protobuf::Message;
+use test_coprocessor::*;
 use tipb::{
     AnalyzeColumnGroup, AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp,
     AnalyzeReq, AnalyzeType,
 };
-
-use test_coprocessor::*;
 
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 

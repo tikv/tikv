@@ -1,10 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use online_config::{ConfigChange, ConfigManager, OnlineConfig};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tikv_util::config::VersionTrack;
-use tikv_util::info;
+
+use lazy_static::lazy_static;
+use online_config::{ConfigChange, ConfigManager, OnlineConfig};
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use tikv_util::{config::VersionTrack, info};
 
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: u64 = 100;
@@ -16,6 +18,19 @@ const DEFAULT_BYTE_THRESHOLD: usize = 30 * 1024 * 1024;
 const DEFAULT_SPLIT_BALANCE_SCORE: f64 = 0.25;
 // We get contained score by sample.contained/(sample.right+sample.left+sample.contained). It will be used to avoid to split regions requested by range.
 const DEFAULT_SPLIT_CONTAINED_SCORE: f64 = 0.5;
+
+lazy_static! {
+    static ref SPLIT_CONFIG: Mutex<Option<Arc<VersionTrack<SplitConfig>>>> = Mutex::new(None);
+}
+
+pub fn get_sample_num() -> usize {
+    let sample_num = if let Some(ref config) = *SPLIT_CONFIG.lock() {
+        config.value().sample_num
+    } else {
+        DEFAULT_SAMPLE_NUM
+    };
+    sample_num
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -76,8 +91,23 @@ impl SplitConfig {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct SplitConfigManager(pub Arc<VersionTrack<SplitConfig>>);
+
+impl SplitConfigManager {
+    pub fn new(split_config: Arc<VersionTrack<SplitConfig>>) -> Self {
+        *SPLIT_CONFIG.lock() = Some(split_config.clone());
+        Self(split_config)
+    }
+}
+
+impl Default for SplitConfigManager {
+    fn default() -> Self {
+        let split_config = Arc::new(VersionTrack::new(SplitConfig::default()));
+        *SPLIT_CONFIG.lock() = Some(split_config.clone());
+        Self(split_config)
+    }
+}
 
 impl ConfigManager for SplitConfigManager {
     fn dispatch(
@@ -102,5 +132,35 @@ impl std::ops::Deref for SplitConfigManager {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
+    use tikv_util::config::VersionTrack;
+
+    use crate::store::{
+        worker::split_config::{get_sample_num, DEFAULT_SAMPLE_NUM},
+        SplitConfig, SplitConfigManager,
+    };
+
+    #[test]
+    fn test_static_var_after_config_change() {
+        assert_eq!(get_sample_num(), DEFAULT_SAMPLE_NUM);
+
+        let mut split_config = SplitConfig::default();
+        split_config.sample_num = 30;
+        let mut cfg_manager = SplitConfigManager::new(Arc::new(VersionTrack::new(split_config)));
+
+        assert_eq!(get_sample_num(), 30);
+
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("sample_num"), ConfigValue::Usize(50));
+        cfg_manager.dispatch(config_change).unwrap();
+
+        assert_eq!(get_sample_num(), 50);
     }
 }

@@ -1,29 +1,35 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{mpsc::channel, Arc},
+    thread,
+    time::Duration,
+};
 
+use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
 use error_code::{raftstore::STALE_COMMAND, ErrorCodeExt};
 use kvproto::kvrpcpb::Context;
-use std::sync::mpsc::channel;
-use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
-use tikv::server::gc_worker::{AutoGcConfig, GcConfig};
-use tikv::storage::kv::{Engine, Error as KvError, ErrorInner as KvErrorInner};
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
+use tikv::{
+    server::gc_worker::{AutoGcConfig, GcConfig},
+    storage::{
+        kv::{Engine, Error as KvError, ErrorInner as KvErrorInner},
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+        Error as StorageError, ErrorInner as StorageErrorInner,
+    },
+};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
 
 fn new_raft_storage() -> (
     Cluster<ServerCluster>,
-    SyncTestStorage<SimulateEngine>,
+    SyncTestStorageApiV1<SimulateEngine>,
     Context,
 ) {
-    new_raft_storage_with_store_count(1, "")
+    new_raft_storage_with_store_count::<ApiV1>(1, "")
 }
 
 #[test]
@@ -192,8 +198,8 @@ fn test_engine_leader_change_twice() {
     }
 }
 
-fn write_test_data<E: Engine>(
-    storage: &SyncTestStorage<E>,
+fn write_test_data<E: Engine, F: KvFormat>(
+    storage: &SyncTestStorage<E, F>,
     ctx: &Context,
     data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,
@@ -218,9 +224,9 @@ fn write_test_data<E: Engine>(
     }
 }
 
-fn check_data<E: Engine>(
+fn check_data<E: Engine, F: KvFormat>(
     cluster: &mut Cluster<ServerCluster>,
-    storages: &HashMap<u64, SyncTestStorage<E>>,
+    storages: &HashMap<u64, SyncTestStorage<E, F>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,
     expect_success: bool,
@@ -260,7 +266,8 @@ fn check_data<E: Engine>(
 #[test]
 fn test_auto_gc() {
     let count = 3;
-    let (mut cluster, first_leader_storage, ctx) = new_raft_storage_with_store_count(count, "");
+    let (mut cluster, first_leader_storage, ctx) =
+        new_raft_storage_with_store_count::<ApiV1>(count, "");
     let pd_client = Arc::clone(&cluster.pd_client);
 
     // Used to wait for all storage's GC to finish
@@ -276,7 +283,7 @@ fn test_auto_gc() {
             let mut config = GcConfig::default();
             // Do not skip GC
             config.ratio_threshold = 0.9;
-            let storage = SyncTestStorageBuilder::from_engine(engine.clone())
+            let storage = SyncTestStorageBuilderApiV1::from_engine(engine.clone())
                 .gc_config(config)
                 .build()
                 .unwrap();

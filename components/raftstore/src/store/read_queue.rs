@@ -1,26 +1,30 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::collections::VecDeque;
-use std::{cmp, mem, u64, usize};
-
-use crate::store::fsm::apply;
-use crate::store::metrics::*;
-use crate::store::{Callback, Config};
-use crate::Result;
+use std::{cmp, collections::VecDeque, mem, u64, usize};
 
 use collections::HashMap;
 use engine_traits::Snapshot;
-use kvproto::kvrpcpb::LockInfo;
-use kvproto::raft_cmdpb::{self, RaftCmdRequest};
+use kvproto::{
+    kvrpcpb::LockInfo,
+    raft_cmdpb::{self, RaftCmdRequest},
+};
 use protobuf::Message;
-use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
-use tikv_util::memory::HeapSize;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now};
-use tikv_util::MustConsumeVec;
-use tikv_util::{box_err, debug};
+use tikv_util::{
+    box_err,
+    codec::number::{NumberEncoder, MAX_VAR_U64_LEN},
+    debug, error,
+    memory::HeapSize,
+    time::{duration_to_sec, monotonic_raw_now},
+    MustConsumeVec,
+};
 use time::Timespec;
 use uuid::Uuid;
+
+use crate::{
+    store::{fsm::apply, metrics::*, Callback, Config},
+    Result,
+};
 
 const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
@@ -74,20 +78,6 @@ where
             locked: None,
             in_contexts: false,
             cmds_heap_size,
-        }
-    }
-
-    pub fn noop(id: Uuid, propose_time: Timespec) -> Self {
-        RAFT_READ_INDEX_PENDING_COUNT.inc();
-        ReadIndexRequest {
-            id,
-            cmds: MustConsumeVec::new("noop"),
-            propose_time,
-            read_index: None,
-            in_contexts: false,
-            addition_request: None,
-            locked: None,
-            cmds_heap_size: 0,
         }
     }
 
@@ -230,14 +220,39 @@ where
         None
     }
 
-    pub fn advance_leader_reads<T>(&mut self, states: T)
+    pub fn advance_leader_reads<T>(&mut self, tag: &str, states: T)
     where
         T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
-        for (uuid, _, index) in states {
-            assert_eq!(uuid, self.reads[self.ready_cnt].id);
-            self.reads[self.ready_cnt].read_index = Some(index);
-            self.ready_cnt += 1;
+        let mut states_iter = states.into_iter();
+        while let Some((uuid, info, index)) = states_iter.next() {
+            let invalid_id = match self.reads.get_mut(self.ready_cnt) {
+                Some(r) if r.id == uuid => {
+                    r.read_index = Some(index);
+                    self.ready_cnt += 1;
+                    continue;
+                }
+                Some(r) => Some((r.id, r.propose_time)),
+                None => None,
+            };
+
+            error!("{} unexpected uuid detected", tag; "current_id" => ?invalid_id);
+            let mut expect_id_track = vec![];
+            for i in (0..self.ready_cnt).rev().take(10).rev() {
+                expect_id_track.push((i, self.reads.get(i).map(|r| (r.id, r.propose_time))));
+            }
+            for i in (self.ready_cnt..self.reads.len()).take(10) {
+                expect_id_track.push((i, self.reads.get(i).map(|r| (r.id, r.propose_time))));
+            }
+            let mut actual_id_track = vec![(uuid, info.is_some(), index)];
+            for (id, info, index) in states_iter.take(20) {
+                actual_id_track.push((id, info.is_some(), index));
+            }
+            error!("context around"; "expect_id_track" => ?expect_id_track, "actual_id_track" => ?actual_id_track);
+            panic!(
+                "{} unexpected uuid detected {} != {:?} at {}",
+                tag, uuid, invalid_id, self.ready_cnt
+            );
         }
     }
 
@@ -423,8 +438,9 @@ impl ReadIndexContext {
 }
 
 mod memtrace {
-    use super::*;
     use tikv_util::memory::HeapSize;
+
+    use super::*;
 
     impl<S> HeapSize for ReadIndexRequest<S>
     where
@@ -500,8 +516,9 @@ mod read_index_ctx_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use engine_test::kv::KvTestSnapshot;
+
+    use super::*;
 
     #[test]
     fn test_read_queue_fold() {
@@ -522,7 +539,7 @@ mod tests {
             queue.contexts.insert(id, offset);
         }
 
-        queue.advance_replica_reads(Vec::<(Uuid, Option<LockInfo>, u64)>::default());
+        queue.advance_replica_reads(Vec::new());
         assert_eq!(queue.ready_cnt, 0);
 
         queue.advance_replica_reads(vec![(queue.reads[0].id, None, 100)]);
@@ -581,7 +598,7 @@ mod tests {
 
         // After the peer becomes leader, `advance` could be called before
         // `clear_uncommitted_on_role_change`.
-        queue.advance_leader_reads(vec![(id, None, 10)]);
+        queue.advance_leader_reads("", vec![(id, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
@@ -596,7 +613,7 @@ mod tests {
         );
         queue.push_back(req, true);
         let last_id = queue.reads.back().map(|t| t.id).unwrap();
-        queue.advance_leader_reads(vec![(last_id, None, 10)]);
+        queue.advance_leader_reads("", vec![(last_id, None, 10)]);
         assert_eq!(queue.ready_cnt, 1);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
@@ -624,7 +641,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader, but the peer is not ready to handle it (e.g. it's in merging).
-        queue.advance_leader_reads(vec![(id, None, 10)]);
+        queue.advance_leader_reads("", vec![(id, None, 10)]);
 
         // The leader steps down to follower, clear uncommitted reads.
         queue.clear_uncommitted_on_role_change(10);
@@ -641,7 +658,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader again, shouldn't panic.
-        queue.advance_leader_reads(vec![(id_1, None, 10)]);
+        queue.advance_leader_reads("", vec![(id_1, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }

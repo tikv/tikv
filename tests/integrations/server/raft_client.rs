@@ -1,29 +1,39 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
-use std::time::Duration;
-use std::{thread, time};
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc,
+    },
+    thread, time,
+    time::Duration,
+};
 
-use super::*;
 use engine_rocks::RocksEngine;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use grpcio::{
     ClientStreamingSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, Server,
 };
-use kvproto::metapb;
-use kvproto::raft_serverpb::{Done, RaftMessage};
-use kvproto::tikvpb::BatchRaftMessage;
-use raft::eraftpb::Entry;
-use raftstore::errors::DiscardReason;
-use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter};
-use tikv::server::load_statistics::ThreadLoadPool;
-use tikv::server::resolve::Callback;
-use tikv::server::{
-    self, resolve, Config, ConnectionBuilder, RaftClient, StoreAddrResolver, TestRaftStoreRouter,
+use kvproto::{
+    metapb,
+    raft_serverpb::{Done, RaftMessage},
+    tikvpb::BatchRaftMessage,
 };
-use tikv_util::worker::Builder as WorkerBuilder;
-use tikv_util::worker::LazyWorker;
+use raft::eraftpb::Entry;
+use raftstore::{
+    errors::DiscardReason,
+    router::{RaftStoreBlackHole, RaftStoreRouter},
+};
+use tikv::server::{
+    self, load_statistics::ThreadLoadPool, resolve, resolve::Callback, Config, ConnectionBuilder,
+    RaftClient, StoreAddrResolver, TestRaftStoreRouter,
+};
+use tikv_util::{
+    config::VersionTrack,
+    worker::{Builder as WorkerBuilder, LazyWorker},
+};
+
+use super::*;
 
 #[derive(Clone)]
 pub struct StaticResolver {
@@ -49,7 +59,7 @@ where
     T: StoreAddrResolver + 'static,
 {
     let env = Arc::new(Environment::new(2));
-    let cfg = Arc::new(Config::default());
+    let cfg = Arc::new(VersionTrack::new(Config::default()));
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
     let loads = Arc::new(ThreadLoadPool::with_threshold(1000));

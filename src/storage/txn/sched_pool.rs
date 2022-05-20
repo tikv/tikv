@@ -1,22 +1,26 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
-use std::mem;
-use std::sync::{Arc, Mutex};
-use tikv_util::sys::SysQuota;
-use tikv_util::time::Duration;
+use std::{
+    cell::RefCell,
+    mem,
+    sync::{Arc, Mutex},
+};
 
 use collections::HashMap;
 use file_system::{set_io_type, IOType};
 use kvproto::pdpb::QueryKind;
 use prometheus::local::*;
 use raftstore::store::WriteStats;
-use tikv_util::yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder};
-
-use crate::storage::kv::{
-    destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics,
+use tikv_util::{
+    sys::SysQuota,
+    time::Duration,
+    yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder},
 };
-use crate::storage::metrics::*;
+
+use crate::storage::{
+    kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics},
+    metrics::*,
+};
 
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,

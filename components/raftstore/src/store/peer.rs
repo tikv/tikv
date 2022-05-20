@@ -1,95 +1,110 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use std::{cmp, mem, u64, usize};
+use std::{
+    cell::RefCell,
+    cmp,
+    collections::VecDeque,
+    fmt, mem,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+    u64, usize,
+};
 
 use bitflags::bitflags;
 use bytes::Bytes;
-use crossbeam::atomic::AtomicCell;
-use crossbeam::channel::TrySendError;
+use collections::{HashMap, HashSet};
+use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
     Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use kvproto::errorpb;
-use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
-use kvproto::metapb::{self, PeerRole};
-use kvproto::pdpb::PeerStats;
-use kvproto::raft_cmdpb::{
-    self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, PutRequest,
-    RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest, TransferLeaderResponse,
-};
-use kvproto::raft_serverpb::{
-    ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-};
-use kvproto::replication_modepb::{
-    DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
+use getset::Getters;
+use kvproto::{
+    errorpb,
+    kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
+    metapb::{self, PeerRole},
+    pdpb::{self, PeerStats},
+    raft_cmdpb::{
+        self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+        PutRequest, RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest,
+        TransferLeaderResponse,
+    },
+    raft_serverpb::{
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
+    },
+    replication_modepb::{
+        DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
+    },
 };
 use parking_lot::RwLockUpgradableReadGuard;
+use pd_client::{BucketStat, INVALID_ID};
 use protobuf::Message;
-use raft::eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType};
 use raft::{
-    self, Changer, GetEntriesContext, LightReady, ProgressState, ProgressTracker, RawNode, Ready,
+    self,
+    eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType},
+    Changer, GetEntriesContext, LightReady, ProgressState, ProgressTracker, RawNode, Ready,
     SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use raft_proto::ConfChangeI;
 use rand::seq::SliceRandom;
 use smallvec::SmallVec;
+use tikv_alloc::trace::TraceEvent;
+use tikv_util::{
+    box_err,
+    codec::number::decode_u64,
+    debug, error, info,
+    sys::disk::DiskUsage,
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt, ThreadReadId},
+    warn,
+    worker::Scheduler,
+    Either,
+};
 use time::Timespec;
+use txn_types::WriteBatchFlags;
 use uuid::Uuid;
 
-use crate::coprocessor::{CoprocessorHost, RegionChangeEvent, RoleChange};
-use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::async_io::write::WriteMsg;
-use crate::store::async_io::write_router::WriteRouter;
-use crate::store::fsm::apply::CatchUpLogs;
-use crate::store::fsm::store::PollContext;
-use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
-use crate::store::hibernate_state::GroupState;
-use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
-use crate::store::msg::RaftCommand;
-use crate::store::txn_ext::LocksStatus;
-use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
-use crate::store::worker::{
-    HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress,
-    RegionTask,
+use super::{
+    cmd_resp,
+    local_metrics::{RaftMetrics, RaftReadyMetrics},
+    metrics::*,
+    peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
+    read_queue::{ReadIndexQueue, ReadIndexRequest},
+    transport::Transport,
+    util::{
+        self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
+        Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+    },
+    DestroyPeerJob,
 };
-use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
-    RAFT_INIT_LOG_INDEX,
+use crate::{
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RoleChange},
+    errors::RAFTSTORE_IS_BUSY,
+    store::{
+        async_io::{write::WriteMsg, write_router::WriteRouter},
+        fsm::{
+            apply::{self, CatchUpLogs},
+            store::{PollContext, RaftRouter},
+            Apply, ApplyMetrics, ApplyTask, Proposal,
+        },
+        hibernate_state::GroupState,
+        memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
+        msg::{PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        txn_ext::LocksStatus,
+        util::{admin_cmd_epoch_lookup, RegionReadProgress},
+        worker::{
+            HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
+            ReadProgress, RegionTask, SplitCheckTask,
+        },
+        Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
+        RAFT_INIT_LOG_INDEX,
+    },
+    Error, Result,
 };
-use crate::{Error, Result};
-use collections::{HashMap, HashSet};
-use pd_client::{BucketStat, INVALID_ID};
-use tikv_alloc::trace::TraceEvent;
-use tikv_util::codec::number::decode_u64;
-use tikv_util::sys::disk::DiskUsage;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now};
-use tikv_util::time::{Instant as TiInstant, InstantExt, ThreadReadId};
-use tikv_util::worker::Scheduler;
-use tikv_util::Either;
-use tikv_util::{box_err, debug, error, info, warn};
-use txn_types::WriteBatchFlags;
-
-use super::cmd_resp;
-use super::local_metrics::{RaftMetrics, RaftReadyMetrics};
-use super::metrics::*;
-use super::peer_storage::{
-    write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage,
-};
-use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
-use super::transport::Transport;
-use super::util::{
-    self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
-    Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
-};
-use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
@@ -454,6 +469,233 @@ pub struct ReadyResult {
     pub has_write_ready: bool,
 }
 
+#[derive(Debug)]
+/// ForceLeader process would be:
+/// 1. If it's hibernated, enter wait ticks state, and wake up the peer
+/// 2. Enter pre force leader state, become candidate and send request vote to all peers
+/// 3. Wait for the responses of the request vote, no reject should be received.
+/// 4. Enter force leader state, become leader without leader lease
+/// 5. Execute recovery plan(some remove-peer commands)
+/// 6. After the plan steps are all applied, exit force leader state
+pub enum ForceLeaderState {
+    WaitTicks {
+        syncer: UnsafeRecoveryForceLeaderSyncer,
+        failed_stores: HashSet<u64>,
+        ticks: usize,
+    },
+    PreForceLeader {
+        syncer: UnsafeRecoveryForceLeaderSyncer,
+        failed_stores: HashSet<u64>,
+    },
+    ForceLeader {
+        time: TiInstant,
+        failed_stores: HashSet<u64>,
+    },
+}
+
+// Following shared states are used while reporting to PD for unsafe recovery and shared among
+// all the regions per their life cycle.
+// The work flow is like:
+//     1. report phase
+//            start_unsafe_recovery_report
+//            -> broadcast wait-apply commands
+//            -> wait for all the peers' apply indices meet their targets
+//            -> broadcast fill out report commands
+//            -> wait for all the peers fill out the reports for themselves
+//            -> send a store report (through store heartbeat)
+//     2. force leader phase
+//            dispatch force leader commands
+//            -> wait for all the peers that received the command become force leader
+//            -> start_unsafe_recovery_report
+//     3. plan execution phase
+//            dispatch recovery plans
+//            -> wait for all the creates, deletes and demotes to finish, for the demotes,
+//               procedures are:
+//                   -> exit joint state if it is already in joint state
+//                   -> demote failed voters, and promote self to be a voter if it is a learner
+//                   -> exit joint state
+//            -> start_unsafe_recovery_report
+
+// Intends to use RAII to sync unsafe recovery procedures between peers, in addition to that,
+// it uses a closure to avoid having a raft router as a member variable, which is statically
+// dispatched, thus needs to propagate the generics everywhere.
+pub struct InvokeClosureOnDrop(Box<dyn Fn() + Send + Sync>);
+
+impl fmt::Debug for InvokeClosureOnDrop {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "InvokeClosureOnDrop")
+    }
+}
+
+impl Drop for InvokeClosureOnDrop {
+    fn drop(&mut self) {
+        self.0();
+    }
+}
+
+pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
+    router: &RaftRouter<EK, ER>,
+    report_id: u64,
+    exit_force_leader: bool,
+) {
+    let wait_apply =
+        UnsafeRecoveryWaitApplySyncer::new(report_id, router.clone(), exit_force_leader);
+    router.broadcast_normal(|| {
+        PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryWaitApply(wait_apply.clone()))
+    });
+}
+
+#[derive(Clone, Debug)]
+pub struct UnsafeRecoveryForceLeaderSyncer(Arc<InvokeClosureOnDrop>);
+
+impl UnsafeRecoveryForceLeaderSyncer {
+    pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
+        let thread_safe_router = Mutex::new(router);
+        let inner = InvokeClosureOnDrop(Box::new(move || {
+            info!("Unsafe recovery, force leader finished.");
+            let router_ptr = thread_safe_router.lock().unwrap();
+            start_unsafe_recovery_report(&*router_ptr, report_id, false);
+        }));
+        UnsafeRecoveryForceLeaderSyncer(Arc::new(inner))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UnsafeRecoveryExecutePlanSyncer {
+    _closure: Arc<InvokeClosureOnDrop>,
+    abort: Arc<Mutex<bool>>,
+}
+
+impl UnsafeRecoveryExecutePlanSyncer {
+    pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
+        let thread_safe_router = Mutex::new(router);
+        let abort = Arc::new(Mutex::new(false));
+        let abort_clone = abort.clone();
+        let closure = InvokeClosureOnDrop(Box::new(move || {
+            info!("Unsafe recovery, plan execution finished");
+            if *abort_clone.lock().unwrap() {
+                warn!("Unsafe recovery, plan execution aborted");
+                return;
+            }
+            let router_ptr = thread_safe_router.lock().unwrap();
+            start_unsafe_recovery_report(&*router_ptr, report_id, true);
+        }));
+        UnsafeRecoveryExecutePlanSyncer {
+            _closure: Arc::new(closure),
+            abort,
+        }
+    }
+
+    pub fn abort(&self) {
+        *self.abort.lock().unwrap() = true;
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UnsafeRecoveryWaitApplySyncer {
+    _closure: Arc<InvokeClosureOnDrop>,
+    abort: Arc<Mutex<bool>>,
+}
+
+impl UnsafeRecoveryWaitApplySyncer {
+    pub fn new(
+        report_id: u64,
+        router: RaftRouter<impl KvEngine, impl RaftEngine>,
+        exit_force_leader: bool,
+    ) -> Self {
+        let thread_safe_router = Mutex::new(router);
+        let abort = Arc::new(Mutex::new(false));
+        let abort_clone = abort.clone();
+        let closure = InvokeClosureOnDrop(Box::new(move || {
+            info!("Unsafe recovery, wait apply finished");
+            if *abort_clone.lock().unwrap() {
+                warn!("Unsafe recovery, wait apply aborted");
+                return;
+            }
+            let router_ptr = thread_safe_router.lock().unwrap();
+            if exit_force_leader {
+                (*router_ptr).broadcast_normal(|| {
+                    PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState)
+                });
+            }
+            let fill_out_report =
+                UnsafeRecoveryFillOutReportSyncer::new(report_id, (*router_ptr).clone());
+            (*router_ptr).broadcast_normal(|| {
+                PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryFillOutReport(
+                    fill_out_report.clone(),
+                ))
+            });
+        }));
+        UnsafeRecoveryWaitApplySyncer {
+            _closure: Arc::new(closure),
+            abort,
+        }
+    }
+
+    pub fn abort(&self) {
+        *self.abort.lock().unwrap() = true;
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UnsafeRecoveryFillOutReportSyncer {
+    _closure: Arc<InvokeClosureOnDrop>,
+    reports: Arc<Mutex<Vec<pdpb::PeerReport>>>,
+}
+
+impl UnsafeRecoveryFillOutReportSyncer {
+    pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
+        let thread_safe_router = Mutex::new(router);
+        let reports = Arc::new(Mutex::new(vec![]));
+        let reports_clone = reports.clone();
+        let closure = InvokeClosureOnDrop(Box::new(move || {
+            info!("Unsafe recovery, peer reports collected");
+            let mut store_report = pdpb::StoreReport::default();
+            {
+                let mut reports_ptr = reports_clone.lock().unwrap();
+                store_report.set_peer_reports(mem::take(&mut *reports_ptr).into());
+            }
+            store_report.set_step(report_id);
+            let router_ptr = thread_safe_router.lock().unwrap();
+            if let Err(e) = (*router_ptr).send_control(StoreMsg::UnsafeRecoveryReport(store_report))
+            {
+                error!("Unsafe recovery, fail to schedule reporting"; "err" => ?e);
+            }
+        }));
+        UnsafeRecoveryFillOutReportSyncer {
+            _closure: Arc::new(closure),
+            reports,
+        }
+    }
+
+    pub fn report_for_self(&self, report: pdpb::PeerReport) {
+        let mut reports_ptr = self.reports.lock().unwrap();
+        (*reports_ptr).push(report);
+    }
+}
+
+pub enum UnsafeRecoveryState {
+    // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
+    // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
+    // new entry or a snapshot, if the target index is met, this state is reset / droppeds. The
+    // syncer holds a reference counted inner object that is shared among all the peers, whose
+    // destructor triggers the next step of unsafe recovery report process.
+    WaitApply {
+        target_index: u64,
+        syncer: UnsafeRecoveryWaitApplySyncer,
+    },
+    DemoteFailedVoters {
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+        failed_voters: Vec<metapb::Peer>,
+        target_index: u64,
+        // Failed regions may be stuck in joint state, if that is the case, we need to ask the
+        // region to exit joint state before proposing the demotion.
+        demote_after_exit: bool,
+    },
+    Destroy(UnsafeRecoveryExecutePlanSyncer),
+}
+
+#[derive(Getters)]
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
@@ -478,6 +720,7 @@ where
 
     proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
+    #[getset(get = "pub")]
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
 
@@ -490,6 +733,15 @@ where
     /// 1. when merging, its data in storeMeta will be removed early by the target peer.
     /// 2. all read requests must be rejected.
     pub pending_remove: bool,
+
+    /// Force leader state is only used in online recovery when the majority of
+    /// peers are missing. In this state, it forces one peer to become leader out
+    /// of accordance with Raft election rule, and forbids any read/write proposals.
+    /// With that, we can further propose remove failed-nodes conf-change, to make
+    /// the Raft group forms majority and works normally later on.
+    ///
+    /// For details, see the comment of `ForceLeaderState`.
+    pub force_leader: Option<ForceLeaderState>,
 
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
@@ -510,10 +762,10 @@ where
     pub approximate_size: Option<u64>,
     /// Approximate keys of the region.
     pub approximate_keys: Option<u64>,
-    /// Whether this region has calculated region size by split-check thread. If we just splitted
-    ///  the region or ingested one file which may be overlapped with the existed data, the
-    /// `approximate_size` is not very accurate.
-    pub has_calculated_region_size: bool,
+    /// Whether this region has scheduled a split check task. If we just splitted
+    ///  the region or ingested one file which may be overlapped with the existed data,
+    /// reset the flag so that the region can be splitted again.
+    pub may_skip_split_check: bool,
 
     /// The state for consistency check.
     pub consistency_state: ConsistencyState,
@@ -608,8 +860,10 @@ where
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
     pub region_buckets: Option<BucketStat>,
+    pub last_region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
+    pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -677,11 +931,12 @@ where
             delete_keys_hint: 0,
             approximate_size: None,
             approximate_keys: None,
-            has_calculated_region_size: false,
+            may_skip_split_check: false,
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
             should_wake_up: false,
+            force_leader: None,
             pending_merge_state: None,
             want_rollback_merge_peers: HashSet::default(),
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
@@ -735,7 +990,9 @@ where
             persisted_number: 0,
             apply_snap_ctx: None,
             region_buckets: None,
+            last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
+            unsafe_recovery_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -811,6 +1068,7 @@ where
             RegionChangeEvent::Create,
             self.get_role(),
         );
+        self.maybe_gen_approximate_buckets(ctx);
     }
 
     #[inline]
@@ -959,6 +1217,7 @@ where
         engines: &Engines<EK, ER>,
         perf_context: &mut EK::PerfContext,
         keep_data: bool,
+        pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
     ) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
@@ -970,46 +1229,94 @@ where
             "peer_id" => self.peer.get_id(),
         );
 
-        // Set Tombstone state explicitly
-        let mut kv_wb = engines.kv.write_batch();
-        let mut raft_wb = engines.raft.log_batch(1024);
-        // Raft log gc should be flushed before being destroyed, so last_compacted_idx has to be
-        // the minimal index that may still have logs.
-        let last_compacted_idx = self.last_compacted_idx;
-        self.mut_store()
-            .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
+        let (pending_create_peers, clean) = if self.local_first_replicate {
+            let mut pending = pending_create_peers.lock().unwrap();
+            if self.get_store().is_initialized() {
+                assert_eq!(pending.get(&region.get_id()), None);
+                (None, true)
+            } else if let Some(status) = pending.get(&region.get_id()) {
+                if *status == (self.peer.get_id(), false) {
+                    pending.remove(&region.get_id());
+                    // Hold the lock to avoid apply worker applies split.
+                    (Some(pending), true)
+                } else if *status == (self.peer.get_id(), true) {
+                    // It's already marked to split by apply worker, skip delete.
+                    (None, false)
+                } else {
+                    // Peer id can't be different as router should exist all the time, their is no
+                    // chance for store to insert a different peer id. And apply worker should skip
+                    // split when meeting a different id.
+                    let status = *status;
+                    // Avoid panic with lock.
+                    drop(pending);
+                    panic!("{} unexpected pending states {:?}", self.tag, status);
+                }
+            } else {
+                // The status is inserted when it's created. It will be removed in following cases:
+                // 1. By appy worker as it fails to split due to region state key. This is
+                //    impossible to reach this code path because the delete write batch is not
+                //    persisted yet.
+                // 2. By store fsm as it fails to create peer, which is also invalid obviously.
+                // 3. By peer fsm after persisting snapshot, then it should be initialized.
+                // 4. By peer fsm after split.
+                // 5. By peer fsm when destroy, which should go the above branch instead.
+                (None, false)
+            }
+        } else {
+            (None, true)
+        };
+        if clean {
+            // Set Tombstone state explicitly
+            let mut kv_wb = engines.kv.write_batch();
+            let mut raft_wb = engines.raft.log_batch(1024);
+            // Raft log gc should be flushed before being destroyed, so last_compacted_idx has to be
+            // the minimal index that may still have logs.
+            let last_compacted_idx = self.last_compacted_idx;
+            self.mut_store()
+                .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
 
-        // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
-        // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
-        // peer list are empty, so a removed peer will be created again.  Saving current peer
-        // into the peer list of region will fix this problem.
-        if !self.get_store().is_initialized() {
-            region.mut_peers().push(self.peer.clone());
-        }
-        write_peer_state(
-            &mut kv_wb,
-            &region,
-            PeerState::Tombstone,
-            self.pending_merge_state.clone(),
-        )?;
-        // write kv rocksdb first in case of restart happen between two write
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        kv_wb.write_opt(&write_opts)?;
+            // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
+            // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
+            // peer list are empty, so a removed peer will be created again.  Saving current peer
+            // into the peer list of region will fix this problem.
+            if !self.get_store().is_initialized() {
+                region.mut_peers().push(self.peer.clone());
+            }
 
-        perf_context.start_observe();
-        engines.raft.consume(&mut raft_wb, true)?;
-        perf_context.report_metrics();
+            write_peer_state(
+                &mut kv_wb,
+                &region,
+                PeerState::Tombstone,
+                // Only persist the `merge_state` if the merge is known to be succeeded
+                // which is determined by the `keep_data` flag
+                if keep_data {
+                    self.pending_merge_state.clone()
+                } else {
+                    None
+                },
+            )?;
 
-        if self.get_store().is_initialized() && !keep_data {
-            // If we meet panic when deleting data and raft log, the dirty data
-            // will be cleared by a newer snapshot applying or restart.
-            if let Err(e) = self.get_store().clear_data() {
-                error!(?e;
-                    "failed to schedule clear data task";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
+            // write kv rocksdb first in case of restart happen between two write
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            kv_wb.write_opt(&write_opts)?;
+
+            drop(pending_create_peers);
+
+            perf_context.start_observe();
+            engines.raft.consume(&mut raft_wb, true)?;
+            perf_context.report_metrics();
+
+            if self.get_store().is_initialized() && !keep_data {
+                // If we meet panic when deleting data and raft log, the dirty data
+                // will be cleared by a newer snapshot applying or restart.
+                if let Err(e) = self.get_store().clear_data() {
+                    error!(?e;
+                        "failed to schedule clear data task";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
+                }
             }
         }
 
@@ -1024,7 +1331,11 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "takes" => ?t.saturating_elapsed(),
+            "clean" => clean,
+            "keep_data" => keep_data,
         );
+
+        fail_point!("raft_store_after_destroy_peer");
 
         Ok(())
     }
@@ -1071,6 +1382,10 @@ where
         }
         if self.raft_group.raft.lead_transferee.is_some() {
             res.reason = "transfer leader";
+            return res;
+        }
+        if self.force_leader.is_some() {
+            res.reason = "force leader";
             return res;
         }
         // Unapplied entries can change the configuration of the group.
@@ -1599,6 +1914,39 @@ where
         false
     }
 
+    pub fn maybe_force_forward_commit_index(&mut self) -> bool {
+        let failed_stores = match &self.force_leader {
+            Some(ForceLeaderState::ForceLeader { failed_stores, .. }) => failed_stores,
+            _ => unreachable!(),
+        };
+
+        let region = self.region();
+        let mut replicated_idx = self.raft_group.raft.raft_log.persisted;
+        for (peer_id, p) in self.raft_group.raft.prs().iter() {
+            let store_id = region
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == *peer_id)
+                .unwrap()
+                .get_store_id();
+            if failed_stores.contains(&store_id) {
+                continue;
+            }
+            if replicated_idx > p.matched {
+                replicated_idx = p.matched;
+            }
+        }
+
+        if self.raft_group.store().term(replicated_idx).unwrap_or(0) < self.term() {
+            // do not commit logs of previous term directly
+            return false;
+        }
+
+        self.raft_group.raft.raft_log.committed =
+            std::cmp::max(self.raft_group.raft.raft_log.committed, replicated_idx);
+        true
+    }
+
     pub fn check_stale_state<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
@@ -1944,6 +2292,11 @@ where
                         self.term(),
                         self.raft_group.store().region(),
                     );
+
+                    if self.unsafe_recovery_state.is_some() {
+                        debug!("unsafe recovery finishes applying a snapshot");
+                        self.unsafe_recovery_maybe_finish_wait_apply(/*force=*/ false);
+                    }
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
                 // come from the ready but comes from the unfinished snapshot task
@@ -2489,6 +2842,11 @@ where
 
             let persist_index = self.raft_group.raft.raft_log.persisted;
             self.mut_store().update_cache_persisted(persist_index);
+
+            if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
+                // forward commit index, the committed entries will be applied in the next raft base tick round
+                self.maybe_force_forward_commit_index();
+            }
         }
 
         if self.apply_snap_ctx.is_some() && self.unpersisted_readies.is_empty() {
@@ -2527,6 +2885,10 @@ where
         self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
+        if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
+            // forward commit index, the committed entries will be applied in the next raft base tick round
+            self.maybe_force_forward_commit_index();
+        }
         self.mut_store().update_cache_persisted(persist_index);
 
         self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
@@ -2709,7 +3071,7 @@ where
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else {
-            self.pending_reads.advance_leader_reads(states);
+            self.pending_reads.advance_leader_reads(&self.tag, states);
             propose_time = self.pending_reads.last_ready().map(|r| r.propose_time);
             if self.ready_to_handle_read() {
                 while let Some(mut read) = self.pending_reads.pop_front() {
@@ -2803,6 +3165,8 @@ where
         // Reset delete_keys_hint and size_diff_hint.
         self.delete_keys_hint = 0;
         self.size_diff_hint = 0;
+        self.region_buckets = None;
+        self.last_region_buckets = None;
     }
 
     /// Try to renew leader lease.
@@ -2831,6 +3195,13 @@ where
             // if commit merge runs slow on sibling peers.
             debug!(
                 "prevents renew lease while merging";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            None
+        } else if self.force_leader.is_some() {
+            debug!(
+                "prevents renew lease while in force leader state";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
@@ -3074,7 +3445,7 @@ where
         let kind = ConfChangeKind::confchange_kind(change_peers.len());
 
         if kind == ConfChangeKind::LeaveJoint {
-            if self.peer.get_role() == PeerRole::DemotingVoter {
+            if self.peer.get_role() == PeerRole::DemotingVoter && !self.is_force_leader() {
                 return Err(box_err!(
                     "{} ignore leave joint command that demoting leader",
                     self.tag
@@ -3147,7 +3518,7 @@ where
 
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
-            || promoted_commit_index >= self.get_store().truncated_index()
+            || promoted_commit_index >= self.get_store().truncated_index() || self.force_leader.is_some()
         {
             return Ok(());
         }
@@ -3772,6 +4143,16 @@ where
         poll_ctx: &mut PollContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
+        // Should not propose normal in force leader state.
+        // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
+        // if in force leader state.
+        if self.force_leader.is_some() {
+            panic!(
+                "{} propose normal in force leader state {:?}",
+                self.tag, self.force_leader
+            );
+        };
+
         if (self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge)
             || (self.prepare_merge_fence > 0
@@ -4133,6 +4514,10 @@ where
         resp
     }
 
+    pub fn voters(&self) -> raft::util::Union<'_> {
+        self.raft_group.raft.prs().conf().voters().ids()
+    }
+
     pub fn term(&self) -> u64 {
         self.raft_group.raft.term
     }
@@ -4364,6 +4749,50 @@ where
                 .propose_check_epoch(cmd, self.term())
                 .is_none()
     }
+
+    pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &PollContext<EK, ER, T>) {
+        if ctx.coprocessor_host.cfg.enable_region_bucket && !self.region().get_peers().is_empty() {
+            if let Err(e) = ctx
+                .split_check_scheduler
+                .schedule(SplitCheckTask::ApproximateBuckets(self.region().clone()))
+            {
+                error!(
+                    "failed to schedule check approximate buckets";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.peer_id(),
+                    "err" => %e,
+                );
+            }
+        }
+    }
+
+    #[inline]
+    pub fn is_force_leader(&self) -> bool {
+        matches!(
+            self.force_leader,
+            Some(ForceLeaderState::ForceLeader { .. })
+        )
+    }
+
+    pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
+        if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
+            &self.unsafe_recovery_state
+        {
+            if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                if self.is_force_leader() {
+                    info!(
+                        "Unsafe recovery, finish wait apply";
+                        "region_id" => self.region().get_id(),
+                        "peer_id" => self.peer_id(),
+                        "target_index" => target_index,
+                        "applied" =>  self.raft_group.raft.raft_log.applied,
+                        "force" => force,
+                    );
+                }
+                self.unsafe_recovery_state = None;
+            }
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -4552,6 +4981,17 @@ where
         };
 
         send_msg.set_to_peer(to_peer);
+
+        if msg.get_from() != self.peer.get_id() {
+            debug!(
+                "redirecting message";
+                "msg_type" => ?msg.get_msg_type(),
+                "from" => msg.get_from(),
+                "to" => msg.get_to(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+        }
 
         // There could be two cases:
         // 1. Target peer already exists but has not established communication with leader yet
@@ -4976,9 +5416,11 @@ pub trait AbstractPeer {
 }
 
 mod memtrace {
-    use super::*;
     use std::mem;
+
     use tikv_util::memory::HeapSize;
+
+    use super::*;
 
     impl<EK, ER> Peer<EK, ER>
     where
@@ -5014,11 +5456,11 @@ mod memtrace {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::store::msg::ExtCallback;
-    use crate::store::util::u64_to_timespec;
     use kvproto::raft_cmdpb;
     use protobuf::ProtobufEnum;
+
+    use super::*;
+    use crate::store::{msg::ExtCallback, util::u64_to_timespec};
 
     #[test]
     fn test_sync_log() {
@@ -5310,8 +5752,9 @@ mod tests {
 
     #[test]
     fn test_cmd_epoch_checker() {
-        use engine_test::kv::KvTestSnapshot;
         use std::sync::mpsc;
+
+        use engine_test::kv::KvTestSnapshot;
         fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
             let mut request = RaftCmdRequest::default();
             request.mut_admin_request().set_cmd_type(cmd_type);

@@ -72,6 +72,7 @@ end-point-stream-batch-row-limit = 4096
 end-point-enable-batch-if-possible = true
 end-point-request-max-handle-duration = "12s"
 end-point-max-concurrency = 10
+end-point-perf-level = 5
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
@@ -216,6 +217,8 @@ renew-leader-lease-advance-duration = "456ms"
 reactive-memory-lock-tick-interval = "566ms"
 reactive-memory-lock-timeout-tick = 8
 report-min-resolved-ts-interval = "233ms"
+report-region-buckets-tick-interval = "1234s"
+max-snapshot-file-raw-size = "10GB"
 
 [coprocessor]
 split-region-on-table = false
@@ -225,10 +228,10 @@ region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
 consistency-check-method = "raw"
-perf-level = 5
 enable-region-bucket = true 
 region-bucket-size = "1MB"
 region-size-threshold-for-approximate = "3MB"
+region-bucket-merge-size-ratio = 0.4
 
 [rocksdb]
 wal-recovery-mode = "absolute-consistency"
@@ -574,6 +577,7 @@ purge-threshold = "1GB"
 recovery-mode = "tolerate-tail-corruption"
 recovery-read-block-size = "1KB"
 recovery-threads = 2
+memory-limit = "1GB"
 
 [security]
 ca-path = "invalid path"
