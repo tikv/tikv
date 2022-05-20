@@ -1150,6 +1150,8 @@ fn test_gen_split_check_bucket_ranges() {
     cluster.cfg.coprocessor.enable_region_bucket = true;
     // disable report buckets; as it will reset the user traffic stats to randmize the test result
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::secs(5);
+    // Make merge check resume quickly.
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
 
@@ -1195,4 +1197,23 @@ fn test_gen_split_check_bucket_ranges() {
     // because the diff between last_bucket_regions and bucket_regions is zero, bucket range for split check should be empty.
     let expected_bucket_ranges = vec![];
     cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
+
+    // split the region
+    pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![b"k11".to_vec()]);
+
+    let left = pd_client.get_region(b"k10").unwrap();
+    let right = pd_client.get_region(b"k12").unwrap();
+    if right.get_id() == 1 {
+        // the bucket_ranges should be None to refresh the bucket
+        cluster.send_half_split_region_message(&right, None);
+    } else {
+        // the bucket_ranges should be None to refresh the bucket
+        cluster.send_half_split_region_message(&left, None);
+    }
+
+    // merge the region
+    pd_client.must_merge(left.get_id(), right.get_id());
+    let region = pd_client.get_region(b"k10").unwrap();
+    // the bucket_ranges should be None to refresh the bucket
+    cluster.send_half_split_region_message(&region, None);
 }
