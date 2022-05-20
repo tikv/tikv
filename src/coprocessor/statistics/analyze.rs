@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Reverse, collections::BinaryHeap, mem, sync::Arc};
+use std::{cmp, cmp::Reverse, collections::BinaryHeap, mem, sync::Arc};
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
@@ -27,13 +27,11 @@ use tidb_query_executors::{
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
-use tikv_util::{
-    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
-    quota_limiter::QuotaLimiter,
-    time::Instant,
-};
+use tikv_util::{metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC}, quota_limiter::QuotaLimiter, time::Instant};
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
+use tikv_util::sys::cpu_time::ProcessStat;
+use tikv_util::sys::SysQuota;
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
@@ -43,6 +41,15 @@ use crate::{
 
 const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;
+
+// minimum number of core kept for analyze
+const ANALYZE_CORE_LOWER_BOUND: usize = 1;
+// max number of cores kept for analyze is core_number - ANALYZE_CORE_UPPER_ROOM_BOUND
+const ANALYZE_CORE_UPPER_ROOM_BOUND: usize = 1;
+// instance is short of cpu when cpu usage is above it
+const SYSTEM_BUSY_THRESHOLD: f64 = 0.90;
+// instance is at healthy state when cpu usage is in [0.75, 0.9)
+const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.75;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -313,7 +320,7 @@ struct RowSampleBuilder<S: Snapshot> {
     sample_rate: f64,
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
-    quota_limiter: Arc<QuotaLimiter>,
+    quota_limiter: QuotaLimiter,
 }
 
 impl<S: Snapshot> RowSampleBuilder<S> {
@@ -338,6 +345,9 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
+        // Make a dedicated copy quota_limiter for current sampler
+        let copy_quota_limiter = QuotaLimiter::copy_from_arc(quota_limiter);
+
         Ok(Self {
             data: table_scanner,
             max_sample_size: req.get_sample_size() as usize,
@@ -345,7 +355,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             sample_rate: req.get_sample_rate(),
             columns_info,
             column_groups: req.take_column_groups().into(),
-            quota_limiter,
+            quota_limiter: copy_quota_limiter,
         })
     }
 
@@ -364,12 +374,34 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         ))
     }
 
+    // Support tuning of cpu quota at present, io bandwidth tuning is on the way
+    // some smarter tuning algorithm like PID could be considered
+    fn tune_quota_limiter(&mut self, mut proc_stat: ProcessStat){
+        // rule based tuning:
+        //      1) if instance is busy, shrink cpu quota for analyze by 1 core until lower bound is hit;
+        //      2) if instance cpu usage is at healthy state, no op;
+        //      3) if instance is idle, increase cpu quota by 1 core until upper bound is hit.
+
+        let cpu_util = (proc_stat.cpu_usage().unwrap() / 100.0) / SysQuota::cpu_cores_quota();
+
+        if cpu_util >= SYSTEM_BUSY_THRESHOLD {
+            self.quota_limiter.set_cpu_time_limit(cmp::max((self.quota_limiter.cputime_limiter() / 1000.0) as usize - 1, ANALYZE_CORE_LOWER_BOUND));
+        } else if cpu_util < SYSTEM_HEALTHY_THRESHOLD {
+            self.quota_limiter.set_cpu_time_limit(cmp::min((self.quota_limiter.cputime_limiter() / 1000.0) as usize + 1, SysQuota::cpu_cores_quota() as usize - ANALYZE_CORE_UPPER_ROOM_BOUND));
+        }
+        self.quota_limiter.set_last_time_tuned(std::time::Instant::now());
+
+    }
+
     async fn collect_column_stats(&mut self) -> Result<AnalyzeSamplingResult> {
         use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
 
         let mut is_drained = false;
         let mut time_slice_start = Instant::now();
         let mut collector = self.new_collector();
+
+        let proc_stat = ProcessStat::cur_proc_stat().unwrap();
+
         while !is_drained {
             let time_slice_elapsed = time_slice_start.saturating_elapsed();
             if time_slice_elapsed > MAX_TIME_SLICE {
@@ -428,6 +460,12 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                     );
                     collector.collect_column(column_vals, collation_key_vals, &self.columns_info);
                 }
+            }
+
+            // Try adjust the quota if necessary
+            if self.quota_limiter.is_auto_tune_enabled() &&
+                self.quota_limiter.get_last_time_tuned().elapsed() >= self.quota_limiter.get_auto_tune_interval() {
+                self.tune_quota_limiter(proc_stat);
             }
 
             // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
