@@ -41,6 +41,9 @@ fn test_destroy_local_reader() {
 
     let epoch = pd_client.get_region_epoch(r1);
 
+    // Ensure peer 3 is initialized.
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
     // Conf version must change.
     assert!(epoch.get_conf_ver() > 2);
 
