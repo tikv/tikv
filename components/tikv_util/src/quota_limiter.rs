@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 use cpu_time::ThreadTime;
 use futures::compat::Future01CompatExt;
@@ -36,6 +37,10 @@ pub struct QuotaLimiter {
     support_auto_tune: AtomicBool,
     // if auto tune is enabled
     auto_tune_enabled: AtomicBool,
+    // last time tuned
+    last_time_tuned: Instant,
+    // auto tune interval in nano seconds
+    auto_tune_interval: AtomicU64,
 }
 
 // Throttle must be consumed in quota limiter.
@@ -98,11 +103,22 @@ impl Default for QuotaLimiter {
             max_delay_duration: AtomicU64::new(0),
             support_auto_tune: AtomicBool::new(false),
             auto_tune_enabled: AtomicBool::new(false),
+            last_time_tuned: Instant::now(),
+            auto_tune_interval: AtomicU64::new(1_000_000),
         }
     }
 }
 
 impl QuotaLimiter {
+    pub fn copy_from_arc(arc_quota: Arc<QuotaLimiter>) -> Self {
+        QuotaLimiter::new(arc_quota.cputime_limiter.speed_limit() as usize,
+                          ReadableSize::kb((arc_quota.read_bandwidth_limiter.speed_limit() / 1000.0) as u64),
+                          ReadableSize::kb((arc_quota.write_bandwidth_limiter.speed_limit() / 1000.0) as u64),
+                           ReadableDuration::micros(arc_quota.max_delay_duration().as_micros() as u64),
+        arc_quota.support_auto_tune.load(Ordering::Relaxed), arc_quota.is_auto_tune_enabled(),
+                          ReadableDuration::micros(arc_quota.get_auto_tune_interval().as_micros() as u64),)
+    }
+
     // 1000 millicpu equals to 1vCPU, 0 means unlimited
     pub fn new(
         cpu_quota: usize,
@@ -111,6 +127,7 @@ impl QuotaLimiter {
         max_delay_duration: ReadableDuration,
         support_auto_tune: bool,
         auto_tune_enabled: bool,
+        auto_tune_interval: ReadableDuration,
     ) -> Self {
         let cputime_limiter = Limiter::builder(Self::speed_limit(cpu_quota as f64 * 1000_f64))
             .refill(CPU_LIMITER_REFILL_DURATION)
@@ -123,6 +140,8 @@ impl QuotaLimiter {
         let max_delay_duration = AtomicU64::new(max_delay_duration.0.as_nanos() as u64);
         let auto_tune_enabled = AtomicBool::new(auto_tune_enabled);
         let support_auto_tune = AtomicBool::new(support_auto_tune);
+        let last_time_tuned = Instant::now();
+        let auto_tune_interval =  AtomicU64::new(auto_tune_interval.0.as_nanos() as u64);
 
         Self {
             cputime_limiter,
@@ -131,6 +150,8 @@ impl QuotaLimiter {
             max_delay_duration,
             support_auto_tune,
             auto_tune_enabled,
+            last_time_tuned,
+            auto_tune_interval,
         }
     }
 
@@ -171,8 +192,33 @@ impl QuotaLimiter {
         }
     }
 
+    pub fn set_auto_tune_interval(&self, interval: ReadableDuration) {
+        self.auto_tune_interval
+            .store(interval.0.as_nanos() as u64, Ordering::Relaxed);
+    }
+
+    pub fn cputime_limiter(&self) -> f64 {
+        self.cputime_limiter.speed_limit()
+    }
+
     fn max_delay_duration(&self) -> Duration {
         Duration::from_nanos(self.max_delay_duration.load(Ordering::Relaxed))
+    }
+
+    pub fn get_auto_tune_interval(&self) -> Duration {
+        Duration::from_nanos(self.auto_tune_interval.load(Ordering::Relaxed))
+    }
+
+    pub fn get_last_time_tuned(&self) -> Instant {
+        self.last_time_tuned
+    }
+
+    pub fn set_last_time_tuned(&mut self, new_time: Instant) {
+        self.last_time_tuned = new_time;
+    }
+
+    pub fn is_auto_tune_enabled(&self) -> bool {
+        self.auto_tune_enabled.load(Ordering::Relaxed)
     }
 
     // To generate a sampler.
@@ -280,6 +326,8 @@ mod tests {
             ReadableDuration::millis(0),
             false,
             false,
+            ReadableDuration::millis(100),
+
         );
 
         let thread_start_time = ThreadTime::now();

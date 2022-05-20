@@ -56,6 +56,9 @@
 # max-delay-duration = "500ms"
 ## If quota auto tune is supported
 # support-auto-tune = false
+## interval for auto tune adjustment
+# auto-tune-interval = "100ms"
+## auto-tune-interval = "100ms"
 
 [log]
 ## Log levels: debug, info, warn, error, fatal.
