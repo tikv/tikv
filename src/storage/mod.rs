@@ -485,7 +485,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         range.0.as_ref().map(AsRef::as_ref),
                         range.1.as_ref().map(AsRef::as_ref),
                     );
-                    if ApiV2::parse_range_mode(range) != KeyMode::TiDB {
+                    if ApiV2::parse_range_mode(range) != KeyMode::TiDB
+                        && cmd != CommandKind::scan_lock
+                    {
                         return Err(ErrorInner::invalid_key_range_mode(
                             cmd,
                             storage_api_version,
