@@ -485,9 +485,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         range.0.as_ref().map(AsRef::as_ref),
                         range.1.as_ref().map(AsRef::as_ref),
                     );
-                    if ApiV2::parse_range_mode(range) != KeyMode::TiDB
-                        && cmd != CommandKind::scan_lock
-                    {
+                    if ApiV2::parse_range_mode(range) != KeyMode::TiDB {
                         return Err(ErrorInner::invalid_key_range_mode(
                             cmd,
                             storage_api_version,
@@ -1240,7 +1238,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             )],
         );
         let concurrency_manager = self.concurrency_manager.clone();
-        let api_version = self.api_version;
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
 
@@ -1265,16 +1262,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
-
-                Self::check_api_version_ranges(
-                    api_version,
-                    ctx.api_version,
-                    CMD,
-                    [(
-                        start_key.as_ref().map(Key::as_encoded),
-                        end_key.as_ref().map(Key::as_encoded),
-                    )],
-                )?;
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
@@ -6309,7 +6296,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_lock_apiv2() {
+    fn test_resolve_lock() {
         test_resolve_lock_impl::<ApiV1>();
         test_resolve_lock_impl::<ApiV2>();
     }
