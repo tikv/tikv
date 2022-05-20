@@ -503,17 +503,7 @@ where
     }
 
     fn handle_get_metrics(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        // the following logic is port from prometheus's golang:
-        // https://github.com/prometheus/client_golang/blob/24172847e35ba46025c49d90b8846b59eb5d9ead/prometheus/promhttp/http.go#L155-L176
-        let encoding = req
-            .headers()
-            .get(ACCEPT_ENCODING)
-            .map(|enc| enc.to_str().unwrap_or_default())
-            .unwrap_or_default();
-        let gz_encoding = encoding
-            .split(',')
-            .map(|s| s.trim())
-            .any(|s| s == "gzip" || s.starts_with("gzip;"));
+        let gz_encoding = client_accept_gzip(&req);
         let metrics = if gz_encoding {
             // gzip can reduce the body size to less than 1/10.
             let mut encoder = GzEncoder::new(vec![], Compression::default());
@@ -523,12 +513,13 @@ where
             dump().into_bytes()
         };
         let mut resp = Response::new(metrics.into());
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
         if gz_encoding {
             resp.headers_mut()
                 .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
         }
-        resp.headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
+
         Ok(resp)
     }
 
@@ -858,6 +849,21 @@ async fn handle_fail_points_request(req: Request<Body>) -> hyper::Result<Respons
             .body(Body::empty())
             .unwrap()),
     }
+}
+
+// check if the client allow return response with gzip compression
+// the following logic is port from prometheus's golang:
+// https://github.com/prometheus/client_golang/blob/24172847e35ba46025c49d90b8846b59eb5d9ead/prometheus/promhttp/http.go#L155-L176
+fn client_accept_gzip(req: &Request<Body>) -> bool {
+    let encoding = req
+        .headers()
+        .get(ACCEPT_ENCODING)
+        .map(|enc| enc.to_str().unwrap_or_default())
+        .unwrap_or_default();
+    encoding
+        .split(',')
+        .map(|s| s.trim())
+        .any(|s| s == "gzip" || s.starts_with("gzip;"))
 }
 
 // Decode different type of json value to string value
