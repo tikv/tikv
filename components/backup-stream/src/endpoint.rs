@@ -321,7 +321,15 @@ where
     ) -> Result<()> {
         let mut revision_new = revision;
         loop {
-            let mut watcher = meta_client.events_from(revision_new).await?;
+            let watcher = meta_client.events_from(revision_new).await;
+            let mut watcher = match watcher {
+                Ok(w) => w,
+                Err(e) => {
+                    e.report("failed to start watch pause");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
 
             loop {
                 if let Some(event) = watcher.stream.next().await {
@@ -341,7 +349,7 @@ where
                         }
                         MetadataEvent::Error { err } => {
                             err.report("metadata client watch meet error");
-                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            tokio::time::sleep(Duration::from_secs(2)).await;
                             break;
                         }
                         _ => panic!("BUG: invalid event {:?}", event),
@@ -359,7 +367,16 @@ where
         let mut revision_new = revision;
 
         loop {
-            let mut watcher = meta_client.events_from_pause(revision_new).await?;
+            let watcher = meta_client.events_from_pause(revision_new).await;
+            let mut watcher = match watcher {
+                Ok(w) => w,
+                Err(e) => {
+                    e.report("failed to start watch pause");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
+            };
+
             loop {
                 if let Some(event) = watcher.stream.next().await {
                     info!("backup stream watch event from etcd"; "event" => ?event);
@@ -377,7 +394,7 @@ where
                         }
                         MetadataEvent::Error { err } => {
                             err.report("metadata client watch meet error");
-                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            tokio::time::sleep(Duration::from_secs(2)).await;
                             break;
                         }
                         _ => panic!("BUG: invalid event {:?}", event),
@@ -638,9 +655,13 @@ where
                 },
                 Err(err) => {
                     err.report(format!("failed to resume backup stream task {}", task_name));
-                    let _ = self
-                        .scheduler
-                        .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)));
+                    let sched = self.scheduler.clone();
+                    tokio::task::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        sched
+                            .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
+                            .unwrap();
+                    });
                 }
             }
         }
