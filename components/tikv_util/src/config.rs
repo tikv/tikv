@@ -188,10 +188,13 @@ impl FromStr for ReadableSize {
             "T" | "TB" | "TiB" => TIB,
             "P" | "PB" | "PiB" => PIB,
             "B" | "" => {
-                return size
-                    .parse::<u64>()
-                    .map(|n| ReadableSize(n))
-                    .map_err(|_| format!("invalid size string: {:?}", s));
+                if size.chars().all(|c| char::is_ascii_digit(&c)) {
+                    return size
+                        .parse::<u64>()
+                        .map(|n| ReadableSize(n))
+                        .map_err(|_| format!("invalid size string: {:?}", s));
+                }
+                UNIT
             }
             _ => {
                 return Err(format!(
