@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use num_traits::float::FloatCore;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -19,7 +19,7 @@ pub struct Pid<T: FloatCore> {
     pub output_limit: T,
 
     pub set_point: T,
-    prev_measurement: Option<T>,
+    last_measurement: Option<T>,
     /// `integral_term = sum[error(t) * ki(t)] (for all t)`
     integral_term: T,
 }
@@ -29,7 +29,6 @@ pub struct ControlOutput<T: FloatCore> {
     /// Contribution of the P term to the output.
     pub p: T,
     /// Contribution of the I term to the output.
-    /// `i = sum[error(t) * ki(t)] (for all t)`
     pub i: T,
     /// Contribution of the D term to the output.
     pub d: T,
@@ -60,7 +59,7 @@ impl<T> Pid<T>
             d_limit,
             output_limit,
             set_point,
-            prev_measurement: None,
+            last_measurement: None,
             integral_term: T::zero(),
         }
     }
@@ -71,14 +70,11 @@ impl<T> Pid<T>
         self.integral_term = T::zero();
     }
 
-    /// Given a new measurement, calculates the next control output.
-    ///
-    /// # Panics
-    /// If a set_point has not been set via `update_set_point()`.
+    /// Calculates the next control output.
     pub fn next_control_output(&mut self, measurement: T) -> ControlOutput<T> {
-        let error = self.set_point - measurement;
+        let delta = self.set_point - measurement;
 
-        let p_unbounded = error * self.kp;
+        let p_unbounded = delta * self.kp;
         let p = apply_limit(self.p_limit, p_unbounded);
 
         // Mitigate output jumps when ki(t) != ki(t-1).
@@ -86,18 +82,18 @@ impl<T> Pid<T>
         // just the error (no ki), because we support ki changing dynamically,
         // we store the entire term so that we don't need to remember previous
         // ki values.
-        self.integral_term = self.integral_term + error * self.ki;
+        self.integral_term = self.integral_term + delta * self.ki;
         // Mitigate integral windup: Don't want to keep building up error
         // beyond what i_limit will allow.
         self.integral_term = apply_limit(self.i_limit, self.integral_term);
 
         // Mitigate derivative kick: Use the derivative of the measurement
         // rather than the derivative of the error.
-        let d_unbounded = -match self.prev_measurement.as_ref() {
+        let d_unbounded = -match self.last_measurement.as_ref() {
             Some(prev_measurement) => measurement - *prev_measurement,
             None => T::zero(),
         } * self.kd;
-        self.prev_measurement = Some(measurement);
+        self.last_measurement = Some(measurement);
         let d = apply_limit(self.d_limit, d_unbounded);
 
         let output = p + self.integral_term + d;
