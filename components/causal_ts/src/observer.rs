@@ -79,7 +79,15 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
 impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
     /// Observe becoming leader, to flush CausalTsProvider.
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
-        if role_change.state == StateRole::Leader {
+        // In scenario of frequent leader transfer, the observing of change from
+        // follower to leader by `on_role_change` would be later than the real role
+        // change in raft state and adjacent write commands.
+        // This would lead to the late of flush, and violate causality. See issue #12498.
+        // So we observe role change to Candidate to fix this issue.
+        // Also note that when there is only one peer, it would become leader directly.
+        if role_change.state == StateRole::Candidate
+            || (ctx.region().peers.len() == 1 && role_change.state == StateRole::Leader)
+        {
             let region_id = ctx.region().get_id();
             if let Err(err) = self.causal_ts_provider.flush() {
                 warn!("CausalObserver::on_role_change, flush timestamp error"; "region" => region_id, "error" => ?err);
