@@ -2864,8 +2864,11 @@ impl TiKvConfig {
         self.server.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
-        self.raft_store
-            .validate(self.coprocessor.region_split_size)?;
+        self.raft_store.validate(
+            self.coprocessor.region_split_size,
+            self.coprocessor.enable_region_bucket,
+            self.coprocessor.region_bucket_size,
+        )?;
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
