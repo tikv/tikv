@@ -11,7 +11,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
 use slog_global::info;
 
-use crate::*;
+use crate::{write_batch::RegionBatch, *};
 
 const EPOCH_LEN: usize = 8;
 const REGION_ID_LEN: usize = 16;

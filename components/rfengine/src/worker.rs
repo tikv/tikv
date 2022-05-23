@@ -12,7 +12,7 @@ use bytes::{Buf, BufMut, Bytes};
 use file_system::{DirectWriter, IORateLimitMode, IOType};
 use slog_global::*;
 
-use crate::{log_batch::RaftLogBlock, *};
+use crate::{log_batch::RaftLogBlock, write_batch::RegionBatch, *};
 
 pub(crate) struct Worker {
     dir: PathBuf,

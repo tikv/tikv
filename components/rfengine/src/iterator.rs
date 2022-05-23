@@ -9,7 +9,12 @@ use std::{
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BytesMut};
 
-use crate::*;
+use crate::{
+    engine::{Error, Result},
+    worker::wal_file_name,
+    write_batch::RegionBatch,
+    writer::{ALIGN_MASK, ALIGN_SIZE, BATCH_HEADER_SIZE},
+};
 
 pub(crate) struct WALIterator {
     dir: PathBuf,
