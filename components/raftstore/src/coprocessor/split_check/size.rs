@@ -224,7 +224,7 @@ pub fn get_region_approximate_size(
 }
 
 /// Get region approximate split keys based on default, write and lock cf.
-fn get_approximate_split_keys(
+pub fn get_approximate_split_keys(
     db: &impl KvEngine,
     region: &Region,
     batch_split_limit: u64,
@@ -264,7 +264,7 @@ pub mod tests {
         store::{BucketRange, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask},
     };
 
-    fn must_split_at_impl(
+    pub fn must_split_at_impl(
         rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,

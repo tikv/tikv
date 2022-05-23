@@ -15,6 +15,7 @@ use super::{
         error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
         SplitChecker,
     },
+    size::get_approximate_split_keys,
     Host,
 };
 use crate::store::{CasualMessage, CasualRouter};
@@ -85,6 +86,17 @@ where
 
     fn policy(&self) -> CheckPolicy {
         self.policy
+    }
+
+    fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
+        if self.batch_split_limit != 0 {
+            return Ok(box_try!(get_approximate_split_keys(
+                engine,
+                region,
+                self.batch_split_limit,
+            )));
+        }
+        Ok(vec![])
     }
 }
 
@@ -207,10 +219,13 @@ mod tests {
         pdpb::CheckPolicy,
     };
     use tempfile::Builder;
-    use tikv_util::worker::Runnable;
+    use tikv_util::{config::ReadableSize, worker::Runnable};
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::{super::size::tests::must_split_at, *};
+    use super::{
+        super::size::tests::{must_split_at, must_split_at_impl},
+        *,
+    };
     use crate::{
         coprocessor::{Config, CoprocessorHost},
         store::{CasualMessage, SplitCheckRunner, SplitCheckTask},
@@ -352,6 +367,71 @@ mod tests {
             CheckPolicy::Scan,
             None,
         ));
+    }
+
+    #[test]
+    fn test_split_check_by_approximate_keys() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::default();
+        let cf_opts = ColumnFamilyOptions::new();
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_keys: Some(100),
+            region_split_keys: Some(80),
+            batch_split_limit: 5,
+            region_size_threshold_for_approximate: ReadableSize(1), // use approximate anyway
+            ..Default::default()
+        };
+
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+
+        put_data(&engine, 0, 90, false);
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Approximate,
+            None,
+        ));
+        // keys has not reached the max_keys 100 yet.
+        match rx.try_recv() {
+            Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
+            | Ok((region_id, CasualMessage::RegionApproximateKeys { .. })) => {
+                assert_eq!(region_id, region.get_id());
+            }
+            others => panic!("expect recv empty, but got {:?}", others),
+        }
+
+        put_data(&engine, 90, 160, true);
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Approximate,
+            None,
+        ));
+        must_split_at_impl(
+            &rx,
+            &region,
+            vec![Key::from_raw(b"0080").append_ts(2.into()).into_encoded()],
+            true, // ignore split key
+        );
+
+        drop(rx);
     }
 
     #[test]
