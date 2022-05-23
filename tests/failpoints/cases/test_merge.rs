@@ -249,7 +249,7 @@ fn test_node_merge_catch_up_logs_leader_election() {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 25;
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
     cluster.run();
 
@@ -303,7 +303,7 @@ fn test_node_merge_catch_up_logs_no_need() {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 25;
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
     cluster.run();
 
@@ -370,7 +370,7 @@ fn test_node_merge_recover_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -433,7 +433,7 @@ fn test_node_merge_multiple_snapshots(together: bool) {
     // make it gc quickly to trigger snapshot easily
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 10;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
     cluster.cfg.raft_store.merge_max_log_gap = 9;
     cluster.run();
 
@@ -534,9 +534,9 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.merge_max_log_gap = 10;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
     // Rely on this config to trigger a compact log
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize(1);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize(1));
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -888,7 +888,7 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     // For snapshot after merging
     cluster.cfg.raft_store.merge_max_log_gap = 10;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
     cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -989,7 +989,7 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
 fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_max_log_gap = 10;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
     // Make merge check resume quickly.
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
@@ -1090,7 +1090,7 @@ fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
 fn test_node_merge_crash_when_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.merge_max_log_gap = 10;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
     // Make merge check resume quickly.
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);

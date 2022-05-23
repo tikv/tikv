@@ -710,7 +710,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .encryption_key_manager(self.encryption_key_manager.clone())
-            .max_per_file_size(self.config.server.max_snapshot_file_raw_size.0)
+            .max_per_file_size(self.config.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(
                 self.pd_client
                     .feature_gate()
@@ -792,7 +792,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         self.config
             .raft_store
-            .validate()
+            .validate(self.config.coprocessor.region_split_size)
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
         let health_service = HealthService::default();
@@ -840,6 +840,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             Box::new(ServerConfigManager::new(
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
+                server.get_grpc_mem_quota().clone(),
             )),
         );
 

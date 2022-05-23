@@ -6,6 +6,7 @@ define_error_codes!(
     PD => ("PdClient", "", ""),
     TSO => ("TSO", "", ""),
     TSO_BATCH_USED_UP => ("TSO batch used up", "", ""),
+    BATCH_RENEW => ("Batch renew", "", ""),
 
     UNKNOWN => ("Unknown", "", "")
 );

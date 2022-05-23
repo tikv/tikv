@@ -25,10 +25,10 @@ use tikv::server::snap::send_snap;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
-    cluster.cfg.server.max_snapshot_file_raw_size = ReadableSize(max_snapshot_file_size);
+    cluster.cfg.raft_store.max_snapshot_file_raw_size = ReadableSize(max_snapshot_file_size);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_operator();
@@ -102,7 +102,7 @@ fn test_server_snap_gc_internal(version: &str) {
     configure_for_snapshot(&mut cluster);
     cluster.pd_client.reset_version(version);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
-    cluster.cfg.server.max_snapshot_file_raw_size = ReadableSize::mb(100);
+    cluster.cfg.raft_store.max_snapshot_file_raw_size = ReadableSize::mb(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -166,7 +166,7 @@ fn test_server_snap_gc_internal(version: &str) {
 
     // version > 6.0.0 should enable multi_snapshot_file feature, which means actual max_per_file_size equals the config
     if version == "6.5.0" {
-        assert!(actual_max_per_file_size == cluster.cfg.server.max_snapshot_file_raw_size.0);
+        assert!(actual_max_per_file_size == cluster.cfg.raft_store.max_snapshot_file_raw_size.0);
     } else {
         // the feature is disabled, and the actual_max_per_file_size should be u64::MAX (so that only one file is generated)
         assert!(actual_max_per_file_size == u64::MAX);
@@ -355,7 +355,7 @@ fn test_node_stale_snap() {
     let mut cluster = new_node_cluster(0, 3);
     // disable compact log to make snapshot only be sent when peer is first added.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -480,7 +480,7 @@ fn test_inspected_snapshot() {
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.prefer_mem = false;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
     cluster.cfg.raft_store.merge_max_log_gap = 3;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -709,7 +709,7 @@ fn test_correct_snapshot_term() {
 #[test]
 fn test_snapshot_clean_up_logs_with_log_gc() {
     let mut cluster = new_node_cluster(0, 4);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 50;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(50);
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
     // Speed up log gc.
     cluster.cfg.raft_store.raft_log_compact_sync_interval = ReadableDuration::millis(1);

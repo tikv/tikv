@@ -66,7 +66,7 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, Default)]
+#[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {
@@ -100,6 +100,10 @@ impl ReadableSize {
 
     pub const fn as_mb(self) -> u64 {
         self.0 / MIB
+    }
+
+    pub fn as_mb_f64(self) -> f64 {
+        self.0 as f64 / MIB as f64
     }
 }
 
