@@ -565,7 +565,7 @@ pub(crate) fn test_key(prefix: &str, i: usize) -> String {
 mod tests {
     use std::{iter::Iterator as StdIterator, sync::atomic::Ordering};
 
-    use bytes::BytesMut;
+    use bytes::{BufMut, BytesMut};
     use rand::Rng;
 
     use super::*;
