@@ -434,27 +434,28 @@ impl WaitTable {
 
     /// Returns the duplicated `Waiter` if there is.
     fn add_waiter(&mut self, token: LockWaitToken, waiter: Waiter) -> bool {
-        // Map region id to the waiter.
-        let mut entry = self
-            .region_waiters
-            .entry(waiter.region_id)
-            .or_insert_with(|| {
-                (
-                    RegionState::new(waiter.region_epoch.clone(), waiter.term),
-                    HashSet::default(),
-                )
-            });
-        match waiter.check_region_state(&entry.0) {
-            CheckRegionStateResult::RegionStateExpired => {
-                self.cancel_region(waiter.region_id);
-                entry = self
-                    .region_waiters
-                    .entry(waiter.region_id)
-                    .insert_entry((
+        // Map region id to waiters in the region.
+        let mut region_waiters_entry =
+            self.region_waiters
+                .entry(waiter.region_id)
+                .or_insert_with(|| {
+                    (
                         RegionState::new(waiter.region_epoch.clone(), waiter.term),
                         HashSet::default(),
-                    ))
-                    .get_mut();
+                    )
+                });
+        match waiter.check_region_state(&region_waiters_entry.0) {
+            CheckRegionStateResult::RegionStateExpired => {
+                self.cancel_region(waiter.region_id);
+                region_waiters_entry =
+                    self.region_waiters
+                        .entry(waiter.region_id)
+                        .or_insert_with(|| {
+                            (
+                                RegionState::new(waiter.region_epoch.clone(), waiter.term),
+                                HashSet::default(),
+                            )
+                        });
             }
             CheckRegionStateResult::WaiterExpired => {
                 self.waiter_count.fetch_sub(1, Ordering::SeqCst);
@@ -479,7 +480,8 @@ impl WaitTable {
                 .insert((waiting_item.lock_digest.hash, waiter.start_ts), token);
         }
 
-        self.waiter_pool.insert(token, waiter).unwrap();
+        assert!(region_waiters_entry.1.insert(token));
+        assert!(self.waiter_pool.insert(token, waiter).is_none());
 
         // if let Some(old_idx) = old_idx {
         //     let _old = waiters.swap_remove(old_idx);
@@ -495,7 +497,10 @@ impl WaitTable {
     }
 
     fn cancel_region(&mut self, region_id: u64) {
-        let (_, tokens) = self.region_waiters.remove(&region_id).unwrap();
+        let (_, tokens) = match self.region_waiters.remove(&region_id) {
+            Some(entry) => entry,
+            None => return,
+        };
         let count = tokens.len();
         for token in tokens {
             let waiter = self.waiter_pool.remove(&token).unwrap();
@@ -1058,14 +1063,14 @@ pub mod tests {
         };
         let (cb, f) = paired_future_callback();
         let waiter = Waiter::new(
-            0,
+            1,
             Default::default(),
             NonZeroU64::new(1).unwrap(),
             waiter_ts,
             vec![KeyLockWaitInfo {
                 key: Key::from_raw(&raw_key),
                 lock_digest: lock,
-                lock_info: Default::default(),
+                lock_info: info.clone(),
             }],
             cb,
             Instant::now() + Duration::from_millis(3000),
