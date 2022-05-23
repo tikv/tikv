@@ -2332,16 +2332,7 @@ fn test_prewrite_without_value() {
     muts[0].set_op(Op::Put);
     muts[0].key = b"key".to_vec();
     muts[0].value = large_value.clone();
-    try_kv_prewrite_with(
-        &client,
-        ctx.clone(),
-        muts,
-        b"key".to_vec(),
-        10,
-        10,
-        false,
-        false,
-    );
+    try_kv_prewrite_pessimistic(&client, ctx.clone(), muts, b"key".to_vec(), 10);
 
     let req = suite.new_changedata_request(rid);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));

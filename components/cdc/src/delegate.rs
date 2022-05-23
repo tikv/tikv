@@ -10,7 +10,7 @@ use std::{
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use collections::HashMap;
+use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
 use kvproto::{
     cdcpb::{
@@ -721,7 +721,16 @@ impl Delegate {
                     );
                 }
 
-                rows.insert(row.key.clone(), (row, has_value));
+                match rows.entry(row.key.clone()) {
+                    HashMapEntry::Occupied(o) => {
+                        let o = o.into_mut();
+                        mem::swap(&mut o.0.value, &mut row.value);
+                        o.0 = row;
+                    }
+                    HashMapEntry::Vacant(v) => {
+                        v.insert((row, has_value));
+                    }
+                }
             }
             "lock" => {
                 let (mut row, mut has_value) = (EventRow::default(), false);
@@ -984,6 +993,7 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
     if !value.is_empty() {
         row.value = value.to_vec();
     }
+    // If default CF is given in a command it means the command always has a value.
     *has_value = true;
 }
 
