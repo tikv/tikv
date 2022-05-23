@@ -736,7 +736,7 @@ fn test_snapshot_recover_from_raft_write_failure() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     // Avoid triggering snapshot at final step.
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 10;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
