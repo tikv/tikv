@@ -1,21 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![cfg_attr(test, feature(test))]
 // Bytes as map key
 #![allow(clippy::mutable_key_type)]
-#![cfg_attr(test, feature(test))]
-
-#[macro_use]
-extern crate serde_derive;
 
 #[cfg(test)]
 extern crate test;
-
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[macro_use]
+extern crate serde_derive;
 
 pub mod engine;
 pub mod iterator;
 pub mod load;
+mod log_batch;
 mod metrics;
 pub mod traits;
 pub mod worker;
