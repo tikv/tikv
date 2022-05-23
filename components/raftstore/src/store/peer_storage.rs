@@ -1101,6 +1101,11 @@ where
     }
 
     #[inline]
+    pub fn raft_state(&self) -> &RaftLocalState {
+        &self.raft_state
+    }
+
+    #[inline]
     pub fn applied_index(&self) -> u64 {
         self.apply_state.get_applied_index()
     }
