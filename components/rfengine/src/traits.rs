@@ -17,8 +17,7 @@ impl RaftEngineReadOnly for RfEngine {
         Ok(self
             .regions
             .get(&raft_group_id)
-            .map(|data| data.read().unwrap().get(index))
-            .flatten())
+            .and_then(|data| data.read().unwrap().get(index)))
     }
 
     fn fetch_entries_to(

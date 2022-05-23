@@ -182,8 +182,7 @@ impl RfEngine {
     pub fn get_term(&self, region_id: u64, index: u64) -> Option<u64> {
         self.regions
             .get(&region_id)
-            .map(|data| data.read().unwrap().term(index))
-            .flatten()
+            .and_then(|data| data.read().unwrap().term(index))
     }
 
     pub fn get_last_index(&self, region_id: u64) -> Option<u64> {
@@ -770,7 +769,7 @@ mod tests {
             engine
                 .get_last_state_with_prefix(1, &[STATE_PREFIX])
                 .unwrap(),
-            [10 as u8].as_slice()
+            [10_u8].as_slice()
         );
         assert!(
             engine
