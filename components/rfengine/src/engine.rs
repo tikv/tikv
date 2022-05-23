@@ -80,6 +80,7 @@ impl WriteBatch {
     }
 }
 
+/// `RegionBatch` is a batch of modifications in one region.
 pub(crate) struct RegionBatch {
     pub(crate) region_id: u64,
     pub(crate) truncated_idx: u64,
@@ -98,10 +99,7 @@ impl RegionBatch {
     }
 
     pub(crate) fn truncate(&mut self, idx: u64) {
-        while let Some(front) = self.raft_logs.front() {
-            if front.index >= idx {
-                break;
-            }
+        while let Some(true) = self.raft_logs.front().map(|l| l.index <= idx) {
             self.raft_logs.pop_front();
         }
         self.truncated_idx = idx;
@@ -113,19 +111,24 @@ impl RegionBatch {
     }
 
     pub fn append_raft_log(&mut self, op: RaftLogOp) {
-        while let Some(back) = self.raft_logs.back() {
-            if back.index + 1 == op.index {
-                break;
-            }
+        debug_assert!(self.truncated_idx < op.index);
+        while let Some(true) = self.raft_logs.back().map(|l| l.index + 1 != op.index) {
             self.raft_logs.pop_back();
         }
+        debug_assert!(
+            self.raft_logs.is_empty()
+                || self
+                    .raft_logs
+                    .back()
+                    .map(|l| l.index + 1 == op.index)
+                    .unwrap()
+        );
         self.raft_logs.push_back(op);
     }
 
     pub fn merge(&mut self, other: RegionBatch) {
-        for (k, v) in other.states {
-            self.states.insert(k, v);
-        }
+        debug_assert_eq!(self.region_id, other.region_id);
+        self.states.extend(other.states);
         for op in other.raft_logs {
             self.append_raft_log(op);
         }
@@ -135,18 +138,20 @@ impl RegionBatch {
     }
 
     pub(crate) fn encoded_len(&self) -> usize {
-        // region_id, start_index, end_index, truncated_idx, states_len.
-        let mut len = 8 + 8 + 8 + 8 + 4;
+        let mut len = 8 /* region_id */ + 8 /* start_index */ + 8 /* end_index */ +
+            8 /* truncated_index */ + 4 /* states_len */;
         for (key, val) in &self.states {
-            len += 2 + key.len() + 4 + val.len();
+            len += 2 /* key_len */ + key.len() + 4 /* val_len */ + val.len();
         }
-        len += self.raft_logs.len() * 4;
-        for op in &self.raft_logs {
-            len += op.encoded_len();
-        }
-        len
+        len += self.raft_logs.len() * 4 /* log_end_offset */;
+        self.raft_logs
+            .iter()
+            .fold(len, |acc, l| acc + l.encoded_len())
     }
 
+    ///  +-------------+---------------+--------------+-------------------+--------------+-----------------+------------+-------------------+--------------+-----+------------------+-----+--------------+-----+
+    ///  |region_id(8B)|first_index(8B)|last_index(8B)|truncated_index(8B)|states_len(4B)|state_key_len(2B)|state_key(n)|state_value_len(4B)|state_value(n)| ... |log_end_offset(4B)| ... |raft_log_op(n)| ... |
+    ///  +-------------+---------------+--------------+-------------------+--------------+-----------------+------------+-------------------+--------------+-----+------------------+-----+--------------+-----+
     pub(crate) fn encode_to(&self, buf: &mut impl BufMut) {
         buf.put_u64_le(self.region_id);
         let first = self.raft_logs.front().map_or(0, |x| x.index);
@@ -842,5 +847,48 @@ mod tests {
         assert!(region_data.apply(&region_batch).is_empty());
         assert!(region_data.get_state(b"k1").is_none());
         assert_eq!(region_data.get_state(b"k2"), Some(&b"v2".to_vec().into()));
+    }
+
+    #[test]
+    fn test_region_batch() {
+        let mut region_batch = RegionBatch::new(1);
+
+        let mut logs = vec![];
+        for i in 1..=10 {
+            let log = RaftLogOp::new(&new_raft_entry(EntryType::EntryNormal, 1, i, b"data", 0));
+            logs.push(log.clone());
+            region_batch.append_raft_log(log);
+        }
+        assert_eq!(region_batch.raft_logs, logs);
+        region_batch.set_state(b"k1", b"v1");
+        region_batch.set_state(b"k2", b"v2");
+        region_batch.truncate(5);
+        assert_eq!(region_batch.truncated_idx, 5);
+        assert_eq!(region_batch.raft_logs, &logs[5..]);
+
+        let mut buf = vec![];
+        region_batch.encode_to(&mut buf);
+        assert_eq!(buf.len(), region_batch.encoded_len());
+        let decoded = RegionBatch::decode(&buf);
+        assert_eq!(decoded.region_id, region_batch.region_id);
+        assert_eq!(decoded.truncated_idx, region_batch.truncated_idx);
+        assert_eq!(decoded.states, region_batch.states);
+        assert_eq!(decoded.raft_logs, region_batch.raft_logs);
+
+        // append conflicted log
+        let log = RaftLogOp::new(&new_raft_entry(EntryType::EntryNormal, 1, 6, b"data", 0));
+        region_batch.append_raft_log(log.clone());
+        assert_eq!(region_batch.raft_logs.len(), 1);
+        assert_eq!(region_batch.raft_logs[0], log);
+
+        let mut region_batch = RegionBatch::new(1);
+        for log in &logs[..5] {
+            region_batch.append_raft_log(log.clone());
+        }
+        region_batch.set_state(b"k0", b"v0");
+        region_batch.merge(decoded);
+        assert_eq!(region_batch.truncated_idx, 5);
+        assert_eq!(region_batch.raft_logs, logs);
+        assert_eq!(region_batch.states.len(), 3);
     }
 }
