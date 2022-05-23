@@ -363,12 +363,12 @@ impl Waiter {
             || self.region_epoch.version < region_state.region_epoch.version
             || self.region_epoch.conf_ver < region_state.region_epoch.conf_ver
         {
-            return CheckRegionStateResult::RegionStateExpired;
+            return CheckRegionStateResult::WaiterExpired;
         } else if self.term > region_state.term
             || self.region_epoch.version > region_state.region_epoch.version
             || self.region_epoch.conf_ver > region_state.region_epoch.conf_ver
         {
-            return CheckRegionStateResult::WaiterExpired;
+            return CheckRegionStateResult::RegionStateExpired;
         }
 
         assert_eq!(self.term, region_state.term);
@@ -386,6 +386,7 @@ impl Waiter {
 // Maybe needs to use `BinaryHeap` or sorted `VecDeque` instead.
 // type Waiters = Vec<Waiter>;
 
+#[derive(PartialEq)]
 struct RegionState {
     region_epoch: RegionEpoch,
     term: NonZeroU64,
@@ -404,7 +405,7 @@ enum CheckRegionStateResult {
 }
 
 struct WaitTable {
-    // Map lock hash to waiters.
+    // Map lock hash and ts to waiters.
     // For compatibility.
     wait_table: HashMap<(u64, TimeStamp), LockWaitToken>,
     // Map region id to waiters belonging to this region, along with other meta of the region.
@@ -960,6 +961,24 @@ pub mod tests {
     use tikv_util::time::InstantExt;
     use txn_types::Key;
 
+    impl Waiter {
+        fn region_id(mut self, id: u64) -> Self {
+            self.region_id = id;
+            self
+        }
+
+        fn epoch(mut self, ver: u64, conf_ver: u64) -> Self {
+            self.region_epoch.set_version(ver);
+            self.region_epoch.set_conf_ver(conf_ver);
+            self
+        }
+
+        fn term(mut self, term: u64) -> Self {
+            self.term = NonZeroU64::new(term).unwrap();
+            self
+        }
+    }
+
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {
             region_id: 1,
@@ -1348,6 +1367,135 @@ pub mod tests {
     //     wait_table.remove(lock);
     //     assert!(wait_table.wait_table.is_empty());
     // }
+
+    #[test]
+    fn test_wait_table_cancel_by_region() {
+        let waiter_count = Arc::new(AtomicUsize::new(0));
+        let mut wait_table = WaitTable::new(waiter_count.clone());
+
+        // Cancel a region when there are nothing in it.
+        wait_table.cancel_region(10);
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
+
+        assert!(wait_table.add_waiter(LockWaitToken(Some(1)), dummy_waiter(1.into(), 1.into(), 1)));
+        assert!(wait_table.add_waiter(LockWaitToken(Some(2)), dummy_waiter(2.into(), 2.into(), 2)));
+        assert!(wait_table.add_waiter(
+            LockWaitToken(Some(3)),
+            dummy_waiter(3.into(), 3.into(), 3).region_id(2)
+        ));
+        assert!(wait_table.add_waiter(
+            LockWaitToken(Some(4)),
+            dummy_waiter(4.into(), 4.into(), 4).region_id(2)
+        ));
+        assert!(wait_table.add_waiter(
+            LockWaitToken(Some(5)),
+            dummy_waiter(5.into(), 5.into(), 5).region_id(2)
+        ));
+        waiter_count.store(5, Ordering::SeqCst);
+        assert_eq!(wait_table.region_waiters.len(), 2);
+
+        // Clear one of the two regions.
+        wait_table.cancel_region(2);
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 2);
+        assert_eq!(wait_table.region_waiters.len(), 1);
+        assert_eq!(wait_table.wait_table.len(), 2);
+        assert_eq!(wait_table.waiter_pool.len(), 2);
+
+        // Clear another region.
+        wait_table.cancel_region(1);
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
+        assert_eq!(wait_table.region_waiters.len(), 0);
+        assert_eq!(wait_table.wait_table.len(), 0);
+        assert_eq!(wait_table.waiter_pool.len(), 0);
+
+        // Epoch / term changing. Test on region 3, and items in region 1 should never be affected.
+        waiter_count.fetch_add(1, Ordering::SeqCst);
+        assert!(wait_table.add_waiter(
+            LockWaitToken(Some(11)),
+            dummy_waiter(11.into(), 11.into(), 11).region_id(1)
+        ));
+        waiter_count.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            wait_table.add_waiter(
+                LockWaitToken(Some(12)),
+                dummy_waiter(12.into(), 12.into(), 12)
+                    .region_id(3)
+                    .epoch(1, 1)
+                    .term(1)
+            )
+        );
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 2);
+        // Adding a newer one.
+        waiter_count.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            wait_table.add_waiter(
+                LockWaitToken(Some(13)),
+                dummy_waiter(13.into(), 13.into(), 13)
+                    .region_id(3)
+                    .epoch(1, 1)
+                    .term(2)
+            )
+        );
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 2);
+        {
+            let entry = wait_table.region_waiters.get(&3).unwrap();
+            assert_eq!(entry.0.region_epoch.get_version(), 1);
+            assert_eq!(entry.0.region_epoch.get_conf_ver(), 1);
+            assert_eq!(entry.0.term.get(), 2);
+            assert_eq!(entry.1.len(), 1);
+            assert!(entry.1.contains(&LockWaitToken(Some(13))));
+        }
+        assert_eq!(wait_table.waiter_pool.len(), 2);
+        assert!(
+            wait_table
+                .waiter_pool
+                .contains_key(&LockWaitToken(Some(13)))
+        );
+        assert!(
+            !wait_table
+                .waiter_pool
+                .contains_key(&LockWaitToken(Some(12)))
+        );
+        assert!(wait_table.wait_table.contains_key(&(13, 13.into())));
+        assert!(!wait_table.wait_table.contains_key(&(12, 12.into())));
+        // Adding a stale one.
+        waiter_count.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            !wait_table.add_waiter(
+                LockWaitToken(Some(14)),
+                dummy_waiter(14.into(), 14.into(), 14)
+                    .region_id(3)
+                    .epoch(1, 1)
+                    .term(1)
+            )
+        );
+
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 2);
+        {
+            let entry = wait_table.region_waiters.get(&3).unwrap();
+            assert_eq!(entry.0.region_epoch.get_version(), 1);
+            assert_eq!(entry.0.region_epoch.get_conf_ver(), 1);
+            assert_eq!(entry.0.term.get(), 2);
+            assert_eq!(entry.1.len(), 1);
+            assert!(entry.1.contains(&LockWaitToken(Some(13))));
+        }
+        assert_eq!(wait_table.waiter_pool.len(), 2);
+        assert!(
+            wait_table
+                .waiter_pool
+                .contains_key(&LockWaitToken(Some(13)))
+        );
+        assert!(
+            !wait_table
+                .waiter_pool
+                .contains_key(&LockWaitToken(Some(12)))
+        );
+        assert!(wait_table.wait_table.contains_key(&(13, 13.into())));
+        assert!(!wait_table.wait_table.contains_key(&(12, 12.into())));
+
+        let waiter = wait_table.take_waiter(LockWaitToken(Some(13))).unwrap();
+        assert_eq!(waiter.start_ts, 13.into());
+    }
 
     #[test]
     fn test_wait_table_is_empty() {
