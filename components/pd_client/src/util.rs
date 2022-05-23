@@ -573,6 +573,8 @@ impl PdConnector {
         let addr_trim = trim_http_prefix(addr);
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
+                .max_send_message_len(-1)
+                .max_receive_message_len(-1)
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
             self.security_mgr.connect(cb, addr_trim)

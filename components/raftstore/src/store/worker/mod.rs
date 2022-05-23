@@ -2,6 +2,7 @@
 
 mod check_leader;
 mod cleanup;
+mod cleanup_snapshot;
 mod cleanup_sst;
 mod compact;
 mod consistency_check;
@@ -20,10 +21,14 @@ mod split_controller;
 pub use self::{
     check_leader::{Runner as CheckLeaderRunner, Task as CheckLeaderTask},
     cleanup::{Runner as CleanupRunner, Task as CleanupTask},
+    cleanup_snapshot::{Runner as GcSnapshotRunner, Task as GcSnapshotTask},
     cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
     compact::{Runner as CompactRunner, Task as CompactTask},
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
-    pd::{FlowStatistics, FlowStatsReporter, HeartbeatTask, Runner as PdRunner, Task as PdTask},
+    pd::{
+        new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
+        Runner as PdRunner, Task as PdTask,
+    },
     query_stats::QueryStats,
     raftlog_fetch::{Runner as RaftlogFetchRunner, Task as RaftlogFetchTask},
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
