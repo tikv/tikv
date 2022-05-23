@@ -1,12 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Instant;
-
-use engine_traits::{
-    Error::EntriesUnavailable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result,
-};
+use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;
+use protobuf::Message;
 use raft::eraftpb::Entry;
+use tikv_util::time::Instant;
 
 use crate::{metrics::*, RfEngine, WriteBatch};
 
@@ -16,13 +14,10 @@ impl RaftEngineReadOnly for RfEngine {
     }
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
-        let map_ref = self.regions.get(&raft_group_id);
-        if map_ref.is_none() {
-            return Ok(None);
-        }
-        let map_ref = map_ref.unwrap();
-        let region_data = map_ref.read().unwrap();
-        Ok(region_data.get(index))
+        Ok(self
+            .regions
+            .get(&raft_group_id)
+            .and_then(|data| data.read().unwrap().get(index)))
     }
 
     fn fetch_entries_to(
@@ -30,30 +25,29 @@ impl RaftEngineReadOnly for RfEngine {
         region_id: u64,
         low: u64,
         high: u64,
-        max_size: Option<usize>,
+        max_size: Option<usize>, // size limit of fetched entries
         buf: &mut Vec<Entry>,
-    ) -> Result<usize> {
+    ) -> Result<usize> /* entry count */ {
+        debug_assert!(low < high);
         let old_len = buf.len();
-        let map_ref = self.regions.get(&region_id);
-        if map_ref.is_none() {
-            return Ok(0);
-        }
-        let map_ref = map_ref.unwrap();
-        let timer = Instant::now();
-        let region_data = map_ref.read().unwrap();
+        let region_data = self
+            .regions
+            .get(&region_id)
+            .ok_or(Error::EntriesCompacted)?;
+        let region_data = region_data.read().unwrap();
+
+        let timer = Instant::now_coarse();
+        let mut total_size = 0;
         for i in low..high {
-            let res = region_data.get(i);
-            if res.is_none() {
-                return Err(EntriesUnavailable);
-            }
-            buf.push(res.unwrap());
-            if let Some(max_size) = max_size {
-                if buf.len() - old_len >= max_size as usize {
-                    break;
-                }
+            let entry = region_data.get(i).ok_or(Error::EntriesUnavailable)?;
+            total_size += entry.compute_size() as usize;
+            buf.push(entry);
+            if max_size.map_or(false, |s| total_size >= s) {
+                // At least return one entry regardless of size limit.
+                break;
             }
         }
-        ENGINE_FETCH_ENTRIES_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
+        ENGINE_FETCH_ENTRIES_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
         Ok(buf.len() - old_len)
     }
 

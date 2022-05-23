@@ -1,7 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Instant;
-
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
@@ -62,10 +60,4 @@ lazy_static! {
         exponential_buckets(0.00005, 1.8, 26).unwrap()
     )
     .unwrap();
-}
-
-pub(crate) fn elapsed_secs(t: Instant) -> f64 {
-    let d = Instant::now().saturating_duration_since(t);
-    let nanos = f64::from(d.subsec_nanos());
-    d.as_secs() as f64 + (nanos / 1_000_000_000.0)
 }
