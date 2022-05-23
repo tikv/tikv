@@ -103,7 +103,7 @@ fn test_server_snapshot_on_resolve_failure() {
 fn test_generate_snapshot() {
     let mut cluster = new_server_cluster(1, 5);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
     cluster.cfg.raft_store.merge_max_log_gap = 3;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -515,7 +515,7 @@ fn test_cancel_snapshot_generating() {
     let mut cluster = new_node_cluster(0, 5);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 10;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
     cluster.cfg.raft_store.merge_max_log_gap = 5;
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -682,7 +682,7 @@ fn test_sending_fail_with_net_error() {
 #[test]
 fn test_snapshot_clean_up_logs_with_unfinished_log_gc() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 15;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(15);
     cluster.cfg.raft_store.raft_log_gc_threshold = 15;
     // Speed up log gc.
     cluster.cfg.raft_store.raft_log_compact_sync_interval = ReadableDuration::millis(1);

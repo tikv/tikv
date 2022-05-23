@@ -7,7 +7,7 @@ publish = false
 [[test]]
 name = "failpoints"
 path = "failpoints/mod.rs"
-required-features = ["failpoints"]
+required-features = ["failpoints", "testexport"]
 
 [[test]]
 name = "integrations"

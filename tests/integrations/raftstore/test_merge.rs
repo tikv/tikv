@@ -115,7 +115,7 @@ fn test_node_merge_with_slow_learner() {
     let mut cluster = new_node_cluster(0, 2);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 40;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 40;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(40);
     cluster.cfg.raft_store.merge_max_log_gap = 15;
     cluster.pd_client.disable_default_operator();
 
@@ -482,7 +482,7 @@ fn test_node_merge_brain_split() {
     configure_for_merge(&mut cluster);
     ignore_merge_target_integrity(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
