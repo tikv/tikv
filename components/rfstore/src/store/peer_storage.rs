@@ -516,7 +516,7 @@ impl PeerStorage {
     }
 }
 
-fn init_raft_state(raft_engine: &rfengine::RFEngine, region: &metapb::Region) -> Result<RaftState> {
+fn init_raft_state(raft_engine: &rfengine::RfEngine, region: &metapb::Region) -> Result<RaftState> {
     let mut rs = RaftState::default();
     let rs_key = raft_state_key(region.get_region_epoch().get_version());
     let rs_val = raft_engine.get_state(region.id, rs_key.chunk());
@@ -576,7 +576,7 @@ fn init_last_term(
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
 pub fn clear_meta(
-    raft: &rfengine::RFEngine,
+    raft: &rfengine::RfEngine,
     raft_wb: &mut rfengine::WriteBatch,
     region: &metapb::Region,
 ) {

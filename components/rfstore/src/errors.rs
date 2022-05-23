@@ -90,8 +90,8 @@ pub enum Error {
     #[error("Raft {0}")]
     Raft(#[from] raft::Error),
 
-    #[error("RFEngine {0}")]
-    RFEngineError(rfengine::Error),
+    #[error("RfEngine {0}")]
+    RfEngineError(rfengine::Error),
 
     #[error("KVEngine {0}")]
     KVEngineError(kvengine::Error),
@@ -123,7 +123,7 @@ pub enum Error {
 
 impl From<rfengine::Error> for Error {
     fn from(e: rfengine::Error) -> Self {
-        Error::RFEngineError(e)
+        Error::RfEngineError(e)
     }
 }
 
@@ -252,7 +252,7 @@ impl ErrorCodeExt for Error {
             Error::Codec(e) => e.error_code(),
             Error::AddrParse(_) => error_code::raftstore::ADDR_PARSE,
             Error::Pd(e) => e.error_code(),
-            Error::RFEngineError(e) => error_code::engine::ENGINE,
+            Error::RfEngineError(e) => error_code::engine::ENGINE,
             Error::KVEngineError(e) => error_code::engine::ENGINE,
             Error::Raft(e) => e.error_code(),
             Error::Timeout(_) => error_code::raftstore::TIMEOUT,

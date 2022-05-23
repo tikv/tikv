@@ -41,7 +41,7 @@ use raftstore::{
     RegionInfoAccessor,
 };
 use resource_metering::ResourceTagFactory;
-use rfengine::RFEngine;
+use rfengine::RfEngine;
 use rfstore::{
     store::{
         Engines, LocalReader, MetaChangeListener, RaftBatchSystem, StoreMeta, PENDING_MSG_CAP,
@@ -714,7 +714,7 @@ impl TiKVServer {
         let raft_db_path = Path::new(&conf.raft_store.raftdb_path);
         let kv_engine_path = PathBuf::from(&conf.storage.data_dir).join(Path::new("db"));
         let wal_size = conf.raft_engine.config().target_file_size.0 as usize;
-        let rf_engine = RFEngine::open(raft_db_path, wal_size).unwrap();
+        let rf_engine = RfEngine::open(raft_db_path, wal_size).unwrap();
         let dfs_conf = &conf.dfs;
         let dfs = Arc::new(kvengine::dfs::S3FS::new(
             dfs_conf.tenant_id,

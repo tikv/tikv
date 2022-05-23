@@ -95,7 +95,7 @@ pub(crate) fn read_epoches(dir: &Path) -> Result<Vec<Epoch>> {
     Ok(epoches)
 }
 
-impl RFEngine {
+impl RfEngine {
     pub(crate) fn load_epoch(&mut self, ep: &Epoch) -> Result<u64> {
         info!(
             "load epoch {}, rlog files {}, has_wal {}, has_state {}",

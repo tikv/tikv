@@ -10,7 +10,7 @@ mod imp {
     use signal::trap::Trap;
 
     #[allow(dead_code)]
-    pub fn wait_for_signal(_engines: Option<Engines<kvengine::Engine, rfengine::RFEngine>>) {
+    pub fn wait_for_signal(_engines: Option<Engines<kvengine::Engine, rfengine::RfEngine>>) {
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {
             match sig {

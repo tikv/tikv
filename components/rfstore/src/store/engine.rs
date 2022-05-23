@@ -8,7 +8,7 @@ use std::{
 
 use kvengine::Engine;
 use kvenginepb::ChangeSet;
-use rfengine::RFEngine;
+use rfengine::RfEngine;
 use tikv_util::{
     mpsc,
     mpsc::{Receiver, Sender},
@@ -19,7 +19,7 @@ use crate::store::StoreMsg;
 #[derive(Clone)]
 pub struct Engines {
     pub kv: kvengine::Engine,
-    pub raft: rfengine::RFEngine,
+    pub raft: rfengine::RfEngine,
     raft_path: PathBuf,
     #[allow(clippy::type_complexity)]
     pub meta_change_channel: Arc<Mutex<Option<(Sender<StoreMsg>, Receiver<StoreMsg>)>>>,
@@ -28,7 +28,7 @@ pub struct Engines {
 impl Engines {
     pub fn new(
         kv: kvengine::Engine,
-        raft: rfengine::RFEngine,
+        raft: rfengine::RfEngine,
         meta_change_channel: (Sender<StoreMsg>, Receiver<StoreMsg>),
     ) -> Self {
         let raft_path = raft.dir.clone();
@@ -47,7 +47,7 @@ impl Engines {
     }
 }
 
-impl From<Engines> for engine_traits::Engines<kvengine::Engine, rfengine::RFEngine> {
+impl From<Engines> for engine_traits::Engines<kvengine::Engine, rfengine::RfEngine> {
     fn from(engines: Engines) -> Self {
         Self {
             kv: engines.kv.clone(),
