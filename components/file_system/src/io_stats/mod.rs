@@ -45,6 +45,7 @@ pub use proc::*;
 
 #[cfg(test)]
 mod tests {
+    use tikv_util::metrics::StdThreadBuildWrapper;
 
     use super::*;
     use crate::IOType;
@@ -55,7 +56,7 @@ mod tests {
         let _ths = (0..8)
             .map(|_| {
                 let tx_clone = tx.clone();
-                std::thread::spawn(move || {
+                std::thread::Builder::new().spawn_wrapper(move || {
                     set_io_type(IOType::ForegroundWrite);
                     tx_clone.send(()).unwrap();
                 })
@@ -73,7 +74,7 @@ mod tests {
         let _ths = (0..8)
             .map(|_| {
                 let tx_clone = tx.clone();
-                std::thread::spawn(move || {
+                std::thread::Builder::new().spawn_wrapper(move || {
                     set_io_type(IOType::ForegroundWrite);
                     tx_clone.send(()).unwrap();
                 })

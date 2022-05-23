@@ -16,7 +16,7 @@ use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, Rp
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
-use tikv_util::{config::ReadableDuration, metrics::ThreadBuildWrapper};
+use tikv_util::config::ReadableDuration;
 use tokio::runtime::Builder;
 use txn_types::TimeStamp;
 
@@ -105,8 +105,6 @@ fn test_rpc_client() {
     let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
         .worker_threads(1)
-        .after_start_wrapper(|| {})
-        .before_stop_wrapper(|| {})
         .build()
         .unwrap();
     let (tx, rx) = mpsc::channel();
@@ -455,8 +453,6 @@ fn test_region_heartbeat_on_leader_change() {
     let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
         .worker_threads(1)
-        .after_start_wrapper(|| {})
-        .before_stop_wrapper(|| {})
         .build()
         .unwrap();
     let (tx, rx) = mpsc::channel();
