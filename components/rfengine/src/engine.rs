@@ -483,11 +483,9 @@ pub struct RegionStats {
 #[cfg(test)]
 mod tests {
     use bytes::{BufMut, BytesMut};
-    use eraftpb::{Entry, EntryType};
     use slog::o;
 
     use super::*;
-    use crate::log_batch::RaftLogOp;
 
     #[test]
     fn test_rfengine() {
@@ -584,89 +582,5 @@ mod tests {
         let drain = std::sync::Mutex::new(drain).fuse();
         let logger = slog::Logger::root(drain, o!());
         slog_global::set_global(logger);
-    }
-
-    fn new_raft_entry(tp: EntryType, term: u64, index: u64, data: &[u8], context: u8) -> Entry {
-        let mut entry = Entry::new();
-        entry.set_entry_type(tp);
-        entry.set_term(term);
-        entry.set_index(index);
-        entry.set_data(data.to_vec().into());
-        entry.set_context(vec![context].into());
-        entry
-    }
-
-    #[test]
-    fn test_region_data() {
-        let mut region_data = RegionData::new(1);
-
-        let mut region_batch = RegionBatch::new(1);
-        for i in 1..=5 {
-            region_batch.append_raft_log(RaftLogOp::new(&new_raft_entry(
-                EntryType::EntryNormal,
-                i,
-                i,
-                b"data",
-                0,
-            )));
-        }
-        assert!(region_data.apply(&region_batch).is_empty());
-        for i in 1..=5 {
-            assert_eq!(
-                region_data.get(i).unwrap(),
-                region_batch.raft_logs[(i - 1) as usize].to_entry()
-            );
-            assert_eq!(region_data.term(i).unwrap(), i);
-        }
-        assert!(region_data.get(6).is_none());
-        let region_stats = region_data.get_stats();
-        assert_eq!(
-            region_stats,
-            RegionStats {
-                id: 1,
-                size: 20,
-                num_logs: 5,
-                num_states: 0,
-                first_idx: 1,
-                last_idx: 5,
-                truncated_idx: 0,
-                dep_count: 0
-            }
-        );
-
-        region_batch = RegionBatch::new(1);
-        region_batch.truncate(5);
-        region_batch.set_state(b"k1", b"v1");
-        region_batch.set_state(b"k2", b"v2");
-        let truncated = region_data.apply(&region_batch);
-        assert_eq!(truncated.len(), 1);
-        assert_eq!(truncated[0].first_index(), 1);
-        assert_eq!(truncated[0].last_index(), 5);
-        for i in 1..=5 {
-            assert!(region_data.get(i).is_none());
-        }
-        assert_eq!(region_data.get_state(b"k1"), Some(&b"v1".to_vec().into()));
-        assert_eq!(region_data.get_state(b"k2"), Some(&b"v2".to_vec().into()));
-        let region_stats = region_data.get_stats();
-        assert_eq!(
-            region_stats,
-            RegionStats {
-                id: 1,
-                size: 0,
-                num_logs: 0,
-                num_states: 2,
-                first_idx: 0,
-                last_idx: 0,
-                truncated_idx: 5,
-                dep_count: 0
-            }
-        );
-
-        region_batch = RegionBatch::new(1);
-        region_batch.truncate(5);
-        region_batch.set_state(b"k1", b"");
-        assert!(region_data.apply(&region_batch).is_empty());
-        assert!(region_data.get_state(b"k1").is_none());
-        assert_eq!(region_data.get_state(b"k2"), Some(&b"v2".to_vec().into()));
     }
 }
