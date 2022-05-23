@@ -31,7 +31,7 @@ impl RaftLogOp {
         }
     }
 
-    fn to_entry(&self) -> eraftpb::Entry {
+    pub(crate) fn to_entry(&self) -> eraftpb::Entry {
         let mut entry = eraftpb::Entry::new();
         entry.set_entry_type(eraftpb::EntryType::from_i32(self.e_type as i32).unwrap());
         entry.set_term(self.term as u64);
@@ -83,6 +83,12 @@ pub(crate) struct RaftLogBlock {
     size: usize,
 }
 
+impl Default for RaftLogBlock {
+    fn default() -> Self {
+        RaftLogBlock::new()
+    }
+}
+
 impl RaftLogBlock {
     fn new() -> Self {
         Self {
@@ -91,11 +97,11 @@ impl RaftLogBlock {
         }
     }
 
-    fn first_index(&self) -> u64 {
+    pub(crate) fn first_index(&self) -> u64 {
         self.logs.front().map_or(0, |front| front.index)
     }
 
-    fn last_index(&self) -> u64 {
+    pub(crate) fn last_index(&self) -> u64 {
         self.logs.back().map_or(0, |back| back.index)
     }
 
@@ -138,18 +144,12 @@ impl RaftLogBlock {
 }
 
 /// `RaftLogs` contains continuous raft logs in memory for a single raft group.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct RaftLogs {
     blocks: VecDeque<RaftLogBlock>,
 }
 
 impl RaftLogs {
-    pub(crate) fn new() -> RaftLogs {
-        Self {
-            blocks: VecDeque::new(),
-        }
-    }
-
     pub(crate) fn size(&self) -> usize {
         self.blocks.iter().fold(0, |acc, b| acc + b.size)
     }
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_raft_logs() {
-        let mut raft_logs = RaftLogs::new();
+        let mut raft_logs = RaftLogs::default();
         assert_eq!(raft_logs.first_index(), 0);
         assert_eq!(raft_logs.last_index(), 0);
 
