@@ -958,12 +958,13 @@ mod tests {
 
     #[test]
     fn test_status_service() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1005,12 +1006,13 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1049,12 +1051,13 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1164,12 +1167,13 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1207,12 +1211,13 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1242,12 +1247,13 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1314,12 +1320,13 @@ mod tests {
     #[test]
     #[ignore]
     fn test_pprof_heap_service() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1343,12 +1350,13 @@ mod tests {
     #[test]
     fn test_pprof_profile_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1375,12 +1383,13 @@ mod tests {
     #[test]
     fn test_metrics() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1429,12 +1438,13 @@ mod tests {
 
     #[test]
     fn test_change_log_level() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
