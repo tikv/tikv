@@ -222,13 +222,10 @@ impl TableIterator {
 
     fn set_block(&mut self, b_pos: i32) -> bool {
         self.b_pos = b_pos;
-        let block = match self.t.load_block(self.b_pos as usize, &mut self.block_buf) {
-            Ok(b) => b,
-            Err(e) => {
-                self.err = Some(e);
-                return false;
-            }
-        };
+        let block = self
+            .t
+            .load_block(self.b_pos as usize, &mut self.block_buf)
+            .unwrap();
         self.bi.set_block(block);
         true
     }
