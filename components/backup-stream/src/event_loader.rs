@@ -214,9 +214,11 @@ where
                     let can_retry = match e.without_context() {
                         Error::RaftRequest(pbe) => {
                             !(pbe.has_epoch_not_match()
+                                || pbe.has_not_leader()
                                 || pbe.get_message().contains("stale observe id"))
                         }
-                        Error::RaftStore(raftstore::Error::RegionNotFound(_)) => false,
+                        Error::RaftStore(raftstore::Error::RegionNotFound(_))
+                        | Error::RaftStore(raftstore::Error::NotLeader(..)) => false,
                         _ => true,
                     };
                     last_err = match last_err {
