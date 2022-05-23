@@ -10,10 +10,10 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BytesMut};
 
 use crate::{
-    engine::{Error, Result},
     worker::wal_file_name,
     write_batch::RegionBatch,
     writer::{ALIGN_MASK, ALIGN_SIZE, BATCH_HEADER_SIZE},
+    Error, Result,
 };
 
 pub(crate) struct WALIterator {
