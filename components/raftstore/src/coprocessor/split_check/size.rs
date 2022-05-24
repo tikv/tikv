@@ -11,12 +11,11 @@ use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::{box_try, debug, info, warn};
 
 use super::{
-    calc_split_keys_count,
     super::{
         error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
         SplitChecker,
     },
-    Host,
+    calc_split_keys_count, Host,
 };
 use crate::store::{CasualMessage, CasualRouter};
 
@@ -97,7 +96,8 @@ where
                 region,
                 self.max_size * self.batch_split_limit,
             )?;
-            let split_keys_count = calc_split_keys_count(region_size, self.split_size, self.batch_split_limit);
+            let split_keys_count =
+                calc_split_keys_count(region_size, self.split_size, self.batch_split_limit);
             if split_keys_count >= 1 {
                 return Ok(box_try!(get_approximate_split_keys(
                     engine,
@@ -182,21 +182,25 @@ where
         if region_size >= host.cfg.region_max_size().0
             || host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0
         {
-            info!(
-                "approximate size over threshold, need to do split check";
-                "region_id" => region.get_id(),
-                "size" => region_size,
-                "threshold" => host.cfg.region_max_size().0,
-            );
-            // when meet large region use approximate way to produce split keys
             let batch_split_limit = if region_size >= host.cfg.region_max_size().0 {
                 host.cfg.batch_split_limit
             } else {
+                // no region split check needed
                 0
             };
+            // when it's a large region use approximate way to produce split keys
             if region_size >= host.cfg.region_size_threshold_for_approximate.0 {
                 policy = CheckPolicy::Approximate;
             }
+
+            info!(
+                "Run size checker";
+                "region_id" => region.get_id(),
+                "size" => region_size,
+                "threshold" => host.cfg.region_max_size().0,
+                "policy" => &policy,
+                "split_check" => batch_split_limit > 0,
+            );
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 host.cfg.region_max_size().0,

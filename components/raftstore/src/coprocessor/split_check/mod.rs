@@ -130,13 +130,16 @@ impl<'a, E> Host<'a, E> {
 }
 
 #[inline]
-pub fn calc_split_keys_count(count_per_region: u64, split_threshold: u64, batch_split_limit: u64) -> u64 {
+pub fn calc_split_keys_count(
+    count_per_region: u64,
+    split_threshold: u64,
+    batch_split_limit: u64,
+) -> u64 {
     let actual_split_limit = if count_per_region % split_threshold == 0 {
         count_per_region / split_threshold
     } else {
         count_per_region / split_threshold + 1
     };
-    
     // split keys count is split count - 1
     std::cmp::min(actual_split_limit - 1, batch_split_limit)
 }
