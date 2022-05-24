@@ -223,16 +223,23 @@ fn parse_mountinfos_v2(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBu
 
 // `root` is mounted on `mount_point`. `path` is a sub path of `root`.
 // This is used to build an absolute path starts with `mount_point`.
-<<<<<<< HEAD
 fn build_path(path: &str, root: &str, mount_point: &Path) -> PathBuf {
     let abs_root = normalize_path(Path::new(root));
     let root = abs_root.to_str().unwrap();
-    assert!(path.starts_with('/') && root.starts_with('/'));
-
-    let relative = path.strip_prefix(root).unwrap();
-    let mut absolute = mount_point.to_path_buf();
-    absolute.push(relative);
-    absolute
+    if path.starts_with('/') && root.starts_with('/') {
+        if let Some(relative) = path.strip_prefix(root) {
+            let mut absolute = mount_point.to_owned();
+            absolute.push(relative);
+            return Some(absolute);
+        }
+    }
+    warn!(
+        "fail to build cgroup path";
+        "path" => %path,
+        "root" => %root,
+        "mount_point" => %mount_point.display()
+    );
+    None
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
@@ -271,34 +278,6 @@ fn parse_memory_max(line: &str) -> i64 {
         Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => i64::MAX,
         Err(e) if matches!(e.kind(), IntErrorKind::NegOverflow) => i64::MIN,
         Err(e) => panic!("parse int: {}", e),
-=======
-fn build_path(path: &str, root: &str, mount_point: &Path) -> Option<PathBuf> {
-    let abs_root = super::super::config::normalize_path(Path::new(root));
-    let root = abs_root.to_str().unwrap();
-    if path.starts_with('/') && root.starts_with('/') {
-        if let Some(relative) = path.strip_prefix(root) {
-            let mut absolute = mount_point.to_owned();
-            absolute.push(relative);
-            return Some(absolute);
-        }
-    }
-    warn!(
-        "fail to build cgroup path";
-        "path" => %path,
-        "root" => %root,
-        "mount_point" => %mount_point.display()
-    );
-    None
-}
-
-fn parse_memory_max(line: &str) -> Option<u64> {
-    if line != "max" {
-        capping_parse_int::<u64>(line)
-            .map_err(|e| warn!("fail to parse memory max"; "line" => %line, "err" => %e))
-            .ok()
-    } else {
-        None
->>>>>>> 456075a28... tikv_util: handle cgroup path building error (#12485)
     }
 }
 
@@ -490,38 +469,23 @@ mod tests {
 
     #[test]
     fn test_parse_memory_max() {
-<<<<<<< HEAD
         let contents = vec![
             "max",
             "-1",
             "9223372036854771712",
             "21474836480",
-            "18446744073709551610",
+            "19446744073709551610",
             "-18446744073709551610",
         ];
         let expects = vec![
-            -1,
-            -1,
-            9223372036854771712,
-            21474836480,
-            9223372036854775807,
-            -9223372036854775808,
+            None,
+            None,
+            Some(9223372036854771712),
+            Some(21474836480),
+            Some(u64::MAX),
+            None,
         ];
         for (content, expect) in contents.into_iter().zip(expects) {
-=======
-        let cases = vec![
-            ("max", None),
-            ("-1", None),
-            ("9223372036854771712", Some(9223372036854771712)),
-            ("21474836480", Some(21474836480)),
-            // Malformed.
-            ("19446744073709551610", Some(u64::MAX)),
-            ("-18446744073709551610", None), // Raise InvalidDigit instead of NegOverflow.
-            ("0.1", None),
-        ];
-        println!("{:?}", "-18446744073709551610".parse::<u64>());
-        for (content, expect) in cases.into_iter() {
->>>>>>> 456075a28... tikv_util: handle cgroup path building error (#12485)
             let limit = parse_memory_max(content);
             assert_eq!(limit, expect);
         }
