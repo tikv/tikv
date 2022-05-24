@@ -242,25 +242,17 @@ fn build_path(path: &str, root: &str, mount_point: &Path) -> Option<PathBuf> {
     None
 }
 
-<<<<<<< HEAD
-fn parse_memory_max(line: &str) -> i64 {
+fn parse_memory_max(line: &str) -> Option<u64> {
     if line == "max" {
-        return -1;
+        return None;
     }
     match line.parse::<i64>() {
-        Ok(x) => x,
-        Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => i64::MAX,
-        Err(e) if matches!(e.kind(), IntErrorKind::NegOverflow) => i64::MIN,
-        Err(e) => panic!("parse int: {}", e),
-=======
-fn parse_memory_max(line: &str) -> Option<u64> {
-    if line != "max" {
-        capping_parse_int::<u64>(line)
-            .map_err(|e| warn!("fail to parse memory max"; "line" => %line, "err" => %e))
-            .ok()
-    } else {
-        None
->>>>>>> 456075a28... tikv_util: handle cgroup path building error (#12485)
+        Ok(x) => Some(x),
+        Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => Some(u64::MAX),
+        Err(e) => {
+            warn!("parse int: {}", e);
+            None
+        },
     }
 }
 
@@ -452,38 +444,23 @@ mod tests {
 
     #[test]
     fn test_parse_memory_max() {
-<<<<<<< HEAD
         let contents = vec![
             "max",
             "-1",
             "9223372036854771712",
             "21474836480",
-            "18446744073709551610",
+            "19446744073709551610",
             "-18446744073709551610",
         ];
         let expects = vec![
-            -1,
-            -1,
-            9223372036854771712,
-            21474836480,
-            9223372036854775807,
-            -9223372036854775808,
+            None,
+            None,
+            Some(9223372036854771712),
+            Some(21474836480),
+            Some(u64::MAX),
+            None,
         ];
         for (content, expect) in contents.into_iter().zip(expects) {
-=======
-        let cases = vec![
-            ("max", None),
-            ("-1", None),
-            ("9223372036854771712", Some(9223372036854771712)),
-            ("21474836480", Some(21474836480)),
-            // Malformed.
-            ("19446744073709551610", Some(u64::MAX)),
-            ("-18446744073709551610", None), // Raise InvalidDigit instead of NegOverflow.
-            ("0.1", None),
-        ];
-        println!("{:?}", "-18446744073709551610".parse::<u64>());
-        for (content, expect) in cases.into_iter() {
->>>>>>> 456075a28... tikv_util: handle cgroup path building error (#12485)
             let limit = parse_memory_max(content);
             assert_eq!(limit, expect);
         }
