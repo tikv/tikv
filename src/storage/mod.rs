@@ -1263,8 +1263,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
-                // Remove the check_api_version_ranges,
-                // because of resolve locks range from TiDB is invalid key range mode
+                // Do not check_api_version in scan_lock, to be compatible with TiDB gc-worker,
+                // which resolves locks on regions, and boundary of regions will be out of range of TiDB keys.
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
