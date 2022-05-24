@@ -1831,12 +1831,12 @@ mod tests {
         // Committing still does nothing.
         must_commit(&engine, b"k2", 10, 25);
         // Try a different txn start ts (which haven't been successfully committed before).
-        // It should report a WriteConflict.
+        // It should report a PessimisticLockNotFound.
         let err = prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 11, false, true).unwrap_err();
         assert!(matches!(
             err,
             Error(box ErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::WriteConflict { .. }
+                box MvccErrorInner::PessimisticLockNotFound { .. }
             )))
         ));
         must_unlocked(&engine, b"k2");
