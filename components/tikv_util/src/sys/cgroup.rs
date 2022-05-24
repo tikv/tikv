@@ -246,7 +246,7 @@ fn parse_memory_max(line: &str) -> Option<u64> {
     if line == "max" {
         return None;
     }
-    match line.parse::<i64>() {
+    match line.parse::<u64>() {
         Ok(x) => Some(x),
         Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => Some(u64::MAX),
         Err(e) => {
