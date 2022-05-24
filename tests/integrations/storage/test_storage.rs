@@ -966,7 +966,7 @@ fn test_txn_store_txnkv_api_version() {
                 store.batch_get_command_err(&[key, key, key], 10);
 
                 store.scan_err(key, None, 100, 10);
-                store.scan_locks_err(20, key, &end_key, 10);
+                store.scan_locks_ok(20, key, &end_key, 10, vec![]);
 
                 store.delete_range_err(key, key);
             }
