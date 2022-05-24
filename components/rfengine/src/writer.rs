@@ -20,20 +20,74 @@ pub(crate) const ALIGN_MASK: u64 = 0xffff_f000;
 pub(crate) const INITIAL_BUF_SIZE: usize = 8 * 1024 * 1024;
 pub(crate) const RECYCLE_DIR: &str = "recycle";
 
-#[repr(C, align(4096))]
-struct AlignTo4K([u8; ALIGN_SIZE]);
+pub(crate) struct DmaBuffer(Vec<u8>);
 
-pub fn alloc_aligned(n_bytes: usize) -> Vec<u8> {
-    let n_units = (n_bytes + ALIGN_SIZE - 1) / ALIGN_SIZE;
+impl DmaBuffer {
+    const DMA_ALIGN: usize = 4096;
 
-    let mut aligned: Vec<AlignTo4K> = Vec::with_capacity(n_units);
+    fn new(cap: usize) -> Self {
+        Self(Self::allocate(cap))
+    }
 
-    let ptr = aligned.as_mut_ptr();
-    let cap_units = aligned.capacity();
+    fn allocate(cap: usize) -> Vec<u8> {
+        #[repr(align(4096))]
+        struct AlignTo4K([u8; DmaBuffer::DMA_ALIGN]);
 
-    mem::forget(aligned);
+        let aligned_len = Self::aligned_len(cap);
+        let mut aligned: Vec<AlignTo4K> = Vec::with_capacity(aligned_len / DmaBuffer::DMA_ALIGN);
+        let ptr = aligned.as_mut_ptr();
 
-    unsafe { Vec::from_raw_parts(ptr as *mut u8, 0, cap_units * mem::size_of::<AlignTo4K>()) }
+        mem::forget(aligned);
+
+        unsafe { Vec::from_raw_parts(ptr as *mut u8, 0, aligned_len) }
+    }
+
+    fn deallocate(mut buf: Vec<u8>) {
+        unsafe {
+            std::alloc::dealloc(
+                buf.as_mut_ptr(),
+                std::alloc::Layout::from_size_align_unchecked(buf.capacity(), DmaBuffer::DMA_ALIGN),
+            )
+        }
+        mem::forget(buf);
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn ensure_space(&mut self, size: usize) {
+        if self.0.capacity() - self.0.len() >= size {
+            return;
+        }
+
+        let mut new = Self::allocate(std::cmp::max(self.0.capacity() * 2, self.0.len() + size));
+        new.extend_from_slice(self.0.as_slice());
+        let old = mem::replace(&mut self.0, new);
+        Self::deallocate(old);
+    }
+
+    unsafe fn as_vec(&mut self) -> &mut Vec<u8> {
+        &mut self.0
+    }
+
+    fn pad_to_align(&mut self) {
+        let aligned_len = Self::aligned_len(self.0.len());
+        assert!(aligned_len <= self.0.capacity());
+        unsafe {
+            self.0.set_len(aligned_len);
+        }
+    }
+
+    pub(crate) fn aligned_len(len: usize) -> usize {
+        len.wrapping_add(Self::DMA_ALIGN - 1) & !(Self::DMA_ALIGN - 1)
+    }
+}
+
+impl Drop for DmaBuffer {
+    fn drop(&mut self) {
+        Self::deallocate(mem::take(&mut self.0))
+    }
 }
 
 pub(crate) struct WALWriter {
@@ -41,7 +95,7 @@ pub(crate) struct WALWriter {
     pub(crate) epoch_id: u32,
     pub(crate) wal_size: usize,
     fd: File,
-    buf: Vec<u8>,
+    buf: DmaBuffer,
     // file_off is always aligned.
     file_off: u64,
 }
@@ -51,8 +105,10 @@ impl WALWriter {
         let wal_size = (wal_size + ALIGN_SIZE - 1) & ALIGN_MASK as usize;
         let file_path = get_wal_file_path(dir, epoch_id)?;
         let fd = open_direct_file(&file_path, true)?;
-        let mut buf = alloc_aligned(INITIAL_BUF_SIZE);
-        buf.resize(BATCH_HEADER_SIZE, 0);
+        let mut buf = DmaBuffer::new(INITIAL_BUF_SIZE);
+        unsafe {
+            buf.as_vec().resize(BATCH_HEADER_SIZE, 0);
+        }
         Ok(Self {
             dir: dir.to_path_buf(),
             epoch_id,
@@ -68,36 +124,27 @@ impl WALWriter {
         self.file_off = file_offset;
     }
 
-    pub(crate) fn reallocate(&mut self) {
-        let new_cap = self.buf.capacity() * 2;
-        let mut new_buf = alloc_aligned(new_cap);
-        new_buf.truncate(0);
-        new_buf.extend_from_slice(self.buf.as_slice());
-        let _ = mem::replace(&mut self.buf, new_buf);
-    }
-
     pub(crate) fn append_region_data(&mut self, region_batch: &RegionBatch) {
-        if self.buf.len() + region_batch.encoded_len() > self.buf.capacity() {
-            self.reallocate();
-        }
-        region_batch.encode_to(&mut self.buf);
+        self.buf.ensure_space(region_batch.encoded_len());
+        region_batch.encode_to(unsafe { self.buf.as_vec() });
     }
 
     pub(crate) fn flush(&mut self) -> Result<bool> {
         let mut rotated = false;
-        if aligned_len(self.buf.len()) + self.file_off as usize > self.wal_size {
+        if DmaBuffer::aligned_len(self.buf.len()) + self.file_off as usize > self.wal_size {
             self.rotate()?;
             rotated = true;
         }
-        let batch = &mut self.buf[..];
+        let batch = unsafe { self.buf.as_vec() };
         let (mut batch_header, batch_payload) = batch.split_at_mut(BATCH_HEADER_SIZE);
         let checksum = crc32fast::hash(batch_payload);
         batch_header.put_u32_le(self.epoch_id);
         batch_header.put_u32_le(checksum);
         batch_header.put_u32_le(batch_payload.len() as u32);
-        self.buf.resize(aligned_len(self.buf.len()), 0);
+        self.buf.pad_to_align();
         let timer = Instant::now_coarse();
-        self.fd.write_all_at(&self.buf[..], self.file_off)?;
+        self.fd
+            .write_all_at(unsafe { self.buf.as_vec() }, self.file_off)?;
         ENGINE_WAL_WRITE_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
         self.file_off += self.buf.len() as u64;
         self.reset_batch();
@@ -105,7 +152,9 @@ impl WALWriter {
     }
 
     pub(crate) fn reset_batch(&mut self) {
-        self.buf.truncate(BATCH_HEADER_SIZE);
+        unsafe {
+            self.buf.as_vec().truncate(BATCH_HEADER_SIZE);
+        }
     }
 
     fn rotate(&mut self) -> Result<()> {
@@ -138,10 +187,6 @@ pub(crate) fn get_wal_file_path(dir: &Path, epoch_id: u32) -> Result<PathBuf> {
         }
     }
     Ok(filename)
-}
-
-pub(crate) fn aligned_len(origin_len: usize) -> usize {
-    ((origin_len + ALIGN_SIZE - 1) as u64 & ALIGN_MASK) as usize
 }
 
 pub(crate) fn find_recycled_file(dir: &Path) -> Result<Option<PathBuf>> {
