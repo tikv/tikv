@@ -441,8 +441,13 @@ where
     fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
-            // Error::Incompatible is returned by response header from PD, no need to retry
-            Err(Error::Incompatible) => true,
+            // these errors are not caused by network, no need to retry
+            Err(
+                Error::Incompatible
+                | Error::StoreTombstone(..)
+                | Error::RegionNotFound(..)
+                | Error::GlobalConfigNotFound(..),
+            ) => true,
             Err(err) => {
                 error!(?*err; "request failed, retry");
                 false
