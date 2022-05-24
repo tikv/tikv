@@ -3210,10 +3210,14 @@ impl TiKvConfig {
             ));
         }
 
-        if last_cfg.storage.enable_ttl && !self.storage.enable_ttl {
-            return Err("can't disable ttl on a ttl instance".to_owned());
-        } else if !last_cfg.storage.enable_ttl && self.storage.enable_ttl {
-            return Err("can't enable ttl on a non-ttl instance".to_owned());
+        // Check validation of api version change between API V1 and V1ttl only.
+        // Validation between V1/V1ttl and V2 is checked in `Node::check_api_version`.
+        if last_cfg.storage.api_version == 1 && self.storage.api_version == 1 {
+            if last_cfg.storage.enable_ttl && !self.storage.enable_ttl {
+                return Err("can't disable ttl on a ttl instance".to_owned());
+            } else if !last_cfg.storage.enable_ttl && self.storage.enable_ttl {
+                return Err("can't enable ttl on a non-ttl instance".to_owned());
+            }
         }
 
         Ok(())
@@ -3802,6 +3806,30 @@ mod tests {
         last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
         tikv_cfg.validate().unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+
+        // Check api version.
+        {
+            let cases = [
+                (ApiVersion::V1, ApiVersion::V1, true),
+                (ApiVersion::V1, ApiVersion::V1ttl, false),
+                (ApiVersion::V1, ApiVersion::V2, true),
+                (ApiVersion::V1ttl, ApiVersion::V1, false),
+                (ApiVersion::V1ttl, ApiVersion::V1ttl, true),
+                (ApiVersion::V1ttl, ApiVersion::V2, true),
+                (ApiVersion::V2, ApiVersion::V1, true),
+                (ApiVersion::V2, ApiVersion::V1ttl, true),
+                (ApiVersion::V2, ApiVersion::V2, true),
+            ];
+            for (from_api, to_api, expected) in cases {
+                last_cfg.storage.set_api_version(from_api);
+                tikv_cfg.storage.set_api_version(to_api);
+                tikv_cfg.validate().unwrap();
+                assert_eq!(
+                    tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok(),
+                    expected
+                );
+            }
+        }
     }
 
     #[test]
