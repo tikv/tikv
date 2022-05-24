@@ -3786,7 +3786,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.9.1"
-source = "git+https://github.com/mornyx/pprof-rs.git?branch=optimize-features#764dcefa9f3af82833271c144879330dfc5c99e1"
+source = "git+https://github.com/tikv/pprof-rs.git?rev=3fed55af8fc6cf69dbd954a0321c799c5a111e4e#3fed55af8fc6cf69dbd954a0321c799c5a111e4e"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
