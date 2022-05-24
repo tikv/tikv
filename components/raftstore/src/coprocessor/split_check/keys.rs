@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::min,
     marker::PhantomData,
     sync::{Arc, Mutex},
 };
@@ -12,12 +11,14 @@ use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::{box_try, debug, info, warn};
 
 use super::{
+    calc_split_keys_count,
     super::{
         error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
         SplitChecker,
     },
     size::get_approximate_split_keys,
     Host,
+
 };
 use crate::store::{CasualMessage, CasualRouter};
 
@@ -96,17 +97,12 @@ where
                 region,
                 self.max_keys_count * self.batch_split_limit,
             )?;
-            let actual_split_limit = if region_key_count % self.split_threshold == 0 {
-                region_key_count / self.split_threshold
-            } else {
-                region_key_count / self.split_threshold + 1
-            };
-            let actual_split_limit = min(actual_split_limit, self.batch_split_limit);
-            if actual_split_limit >= 2 {
+            let split_keys_count = calc_split_keys_count(region_key_count, self.split_threshold, self.batch_split_limit);
+            if split_keys_count >= 1 {
                 return Ok(box_try!(get_approximate_split_keys(
                     engine,
                     region,
-                    actual_split_limit,
+                    split_keys_count,
                 )));
             }
         }
@@ -237,7 +233,7 @@ mod tests {
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::{
-        super::size::tests::{must_split_at, must_split_at_impl},
+        super::size::tests::{must_split_at, must_split_with},
         *,
     };
     use crate::{
@@ -438,11 +434,10 @@ mod tests {
             CheckPolicy::Approximate,
             None,
         ));
-        must_split_at_impl(
+        must_split_with(
             &rx,
             &region,
-            vec![Key::from_raw(b"0080").append_ts(2.into()).into_encoded()],
-            true, // ignore split key
+            1,
         );
 
         drop(rx);

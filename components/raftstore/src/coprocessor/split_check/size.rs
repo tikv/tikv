@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::min,
     marker::PhantomData,
     sync::{Arc, Mutex},
 };
@@ -12,6 +11,7 @@ use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::{box_try, debug, info, warn};
 
 use super::{
+    calc_split_keys_count,
     super::{
         error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
         SplitChecker,
@@ -97,17 +97,12 @@ where
                 region,
                 self.max_size * self.batch_split_limit,
             )?;
-            let actual_split_limit = if region_size % self.split_size == 0 {
-                region_size / self.split_size
-            } else {
-                region_size / self.split_size + 1
-            };
-            let actual_split_limit = min(actual_split_limit, self.batch_split_limit);
-            if actual_split_limit >= 2 {
+            let split_keys_count = calc_split_keys_count(region_size, self.split_size, self.batch_split_limit);
+            if split_keys_count >= 1 {
                 return Ok(box_try!(get_approximate_split_keys(
                     engine,
                     region,
-                    actual_split_limit,
+                    split_keys_count,
                 )));
             }
         }
@@ -276,7 +271,7 @@ pub mod tests {
         store::{BucketRange, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask},
     };
 
-    pub fn must_split_at_impl(
+    fn must_split_at_impl(
         rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
@@ -315,6 +310,36 @@ pub mod tests {
         exp_split_keys: Vec<Vec<u8>>,
     ) {
         must_split_at_impl(rx, exp_region, exp_split_keys, false)
+    }
+
+    pub fn must_split_with(
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        exp_region: &Region,
+        exp_split_keys_count: usize,
+    ) {
+        loop {
+            match rx.try_recv() {
+                Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
+                | Ok((region_id, CasualMessage::RegionApproximateKeys { .. })) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                }
+                Ok((
+                    region_id,
+                    CasualMessage::SplitRegion {
+                        region_epoch,
+                        split_keys,
+                        ..
+                    },
+                )) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                    assert_eq!(&region_epoch, exp_region.get_region_epoch());
+                    assert_eq!(split_keys.len(), exp_split_keys_count);
+                    break;
+                }
+                Ok((_region_id, CasualMessage::RefreshRegionBuckets { .. })) => {}
+                others => panic!("expect split check result, but got {:?}", others),
+            }
+        }
     }
 
     pub fn must_generate_buckets(
