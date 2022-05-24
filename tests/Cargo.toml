@@ -95,7 +95,7 @@ tidb_query_common = { path = "../components/tidb_query_common", default-features
 tidb_query_aggr = { path = "../components/tidb_query_aggr", default-features = false }
 tidb_query_executors = { path = "../components/tidb_query_executors", default-features = false }
 tidb_query_expr = { path = "../components/tidb_query_expr", default-features = false }
-tikv = { path = "../", default-features = false }
+tikv = { path = "../", features = ["pprof-dwarf"], default-features = false }
 tikv_util = { path = "../components/tikv_util", default-features = false }
 error_code = { path = "../components/error_code", default-features = false }
 collections = { path = "../components/collections" }
