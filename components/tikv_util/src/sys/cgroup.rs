@@ -252,7 +252,7 @@ fn parse_memory_max(line: &str) -> Option<u64> {
         Err(e) => {
             warn!("parse int: {}", e);
             None
-        },
+        }
     }
 }
 
