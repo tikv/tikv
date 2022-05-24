@@ -42,8 +42,9 @@ impl LinuxStyleCpuTime {
     }
 }
 
-pub use imp::cpu_time;
 pub use std::io::Result;
+
+pub use imp::cpu_time;
 
 /// A struct to monitor process cpu usage
 #[derive(Clone, Copy)]
@@ -84,11 +85,7 @@ impl ProcessStat {
 
 #[cfg(target_os = "linux")]
 mod imp {
-    use std::{
-        fs::File,
-        io::{self, Read},
-    };
-    use libc::{syscall, sysconf, SYS_gettid, _SC_CLK_TCK};
+    use std::{fs::File, io, io::Read, time::Duration};
 
     pub fn current() -> io::Result<super::LinuxStyleCpuTime> {
         let mut state = String::new();
@@ -204,8 +201,9 @@ mod imp {
         ))
     }
 
-    use scopeguard::defer;
     use std::{io, mem, time::Duration};
+
+    use scopeguard::defer;
     use winapi::{
         shared::{
             minwindef::FILETIME,
@@ -214,8 +212,8 @@ mod imp {
         um::{
             handleapi::CloseHandle,
             processthreadsapi::{
-                GetCurrentProcess, GetCurrentThreadId, GetProcessTimes, GetSystemTimes, GetThreadTimes,
-                OpenThread,
+                GetCurrentProcess, GetCurrentThreadId, GetProcessTimes, GetSystemTimes,
+                GetThreadTimes, OpenThread,
             },
             sysinfoapi::{GetSystemInfo, SYSTEM_INFO},
             winnt::THREAD_QUERY_INFORMATION,
@@ -249,8 +247,8 @@ mod imp {
             return Err(io::Error::last_os_error());
         }
         defer! {{
-        unsafe { CloseHandle(handler) };
-    }}
+            unsafe { CloseHandle(handler) };
+        }}
 
         let mut create_time = FILETIME::default();
         let mut exit_time = FILETIME::default();
@@ -313,7 +311,6 @@ mod imp {
 
         Ok(Duration::from_nanos(cpu))
     }
-
 }
 
 #[cfg(test)]
@@ -333,8 +330,10 @@ mod tests {
 
         let num = 1;
         for _ in 0..num * 10 {
-            std::thread::spawn(move || loop {
-                let _ = (0..10_000_000).into_iter().sum::<u128>();
+            std::thread::spawn(move || {
+                loop {
+                    let _ = (0..10_000_000).into_iter().sum::<u128>();
+                }
             });
         }
 
@@ -342,6 +341,6 @@ mod tests {
 
         let usage = stat.cpu_usage().unwrap();
 
-        assert!(usage > 0.9 as f64)
+        assert!(usage > 0.9_f64)
     }
 }

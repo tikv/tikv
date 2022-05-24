@@ -27,11 +27,14 @@ use tidb_query_executors::{
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
-use tikv_util::{metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC}, quota_limiter::QuotaLimiter, time::Instant};
+use tikv_util::{
+    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
+    quota_limiter::QuotaLimiter,
+    sys::{cpu_time::ProcessStat, SysQuota},
+    time::Instant,
+};
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
-use tikv_util::sys::cpu_time::ProcessStat;
-use tikv_util::sys::SysQuota;
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
@@ -43,12 +46,12 @@ const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;
 
 // minimum number of core kept for analyze
-const ANALYZE_CORE_LOWER_BOUND: usize = 1;
-// max number of cores kept for analyze is core_number - ANALYZE_CORE_UPPER_ROOM_BOUND
-const ANALYZE_CORE_UPPER_ROOM_BOUND: usize = 1;
-// instance is short of cpu when cpu usage is above it
+const ANALYZER_CORE_LOWER_BOUND: usize = 1;
+// max number of cores kept for analyze = core_number - ANALYZER_CORE_EXCLUSIVE_BOUND
+const ANALYZER_CORE_EXCLUSIVE_BOUND: usize = 1;
+// indication of TiKV instance is short of cpu
 const SYSTEM_BUSY_THRESHOLD: f64 = 0.90;
-// instance is at healthy state when cpu usage is in [0.75, 0.9)
+// indication of TiKV instance in healthy state when cpu usage is in [0.75, 0.9)
 const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.75;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
@@ -376,7 +379,11 @@ impl<S: Snapshot> RowSampleBuilder<S> {
 
     // Support tuning of cpu quota at present, io bandwidth tuning is on the way
     // some smarter tuning algorithm like PID could be considered
-    fn tune_quota_limiter(&mut self, mut proc_stat: ProcessStat){
+    fn tune_quota_limiter(&mut self, mut proc_stat: ProcessStat) {
+        debug_assert!(
+            self.quota_limiter.is_auto_tune_enabled(),
+            "auto_tune must be turned on!"
+        );
         // rule based tuning:
         //      1) if instance is busy, shrink cpu quota for analyze by 1 core until lower bound is hit;
         //      2) if instance cpu usage is at healthy state, no op;
@@ -385,12 +392,36 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         let cpu_util = (proc_stat.cpu_usage().unwrap() / 100.0) / SysQuota::cpu_cores_quota();
 
         if cpu_util >= SYSTEM_BUSY_THRESHOLD {
-            self.quota_limiter.set_cpu_time_limit(cmp::max((self.quota_limiter.cputime_limiter() / 1000.0) as usize - 1, ANALYZE_CORE_LOWER_BOUND));
+            self.quota_limiter.set_cpu_time_limit(
+                1_000_000
+                    * cmp::max(
+                        (self.quota_limiter.cputime_limiter() / 1_000_000_000.0) as usize - 1,
+                        ANALYZER_CORE_LOWER_BOUND,
+                    ),
+            );
+            debug!("cpu_time_limit shrinked";
+                            "cpu_util" => ?cpu_util,
+                            "new quota" => ?self.quota_limiter.cputime_limiter() / 1_000_000_000.0);
+            NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                .get(ThrottleType::quota_limiter_auto_tuned)
+                .inc_by(1_u64);
         } else if cpu_util < SYSTEM_HEALTHY_THRESHOLD {
-            self.quota_limiter.set_cpu_time_limit(cmp::min((self.quota_limiter.cputime_limiter() / 1000.0) as usize + 1, SysQuota::cpu_cores_quota() as usize - ANALYZE_CORE_UPPER_ROOM_BOUND));
+            self.quota_limiter.set_cpu_time_limit(
+                1_000_000
+                    * cmp::min(
+                        (self.quota_limiter.cputime_limiter() / 1_000_000_000.0) as usize + 1,
+                        SysQuota::cpu_cores_quota() as usize - ANALYZER_CORE_EXCLUSIVE_BOUND,
+                    ),
+            );
+            debug!("cpu_time_limit increased";
+                            "cpu_util" => ?cpu_util,
+                            "new quota" => ?self.quota_limiter.cputime_limiter() / 1_000_000_000.0);
+            NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                .get(ThrottleType::quota_limiter_auto_tuned)
+                .inc_by(1_u64);
         }
-        self.quota_limiter.set_last_time_tuned(std::time::Instant::now());
-
+        self.quota_limiter
+            .set_last_time_tuned(std::time::Instant::now());
     }
 
     async fn collect_column_stats(&mut self) -> Result<AnalyzeSamplingResult> {
@@ -463,8 +494,10 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             }
 
             // Try adjust the quota if necessary
-            if self.quota_limiter.is_auto_tune_enabled() &&
-                self.quota_limiter.get_last_time_tuned().elapsed() >= self.quota_limiter.get_auto_tune_interval() {
+            if self.quota_limiter.is_auto_tune_enabled()
+                && self.quota_limiter.get_last_time_tuned().elapsed()
+                    >= self.quota_limiter.get_auto_tune_interval()
+            {
                 self.tune_quota_limiter(proc_stat);
             }
 
