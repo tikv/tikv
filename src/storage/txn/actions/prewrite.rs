@@ -340,12 +340,25 @@ impl<'a> PrewriteMutation<'a> {
     fn check_for_newer_version<S: Snapshot>(&self, txn: &mut MvccTxn<S>) -> Result<Option<Write>> {
         match txn.reader.seek_write(&self.key, TimeStamp::max())? {
             Some((commit_ts, write)) => {
-                // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger than current start
+                // Abort on writes after our start/for_update timestamp ...
+                // If exists a commit version whose commit timestamp is larger than current start/for_update
                 // timestamp, we should abort current prewrite.
-                if commit_ts > self.txn_props.start_ts {
-                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                    self.write_conflict_error(&write, commit_ts)?;
+                match self.txn_props.kind {
+                    TransactionKind::Optimistic(_) => {
+                        if commit_ts > self.txn_props.start_ts {
+                            MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                            self.write_conflict_error(&write, commit_ts)?;
+                        }
+                    }
+                    TransactionKind::Pessimistic(for_update_ts) => {
+                        if commit_ts > for_update_ts {
+                            return Err(ErrorInner::PessimisticLockNotFound {
+                                start_ts: self.txn_props.start_ts,
+                                key: self.key.clone().into_raw()?,
+                            }
+                            .into());
+                        }
+                    }
                 }
                 // If there's a write record whose commit_ts equals to our start ts, the current
                 // transaction is ok to continue, unless the record means that the current
