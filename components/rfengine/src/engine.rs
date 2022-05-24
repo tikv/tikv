@@ -358,6 +358,7 @@ pub(crate) fn maybe_create_recycle_dir(dir: &Path) -> Result<()> {
     let recycle_path = dir.join(RECYCLE_DIR);
     if !recycle_path.exists() {
         fs::create_dir_all(recycle_path)?;
+        file_system::sync_dir(dir)?;
     } else if !recycle_path.is_dir() {
         return Err(Error::Open(String::from("recycle path is not dir")));
     }

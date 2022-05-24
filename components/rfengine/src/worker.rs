@@ -150,6 +150,8 @@ impl Worker {
         let wal_filename = wal_file_name(self.dir.as_path(), epoch_id);
         let recycle_filename = recycle_file_name(self.dir.as_path(), epoch_id);
         fs::rename(wal_filename, recycle_filename)?;
+        file_system::sync_dir(self.dir.as_path())?;
+        file_system::sync_dir(self.dir.join(RECYCLE_DIR).as_path())?;
         Ok(())
     }
 
@@ -208,6 +210,9 @@ impl Worker {
                     retain_cnt += 1;
                 }
             }
+        }
+        if let Err(e) = file_system::sync_dir(self.dir.as_path()) {
+            error!("failed to sync directory: {}", e);
         }
         info!(
             "region {} truncate raft log to {}, remove {} files, retain {} files",

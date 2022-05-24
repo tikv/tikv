@@ -159,6 +159,7 @@ impl WALWriter {
         let wal_size = DmaBuffer::aligned_len(wal_size);
         let file_path = get_wal_file_path(dir, epoch_id)?;
         let fd = open_direct_file(&file_path, true)?;
+        file_system::sync_dir(dir)?;
         let mut buf = DmaBuffer::new(INITIAL_BUF_SIZE);
         buf.ensure_space(BATCH_HEADER_SIZE);
         // Safety: ensured enough space and `flush` will init the header.
@@ -227,6 +228,7 @@ impl WALWriter {
     pub(crate) fn open_file(&mut self) -> Result<()> {
         let filename = get_wal_file_path(&self.dir, self.epoch_id)?;
         let file = open_direct_file(&filename, true)?;
+        file_system::sync_dir(&self.dir)?;
         file.set_len(self.wal_size as u64)?;
         self.fd = file;
         self.file_off = 0;
@@ -239,6 +241,7 @@ pub(crate) fn get_wal_file_path(dir: &Path, epoch_id: u32) -> Result<PathBuf> {
     if !filename.exists() {
         if let Ok(Some(recycle_filename)) = find_recycled_file(dir) {
             fs::rename(recycle_filename, filename.clone())?;
+            file_system::sync_dir(dir.join(RECYCLE_DIR))?;
         }
     }
     Ok(filename)
