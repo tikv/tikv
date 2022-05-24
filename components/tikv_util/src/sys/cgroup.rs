@@ -242,7 +242,6 @@ fn build_path(path: &str, root: &str, mount_point: &Path) -> Option<PathBuf> {
     None
 }
 
-<<<<<<< HEAD
 fn normalize_path(path: &Path) -> PathBuf {
     let mut components = path.components().peekable();
     let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
