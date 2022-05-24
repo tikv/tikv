@@ -135,7 +135,7 @@ pub fn calc_split_keys_count(
     split_threshold: u64,
     batch_split_limit: u64,
 ) -> u64 {
-    let actual_split_limit = if count_per_region % split_threshold == 0 {
+    let actual_split_limit = if count_per_region % split_threshold < split_threshold / 2 {
         count_per_region / split_threshold
     } else {
         count_per_region / split_threshold + 1
