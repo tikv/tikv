@@ -223,7 +223,7 @@ fn parse_mountinfos_v2(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBu
 
 // `root` is mounted on `mount_point`. `path` is a sub path of `root`.
 // This is used to build an absolute path starts with `mount_point`.
-fn build_path(path: &str, root: &str, mount_point: &Path) -> PathBuf {
+fn build_path(path: &str, root: &str, mount_point: &Path) -> Option<PathBuf> {
     let abs_root = normalize_path(Path::new(root));
     let root = abs_root.to_str().unwrap();
     if path.starts_with('/') && root.starts_with('/') {
@@ -269,15 +269,17 @@ fn normalize_path(path: &Path) -> PathBuf {
     ret
 }
 
-fn parse_memory_max(line: &str) -> i64 {
+fn parse_memory_max(line: &str) -> Option<u64> {
     if line == "max" {
-        return -1;
+        return None;
     }
-    match line.parse::<i64>() {
-        Ok(x) => x,
-        Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => i64::MAX,
-        Err(e) if matches!(e.kind(), IntErrorKind::NegOverflow) => i64::MIN,
-        Err(e) => panic!("parse int: {}", e),
+    match line.parse::<u64>() {
+        Ok(x) => Some(x),
+        Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => Some(u64::MAX),
+        Err(e) => {
+            warn!("parse int: {}", e);
+            None
+        }
     }
 }
 
