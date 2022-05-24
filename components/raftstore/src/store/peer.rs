@@ -3165,8 +3165,8 @@ where
         // Reset delete_keys_hint and size_diff_hint.
         self.delete_keys_hint = 0;
         self.size_diff_hint = 0;
+        self.last_region_buckets = self.region_buckets.take();
         self.region_buckets = None;
-        self.last_region_buckets = None;
     }
 
     /// Try to renew leader lease.

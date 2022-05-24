@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::min,
     marker::PhantomData,
     sync::{Arc, Mutex},
 };
@@ -91,11 +92,24 @@ where
 
     fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
         if self.batch_split_limit != 0 {
-            return Ok(box_try!(get_approximate_split_keys(
+            let region_size = get_region_approximate_size(
                 engine,
                 region,
-                self.batch_split_limit,
-            )));
+                self.max_size * self.batch_split_limit,
+            )?;
+            let actual_split_limit = if region_size % self.split_size == 0 {
+                region_size / self.split_size
+            } else {
+                region_size / self.split_size + 1
+            };
+            let actual_split_limit = min(actual_split_limit, self.batch_split_limit);
+            if actual_split_limit >= 2 {
+                return Ok(box_try!(get_approximate_split_keys(
+                    engine,
+                    region,
+                    actual_split_limit,
+                )));
+            }
         }
         Ok(vec![])
     }
@@ -185,9 +199,7 @@ where
             } else {
                 0
             };
-            if region_size >= host.cfg.region_max_size().0 * host.cfg.batch_split_limit
-                || region_size >= host.cfg.region_size_threshold_for_approximate.0
-            {
+            if region_size >= host.cfg.region_size_threshold_for_approximate.0 {
                 policy = CheckPolicy::Approximate;
             }
             // Need to check size.

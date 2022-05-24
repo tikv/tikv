@@ -89,7 +89,7 @@ impl Default for Config {
             perf_level: PerfLevel::Uninitialized,
             enable_region_bucket: false,
             region_bucket_size: DEFAULT_BUCKET_SIZE,
-            region_size_threshold_for_approximate: DEFAULT_BUCKET_SIZE * 4,
+            region_size_threshold_for_approximate: DEFAULT_BUCKET_SIZE * BATCH_SPLIT_LIMIT,
             region_bucket_merge_size_ratio: DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO,
         }
     }

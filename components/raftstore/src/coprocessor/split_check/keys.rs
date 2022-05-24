@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::min,
     marker::PhantomData,
     sync::{Arc, Mutex},
 };
@@ -90,11 +91,24 @@ where
 
     fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
         if self.batch_split_limit != 0 {
-            return Ok(box_try!(get_approximate_split_keys(
+            let region_key_count = get_region_approximate_keys(
                 engine,
                 region,
-                self.batch_split_limit,
-            )));
+                self.max_keys_count * self.batch_split_limit,
+            )?;
+            let actual_split_limit = if region_key_count % self.split_threshold == 0 {
+                region_key_count / self.split_threshold
+            } else {
+                region_key_count / self.split_threshold + 1
+            };
+            let actual_split_limit = min(actual_split_limit, self.batch_split_limit);
+            if actual_split_limit >= 2 {
+                return Ok(box_try!(get_approximate_split_keys(
+                    engine,
+                    region,
+                    actual_split_limit,
+                )));
+            }
         }
         Ok(vec![])
     }

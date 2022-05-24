@@ -4163,8 +4163,8 @@ where
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
         self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff().0;
+        self.fsm.peer.last_region_buckets = self.fsm.peer.region_buckets.take();
         self.fsm.peer.region_buckets = None;
-        self.fsm.peer.last_region_buckets = None;
         if self.fsm.peer.is_leader() {
             info!(
                 "notify pd with merge";
@@ -5254,13 +5254,22 @@ where
             return;
         }
 
-        let current_version = self
+        let mut current_version = self
             .fsm
             .peer
             .region_buckets
             .as_ref()
             .map(|b| b.meta.version)
             .unwrap_or_default();
+        if current_version == 0 {
+            current_version = self
+                .fsm
+                .peer
+                .last_region_buckets
+                .as_ref()
+                .map(|b| b.meta.version)
+                .unwrap_or_default();
+        }
         let mut region_buckets: BucketStat;
         if let Some(bucket_ranges) = bucket_ranges {
             assert_eq!(buckets.len(), bucket_ranges.len());
