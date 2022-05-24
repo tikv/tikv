@@ -277,9 +277,9 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
 
                 // Enable quota limiter auto tune for auto analyze when needed
-               if analyze.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0 {
-                   quota_limiter.set_auto_tune(true);
-               }
+                if analyze.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0 {
+                    quota_limiter.set_auto_tune(true);
+                }
 
                 builder = Box::new(move |snap, req_ctx| {
                     statistics::analyze::AnalyzeContext::new(

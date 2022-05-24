@@ -37,8 +37,8 @@ pub struct ControlOutput<T: FloatCore> {
 }
 
 impl<T> Pid<T>
-    where
-        T: FloatCore,
+where
+    T: FloatCore,
 {
     pub fn new(
         kp: T,

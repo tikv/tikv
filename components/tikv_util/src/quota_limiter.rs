@@ -2,13 +2,11 @@
 
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
-use std::sync::atomic::AtomicBool;
-use std::time::Instant;
 
 use cpu_time::ThreadTime;
 use futures::compat::Future01CompatExt;
@@ -111,12 +109,15 @@ impl Default for QuotaLimiter {
 
 impl QuotaLimiter {
     pub fn copy_from_arc(arc_quota: Arc<QuotaLimiter>) -> Self {
-        QuotaLimiter::new(arc_quota.cputime_limiter.speed_limit() as usize,
-                          ReadableSize::kb((arc_quota.read_bandwidth_limiter.speed_limit() / 1000.0) as u64),
-                          ReadableSize::kb((arc_quota.write_bandwidth_limiter.speed_limit() / 1000.0) as u64),
-                           ReadableDuration::micros(arc_quota.max_delay_duration().as_micros() as u64),
-        arc_quota.support_auto_tune.load(Ordering::Relaxed), arc_quota.is_auto_tune_enabled(),
-                          ReadableDuration::micros(arc_quota.get_auto_tune_interval().as_micros() as u64),)
+        QuotaLimiter::new(
+            arc_quota.cputime_limiter.speed_limit() as usize,
+            ReadableSize::b(arc_quota.write_bandwidth_limiter.speed_limit() as u64),
+            ReadableSize::b(arc_quota.read_bandwidth_limiter.speed_limit() as u64),
+            ReadableDuration::micros(arc_quota.max_delay_duration().as_micros() as u64),
+            arc_quota.support_auto_tune.load(Ordering::Relaxed),
+            arc_quota.is_auto_tune_enabled(),
+            ReadableDuration::micros(arc_quota.get_auto_tune_interval().as_micros() as u64),
+        )
     }
 
     // 1000 millicpu equals to 1vCPU, 0 means unlimited
@@ -141,7 +142,7 @@ impl QuotaLimiter {
         let auto_tune_enabled = AtomicBool::new(auto_tune_enabled);
         let support_auto_tune = AtomicBool::new(support_auto_tune);
         let last_time_tuned = Instant::now();
-        let auto_tune_interval =  AtomicU64::new(auto_tune_interval.0.as_nanos() as u64);
+        let auto_tune_interval = AtomicU64::new(auto_tune_interval.0.as_nanos() as u64);
 
         Self {
             cputime_limiter,
@@ -327,7 +328,6 @@ mod tests {
             false,
             false,
             ReadableDuration::millis(100),
-
         );
 
         let thread_start_time = ThreadTime::now();
