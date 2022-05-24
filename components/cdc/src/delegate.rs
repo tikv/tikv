@@ -763,6 +763,7 @@ impl Delegate {
                 let occupied = rows.entry(row.key.clone()).or_default();
                 if occupied.1 {
                     assert!(!has_value);
+                    has_value = true;
                     mem::swap(&mut occupied.0.value, &mut row.value);
                 }
                 *occupied = (row, has_value);
