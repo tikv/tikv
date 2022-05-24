@@ -2558,7 +2558,7 @@ impl Default for QuotaConfig {
             foreground_write_bandwidth: ReadableSize(0),
             foreground_read_bandwidth: ReadableSize(0),
             max_delay_duration: ReadableDuration::millis(500),
-            support_auto_tune:false,
+            support_auto_tune: false,
             auto_tune_interval: ReadableDuration::millis(100),
         }
     }
@@ -4492,6 +4492,9 @@ mod tests {
             cfg.quota.foreground_write_bandwidth,
             cfg.quota.foreground_read_bandwidth,
             cfg.quota.max_delay_duration,
+            cfg.quota.support_auto_tune,
+            false,
+            cfg.quota.auto_tune_interval,
         ));
 
         let cfg_controller = ConfigController::new(cfg.clone());
