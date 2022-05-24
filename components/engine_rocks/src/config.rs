@@ -215,6 +215,66 @@ pub mod compression_type_serde {
     }
 }
 
+pub mod checksum_type_serde {
+    use std::fmt;
+
+    use rocksdb::ChecksumType;
+    use serde::{
+        de::{Error, Unexpected, Visitor},
+        Deserializer, Serializer,
+    };
+
+    pub fn serialize<S>(t: &ChecksumType, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let name = match *t {
+            ChecksumType::NoChecksum => "no",
+            ChecksumType::CRC32c => "crc32c",
+            ChecksumType::XxHash => "xxhash",
+            ChecksumType::XxHash64 => "xxhash64",
+            ChecksumType::XXH3 => "xxh3",
+        };
+        serializer.serialize_str(name)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ChecksumType, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = ChecksumType;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a checksum type")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<ChecksumType, E>
+            where
+                E: Error,
+            {
+                let str = match &*value.trim().to_lowercase() {
+                    "no" => ChecksumType::NoChecksum,
+                    "crc32c" => ChecksumType::CRC32c,
+                    "xxhash" => ChecksumType::XxHash,
+                    "xxhash64" => ChecksumType::XxHash64,
+                    "xxh3" => ChecksumType::XXH3,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other("invalid checksum type"),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(str)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlobRunMode {

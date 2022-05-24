@@ -26,6 +26,9 @@ test-engine-raft-raft-engine = [
 test-engines-rocksdb = ["server/test-engines-rocksdb"]
 test-engines-panic = ["server/test-engines-panic"]
 
+optimize-rocks-read = ["server/optimize-rocks-read"]
+optimize-rocks-write = ["server/optimize-rocks-write"]
+
 nortcheck = ["server/nortcheck"]
 
 [dependencies]

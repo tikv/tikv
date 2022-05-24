@@ -10,6 +10,9 @@ portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 failpoints = ["fail/failpoints"]
 
+optimize-rocks-read = []
+optimize-rocks-write = []
+
 # Disables runtime checks of invariants required by RocksDB that are redundant
 # with assertions inside RocksDB itself. This makes it possible to test those
 # invariants in Rust tests, resulting an a panic instead of an abort, at the

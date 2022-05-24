@@ -24,9 +24,9 @@ use engine_rocks::{
     get_env,
     properties::MvccPropertiesCollectorFactory,
     raw::{
-        BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-        DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
-        TitanDBOptions,
+        BlockBasedOptions, Cache, ChecksumType, ColumnFamilyOptions, CompactionPriority,
+        DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env,
+        LRUCacheOptions, PrepopulateBlockCache, TitanDBOptions,
     },
     raw_util::CFOptions,
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
@@ -317,6 +317,13 @@ macro_rules! cf_config {
             pub bottommost_zstd_compression_dict_size: i32,
             #[online_config(skip)]
             pub bottommost_zstd_compression_sample_size: i32,
+            #[online_config(skip)]
+            pub prepopulate_block_cache: bool,
+            #[online_config(skip)]
+            pub format_version: u32,
+            #[serde(with = "rocks_config::checksum_type_serde")]
+            #[online_config(skip)]
+            pub checksum: ChecksumType,
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -478,6 +485,11 @@ macro_rules! build_cf_opt {
             block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
         }
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
+        if $opt.prepopulate_block_cache {
+            block_base_opts.set_prepopulate_block_cache(PrepopulateBlockCache::FlushOnly);
+        }
+        block_base_opts.set_format_version($opt.format_version);
+        block_base_opts.set_checksum($opt.checksum);
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_block_based_table_factory(&block_base_opts);
         cf_opts.set_num_levels($opt.num_levels);
@@ -493,6 +505,7 @@ macro_rules! build_cf_opt {
             0,     /* strategy */
             $opt.bottommost_zstd_compression_dict_size,
             $opt.bottommost_zstd_compression_sample_size,
+            1, /* parallel_threads */
         );
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
@@ -586,10 +599,13 @@ impl Default for DefaultCfConfig {
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan: TitanCfConfig::default(),
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: false,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan: TitanCfConfig::default(),
         }
     }
 }
@@ -695,10 +711,13 @@ impl Default for WriteCfConfig {
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan,
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: false,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan,
         }
     }
 }
@@ -790,10 +809,13 @@ impl Default for LockCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan,
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: false,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan,
         }
     }
 }
@@ -863,10 +885,13 @@ impl Default for RaftCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan,
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: false,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan,
         }
     }
 }
@@ -1226,10 +1251,13 @@ impl Default for RaftDefaultCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan: TitanCfConfig::default(),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: false,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan: TitanCfConfig::default(),
         }
     }
 }

@@ -40,6 +40,8 @@ impl From<engine_traits::WriteOptions> for RocksWriteOptions {
         let mut r = RawWriteOptions::default();
         r.set_sync(opts.sync());
         r.set_no_slowdown(opts.no_slowdown());
+        #[cfg(feature = "optimize-rocks-write")]
+        r.set_memtable_insert_hint_per_batch(true);
         RocksWriteOptions(r)
     }
 }
@@ -66,9 +68,14 @@ fn build_read_opts(iter_opts: engine_traits::IterOptions) -> RawReadOptions {
     }
     if iter_opts.total_order_seek_used() {
         opts.set_total_order_seek(true);
+        #[cfg(feature = "optimize-rocks-read")]
+        opts.auto_prefix_mode(true);
     } else if iter_opts.prefix_same_as_start() {
         opts.set_prefix_same_as_start(true);
     }
+
+    #[cfg(feature = "optimize-rocks-read")]
+    opts.adaptive_readahead(true);
 
     if iter_opts.hint_min_ts().is_some() || iter_opts.hint_max_ts().is_some() {
         opts.set_table_filter(TsFilter::new(

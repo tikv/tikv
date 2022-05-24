@@ -32,6 +32,9 @@ test-engines-panic = [
 nortcheck = ["engine_rocks/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
+optimize-rocks-read = ["engine_rocks/optimize-rocks-read"]
+optimize-rocks-write = ["engine_rocks/optimize-rocks-write"]
+
 [dependencies]
 api_version = { path = "../api_version" }
 backup = { path = "../backup", default-features = false }
