@@ -67,10 +67,10 @@ impl DmaBuffer {
         self.layout.size()
     }
 
-    /// Shortens the vector, keeping the first `len` elements and dropping
+    /// Shortens the buffer, keeping the first `len` elements and dropping
     /// the rest.
     ///
-    /// If `len` is greater than the vector's current length, this has no
+    /// If `len` is greater than the buffer's current length, this has no
     /// effect.
     fn truncate(&mut self, len: usize) {
         self.len = cmp::min(self.len, len);
@@ -107,7 +107,7 @@ impl DmaBuffer {
         &mut std::slice::from_raw_parts_mut(self.data.as_ptr(), self.capacity())[self.len..]
     }
 
-    /// Advances the internal cursor of the BufMut
+    /// Advances the internal cursor of the Buffer.
     ///
     /// The next call to `chunk_mut` will return a slice starting `cnt` bytes
     /// further into the underlying buf.
@@ -192,6 +192,12 @@ impl WALWriter {
     }
 
     pub(crate) fn flush(&mut self) -> Result<(usize, bool)> {
+        let mut rotated = false;
+        if DmaBuffer::aligned_len(self.buf.len()) + self.file_off as usize > self.wal_size {
+            self.rotate()?;
+            rotated = true;
+        }
+
         let data_len = self.buf.len();
         let batch = self.buf.as_mut();
         let (mut batch_header, batch_payload) = batch.split_at_mut(BATCH_HEADER_SIZE);
@@ -206,12 +212,6 @@ impl WALWriter {
         ENGINE_WAL_WRITE_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
         self.file_off += self.buf.len() as u64;
         self.buf.truncate(BATCH_HEADER_SIZE);
-
-        let mut rotated = false;
-        if self.file_off as usize > self.wal_size {
-            self.rotate()?;
-            rotated = true;
-        }
 
         Ok((data_len, rotated))
     }
