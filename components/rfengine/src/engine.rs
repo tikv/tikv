@@ -166,8 +166,7 @@ impl RfEngine {
         for data in wb.regions.values() {
             writer.append_region_data(data);
         }
-        let size = writer.buf_size();
-        let rotated = writer.flush()?;
+        let (size, rotated) = writer.flush()?;
         drop(writer);
         if rotated {
             self.task_sender.send(Task::Rotate { epoch_id }).unwrap();
