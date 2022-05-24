@@ -141,5 +141,5 @@ pub fn calc_split_keys_count(
         count_per_region / split_threshold + 1
     };
     // split keys count is split count - 1
-    std::cmp::min(actual_split_limit - 1, batch_split_limit)
+    std::cmp::min(actual_split_limit.saturating_sub(1), batch_split_limit)
 }

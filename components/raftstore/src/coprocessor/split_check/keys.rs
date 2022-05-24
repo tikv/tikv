@@ -11,14 +11,13 @@ use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::{box_try, debug, info, warn};
 
 use super::{
-    calc_split_keys_count,
     super::{
         error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
         SplitChecker,
     },
+    calc_split_keys_count,
     size::get_approximate_split_keys,
     Host,
-
 };
 use crate::store::{CasualMessage, CasualRouter};
 
@@ -97,7 +96,11 @@ where
                 region,
                 self.max_keys_count * self.batch_split_limit,
             )?;
-            let split_keys_count = calc_split_keys_count(region_key_count, self.split_threshold, self.batch_split_limit);
+            let split_keys_count = calc_split_keys_count(
+                region_key_count,
+                self.split_threshold,
+                self.batch_split_limit,
+            );
             if split_keys_count >= 1 {
                 return Ok(box_try!(get_approximate_split_keys(
                     engine,
@@ -434,11 +437,7 @@ mod tests {
             CheckPolicy::Approximate,
             None,
         ));
-        must_split_with(
-            &rx,
-            &region,
-            1,
-        );
+        must_split_with(&rx, &region, 1);
 
         drop(rx);
     }

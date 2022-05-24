@@ -4163,10 +4163,7 @@ where
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
         self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff().0;
-        if self.fsm.peer.region_buckets.is_some() {
-            self.fsm.peer.last_region_buckets = self.fsm.peer.region_buckets.take();
-            self.fsm.peer.region_buckets = None;
-        }
+        self.fsm.peer.reset_region_buckets();
         if self.fsm.peer.is_leader() {
             info!(
                 "notify pd with merge";

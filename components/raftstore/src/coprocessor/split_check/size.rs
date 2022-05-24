@@ -198,7 +198,7 @@ where
                 "region_id" => region.get_id(),
                 "size" => region_size,
                 "threshold" => host.cfg.region_max_size().0,
-                "policy" => &policy,
+                "policy" => ?policy,
                 "split_check" => batch_split_limit > 0,
             );
             // Need to check size.
