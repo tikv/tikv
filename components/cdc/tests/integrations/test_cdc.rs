@@ -2325,7 +2325,7 @@ fn test_prewrite_without_value() {
     let rid = suite.cluster.get_region(&[]).id;
     let ctx = suite.get_context(rid);
     let client = suite.get_tikv_client(rid).clone();
-    let large_value = vec![b'x'; 1024];
+    let large_value = vec![b'x'; 2 * txn_types::SHORT_VALUE_MAX_LEN];
 
     // Perform a pessimistic prewrite with a large value.
     let mut muts = vec![Mutation::default()];
