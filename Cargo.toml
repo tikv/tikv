@@ -90,6 +90,7 @@ engine_traits_tests = { path = "components/engine_traits_tests", default-feature
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.5"
 file_system = { path = "components/file_system", default-features = false }
+flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-timer = "3.0"
