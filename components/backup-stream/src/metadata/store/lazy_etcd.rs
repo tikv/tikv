@@ -32,7 +32,7 @@ impl ConnectionConfig {
 }
 
 impl LazyEtcdClient {
-    pub fn new(endpoints: &[impl ToString], conf: ConnectionConfig) -> Self {
+    pub fn new(endpoints: &[String], conf: ConnectionConfig) -> Self {
         Self(Arc::new(LazyEtcdClientInner {
             opt: conf.to_connection_options(),
             endpoints: endpoints.iter().map(ToString::to_string).collect(),
