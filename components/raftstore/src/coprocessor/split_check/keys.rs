@@ -236,7 +236,10 @@ mod tests {
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::{
-        super::size::tests::{must_split_at, must_split_with},
+        super::{
+            calc_split_keys_count,
+            size::tests::{must_split_at, must_split_with},
+        },
         *,
     };
     use crate::{
@@ -383,8 +386,11 @@ mod tests {
     }
 
     #[test]
-    fn test_split_check_by_approximate_keys() {
-        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+    fn te1st_split_check_by_approximate_keys() {
+        let path = Builder::new()
+            .prefix("_test_split_check_by_approximate_keys")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::default();
         let cf_opts = ColumnFamilyOptions::new();
@@ -480,6 +486,119 @@ mod tests {
         region.mut_peers().push(Peer::default());
         let range_keys = get_region_approximate_keys(&db, &region, 0).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
+    }
+
+    fn test_calc_split_keys_count_impl(
+        split_size: ReadableSize,
+        max_region_size: ReadableSize,
+        split_limit: u64,
+    ) {
+        let region_sizes = vec![
+            ReadableSize::mb(split_size.as_mb() * 2),
+            ReadableSize::mb(split_size.as_mb() * 2 + 1),
+            ReadableSize::mb(split_size.as_mb() * split_limit),
+            ReadableSize::mb(split_size.as_mb() * split_limit + 1),
+        ];
+        for region_size in region_sizes {
+            let split_count = calc_split_keys_count(region_size.0, split_size.0, split_limit);
+            let avg_split_size = region_size.0 / (split_count+1);
+            // splitted size should be more than 2/3 of split_size
+            assert!(
+                avg_split_size > split_size.0 * 2 / 3,
+                "region_size={}mb, {} {}",
+                region_size.as_mb(),
+                avg_split_size,
+                split_size.0 * 2 / 3
+            );
+
+             // splitted size should be no more than max_region_size
+             assert!(
+                avg_split_size <= max_region_size.0,
+                "region_size={}mb, {} {}",
+                region_size.as_mb(),
+                avg_split_size,
+                max_region_size.0
+            );
+        }
+    }
+    #[test]
+    fn test_calc_split_keys_count() {
+        // test under default settings
+        let split_size = ReadableSize::mb(96);
+        let max_region_size = ReadableSize::mb(144);
+        let split_limit = 10;
+        test_calc_split_keys_count_impl(split_size, max_region_size, split_limit);
+
+        // test under 256MB region size
+        let split_size = ReadableSize::mb(256);
+        let max_region_size = ReadableSize::mb(392);
+        let split_limit = 4;
+        test_calc_split_keys_count_impl(split_size, max_region_size, split_limit);
+    }
+
+    #[test]
+    fn test_check_split_region_with_scan_keys_and_bucket_enabled() {
+        let path = Builder::new()
+            .prefix("_test_check_split_region_with_scan_keys_and_bucket_enabled")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::default();
+        let cf_opts = ColumnFamilyOptions::new();
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_keys: Some(100),
+            region_split_keys: Some(80),
+            batch_split_limit: 5,
+            enable_region_bucket: true,
+            // need check split region buckets, but region size does not exceed the split threshold
+            region_bucket_size: ReadableSize(100),
+            ..Default::default()
+        };
+
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+
+        put_data(&engine, 0, 90, false);
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+            None,
+        ));
+        // keys has not reached the max_keys 100 yet.
+        match rx.try_recv() {
+            Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
+            | Ok((region_id, CasualMessage::RegionApproximateKeys { .. })) => {
+                assert_eq!(region_id, region.get_id());
+            }
+            others => panic!("expect recv empty, but got {:?}", others),
+        }
+
+        put_data(&engine, 90, 160, true);
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+            None,
+        ));
+        must_split_with(&rx, &region, 1);
+
+        drop(rx);
     }
 
     #[test]
