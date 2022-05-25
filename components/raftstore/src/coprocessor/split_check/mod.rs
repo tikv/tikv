@@ -136,9 +136,11 @@ pub fn calc_split_keys_count(
     batch_split_limit: u64,
 ) -> u64 {
     // split keys count is split count - 1
-    // if the count_per_region % split_threshold < split_threshold / 2, then split count is count_per_region/split_threshold
+    // e.g. if split_threshold is 60, count_per_region is 60, return 0
+    //      if split_threshold is 60, count_per_region is 61, return 1
+    //      if split_threshold is 60, count_per_region is 121, return 2
     std::cmp::min(
-        count_per_region.saturating_sub(split_threshold / 2) / split_threshold,
+        ((count_per_region as f64 / split_threshold as f64).ceil() as u64).saturating_sub(1),
         batch_split_limit,
     )
 }
