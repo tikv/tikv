@@ -273,8 +273,7 @@ impl Samples {
 // Recorder is used to record the potential split-able key ranges,
 // sample and split them according to the split config appropriately.
 pub struct Recorder {
-    pub detect_times: u64,
-    pub detected_times: u64,
+    pub detect_times: usize,
     pub peer: Peer,
     pub key_ranges: Vec<Vec<KeyRange>>,
     pub create_time: SystemTime,
@@ -283,8 +282,7 @@ pub struct Recorder {
 impl Recorder {
     fn new(detect_times: u64) -> Recorder {
         Recorder {
-            detect_times,
-            detected_times: 0,
+            detect_times: detect_times as usize,
             peer: Peer::default(),
             key_ranges: vec![],
             create_time: SystemTime::now(),
@@ -292,7 +290,6 @@ impl Recorder {
     }
 
     fn record(&mut self, key_ranges: Vec<KeyRange>) {
-        self.detected_times += 1;
         self.key_ranges.push(key_ranges);
     }
 
@@ -303,7 +300,7 @@ impl Recorder {
     }
 
     fn is_ready(&self) -> bool {
-        self.detected_times >= self.detect_times
+        self.key_ranges.len() >= self.detect_times
     }
 
     // collect the split keys from the recorded key_ranges.
@@ -562,7 +559,7 @@ impl AutoSplitController {
     // according to all the stats info the recorder has collected before.
     pub fn flush(&mut self, read_stats_vec: Vec<ReadStats>) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut split_infos = vec![];
-        let mut top = BinaryHeap::with_capacity(TOP_N as usize);
+        let mut top_qps = BinaryHeap::with_capacity(TOP_N);
         let region_infos_map = Self::collect_read_stats(read_stats_vec);
 
         for (region_id, region_infos) in region_infos_map {
@@ -633,10 +630,10 @@ impl AutoSplitController {
                     .inc();
             }
 
-            top.push(qps);
+            top_qps.push(qps);
         }
 
-        (top.into_vec(), split_infos)
+        (top_qps.into_vec(), split_infos)
     }
 
     pub fn clear(&mut self) {
@@ -855,7 +852,7 @@ mod tests {
     }
 
     fn check_split(mode: &[u8], qps_stats: Vec<ReadStats>, split_keys: Vec<&[u8]>) {
-        let mut hub = AutoSplitController::new(SplitConfigManager::default());
+        let mut hub = AutoSplitController::default();
         hub.cfg.qps_threshold = 1;
         hub.cfg.sample_threshold = 0;
 
@@ -888,7 +885,7 @@ mod tests {
 
     #[test]
     fn test_sample_key_num() {
-        let mut hub = AutoSplitController::new(SplitConfigManager::default());
+        let mut hub = AutoSplitController::default();
         hub.cfg.qps_threshold = 2000;
         hub.cfg.sample_num = 2000;
         hub.cfg.sample_threshold = 0;
@@ -1220,7 +1217,7 @@ mod tests {
             other_qps_stats.push(default_qps_stats());
         }
         b.iter(|| {
-            let mut hub = AutoSplitController::new(SplitConfigManager::default());
+            let mut hub = AutoSplitController::default();
             hub.flush(other_qps_stats.clone());
         });
     }
