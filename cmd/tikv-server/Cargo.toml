@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure", "pprof-dwarf"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["server/tcmalloc"]
 jemalloc = ["server/jemalloc"]
 mimalloc = ["server/mimalloc"]
@@ -28,7 +28,6 @@ test-engines-panic = ["server/test-engines-panic"]
 
 nortcheck = ["server/nortcheck"]
 
-pprof-dwarf = ["tikv/pprof-dwarf"]
 pprof-fp = ["tikv/pprof-fp"]
 
 [dependencies]
