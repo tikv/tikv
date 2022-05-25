@@ -899,6 +899,21 @@ where
         region_local_state.set_region(self.region().clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
+        if let Ok(entries) = self.fsm.peer.get_store().entries(
+            self.fsm.peer.raft_group.store().commit_index(),
+            self.fsm.peer.get_store().last_index() + 1,
+            NO_LIMIT,
+            GetEntriesContext::empty(false),
+        ) {
+            for entry in entries {
+                let index = entry.get_index();
+                let cmd: RaftCmdRequest =
+                    util::parse_data_at(entry.get_context(), index, "Unsafe recovery, whether has commit merge");
+                if cmd.has_admin_request() && cmd.get_admin_request().has_commit_merge() {
+                    self_report.set_has_commit_merge(true);
+                }
+            }
+        }
         syncer.report_for_self(self_report);
     }
 

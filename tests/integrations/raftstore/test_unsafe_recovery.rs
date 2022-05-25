@@ -5,7 +5,7 @@ use std::{iter::FromIterator, sync::Arc, time::Duration};
 use futures::executor::block_on;
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
-use raft::eraftpb::ConfChangeType;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::util::find_peer;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
@@ -1054,4 +1054,63 @@ fn test_force_leader_multiple_election_rounds() {
     // quorum is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+}
+
+// Tests whether unsafe recovery report sets has_commit_merge correctly.
+// This field is used by PD to issue force leader command in order, so that the recovery process
+// does not break the merge accidentally, when:
+//   *   The source region and the target region lost their quorum.
+//   *   The living peer(s) of the source region does not have prepare merge message replicated.
+//   *   The living peer(s) of the target region has commit merge messages replicated but
+//       uncommitted.
+// If the living peer(s) of the source region in the above example enters force leader state before
+// the peer(s) of the target region, thus proposes a no-op entry (while becoming the leader) which
+// is conflict with part of the catch up logs, there will be data loss.
+#[test]
+fn test_unsafe_recovery_has_commit_merge() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+    let right_on_store1 = find_peer(&right, 1).unwrap();
+    cluster.must_transfer_leader(right.get_id(), right_on_store1.clone());
+
+    // Blocks the MsgAppendResponse so that the CommitMerge message will only be replicated but not
+    // committed.
+    let _ = Box::new(
+        RegionPacketFilter::new(right.get_id(), 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppendResponse),
+    );
+    pd_client.merge_region(left.get_id(), right.get_id());
+    // Send a empty recovery plan to trigger report.
+    let plan = pdpb::RecoveryPlan::default();
+    pd_client.must_set_unsafe_recovery_plan(1, plan);
+    cluster.must_send_store_heartbeat(1);
+    let mut store_report = None;
+    for _ in 0..10 {
+        store_report = pd_client.must_get_store_report(1);
+        if store_report.is_some() {
+            break;
+        }
+    }
+    assert_ne!(store_report, None);
+    let mut has_commit_merge = false;
+    info!("print report"; "report" => ?store_report.as_ref().unwrap());
+    for peer_report in store_report.unwrap().get_peer_reports().iter() {
+        if peer_report.get_region_state().get_region().get_id() == right.get_id()
+            && peer_report.get_has_commit_merge()
+        {
+            has_commit_merge = true;
+        }
+    }
+    assert!(has_commit_merge);
 }
