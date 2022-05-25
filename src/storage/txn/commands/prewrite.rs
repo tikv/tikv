@@ -517,6 +517,19 @@ impl<K: PrewriteKind> Prewriter<K> {
                             .insert(key, (old_value, Some(mutation_type)));
                     }
                 }
+                Ok((..)) => {
+                    // If it needs min_commit_ts but min_commit_ts is zero, the lock
+                    // has been prewritten and has fallen back from async commit or 1PC.
+                    // We should let later keys prewrite in the old 2PC way.
+                    props.commit_kind = CommitKind::TwoPc;
+                    async_commit_pk = None;
+                    self.secondary_keys = None;
+                    self.try_one_pc = false;
+                    fallback_1pc_locks(txn);
+                    // release memory locks
+                    txn.guards = Vec::new();
+                    final_min_commit_ts = TimeStamp::zero();
+                }
                 Err(MvccError(box MvccErrorInner::WriteConflict {
                     start_ts,
                     conflict_commit_ts,
@@ -527,7 +540,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 Err(MvccError(box MvccErrorInner::PessimisticLockNotFound { .. })) => {
                     return check_committed_record_on_err(prewrite_result, txn, reader, &key);
                 }
-                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((..)) => {
+                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) => {
                     // The prewrite might be a retry and the record may have been committed.
                     // So, we need to prevent the fallback to avoid duplicate commits.
                     if let Ok(res) =
