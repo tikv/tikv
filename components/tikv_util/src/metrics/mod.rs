@@ -1,5 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{collections::HashMap, io::Write};
+
+use kvproto::pdpb;
 use lazy_static::lazy_static;
 use prometheus::{proto::MetricType, *};
 use prometheus_static_metric::*;
@@ -31,20 +34,21 @@ pub use self::metrics_reader::HistogramReader;
 
 mod metrics_reader;
 
-use std::collections::HashMap;
-
-use kvproto::pdpb;
 pub type RecordPairVec = Vec<pdpb::RecordPair>;
 
 pub fn dump(should_simplify: bool) -> String {
     let mut buffer = vec![];
+    dump_to(&mut buffer, should_simplify);
+    String::from_utf8(buffer).unwrap()
+}
+
+pub fn dump_to(w: &mut impl Write, should_simplify: bool) {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
     if !should_simplify {
-        if let Err(e) = encoder.encode(&*metric_families, &mut buffer) {
+        if let Err(e) = encoder.encode(&*metric_families, w) {
             warn!("prometheus encoding error"; "err" => ?e);
         }
-        return String::from_utf8(buffer).unwrap();
     }
 
     // filter out mertics that has no sample values
@@ -59,12 +63,11 @@ pub fn dump(should_simplify: bool) -> String {
         }
         if !metrics.is_empty() {
             mf.set_metric(metrics.into());
-            if let Err(e) = encoder.encode(&[mf], &mut buffer) {
+            if let Err(e) = encoder.encode(&[mf], w) {
                 warn!("prometheus encoding error"; "err" => ?e);
             }
         }
     }
-    String::from_utf8(buffer).unwrap()
 }
 
 make_auto_flush_static_metric! {

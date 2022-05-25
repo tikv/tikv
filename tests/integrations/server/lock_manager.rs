@@ -35,7 +35,7 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
         assert!(resp.errors[0].has_locked(), "{:?}", resp.errors[0]);
     });
     // Sleep to make sure txn(ts+1) is waiting for txn(ts)
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(300));
     let mut ctx2 = ctx.clone();
     ctx2.set_resource_group_tag(b"tag2".to_vec());
     let resp = kv_pessimistic_lock(client, ctx2, vec![key2.clone()], ts, ts, false);
@@ -82,7 +82,7 @@ fn build_leader_client(cluster: &mut Cluster<ServerCluster>, key: &[u8]) -> (Tik
 fn must_detect_deadlock(cluster: &mut Cluster<ServerCluster>, key: &[u8], ts: u64) {
     // Sometimes, deadlocks can't be detected at once due to leader change, but it will be
     // detected.
-    for _ in 0..3 {
+    for _ in 0..5 {
         let (client, ctx) = build_leader_client(cluster, key);
         if deadlock(&client, ctx, key, ts) {
             return;
