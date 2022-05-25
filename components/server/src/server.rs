@@ -870,8 +870,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                     keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
                     tls: self.security_mgr.tonic_tls_config(),
                 },
-            )
-            .expect("cannot initlize the lazy etcd client config (probably tls key / cert path misconfigured)");
+            );
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 node.id(),
                 etcd_cli,

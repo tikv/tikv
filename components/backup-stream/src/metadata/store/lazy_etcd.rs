@@ -23,8 +23,8 @@ impl ConnectionConfig {
     /// Convert the config to the connection option.
     fn to_connection_options(&self) -> ConnectOptions {
         let mut opts = ConnectOptions::new();
-        if let Some(tls) = self.tls {
-            opts = opts.with_tls(tls)
+        if let Some(tls) = &self.tls {
+            opts = opts.with_tls(tls.clone())
         }
         opts = opts.with_keep_alive(self.keep_alive_interval, self.keep_alive_timeout);
         opts
@@ -68,13 +68,13 @@ fn etcd_error_is_retryable(etcd_err: &EtcdError) -> bool {
         | EtcdError::WatchError(_)
         | EtcdError::LeaseKeepAliveError(_)
         | EtcdError::ElectError(_) => true,
-        EtcdError::GRpcStatus(grpc) => match grpc.code() {
-            tonic::Code::Unavailable => true,
-            tonic::Code::Aborted => true,
-            tonic::Code::Internal => true,
-            tonic::Code::ResourceExhausted => true,
-            _ => false,
-        },
+        EtcdError::GRpcStatus(grpc) => matches!(
+            grpc.code(),
+            tonic::Code::Unavailable
+                | tonic::Code::Aborted
+                | tonic::Code::Internal
+                | tonic::Code::ResourceExhausted
+        ),
     }
 }
 
