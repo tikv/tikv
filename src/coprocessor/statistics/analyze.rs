@@ -282,8 +282,13 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let col_req = self.req.take_col_req();
                 let storage = self.storage.take().unwrap();
                 let ranges = std::mem::take(&mut self.ranges);
-                let mut builder =
-                    RowSampleBuilder::new(col_req, storage, ranges, self.quota_limiter.clone())?;
+                let mut builder = RowSampleBuilder::new(
+                    col_req,
+                    storage,
+                    ranges,
+                    self.quota_limiter.clone(),
+                    self.req.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0,
+                )?;
                 let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
@@ -324,6 +329,7 @@ struct RowSampleBuilder<S: Snapshot> {
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: QuotaLimiter,
+    is_auto_analyze: bool,
 }
 
 impl<S: Snapshot> RowSampleBuilder<S> {
@@ -332,6 +338,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         storage: TiKvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
         quota_limiter: Arc<QuotaLimiter>,
+        is_auto_analyze: bool,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
         if columns_info.is_empty() {
@@ -359,6 +366,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter: copy_quota_limiter,
+            is_auto_analyze,
         })
     }
 
@@ -380,10 +388,6 @@ impl<S: Snapshot> RowSampleBuilder<S> {
     // Support tuning of cpu quota at present, io bandwidth tuning is on the way
     // some smarter tuning algorithm like PID could be considered
     fn tune_quota_limiter(&mut self, mut proc_stat: ProcessStat) {
-        debug_assert!(
-            self.quota_limiter.is_auto_tune_enabled(),
-            "auto_tune must be turned on!"
-        );
         // rule based tuning:
         //      1) if instance is busy, shrink cpu quota for analyze by 1 core until lower bound is hit;
         //      2) if instance cpu usage is at healthy state, no op;
@@ -391,35 +395,35 @@ impl<S: Snapshot> RowSampleBuilder<S> {
 
         let cpu_util = (proc_stat.cpu_usage().unwrap() / 100.0) / SysQuota::cpu_cores_quota();
 
+        let old_quota = self.quota_limiter.cputime_limiter();
+
         if cpu_util >= SYSTEM_BUSY_THRESHOLD {
             self.quota_limiter.set_cpu_time_limit(
-                1_000_000
+                1_000
                     * cmp::max(
-                        (self.quota_limiter.cputime_limiter() / 1_000_000_000.0) as usize - 1,
+                        (self.quota_limiter.cputime_limiter() / 1_000_000.0) as usize - 1,
                         ANALYZER_CORE_LOWER_BOUND,
                     ),
             );
-            debug!("cpu_time_limit shrinked";
-                            "cpu_util" => ?cpu_util,
-                            "new quota" => ?self.quota_limiter.cputime_limiter() / 1_000_000_000.0);
-            NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-                .get(ThrottleType::quota_limiter_auto_tuned)
-                .inc_by(1_u64);
         } else if cpu_util < SYSTEM_HEALTHY_THRESHOLD {
             self.quota_limiter.set_cpu_time_limit(
-                1_000_000
+                1_000
                     * cmp::min(
-                        (self.quota_limiter.cputime_limiter() / 1_000_000_000.0) as usize + 1,
+                        (self.quota_limiter.cputime_limiter() / 1_000_000.0) as usize + 1,
                         SysQuota::cpu_cores_quota() as usize - ANALYZER_CORE_EXCLUSIVE_BOUND,
                     ),
             );
-            debug!("cpu_time_limit increased";
+        }
+
+        if old_quota != self.quota_limiter.cputime_limiter() {
+            debug!("cpu_time_limiter tuned";
                             "cpu_util" => ?cpu_util,
-                            "new quota" => ?self.quota_limiter.cputime_limiter() / 1_000_000_000.0);
+                            "new quota" => ?self.quota_limiter.cputime_limiter() / 1_000.0);
             NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                 .get(ThrottleType::quota_limiter_auto_tuned)
                 .inc_by(1_u64);
         }
+
         self.quota_limiter
             .set_last_time_tuned(std::time::Instant::now());
     }
@@ -494,7 +498,8 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             }
 
             // Try adjust the quota if necessary
-            if self.quota_limiter.is_auto_tune_enabled()
+            if self.is_auto_analyze
+                && self.quota_limiter.supports_auto_tune()
                 && self.quota_limiter.get_last_time_tuned().elapsed()
                     >= self.quota_limiter.get_auto_tune_interval()
             {

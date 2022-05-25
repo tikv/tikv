@@ -285,7 +285,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             config.quota.foreground_read_bandwidth,
             config.quota.max_delay_duration,
             config.quota.support_auto_tune,
-            false,
             config.quota.auto_tune_interval,
         ));
 
