@@ -2928,6 +2928,10 @@ impl<S: Snapshot> Apply<S> {
         assert_eq!(self.region_id, other.region_id);
         assert_eq!(self.peer_id, other.peer_id);
         if self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE {
+            if other.bucket_meta.is_some() {
+                self.bucket_meta = other.bucket_meta.take();
+            }
+
             assert!(other.term >= self.term);
             self.term = other.term;
 
