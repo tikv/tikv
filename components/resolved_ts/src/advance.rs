@@ -235,8 +235,7 @@ pub async fn region_resolved_ts_store(
                     get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
                         .await
                         .map_err(|e| {
-                            let reconnect = !matches!(e, pd_client::Error::StoreTombstone(..));
-                            (to_store, reconnect, format!("[get tikv client] {}", e))
+                            (to_store, e.retryable(), format!("[get tikv client] {}", e))
                         })?;
 
                 let mut req = CheckLeaderRequest::default();

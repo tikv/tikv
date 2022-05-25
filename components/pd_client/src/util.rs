@@ -441,16 +441,14 @@ where
     fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
-            // these errors are not caused by network, no need to retry
-            Err(
-                Error::Incompatible
-                | Error::StoreTombstone(..)
-                | Error::RegionNotFound(..)
-                | Error::GlobalConfigNotFound(..),
-            ) => true,
             Err(err) => {
-                error!(?*err; "request failed, retry");
-                false
+                // these errors are not caused by network, no need to retry
+                if err.retryable() {
+                    error!(?*err; "request failed, retry");
+                    false
+                } else {
+                    true
+                }
             }
         }
     }
