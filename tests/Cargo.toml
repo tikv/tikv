@@ -107,7 +107,7 @@ tidb_query_common = { path = "../components/tidb_query_common", default-features
 tidb_query_datatype = { path = "../components/tidb_query_datatype", default-features = false }
 tidb_query_executors = { path = "../components/tidb_query_executors", default-features = false }
 tidb_query_expr = { path = "../components/tidb_query_expr", default-features = false }
-tikv = { path = "../", features = ["pprof-dwarf"], default-features = false }
+tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util", default-features = false }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
