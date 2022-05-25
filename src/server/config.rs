@@ -169,6 +169,10 @@ pub struct Config {
     // * system=32G, memory_usage_limit=24G, reject_at=4.8G
     pub reject_messages_on_memory_ratio: f64,
 
+    // whether to compact metrics or not.
+    #[doc(hidden)]
+    pub simplify_metrics: bool,
+
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
     pub labels: HashMap<String, String>,
@@ -190,10 +194,6 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub end_point_max_tasks: Option<usize>,
-
-    // whether to compact metrics or not.
-    #[doc(hidden)]
-    pub simplify_metrics: bool,
 }
 
 impl Default for Config {
