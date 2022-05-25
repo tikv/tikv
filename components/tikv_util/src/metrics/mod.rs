@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use lazy_static::lazy_static;
-use prometheus::*;
+use prometheus::{proto::MetricType, *};
 use prometheus_static_metric::*;
 
 #[cfg(target_os = "linux")]
@@ -36,8 +36,9 @@ use std::collections::HashMap;
 use kvproto::pdpb;
 pub type RecordPairVec = Vec<pdpb::RecordPair>;
 
-pub fn dump() -> String {
+pub fn dump(should_simplify: bool) -> String {
     let mut buffer = vec![];
+<<<<<<< HEAD
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
     for mf in metric_families {
@@ -46,6 +47,38 @@ pub fn dump() -> String {
         }
     }
     String::from_utf8(buffer).unwrap()
+=======
+    dump_to(&mut buffer, should_simplify);
+    String::from_utf8(buffer).unwrap()
+}
+
+pub fn dump_to(w: &mut impl Write, should_simplify: bool) {
+    let encoder = TextEncoder::new();
+    let metric_families = prometheus::gather();
+    if !should_simplify {
+        if let Err(e) = encoder.encode(&*metric_families, w) {
+            warn!("prometheus encoding error"; "err" => ?e);
+        }
+    }
+
+    // filter out mertics that has no sample values
+    for mut mf in metric_families {
+        let mut metrics = mf.take_metric().into_vec();
+        match mf.get_field_type() {
+            MetricType::COUNTER => {
+                metrics.retain(|m| m.get_counter().get_value() > 0.0);
+            }
+            MetricType::HISTOGRAM => metrics.retain(|m| m.get_histogram().get_sample_count() > 0),
+            _ => {}
+        }
+        if !metrics.is_empty() {
+            mf.set_metric(metrics.into());
+            if let Err(e) = encoder.encode(&[mf], w) {
+                warn!("prometheus encoding error"; "err" => ?e);
+            }
+        }
+    }
+>>>>>>> c3c9707fa... server: support return simplified metrics response (#12602)
 }
 
 make_auto_flush_static_metric! {

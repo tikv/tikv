@@ -495,6 +495,34 @@ where
         }
     }
 
+<<<<<<< HEAD
+=======
+    fn handle_get_metrics(
+        req: Request<Body>,
+        mgr: &ConfigController,
+    ) -> hyper::Result<Response<Body>> {
+        let should_simplify = mgr.get_current().server.simplify_metrics;
+        let gz_encoding = client_accept_gzip(&req);
+        let metrics = if gz_encoding {
+            // gzip can reduce the body size to less than 1/10.
+            let mut encoder = GzEncoder::new(vec![], Compression::default());
+            dump_to(&mut encoder, should_simplify);
+            encoder.finish().unwrap()
+        } else {
+            dump(should_simplify).into_bytes()
+        };
+        let mut resp = Response::new(metrics.into());
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
+        if gz_encoding {
+            resp.headers_mut()
+                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+
+        Ok(resp)
+    }
+
+>>>>>>> c3c9707fa... server: support return simplified metrics response (#12602)
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
         I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
@@ -551,7 +579,13 @@ where
                         }
 
                         match (method, path.as_ref()) {
+<<<<<<< HEAD
                             (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
+=======
+                            (Method::GET, "/metrics") => {
+                                Self::handle_get_metrics(req, &cfg_controller)
+                            }
+>>>>>>> c3c9707fa... server: support return simplified metrics response (#12602)
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
                             (Method::GET, "/debug/pprof/heap_activate") => {
