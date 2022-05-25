@@ -96,8 +96,12 @@ where
                 region,
                 self.max_size * self.batch_split_limit,
             )?;
-            let split_keys_count =
-                calc_split_keys_count(region_size, self.split_size, self.max_size, self.batch_split_limit);
+            let split_keys_count = calc_split_keys_count(
+                region_size,
+                self.split_size,
+                self.max_size,
+                self.batch_split_limit,
+            );
             if split_keys_count >= 1 {
                 return Ok(box_try!(get_approximate_split_keys(
                     engine,
