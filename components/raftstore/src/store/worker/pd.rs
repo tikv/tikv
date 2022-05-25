@@ -541,7 +541,9 @@ where
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
-                while let Err(mpsc::RecvTimeoutError::Timeout) = timer_rx.recv_timeout(tick_interval) {
+                while let Err(mpsc::RecvTimeoutError::Timeout) =
+                    timer_rx.recv_timeout(tick_interval)
+                {
                     if is_enable_tick(timer_cnt, collect_store_infos_interval) {
                         StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
                     }
