@@ -99,6 +99,7 @@ where
             let split_keys_count = calc_split_keys_count(
                 region_key_count,
                 self.split_threshold,
+                self.max_keys_count,
                 self.batch_split_limit,
             );
             if split_keys_count >= 1 {
@@ -386,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn te1st_split_check_by_approximate_keys() {
+    fn test_split_check_by_approximate_keys() {
         let path = Builder::new()
             .prefix("_test_split_check_by_approximate_keys")
             .tempdir()
@@ -494,25 +495,33 @@ mod tests {
         split_limit: u64,
     ) {
         let region_sizes = vec![
+            ReadableSize::mb(max_region_size.as_mb() + 1),
             ReadableSize::mb(split_size.as_mb() * 2),
             ReadableSize::mb(split_size.as_mb() * 2 + 1),
             ReadableSize::mb(split_size.as_mb() * split_limit),
             ReadableSize::mb(split_size.as_mb() * split_limit + 1),
+            ReadableSize::mb(split_size.as_mb() * (split_limit + 1)),
         ];
         for region_size in region_sizes {
-            let split_count = calc_split_keys_count(region_size.0, split_size.0, split_limit);
-            let avg_split_size = region_size.0 / (split_count+1);
-            // splitted size should be more than 2/3 of split_size
+            let split_count =
+                calc_split_keys_count(region_size.0, split_size.0, max_region_size.0, split_limit);
+            let avg_split_size = region_size.0 / (split_count + 1);
+            let diff = if avg_split_size >= split_size.0 {
+                avg_split_size - split_size.0
+            } else {
+                split_size.0 - avg_split_size
+            };
+            // the diff of actual split size and split_size is less than 1/3 split_size
             assert!(
-                avg_split_size > split_size.0 * 2 / 3,
+                diff <= split_size.0 / 3,
                 "region_size={}mb, {} {}",
                 region_size.as_mb(),
                 avg_split_size,
-                split_size.0 * 2 / 3
+                split_size.0
             );
 
-             // splitted size should be no more than max_region_size
-             assert!(
+            // splitted size should be no more than max_region_size
+            assert!(
                 avg_split_size <= max_region_size.0,
                 "region_size={}mb, {} {}",
                 region_size.as_mb(),
@@ -534,6 +543,22 @@ mod tests {
         let max_region_size = ReadableSize::mb(392);
         let split_limit = 4;
         test_calc_split_keys_count_impl(split_size, max_region_size, split_limit);
+        let split_size = ReadableSize::gb(1);
+        let max_region_size = ReadableSize::mb(1500);
+        let split_keys_count = calc_split_keys_count(
+            ReadableSize::mb(2300).0,
+            split_size.0,
+            max_region_size.0,
+            split_limit,
+        );
+        assert_eq!(split_keys_count, 1);
+        let split_keys_count = calc_split_keys_count(
+            ReadableSize::mb(3000).0,
+            split_size.0,
+            max_region_size.0,
+            split_limit,
+        );
+        assert_eq!(split_keys_count, 2);
     }
 
     #[test]

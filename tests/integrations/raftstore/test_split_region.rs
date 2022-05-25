@@ -1180,6 +1180,15 @@ fn test_refresh_region_bucket_keys() {
     let bucket_version7 =
         cluster.refresh_region_bucket_keys(&region, buckets, None, Some(expected_buckets.clone()));
     assert_eq!(bucket_version7, bucket_version6 + 1);
+
+    let bucket_version8 = cluster.refresh_region_bucket_keys(
+        &region,
+        vec![],
+        Some(vec![]),
+        Some(expected_buckets.clone()),
+    );
+    // no change on buckets, the bucket version is not changed.
+    assert_eq!(bucket_version8, bucket_version7)
 }
 
 #[test]

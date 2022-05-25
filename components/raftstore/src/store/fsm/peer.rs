@@ -5220,6 +5220,9 @@ where
             let bucket_version: u64 = if current_version_term == term {
                 current_version + 1
             } else {
+                if term > u32::MAX.into() {
+                    error!("unexpected term {} more than u32::MAX. Bucket version will be backward.", term);
+                }
                 term << 32
             };
             bucket_version
@@ -5275,6 +5278,10 @@ where
             let mut i = 0;
             region_buckets = self.fsm.peer.region_buckets.clone().unwrap();
             let mut meta = (*region_buckets.meta).clone();
+            if !buckets.is_empty() { 
+                meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
+            }
+            meta.region_epoch = region_epoch; 
             for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
                 while i < meta.keys.len() && meta.keys[i] != bucket_range.0 {
                     i += 1;
@@ -5313,8 +5320,6 @@ where
                 }
                 i += 1;
             }
-            meta.region_epoch = region_epoch;
-            meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
             region_buckets.meta = Arc::new(meta);
         } else {
             debug!(
