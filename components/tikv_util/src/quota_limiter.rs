@@ -33,8 +33,6 @@ pub struct QuotaLimiter {
     max_delay_duration: AtomicU64,
     // if supports auto tune
     support_auto_tune: AtomicBool,
-    // if auto tune is enabled
-    auto_tune_enabled: AtomicBool,
     // last time tuned
     last_time_tuned: Instant,
     // auto tune interval in nano seconds
@@ -100,7 +98,6 @@ impl Default for QuotaLimiter {
             read_bandwidth_limiter: Limiter::new(f64::INFINITY),
             max_delay_duration: AtomicU64::new(0),
             support_auto_tune: AtomicBool::new(false),
-            auto_tune_enabled: AtomicBool::new(false),
             last_time_tuned: Instant::now(),
             auto_tune_interval: AtomicU64::new(1_000_000),
         }
@@ -110,12 +107,11 @@ impl Default for QuotaLimiter {
 impl QuotaLimiter {
     pub fn copy_from_arc(arc_quota: Arc<QuotaLimiter>) -> Self {
         QuotaLimiter::new(
-            arc_quota.cputime_limiter.speed_limit() as usize,
+            (arc_quota.cputime_limiter.speed_limit() / 1000.0) as usize,
             ReadableSize::b(arc_quota.write_bandwidth_limiter.speed_limit() as u64),
             ReadableSize::b(arc_quota.read_bandwidth_limiter.speed_limit() as u64),
             ReadableDuration::micros(arc_quota.max_delay_duration().as_micros() as u64),
             arc_quota.support_auto_tune.load(Ordering::Relaxed),
-            arc_quota.is_auto_tune_enabled(),
             ReadableDuration::micros(arc_quota.get_auto_tune_interval().as_micros() as u64),
         )
     }
@@ -127,7 +123,6 @@ impl QuotaLimiter {
         read_bandwidth: ReadableSize,
         max_delay_duration: ReadableDuration,
         support_auto_tune: bool,
-        auto_tune_enabled: bool,
         auto_tune_interval: ReadableDuration,
     ) -> Self {
         let cputime_limiter = Limiter::builder(Self::speed_limit(cpu_quota as f64 * 1000_f64))
@@ -139,7 +134,6 @@ impl QuotaLimiter {
         let read_bandwidth_limiter = Limiter::new(Self::speed_limit(read_bandwidth.0 as f64));
 
         let max_delay_duration = AtomicU64::new(max_delay_duration.0.as_nanos() as u64);
-        let auto_tune_enabled = AtomicBool::new(auto_tune_enabled);
         let support_auto_tune = AtomicBool::new(support_auto_tune);
         let last_time_tuned = Instant::now();
         let auto_tune_interval = AtomicU64::new(auto_tune_interval.0.as_nanos() as u64);
@@ -150,7 +144,6 @@ impl QuotaLimiter {
             read_bandwidth_limiter,
             max_delay_duration,
             support_auto_tune,
-            auto_tune_enabled,
             last_time_tuned,
             auto_tune_interval,
         }
@@ -184,15 +177,6 @@ impl QuotaLimiter {
             .store(duration.0.as_nanos() as u64, Ordering::Relaxed);
     }
 
-    pub fn set_auto_tune(&self, flag: bool) {
-        if self.support_auto_tune.load(Ordering::Relaxed) {
-            self.auto_tune_enabled.store(flag, Ordering::Relaxed);
-            debug!("quota_limiter auto tune is set";
-                   "value set to" => flag,
-            );
-        }
-    }
-
     pub fn set_auto_tune_interval(&self, interval: ReadableDuration) {
         self.auto_tune_interval
             .store(interval.0.as_nanos() as u64, Ordering::Relaxed);
@@ -218,8 +202,8 @@ impl QuotaLimiter {
         self.last_time_tuned = new_time;
     }
 
-    pub fn is_auto_tune_enabled(&self) -> bool {
-        self.auto_tune_enabled.load(Ordering::Relaxed)
+    pub fn supports_auto_tune(&self) -> bool {
+        self.support_auto_tune.load(Ordering::Relaxed)
     }
 
     // To generate a sampler.
@@ -326,7 +310,6 @@ mod tests {
             ReadableSize::kb(1),
             ReadableDuration::millis(0),
             false,
-            false,
             ReadableDuration::millis(100),
         );
 
@@ -390,5 +373,19 @@ mod tests {
         sample.add_write_bytes(512);
         let should_delay = block_on(quota_limiter.async_consume(sample));
         check_duration(should_delay, Duration::from_millis(40));
+
+        let arc_quota_limiter = Arc::new(quota_limiter);
+        arc_quota_limiter.set_cpu_time_limit(2000);
+        let quota_limiter_copy1 = QuotaLimiter::copy_from_arc(arc_quota_limiter.clone());
+        quota_limiter_copy1.set_cpu_time_limit(3000);
+        let quota_limiter_copy2 = QuotaLimiter::copy_from_arc(arc_quota_limiter.clone());
+        quota_limiter_copy2.set_cpu_time_limit(4000);
+        let quota_limiter_copy3 = QuotaLimiter::copy_from_arc(arc_quota_limiter.clone());
+        assert!(arc_quota_limiter.cputime_limiter() < quota_limiter_copy1.cputime_limiter());
+        assert!(quota_limiter_copy1.cputime_limiter() < quota_limiter_copy2.cputime_limiter());
+        assert_eq!(
+            arc_quota_limiter.cputime_limiter(),
+            quota_limiter_copy3.cputime_limiter()
+        );
     }
 }
