@@ -6,7 +6,6 @@ use etcd_client::{ConnectOptions, Error as EtcdError, TlsOptions};
 use futures::Future;
 use tikv_util::stream::RetryError;
 use tokio::sync::OnceCell;
-use tonic::transport::{Certificate, Identity};
 
 use super::{etcd::EtcdSnapshot, EtcdStore, MetaStore};
 use crate::errors::{ContextualResultExt, Result};
@@ -15,57 +14,30 @@ use crate::errors::{ContextualResultExt, Result};
 pub struct LazyEtcdClient(Arc<LazyEtcdClientInner>);
 
 pub struct ConnectionConfig {
-    pub ca_path: String,
-    pub cert_path: String,
-    pub key_path: String,
+    pub tls: Option<TlsOptions>,
     pub keep_alive_interval: Duration,
     pub keep_alive_timeout: Duration,
 }
 
 impl ConnectionConfig {
-    /// make tls config.
-    /// For now, the interface of the `etcd_client` doesn't us to control
-    /// how to create channels when connecting, hence we cannot update the tls config at runtime.
-    /// TODO: maybe add some method like `with_channel` for `etcd_client`, and adapt the `SecurityManager` API,
-    ///       instead of doing everything by own.
-    fn tls(&self) -> Result<Option<TlsOptions>> {
-        if self.cert_path.is_empty() && self.ca_path.is_empty() && self.key_path.is_empty() {
-            return Ok(None);
-        }
-
-        let mut opt = TlsOptions::new();
-        if !self.ca_path.is_empty() {
-            let ca_cert_bin = std::fs::read(&self.ca_path)?;
-            let ca_cert = Certificate::from_pem(ca_cert_bin.as_slice());
-            opt = opt.ca_certificate(ca_cert);
-        }
-        if !self.cert_path.is_empty() && !self.key_path.is_empty() {
-            let client_cert_bin = std::fs::read(&self.cert_path)?;
-            let client_key_bin = std::fs::read(&self.key_path)?;
-            let client_cert = Identity::from_pem(client_cert_bin, client_key_bin);
-            opt = opt.identity(client_cert);
-        }
-        Ok(Some(opt))
-    }
-
     /// Convert the config to the connection option.
-    fn to_connection_options(&self) -> Result<ConnectOptions> {
+    fn to_connection_options(&self) -> ConnectOptions {
         let mut opts = ConnectOptions::new();
-        if let Some(tls) = self.tls()? {
+        if let Some(tls) = self.tls {
             opts = opts.with_tls(tls)
         }
         opts = opts.with_keep_alive(self.keep_alive_interval, self.keep_alive_timeout);
-        Ok(opts)
+        opts
     }
 }
 
 impl LazyEtcdClient {
-    pub fn new(endpoints: &[impl ToString], conf: ConnectionConfig) -> Result<Self> {
-        Ok(Self(Arc::new(LazyEtcdClientInner {
-            opt: conf.to_connection_options()?,
+    pub fn new(endpoints: &[impl ToString], conf: ConnectionConfig) -> Self {
+        Self(Arc::new(LazyEtcdClientInner {
+            opt: conf.to_connection_options(),
             endpoints: endpoints.iter().map(ToString::to_string).collect(),
             cli: OnceCell::new(),
-        })))
+        }))
     }
 }
 
@@ -131,10 +103,15 @@ where
 
 impl LazyEtcdClientInner {
     async fn connect(&self) -> Result<EtcdStore> {
-        let store =
-            retry(|| etcd_client::Client::connect(self.endpoints.clone(), Some(self.opt.clone())))
-                .await
-                .context("during connecting to the etcd")?;
+        let store = retry(|| {
+            // For now, the interface of the `etcd_client` doesn't us to control
+            // how to create channels when connecting, hence we cannot update the tls config at runtime.
+            // TODO: maybe add some method like `with_channel` for `etcd_client`, and adapt the `SecurityManager` API,
+            //       instead of doing everything by own.
+            etcd_client::Client::connect(self.endpoints.clone(), Some(self.opt.clone()))
+        })
+        .await
+        .context("during connecting to the etcd")?;
         Ok(EtcdStore::from(store))
     }
 

@@ -47,7 +47,7 @@ use crate::{
     router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL},
     subscription_track::SubscriptionTracer,
     try_send,
-    utils::{self, StopWatch, WaitGroup},
+    utils::{self, StopWatch},
 };
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
@@ -631,8 +631,6 @@ where
         let pd_cli = self.pd_client.clone();
         let resolvers = self.subs.clone();
         let cm = self.concurrency_manager.clone();
-        // Block for a little time.
-        self.pool.block_on(self.temp_writers.wait());
         self.pool.spawn(Self::flush_for_task(
             task, store_id, router, pd_cli, resolvers, cli, cm,
         ));
