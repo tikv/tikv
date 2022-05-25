@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::AsRef, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
+use std::{fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
@@ -22,7 +22,7 @@ use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
     config::ReadableDuration,
-    debug, defer, error, info,
+    debug, defer, info,
     time::Instant,
     warn,
     worker::{Runnable, Scheduler},
@@ -41,22 +41,19 @@ use crate::{
     annotate,
     errors::{Error, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
-    metadata::{
-        store::{EtcdStore, MetaStore},
-        MetadataClient, MetadataEvent, StreamTask,
-    },
+    metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL},
     subscription_track::SubscriptionTracer,
     try_send,
-    utils::{self, StopWatch},
+    utils::{self, StopWatch, WaitGroup},
 };
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 
-pub struct Endpoint<S: MetaStore + 'static, R, E, RT, PDC> {
-    meta_client: Option<MetadataClient<S>>,
+pub struct Endpoint<S, R, E, RT, PDC> {
+    meta_client: MetadataClient<S>,
     range_router: Router,
     scheduler: Scheduler<Task>,
     observer: BackupStreamObserver,
@@ -80,77 +77,9 @@ where
     PDC: PdClient + 'static,
     S: MetaStore + 'static,
 {
-    pub fn with_client(
+    pub fn new(
         store_id: u64,
-        cli: MetadataClient<S>,
-        config: BackupStreamConfig,
-        scheduler: Scheduler<Task>,
-        observer: BackupStreamObserver,
-        accessor: R,
-        router: RT,
-        pd_client: Arc<PDC>,
-        cm: ConcurrencyManager,
-    ) -> Self {
-        // Always use 2 threads for I/O tasks.
-        let pool = create_tokio_runtime(config.io_threads, "br-stream")
-            .expect("failed to create tokio runtime for backup stream worker.");
-        let scan_pool = create_scan_pool(config.num_threads);
-
-        // TODO consider TLS?
-        let meta_client = Some(cli);
-        let range_router = Router::new(
-            PathBuf::from(config.temp_path.clone()),
-            scheduler.clone(),
-            config.temp_file_size_limit_per_task.0,
-            config.max_flush_interval.0,
-        );
-
-        if let Some(meta_client) = meta_client.as_ref() {
-            // spawn a worker to watch task changes from etcd periodically.
-            let meta_client_clone = meta_client.clone();
-            let scheduler_clone = scheduler.clone();
-            // TODO build a error handle mechanism #error 2
-            pool.spawn(async {
-                if let Err(err) =
-                    Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
-                {
-                    err.report("failed to start watch tasks");
-                }
-            });
-            pool.spawn(Self::starts_flush_ticks(range_router.clone()));
-        }
-        let initial_scan_memory_quota =
-            PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
-        info!("the endpoint of backup stream started"; "path" => %config.temp_path);
-        Endpoint {
-            meta_client,
-            range_router,
-            scheduler,
-            observer,
-            pool,
-            store_id,
-            regions: accessor,
-            engine: PhantomData,
-            router,
-            pd_client,
-            subs: Default::default(),
-            concurrency_manager: cm,
-            initial_scan_memory_quota,
-            scan_pool,
-        }
-    }
-}
-
-impl<R, E, RT, PDC> Endpoint<EtcdStore, R, E, RT, PDC>
-where
-    R: RegionInfoProvider + 'static + Clone,
-    E: KvEngine,
-    RT: RaftStoreRouter<E> + 'static,
-    PDC: PdClient + 'static,
-{
-    pub fn new<S: AsRef<str>>(
-        store_id: u64,
-        endpoints: &dyn AsRef<[S]>,
+        store: S,
         config: BackupStreamConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
@@ -158,24 +87,13 @@ where
         router: RT,
         pd_client: Arc<PDC>,
         concurrency_manager: ConcurrencyManager,
-    ) -> Endpoint<EtcdStore, R, E, RT, PDC> {
+    ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
         let pool = create_tokio_runtime(config.io_threads, "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
         let scan_pool = create_scan_pool(config.num_threads);
 
-        // TODO consider TLS?
-        let meta_client = match pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
-            Ok(c) => {
-                let meta_store = EtcdStore::from(c);
-                Some(MetadataClient::new(meta_store, store_id))
-            }
-            Err(e) => {
-                error!("failed to create etcd client for backup stream worker"; "error" => ?e);
-                None
-            }
-        };
-
+        let meta_client = MetadataClient::new(store, store_id);
         let range_router = Router::new(
             PathBuf::from(config.temp_path.clone()),
             scheduler.clone(),
@@ -183,21 +101,18 @@ where
             config.max_flush_interval.0,
         );
 
-        if let Some(meta_client) = meta_client.as_ref() {
-            // spawn a worker to watch task changes from etcd periodically.
-            let meta_client_clone = meta_client.clone();
-            let scheduler_clone = scheduler.clone();
-            // TODO build a error handle mechanism #error 2
-            pool.spawn(async {
-                if let Err(err) =
-                    Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
-                {
-                    err.report("failed to start watch tasks");
-                }
-            });
+        // spawn a worker to watch task changes from etcd periodically.
+        let meta_client_clone = meta_client.clone();
+        let scheduler_clone = scheduler.clone();
+        // TODO build a error handle mechanism #error 2
+        pool.spawn(async {
+            if let Err(err) = Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
+            {
+                err.report("failed to start watch tasks");
+            }
+        });
 
-            pool.spawn(Self::starts_flush_ticks(range_router.clone()));
-        }
+        pool.spawn(Self::starts_flush_ticks(range_router.clone()));
 
         let initial_scan_memory_quota =
             PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
@@ -230,7 +145,7 @@ where
     PDC: PdClient + 'static,
 {
     fn get_meta_client(&self) -> MetadataClient<S> {
-        self.meta_client.as_ref().unwrap().clone()
+        self.meta_client.clone()
     }
 
     fn on_fatal_error(&self, task: String, err: Box<Error>) {
@@ -361,14 +276,14 @@ where
         }
     }
 
-    fn backup_batch(&self, batch: CmdBatch) {
-        let mut sw = StopWatch::new();
+    /// Convert a batch of events to the cmd batch, and update the resolver status.
+    fn record_batch(subs: SubscriptionTracer, batch: CmdBatch) -> Option<ApplyEvents> {
         let region_id = batch.region_id;
-        let mut resolver = match self.subs.get_subscription_of(region_id) {
+        let mut resolver = match subs.get_subscription_of(region_id) {
             Some(rts) => rts,
             None => {
-                warn!("BUG: the region isn't registered (no resolver found) but sent to backup_batch."; "region_id" => %region_id);
-                return;
+                debug!("the region isn't registered (no resolver found) but sent to backup_batch, maybe stale."; "region_id" => %region_id);
+                return None;
             }
         };
         // Stale data is accpetable, while stale locks may block the checkpoint advancing.
@@ -382,24 +297,30 @@ where
         //                 (Before we refreshing the resolver for this region again)
         if batch.pitr_id != resolver.value().handle.id {
             debug!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
-            return;
+            return None;
         }
-        let sched = self.scheduler.clone();
 
         let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver());
-        drop(resolver);
-        if kvs.is_empty() {
-            return;
-        }
+        Some(kvs)
+    }
 
-        HANDLE_EVENT_DURATION_HISTOGRAM
+    fn backup_batch(&self, batch: CmdBatch) {
+        let mut sw = StopWatch::new();
+
+        let router = self.range_router.clone();
+        let sched = self.scheduler.clone();
+        let subs = self.subs.clone();
+        self.pool.spawn(async move {
+            let region_id = batch.region_id;
+            let kvs = Self::record_batch(subs, batch);
+            if kvs.as_ref().map(|x| x.is_empty()).unwrap_or(true) {
+                return;
+            }
+            let kvs = kvs.unwrap();
+
+            HANDLE_EVENT_DURATION_HISTOGRAM
             .with_label_values(&["to_stream_event"])
             .observe(sw.lap().as_secs_f64());
-        let router = self.range_router.clone();
-        self.pool.spawn(async move {
-            HANDLE_EVENT_DURATION_HISTOGRAM
-                .with_label_values(&["get_router_lock"])
-                .observe(sw.lap().as_secs_f64());
             let kv_count = kvs.len();
             let total_size = kvs.size();
             metrics::HEAP_MEMORY
@@ -497,71 +418,69 @@ where
 
     /// Load the task into memory: this would make the endpint start to observe.
     fn load_task(&self, task: StreamTask) {
-        if let Some(cli) = self.meta_client.as_ref() {
-            let cli = cli.clone();
-            let init = self.make_initial_loader();
-            let range_router = self.range_router.clone();
+        let cli = self.meta_client.clone();
+        let init = self.make_initial_loader();
+        let range_router = self.range_router.clone();
 
-            info!(
-                "register backup stream task";
-                "task" => ?task,
-            );
+        info!(
+            "register backup stream task";
+            "task" => ?task,
+        );
 
-            let task_name = task.info.get_name().to_owned();
-            // clean the safepoint created at pause(if there is)
-            self.pool.spawn(
-                self.deregister_guard_service_safepoint(task.info.get_name())
-                    .map(|r| r.map_err(|err| err.report("removing safe point for pausing"))),
-            );
-            self.pool.block_on(async move {
-                let task_name = task.info.get_name();
-                match cli.ranges_of_task(task_name).await {
-                    Ok(ranges) => {
-                        info!(
-                            "register backup stream ranges";
-                            "task" => ?task,
-                            "ranges-count" => ranges.inner.len(),
-                        );
-                        let ranges = ranges
-                            .inner
-                            .into_iter()
-                            .map(|(start_key, end_key)| {
-                                (utils::wrap_key(start_key), utils::wrap_key(end_key))
-                            })
-                            .collect::<Vec<_>>();
-                        if let Err(err) = range_router
-                            .register_task(task.clone(), ranges.clone())
-                            .await
-                        {
-                            err.report(format!(
-                                "failed to register backup stream task {}",
-                                task.info.name
-                            ));
-                            return;
-                        }
-
-                        for (start_key, end_key) in ranges {
-                            let init = init.clone();
-
-                            self.observe_and_scan_region(init, &task, start_key, end_key)
-                                .await
-                                .unwrap();
-                        }
-                        info!(
-                            "finish register backup stream ranges";
-                            "task" => ?task,
-                        );
-                    }
-                    Err(e) => {
-                        e.report(format!(
-                            "failed to register backup stream task {} to router: ranges not found",
-                            task.info.get_name()
+        let task_name = task.info.get_name().to_owned();
+        // clean the safepoint created at pause(if there is)
+        self.pool.spawn(
+            self.deregister_guard_service_safepoint(task.info.get_name())
+                .map(|r| r.map_err(|err| err.report("removing safe point for pausing"))),
+        );
+        self.pool.block_on(async move {
+            let task_name = task.info.get_name();
+            match cli.ranges_of_task(task_name).await {
+                Ok(ranges) => {
+                    info!(
+                        "register backup stream ranges";
+                        "task" => ?task,
+                        "ranges-count" => ranges.inner.len(),
+                    );
+                    let ranges = ranges
+                        .inner
+                        .into_iter()
+                        .map(|(start_key, end_key)| {
+                            (utils::wrap_key(start_key), utils::wrap_key(end_key))
+                        })
+                        .collect::<Vec<_>>();
+                    if let Err(err) = range_router
+                        .register_task(task.clone(), ranges.clone())
+                        .await
+                    {
+                        err.report(format!(
+                            "failed to register backup stream task {}",
+                            task.info.name
                         ));
+                        return;
                     }
+
+                    for (start_key, end_key) in ranges {
+                        let init = init.clone();
+
+                        self.observe_and_scan_region(init, &task, start_key, end_key)
+                            .await
+                            .unwrap();
+                    }
+                    info!(
+                        "finish register backup stream ranges";
+                        "task" => ?task,
+                    );
                 }
-            });
-            metrics::update_task_status(TaskStatus::Running, &task_name);
-        };
+                Err(e) => {
+                    e.report(format!(
+                        "failed to register backup stream task {} to router: ranges not found",
+                        task.info.get_name()
+                    ));
+                }
+            }
+        });
+        metrics::update_task_status(TaskStatus::Running, &task_name);
     }
 
     fn register_guard_service_safepoint(
@@ -632,6 +551,7 @@ where
             .await
             .map_err(|err| Error::from(err).report("failed to get tso from pd"))
             .unwrap_or_default();
+        cm.update_max_ts(pd_tso);
         let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
         let tso = Ord::min(pd_tso, min_ts);
         let ts = resolvers.resolve_with(tso);
@@ -664,7 +584,6 @@ where
                 // We cannot advance the resolved ts for now.
                 return;
             }
-            concurrency_manager.update_max_ts(TimeStamp::new(rts));
             if let Err(err) = pd_cli
                 .update_service_safe_point(
                     format!("backup-stream-{}-{}", task, store_id),
@@ -694,11 +613,7 @@ where
 
     pub fn on_force_flush(&self, task: String, store_id: u64) {
         let router = self.range_router.clone();
-        let cli = self
-            .meta_client
-            .as_ref()
-            .expect("on_flush: executed from an endpoint without cli")
-            .clone();
+        let cli = self.meta_client.clone();
         let pd_cli = self.pd_client.clone();
         let resolvers = self.subs.clone();
         let cm = self.concurrency_manager.clone();
@@ -712,14 +627,12 @@ where
 
     pub fn on_flush(&self, task: String, store_id: u64) {
         let router = self.range_router.clone();
-        let cli = self
-            .meta_client
-            .as_ref()
-            .expect("on_flush: executed from an endpoint without cli")
-            .clone();
+        let cli = self.meta_client.clone();
         let pd_cli = self.pd_client.clone();
         let resolvers = self.subs.clone();
         let cm = self.concurrency_manager.clone();
+        // Block for a little time.
+        self.pool.block_on(self.temp_writers.wait());
         self.pool.spawn(Self::flush_for_task(
             task, store_id, router, pd_cli, resolvers, cli, cm,
         ));
@@ -745,7 +658,7 @@ where
     ) -> Result<()> {
         let init = self.make_initial_loader();
 
-        let meta_cli = self.meta_client.as_ref().unwrap().clone();
+        let meta_cli = self.meta_client.clone();
         let last_checkpoint = TimeStamp::new(
             self.pool
                 .block_on(meta_cli.global_progress_of_task(&task))?,

@@ -4,6 +4,7 @@ pub mod slash_etc;
 pub use slash_etc::SlashEtcStore;
 
 pub mod etcd;
+pub mod lazy_etcd;
 use std::{future::Future, pin::Pin};
 
 use async_trait::async_trait;

@@ -22,10 +22,11 @@ dashmap = "5"
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code" }
-etcd-client = { version = "0.7", features = ["pub-response-field"] }
+etcd-client = { version = "0.7", features = ["pub-response-field", "tls"] }
 external_storage = { path = "../external_storage", default-features = false }
 external_storage_export = { path = "../external_storage/export", default-features = false }
 fail = "0.5"
+tonic = "0.5"
 
 file_system = { path = "../file_system" }
 futures = "0.3"

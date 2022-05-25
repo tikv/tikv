@@ -133,9 +133,9 @@ impl Suite {
         cfg.enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let ob = self.obs.get(&id).unwrap().clone();
-        let endpoint = Endpoint::with_client(
+        let endpoint = Endpoint::new(
             id,
-            MetadataClient::new(self.meta_store.clone(), id),
+            self.meta_store.clone(),
             cfg,
             worker.scheduler(),
             ob,
