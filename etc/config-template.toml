@@ -81,7 +81,7 @@
 
 ## The maximum working thread count of the thread pool.
 ## The default value is max(4, LOGICAL_CPU_NUM * 0.8).
-# max-thread-count = 8
+# max-thread-count = 4
 
 ## Size of the stack for each thread in the thread pool.
 # stack-size = "10MB"
