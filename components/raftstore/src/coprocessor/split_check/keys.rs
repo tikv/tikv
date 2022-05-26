@@ -586,10 +586,12 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_keys: Some(100),
+            region_max_keys: Some(159),
             region_split_keys: Some(80),
             batch_split_limit: 5,
             enable_region_bucket: true,
+            region_max_size: Some(ReadableSize(301376)),
+            region_split_size: ReadableSize(160616),
             // need check split region buckets, but region size does not exceed the split threshold
             region_bucket_size: ReadableSize(100),
             ..Default::default()

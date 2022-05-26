@@ -51,6 +51,9 @@ where
     E: KvEngine,
 {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
+        if self.batch_split_limit == 0 {
+            return false;
+        }
         let size = entry.entry_size() as u64;
         self.current_size += size;
 
