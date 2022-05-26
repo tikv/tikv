@@ -170,6 +170,20 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         }
         std::mem::take(&mut self.reader.statistics)
     }
+
+    pub fn scan_values_in_default(&mut self, key: &Key) -> Result<Vec<(TimeStamp, Value)>> {
+        if self.cloud_reader.is_some() {
+            return Ok(vec![]);
+        }
+        self.reader.scan_values_in_default(key)
+    }
+
+    pub fn seek_ts(&mut self, ts: TimeStamp) -> Result<Option<Key>> {
+        if let Some(reader) = &mut self.cloud_reader{
+            return reader.seek_ts(ts);
+        }
+        self.reader.seek_ts(ts)
+    }
 }
 
 pub struct MvccReader<S: EngineSnapshot> {

@@ -238,6 +238,21 @@ impl CloudReader {
         }
         Ok(None)
     }
+
+    /// Return the first committed key for which `start_ts` equals to `ts`
+    pub fn seek_ts(&mut self, ts: TimeStamp) -> Result<Option<Key>> {
+        let mut it = self.snapshot.new_iterator(WRITE_CF, false, true, None);
+        it.rewind();
+        while it.valid() {
+            let item = it.item();
+            let user_meta = UserMeta::from_slice(item.user_meta());
+            if user_meta.start_ts == ts.into_inner() {
+                return Ok(Some(Key::from_raw(it.key())));
+            }
+            it.next()
+        }
+        Ok(None)
+    }
 }
 
 fn parse_write(item: kvengine::Item<'_>) -> (TimeStamp, Write) {

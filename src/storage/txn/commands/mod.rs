@@ -55,7 +55,7 @@ use crate::storage::{
     kv::WriteData,
     lock_manager::{self, LockManager, WaitTimeout},
     metrics,
-    mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
+    mvcc::{Lock as MvccLock, ReleasedLock, SnapshotReader},
     txn::{latch, ProcessResult, Result},
     types::{
         MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
@@ -438,7 +438,7 @@ type LockWritesVals = (
 );
 
 fn find_mvcc_infos_by_key<S: Snapshot>(
-    reader: &mut MvccReader<S>,
+    reader: &mut SnapshotReader<S>,
     key: &Key,
     mut ts: TimeStamp,
 ) -> Result<LockWritesVals> {

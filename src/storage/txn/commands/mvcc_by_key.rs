@@ -4,7 +4,7 @@
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    mvcc::MvccReader,
+    mvcc::SnapshotReader,
     txn::{
         commands::{find_mvcc_infos_by_key, Command, CommandExt, ReadCommand, TypedCommand},
         ProcessResult, Result,
@@ -37,9 +37,9 @@ impl CommandExt for MvccByKey {
 
 impl<S: Snapshot> ReadCommand<S> for MvccByKey {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
-        let mut reader = MvccReader::new_with_ctx(snapshot, None, &self.ctx);
+        let mut reader = SnapshotReader::new(TimeStamp::max(), snapshot, true);
         let result = find_mvcc_infos_by_key(&mut reader, &self.key, TimeStamp::max());
-        statistics.add(&reader.statistics);
+        statistics.add(&reader.take_statistics());
         let (lock, writes, values) = result?;
         Ok(ProcessResult::MvccKey {
             mvcc: MvccInfo {
