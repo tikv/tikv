@@ -1,11 +1,18 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::AsRef, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    convert::AsRef,
+    fmt,
+    marker::PhantomData,
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use futures::{Future, FutureExt};
+use futures::FutureExt;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -234,20 +241,26 @@ where
     }
 
     fn on_fatal_error(&self, task: String, err: Box<Error>) {
-        // Let's pause the task locally first.
-        let start_ts = self.unload_task(&task).map(|task| task.start_ts);
+        // Let's pause the task first.
+        self.unload_task(&task);
         err.report_fatal();
         metrics::update_task_status(TaskStatus::Error, &task);
 
         let meta_cli = self.get_meta_client();
+        let pdc = self.pd_client.clone();
         let store_id = self.store_id;
         let sched = self.scheduler.clone();
-        let register_safepoint = self
-            .register_guard_service_safepoint(&task, TimeStamp::new(start_ts.unwrap_or_default()));
-
+        let safepoint_name = self.pause_guard_id_for_task(&task);
+        let safepoint_ttl = self.pause_guard_duration();
         self.pool.block_on(async move {
             let err_fut = async {
-                register_safepoint.await?;
+                let safepoint = meta_cli.global_progress_of_task(&task).await?;
+                pdc.update_service_safe_point(
+                    safepoint_name,
+                    TimeStamp::new(safepoint),
+                    safepoint_ttl,
+                )
+                .await?;
                 meta_cli.pause(&task).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(err.error_code().code.to_owned());
@@ -510,8 +523,15 @@ where
             let task_name = task.info.get_name().to_owned();
             // clean the safepoint created at pause(if there is)
             self.pool.spawn(
-                self.deregister_guard_service_safepoint(task.info.get_name())
-                    .map(|r| r.map_err(|err| err.report("removing safe point for pausing"))),
+                self.pd_client
+                    .update_service_safe_point(
+                        self.pause_guard_id_for_task(task.info.get_name()),
+                        TimeStamp::zero(),
+                        Duration::new(0, 0),
+                    )
+                    .map(|r| {
+                        r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
+                    }),
             );
             self.pool.block_on(async move {
                 let task_name = task.info.get_name();
@@ -564,40 +584,18 @@ where
         };
     }
 
-    fn register_guard_service_safepoint(
-        &self,
-        task_name: &str,
-        // hint for make optimized safepoint when we cannot get that from `SubscriptionTracker`
-        start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<()>> + Send + 'static {
-        self.pd_client
-            .update_service_safe_point(
-                format!("{}-{}-guard", task_name, self.store_id),
-                self.subs.safepoint().max(start_ts),
-                ReadableDuration::hours(24).0,
-            )
-            .map(|r| r.map_err(|err| err.into()))
+    fn pause_guard_id_for_task(&self, task: &str) -> String {
+        format!("{}-{}-pause-guard", task, self.store_id)
     }
 
-    fn deregister_guard_service_safepoint(
-        &self,
-        task_name: &str,
-    ) -> impl Future<Output = Result<()>> + Send + 'static {
-        self.pd_client
-            .update_service_safe_point(
-                format!("{}-{}-guard", task_name, self.store_id),
-                TimeStamp::zero(),
-                Duration::new(0, 0),
-            )
-            .map(|r| r.map_err(|err| err.into()))
+    fn pause_guard_duration(&self) -> Duration {
+        ReadableDuration::hours(24).0
     }
 
-    pub fn on_pause(&self, task_name: &str) {
-        let task = self.unload_task(task_name);
-        if let Some(t) = task {
-            info!("pause backup stream task."; "task" => %t.name);
-        }
-        metrics::update_task_status(TaskStatus::Paused, task_name);
+    pub fn on_pause(&self, task: &str) {
+        self.unload_task(task);
+
+        metrics::update_task_status(TaskStatus::Paused, task);
     }
 
     pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
@@ -652,6 +650,8 @@ where
         // NOTE: Maybe push down the resolve step to the router?
         //       Or if there are too many duplicated `Flush` command, we may do some useless works.
         let new_rts = Self::try_resolve(&concurrency_manager, pd_cli.clone(), resolvers).await;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("delay_on_flush");
         metrics::FLUSH_DURATION
             .with_label_values(&["resolve_by_now"])
             .observe(start.saturating_elapsed_secs());
@@ -665,6 +665,11 @@ where
                 return;
             }
             concurrency_manager.update_max_ts(TimeStamp::new(rts));
+            let in_flight = crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.load(Ordering::SeqCst);
+            if in_flight > 0 {
+                warn!("inflight leader detected, skipping advancing resolved ts"; "in_flight" => %in_flight);
+                return;
+            }
             if let Err(err) = pd_cli
                 .update_service_safe_point(
                     format!("backup-stream-{}-{}", task, store_id),
@@ -802,10 +807,13 @@ where
                 region,
                 needs_initial_scanning,
             } => {
+                #[cfg(feature = "failpoints")]
+                fail::fail_point!("delay_on_start_observe");
                 self.start_observe(region, needs_initial_scanning);
                 metrics::INITIAL_SCAN_REASON
                     .with_label_values(&["leader-changed"])
                     .inc();
+                crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_sub(1, Ordering::SeqCst);
             }
             ObserveOp::Stop { ref region } => {
                 self.subs.deregister_region(region, |_, _| true);
@@ -970,7 +978,7 @@ where
     }
 
     pub fn run_task(&self, task: Task) {
-        debug!("run backup stream task"; "task" => ?task);
+        debug!("run backup stream task"; "task" => ?task, "store_id" => %self.store_id);
         let now = Instant::now_coarse();
         let label = task.label();
         defer! {
