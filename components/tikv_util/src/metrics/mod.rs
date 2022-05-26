@@ -1,7 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap, sync::atomic::{AtomicU64, Ordering}, io::Write
+    collections::HashMap,
+    io::Write,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use kvproto::pdpb;
@@ -78,22 +80,10 @@ pub fn dump_to(w: &mut impl Write, should_simplify: bool) {
     if !should_simplify
         || METRICS_DUMP_COUNTER.fetch_add(1, Ordering::Relaxed) % METRICS_DUMP_FACTOR == 0
     {
-        dump_metrics(
-            prometheus::gather(),
-            &encoder,
-            w,
-            should_simplify,
-            true,
-        );
+        dump_metrics(prometheus::gather(), &encoder, w, should_simplify, true);
     }
     if !should_simplify {
-        dump_metrics(
-            UNUSED_METRICS_REGISTRY.gather(),
-            &encoder,
-            w,
-            false,
-            false,
-        );
+        dump_metrics(UNUSED_METRICS_REGISTRY.gather(), &encoder, w, false, false);
     }
 }
 
