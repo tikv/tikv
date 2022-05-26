@@ -166,8 +166,7 @@ impl RfEngine {
         for data in wb.regions.values() {
             writer.append_region_data(data);
         }
-        let size = writer.buf_size();
-        let rotated = writer.flush()?;
+        let (size, rotated) = writer.flush()?;
         drop(writer);
         if rotated {
             self.task_sender.send(Task::Rotate { epoch_id }).unwrap();
@@ -359,6 +358,7 @@ pub(crate) fn maybe_create_recycle_dir(dir: &Path) -> Result<()> {
     let recycle_path = dir.join(RECYCLE_DIR);
     if !recycle_path.exists() {
         fs::create_dir_all(recycle_path)?;
+        file_system::sync_dir(dir)?;
     } else if !recycle_path.is_dir() {
         return Err(Error::Open(String::from("recycle path is not dir")));
     }

@@ -12,7 +12,7 @@ use bytes::{Buf, BytesMut};
 use crate::{
     worker::wal_file_name,
     write_batch::RegionBatch,
-    writer::{ALIGN_MASK, ALIGN_SIZE, BATCH_HEADER_SIZE},
+    writer::{DmaBuffer, BATCH_HEADER_SIZE},
     Error, Result,
 };
 
@@ -77,15 +77,15 @@ impl WALIterator {
         if length > MAX_BATCH_SIZE {
             return Err(Error::EOF);
         }
-        let aligned_length = (BATCH_HEADER_SIZE + length + ALIGN_SIZE - 1) as u64 & ALIGN_MASK;
-        let remained_length = aligned_length as usize - BATCH_HEADER_SIZE;
+        let aligned_length = DmaBuffer::aligned_len(BATCH_HEADER_SIZE + length);
+        let remained_length = aligned_length - BATCH_HEADER_SIZE;
         self.buf.resize(remained_length, 0);
         reader.read_exact(&mut self.buf[..])?;
         let batch = &self.buf[..length];
         if checksum != crc32fast::hash(batch) {
             return Err(Error::EOF);
         }
-        self.offset += aligned_length;
+        self.offset += aligned_length as u64;
         Ok(batch)
     }
 }
