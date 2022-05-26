@@ -49,13 +49,25 @@ impl Worker {
         }
     }
 
-    pub(crate) fn run(&mut self) {
-        loop {
-            let res = self.task_rx.recv();
-            if res.is_err() {
-                return;
+    /// Reruns compaction tasks if needed.
+    /// It's possible a rotation task is interrupted due to crash, we should rerun it.
+    fn rerun_compact(&mut self) {
+        // Don't compact the last epoch because it's highly probable to truncate raft logs in it soon.
+        if self.epoches.len() < 2 {
+            return;
+        }
+        for i in 0..self.epoches.len() - 1 {
+            if self.epoches[i].has_wal_file {
+                if let Err(err) = self.compact(i) {
+                    error!("failed to compact epoch {} {:?}", self.epoches[i].id, err);
+                }
             }
-            let task = res.unwrap();
+        }
+    }
+
+    pub(crate) fn run(&mut self) {
+        self.rerun_compact();
+        while let Ok(task) = self.task_rx.recv() {
             match task {
                 Task::Rotate { epoch_id } => {
                     self.handle_rotate_task(epoch_id);
@@ -76,6 +88,7 @@ impl Worker {
         let mut epoch = Epoch::new(epoch_id);
         epoch.has_wal_file = true;
         self.epoches.push(epoch);
+        // Don't compact the last epoch because it's highly probable to truncate raft logs in it soon.
         if self.epoches.len() >= 2 {
             let idx = self.epoches.len() - 2;
             let compact_id = self.epoches[idx].id;
@@ -112,8 +125,7 @@ impl Worker {
     fn get_region_states(&mut self, region_id: u64) -> &mut BTreeMap<Bytes, Bytes> {
         self.all_states
             .entry(region_id)
-            .or_insert_with(|| BTreeMap::new());
-        self.all_states.get_mut(&region_id).unwrap()
+            .or_insert_with(|| BTreeMap::new())
     }
 
     fn compact(&mut self, epoch_idx: usize) -> Result<()> {
@@ -147,11 +159,31 @@ impl Worker {
             epoch_id, generated_files,
         );
         self.write_all_states(epoch_id)?;
+        let _ = file_system::sync_dir(self.dir.as_path());
+
+        if let Err(e) = self.recycle_wal_file(epoch_id) {
+            warn!("failed to recycle wal file"; "epoch_id" => epoch_id, "err" => %e);
+        }
+        Ok(())
+    }
+
+    fn recycle_wal_file(&self, epoch_id: u32) -> Result<()> {
+        let wal_filename = wal_file_name(self.dir.as_path(), epoch_id);
+        let recycled_count = self.dir.read_dir()?.count();
+        if recycled_count >= 3 {
+            fs::remove_file(wal_filename)?;
+            let _ = file_system::sync_dir(self.dir.as_path());
+            return Ok(());
+        }
+
         let wal_filename = wal_file_name(self.dir.as_path(), epoch_id);
         let recycle_filename = recycle_file_name(self.dir.as_path(), epoch_id);
-        fs::rename(wal_filename, recycle_filename)?;
-        file_system::sync_dir(self.dir.as_path())?;
-        file_system::sync_dir(self.dir.join(RECYCLE_DIR).as_path())?;
+        fs::rename(wal_filename.as_path(), recycle_filename).map_err(|e| {
+            let _ = fs::remove_file(wal_filename);
+            e
+        })?;
+        let _ = file_system::sync_dir(self.dir.as_path());
+        let _ = file_system::sync_dir(self.dir.join(RECYCLE_DIR).as_path());
         Ok(())
     }
 
