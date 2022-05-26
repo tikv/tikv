@@ -103,7 +103,7 @@ fn test_update_split_check_config() {
         let mut cop_config = cfg.coprocessor;
         cop_config.split_region_on_table = true;
         cop_config.batch_split_limit = 123;
-        cop_config.region_split_keys = 12345;
+        cop_config.region_split_keys = Some(12345);
         cop_config
     };
     validate(&scheduler, move |cfg: &Config| {

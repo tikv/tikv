@@ -441,11 +441,14 @@ where
     fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
-            // Error::Incompatible is returned by response header from PD, no need to retry
-            Err(Error::Incompatible) => true,
             Err(err) => {
-                error!(?*err; "request failed, retry");
-                false
+                // these errors are not caused by network, no need to retry
+                if err.retryable() {
+                    error!(?*err; "request failed, retry");
+                    false
+                } else {
+                    true
+                }
             }
         }
     }
@@ -573,6 +576,8 @@ impl PdConnector {
         let addr_trim = trim_http_prefix(addr);
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
+                .max_send_message_len(-1)
+                .max_receive_message_len(-1)
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
             self.security_mgr.connect(cb, addr_trim)
