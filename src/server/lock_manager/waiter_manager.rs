@@ -180,6 +180,7 @@ pub(crate) struct Waiter {
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
     _lifetime_timer: HistogramTimer,
+    wait_start_time: Instant,
 }
 
 impl Waiter {
@@ -199,6 +200,7 @@ impl Waiter {
             delay: Delay::new(deadline),
             diag_ctx,
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            wait_start_time: Instant::now(),
         }
     }
 
@@ -286,10 +288,18 @@ impl Waiter {
 // Maybe needs to use `BinaryHeap` or sorted `VecDeque` instead.
 type Waiters = Vec<Waiter>;
 
+struct WaitHistory {
+    blocked_txn: u64,
+    lock_holding_txn: u64,
+    wait_time: Duration,
+    resource_group_tag: Vec<u8>,
+}
+
 struct WaitTable {
     // Map lock hash to waiters.
     wait_table: HashMap<u64, Waiters>,
     waiter_count: Arc<AtomicUsize>,
+    history: VecDeque<WaitHistory>,
 }
 
 impl WaitTable {
@@ -297,6 +307,7 @@ impl WaitTable {
         Self {
             wait_table: HashMap::default(),
             waiter_count,
+            history: VecDeque::new()
         }
     }
 
@@ -345,6 +356,13 @@ impl WaitTable {
         if waiters.is_empty() {
             self.remove(lock);
         }
+        self.history.push(WaitHistory {
+            blocked_txn: waiter.start_ts.into_inner(),
+            lock_holding_txn: waiter.lock.ts.into_inner(),
+            wait_time: waiter.delay.get_duration(),
+            resource_group_tag: waiter.diag_ctx.resource_group_tag.clone(),
+            wait_time: waiter.wait_start_time.elapsed(),
+        });
         Some(waiter)
     }
 
@@ -659,6 +677,7 @@ pub mod tests {
             diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            wait_start_time: Instant::now(),
         }
     }
 
