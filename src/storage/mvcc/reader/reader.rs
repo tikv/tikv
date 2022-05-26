@@ -179,7 +179,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     }
 
     pub fn seek_ts(&mut self, ts: TimeStamp) -> Result<Option<Key>> {
-        if let Some(reader) = &mut self.cloud_reader{
+        if let Some(reader) = &mut self.cloud_reader {
             return reader.seek_ts(ts);
         }
         self.reader.seek_ts(ts)
