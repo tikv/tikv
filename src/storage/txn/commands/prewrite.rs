@@ -516,6 +516,19 @@ impl<K: PrewriteKind> Prewriter<K> {
                             .insert(key, (old_value, Some(mutation_type)));
                     }
                 }
+                Ok((..)) => {
+                    // If it needs min_commit_ts but min_commit_ts is zero, the lock
+                    // has been prewritten and has fallen back from async commit or 1PC.
+                    // We should let later keys prewrite in the old 2PC way.
+                    props.commit_kind = CommitKind::TwoPc;
+                    async_commit_pk = None;
+                    self.secondary_keys = None;
+                    self.try_one_pc = false;
+                    fallback_1pc_locks(txn);
+                    // release memory locks
+                    txn.guards = Vec::new();
+                    final_min_commit_ts = TimeStamp::zero();
+                }
                 Err(MvccError(box MvccErrorInner::WriteConflict {
                     start_ts,
                     conflict_commit_ts,
@@ -526,7 +539,14 @@ impl<K: PrewriteKind> Prewriter<K> {
                 Err(MvccError(box MvccErrorInner::PessimisticLockNotFound { .. })) => {
                     return check_committed_record_on_err(prewrite_result, txn, reader, &key);
                 }
-                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((..)) => {
+                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) => {
+                    // The prewrite might be a retry and the record may have been committed.
+                    // So, we need to prevent the fallback to avoid duplicate commits.
+                    if let Ok(res) =
+                        check_committed_record_on_err(prewrite_result, txn, reader, &key)
+                    {
+                        return Ok(res);
+                    }
                     // fallback to not using async commit or 1pc
                     props.commit_kind = CommitKind::TwoPc;
                     async_commit_pk = None;
@@ -2185,4 +2205,121 @@ mod tests {
             MvccError(box MvccErrorInner::AssertionFailed { .. })
         ));
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_prewrite_committed_encounter_newer_lock() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut statistics = Statistics::default();
+
+        let k1 = b"k1";
+        let v1 = b"v1";
+        let v2 = b"v2";
+
+        must_prewrite_put_async_commit(&engine, k1, v1, k1, &Some(vec![]), 5, 10);
+        // This commit may actually come from a ResolveLock command
+        must_commit(&engine, k1, 5, 15);
+
+        // Another transaction prewrites
+        must_prewrite_put(&engine, k1, v2, k1, 20);
+
+        // A retried prewrite of the first transaction should be idempotent.
+        let prewrite_cmd = Prewrite::new(
+            vec![Mutation::make_put(Key::from_raw(k1), v1.to_vec())],
+            k1.to_vec(),
+            5.into(),
+            2000,
+            false,
+            1,
+            5.into(),
+            1000.into(),
+            Some(vec![]),
+            false,
+            AssertionLevel::Off,
+            Context::default(),
+        );
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: ConcurrencyManager::new(20.into()),
+            extra_op: ExtraOp::Noop,
+            statistics: &mut statistics,
+            async_apply_prewrite: false,
+        };
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let res = prewrite_cmd.cmd.process_write(snap, context).unwrap();
+        match res.pr {
+            ProcessResult::PrewriteResult { result } => {
+                assert!(result.locks.is_empty(), "{:?}", result);
+                assert_eq!(result.min_commit_ts, 15.into(), "{:?}", result);
+            }
+            _ => panic!("unexpected result {:?}", res.pr),
+        }
+    }
+
+    #[test]
+    fn test_repeated_prewrite_commit_ts_too_large() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let mut statistics = Statistics::default();
+
+        // First, prewrite and commit normally.
+        must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 5, 10);
+        must_pessimistic_prewrite_put_async_commit(
+            &engine,
+            b"k1",
+            b"v1",
+            b"k1",
+            &Some(vec![b"k2".to_vec()]),
+            5,
+            10,
+            true,
+            15,
+        );
+        must_prewrite_put_impl(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &Some(vec![]),
+            5.into(),
+            false,
+            100,
+            10.into(),
+            1,
+            15.into(),
+            20.into(),
+            false,
+            Assertion::None,
+            AssertionLevel::Off,
+        );
+        must_commit(&engine, b"k1", 5, 18);
+        must_commit(&engine, b"k2", 5, 18);
+
+        // Update max_ts to be larger than the max_commit_ts.
+        cm.update_max_ts(50.into());
+
+        // Retry the prewrite on non-pessimistic key.
+        // (is_retry_request flag is not set, here we don't rely on it.)
+        let mutation = Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec());
+        let cmd = PrewritePessimistic::new(
+            vec![(mutation, false)],
+            b"k1".to_vec(),
+            5.into(),
+            100,
+            10.into(),
+            1,
+            15.into(),
+            20.into(),
+            Some(vec![]),
+            false,
+            AssertionLevel::Off,
+            Context::default(),
+        );
+        let res = prewrite_command(&engine, cm, &mut statistics, cmd).unwrap();
+        // It should return the real commit TS as the min_commit_ts in the result.
+        assert_eq!(res.min_commit_ts, 18.into(), "{:?}", res);
+        must_unlocked(&engine, b"k2");
+    }
+>>>>>>> c461cd829... txn: check committed record before async commit fallback (#12616)
 }
