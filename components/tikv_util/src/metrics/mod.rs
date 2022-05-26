@@ -1,7 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    collections::HashMap, sync::atomic::{AtomicU64, Ordering}, io::Write
+};
+
+use kvproto::pdpb;
 use lazy_static::lazy_static;
-use prometheus::*;
+use prometheus::{proto::MetricType, *};
 use prometheus_static_metric::*;
 
 #[cfg(target_os = "linux")]
@@ -31,12 +36,6 @@ pub use self::metrics_reader::HistogramReader;
 
 mod metrics_reader;
 
-use std::{
-    collections::HashMap,
-    sync::atomic::{AtomicU64, Ordering},
-};
-
-use kvproto::pdpb;
 pub type RecordPairVec = Vec<pdpb::RecordPair>;
 
 lazy_static! {
@@ -55,19 +54,24 @@ const METRICS_DUMP_FACTOR: u64 = 2;
 
 pub fn dump(should_simplify: bool) -> String {
     let mut buffer = vec![];
+    dump_to(&mut buffer, should_simplify);
+    String::from_utf8(buffer).unwrap()
+}
+
+pub fn dump_to(w: &mut impl Write, should_simplify: bool) {
     let encoder = TextEncoder::new();
 
     dump_metrics(
         HIGH_PRIORITY_REGISTRY.gather(),
         &encoder,
-        &mut buffer,
+        w,
         should_simplify,
         true,
     );
     dump_metrics(
         FULL_HISTOGRAM_REGISTRY.gather(),
         &encoder,
-        &mut buffer,
+        w,
         should_simplify,
         false,
     );
@@ -77,7 +81,7 @@ pub fn dump(should_simplify: bool) -> String {
         dump_metrics(
             prometheus::gather(),
             &encoder,
-            &mut buffer,
+            w,
             should_simplify,
             true,
         );
@@ -86,13 +90,11 @@ pub fn dump(should_simplify: bool) -> String {
         dump_metrics(
             UNUSED_METRICS_REGISTRY.gather(),
             &encoder,
-            &mut buffer,
+            w,
             false,
             false,
         );
     }
-
-    String::from_utf8(buffer).unwrap()
 }
 
 fn dump_metrics<E: Encoder, W: std::io::Write>(
@@ -102,7 +104,6 @@ fn dump_metrics<E: Encoder, W: std::io::Write>(
     should_simplify: bool,
     compact_histogram: bool,
 ) {
-    use prometheus::proto::MetricType;
     if !should_simplify {
         if let Err(e) = encoder.encode(&*metric_families, writer) {
             warn!("prometheus encoding error"; "err" => ?e);

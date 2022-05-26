@@ -221,8 +221,12 @@ impl ImportDir {
         })
     }
 
-    pub fn join(&self, meta: &SstMeta) -> Result<ImportPath> {
-        let file_name = sst_meta_to_path(meta)?;
+    pub fn get_root_dir(&self) -> &PathBuf {
+        &self.root_dir
+    }
+
+    /// Make an import path base on the basic path and the file name.
+    pub fn get_import_path(&self, file_name: &str) -> Result<ImportPath> {
         let save_path = self.root_dir.join(&file_name);
         let temp_path = self.temp_dir.join(&file_name);
         let clone_path = self.clone_dir.join(&file_name);
@@ -231,6 +235,11 @@ impl ImportDir {
             temp: temp_path,
             clone: clone_path,
         })
+    }
+
+    pub fn join(&self, meta: &SstMeta) -> Result<ImportPath> {
+        let file_name = sst_meta_to_path(meta)?;
+        self.get_import_path(file_name.to_str().unwrap())
     }
 
     pub fn create(
@@ -346,7 +355,7 @@ impl ImportDir {
             .check_api_version(&meta_vec, key_manager.clone(), api_version)
             .unwrap()
         {
-            panic!("cannot ingest because of imcompatible api version");
+            panic!("cannot ingest because of incompatible api version");
         }
 
         let mut paths = HashMap::new();

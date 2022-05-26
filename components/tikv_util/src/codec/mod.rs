@@ -2,6 +2,7 @@
 
 pub mod bytes;
 pub mod number;
+pub mod stream_event;
 
 use std::io::{self, ErrorKind};
 

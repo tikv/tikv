@@ -39,7 +39,7 @@ use crate::{
 };
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
-const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
+pub const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 
 // The default version that can enable compaction filter for GC. This is necessary because after
 // compaction filter is enabled, it's impossible to fallback to ealier version which modifications
@@ -48,14 +48,14 @@ const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
 // Global context to create a compaction filter for write CF. It's necessary as these fields are
 // not available when constructing `WriteCompactionFilterFactory`.
-struct GcContext {
-    db: RocksEngine,
-    store_id: u64,
-    safe_point: Arc<AtomicU64>,
+pub struct GcContext {
+    pub(crate) db: RocksEngine,
+    pub(crate) store_id: u64,
+    pub(crate) safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
     feature_gate: FeatureGate,
-    gc_scheduler: Scheduler<GcTask<RocksEngine>>,
-    region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
+    pub(crate) gc_scheduler: Scheduler<GcTask<RocksEngine>>,
+    pub(crate) region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 }
@@ -64,16 +64,16 @@ struct GcContext {
 static ORPHAN_VERSIONS_ID: AtomicUsize = AtomicUsize::new(0);
 
 lazy_static! {
-    static ref GC_CONTEXT: Mutex<Option<GcContext>> = Mutex::new(None);
+    pub static ref GC_CONTEXT: Mutex<Option<GcContext>> = Mutex::new(None);
 
     // Filtered keys in `WriteCompactionFilter::filter_v2`.
-    static ref GC_COMPACTION_FILTERED: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_FILTERED: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filtered",
         "Filtered versions by compaction"
     )
     .unwrap();
     // A counter for errors met by `WriteCompactionFilter`.
-    static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
+    pub static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_failure",
         "Compaction filter meets failure",
         &["type"]
@@ -93,7 +93,7 @@ lazy_static! {
 
 
     // `WriteType::Rollback` and `WriteType::Lock` are handled in different ways.
-    static ref GC_COMPACTION_MVCC_ROLLBACK: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_MVCC_ROLLBACK: IntCounter = register_int_counter!(
         "tikv_gc_compaction_mvcc_rollback",
         "Compaction of mvcc rollbacks"
     )
@@ -530,18 +530,18 @@ impl WriteCompactionFilter {
     }
 }
 
-struct CompactionFilterStats {
-    versions: Cell<usize>, // Total stale versions meet by compaction filters.
-    filtered: Cell<usize>, // Filtered versions by compaction filters.
-    last_report: Cell<Instant>,
+pub struct CompactionFilterStats {
+    pub versions: Cell<usize>, // Total stale versions meet by compaction filters.
+    pub filtered: Cell<usize>, // Filtered versions by compaction filters.
+    pub last_report: Cell<Instant>,
 }
 impl CompactionFilterStats {
-    fn need_report(&self) -> bool {
+    pub fn need_report(&self) -> bool {
         self.versions.get() >= 1024 * 1024 // 1M versions.
             || self.last_report.get().saturating_elapsed() >= Duration::from_secs(60)
     }
 
-    fn prepare_report(&self) -> (usize, usize) {
+    pub fn prepare_report(&self) -> (usize, usize) {
         let versions = self.versions.replace(0);
         let filtered = self.filtered.replace(0);
         self.last_report.set(Instant::now());
@@ -703,7 +703,7 @@ pub mod test_utils {
         util::get_cf_handle,
         RocksEngine,
     };
-    use engine_traits::{SyncMutable, CF_WRITE};
+    use engine_traits::{SyncMutable, CF_DEFAULT, CF_WRITE};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::{
         config::VersionTrack,
@@ -816,6 +816,21 @@ pub mod test_utils {
                 compact_opts.set_target_level(target_level as i32);
             }
             db.compact_range_cf_opt(handle, &compact_opts, self.start, self.end);
+            self.post_gc();
+        }
+
+        pub fn gc_raw(&mut self, engine: &RocksEngine) {
+            let _guard = LOCK.lock().unwrap();
+            self.prepare_gc(engine);
+
+            let db = engine.as_inner();
+            let handle = get_cf_handle(db, CF_DEFAULT).unwrap();
+            let mut compact_opts = default_compact_options();
+            if let Some(target_level) = self.target_level {
+                compact_opts.set_change_level(true);
+                compact_opts.set_target_level(target_level as i32);
+            }
+            db.compact_range_cf_opt(handle, &compact_opts, None, None);
             self.post_gc();
         }
 

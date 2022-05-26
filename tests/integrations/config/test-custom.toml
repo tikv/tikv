@@ -218,6 +218,7 @@ reactive-memory-lock-tick-interval = "566ms"
 reactive-memory-lock-timeout-tick = 8
 report-min-resolved-ts-interval = "233ms"
 report-region-buckets-tick-interval = "1234s"
+max-snapshot-file-raw-size = "10GB"
 
 [coprocessor]
 split-region-on-table = false
@@ -576,6 +577,7 @@ purge-threshold = "1GB"
 recovery-mode = "tolerate-tail-corruption"
 recovery-read-block-size = "1KB"
 recovery-threads = 2
+memory-limit = "1GB"
 
 [security]
 ca-path = "invalid path"

@@ -230,7 +230,13 @@ impl Simulator for NodeCluster {
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
+        raft_store
+            .validate(
+                cfg.coprocessor.region_split_size,
+                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.region_bucket_size,
+            )
+            .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let mut node = Node::new(
             system,
@@ -257,6 +263,7 @@ impl Simulator for NodeCluster {
                 .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
                 .max_total_size(cfg.server.snap_max_total_size.0)
                 .encryption_key_manager(key_manager)
+                .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
@@ -326,8 +333,13 @@ impl Simulator for NodeCluster {
                 .map(|p| p.path().to_str().unwrap().to_owned())
         );
 
+        let region_split_size = cfg.coprocessor.region_split_size;
+        let enable_region_bucket = cfg.coprocessor.enable_region_bucket;
+        let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.validate().unwrap();
+        raftstore_cfg
+            .validate(region_split_size, enable_region_bucket, region_bucket_size)
+            .unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,

@@ -28,6 +28,7 @@ mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 
 [dependencies]
+api_version = { path = "../api_version" }
 bitflags = "1.0"
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }

@@ -1,11 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use file_system::{get_io_type, set_io_type, IOType};
+use regex::Regex;
 use rocksdb::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MutableStatus,
     SubcompactionJobInfo, WriteStallInfo,
 };
-use tikv_util::set_panic_mark;
+use tikv_util::{error, metrics::CRITICAL_ERROR, set_panic_mark, warn, worker::Scheduler};
 
 use crate::rocks_metrics::*;
 
@@ -14,12 +15,17 @@ const NO_SPACE_ERROR: &str = "IO error: No space left on device";
 
 pub struct RocksEventListener {
     db_name: String,
+    sst_recovery_scheduler: Option<Scheduler<String>>,
 }
 
 impl RocksEventListener {
-    pub fn new(db_name: &str) -> RocksEventListener {
+    pub fn new(
+        db_name: &str,
+        sst_recovery_scheduler: Option<Scheduler<String>>,
+    ) -> RocksEventListener {
         RocksEventListener {
             db_name: db_name.to_owned(),
+            sst_recovery_scheduler,
         }
     }
 }
@@ -107,12 +113,36 @@ impl rocksdb::EventListener for RocksEventListener {
                 // Ignore NoSpace error and let RocksDB automatically recover.
                 return;
             }
+
             let r = match reason {
                 DBBackgroundErrorReason::Flush => "flush",
                 DBBackgroundErrorReason::Compaction => "compaction",
                 DBBackgroundErrorReason::WriteCallback => "write_callback",
                 DBBackgroundErrorReason::MemTable => "memtable",
             };
+
+            if err.starts_with("Corruption") || err.starts_with("IO error") {
+                if let Some(scheduler) = self.sst_recovery_scheduler.as_ref() {
+                    if let Some(path) = resolve_sst_filename_from_err(&err) {
+                        warn!(
+                            "detected rocksdb background error";
+                            "sst" => &path,
+                            "err" => &err
+                        );
+                        match scheduler.schedule(path) {
+                            Ok(()) => {
+                                status.reset();
+                                CRITICAL_ERROR.with_label_values(&["sst_corruption"]).inc();
+                                return;
+                            }
+                            Err(e) => {
+                                error!("rocksdb sst recovery job schedule failed, error: {:?}", e);
+                            }
+                        }
+                    }
+                }
+            }
+
             // Avoid tikv from restarting if rocksdb get corruption.
             if err.starts_with("Corruption") {
                 set_panic_mark();
@@ -128,5 +158,32 @@ impl rocksdb::EventListener for RocksEventListener {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "stall_conditions_changed"])
             .inc();
+    }
+}
+
+// Here are some expected error examples:
+// 1. Corruption: Sst file size mismatch: /qps/data/tikv-10014/db/000398.sst. Size recorded in manifest 6975, actual size 6959
+// 2. Corruption: Bad table magic number: expected 9863518390377041911, found 759105309091689679 in /qps/data/tikv-10014/db/000021.sst
+//
+// We assume that only the corruption sst file path is printed inside error.
+fn resolve_sst_filename_from_err(err: &str) -> Option<String> {
+    let r = Regex::new(r"/\w*\.sst").unwrap();
+    let matches = match r.captures(err) {
+        None => return None,
+        Some(v) => v,
+    };
+    let filename = matches.get(0).unwrap().as_str().to_owned();
+    Some(filename)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_sst_filename() {
+        let err = "Corruption: Sst file size mismatch: /qps/data/tikv-10014/db/000398.sst. Size recorded in manifest 6975, actual size 6959";
+        let filename = resolve_sst_filename_from_err(err).unwrap();
+        assert_eq!(filename, "/000398.sst");
     }
 }
