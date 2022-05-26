@@ -6825,11 +6825,8 @@ mod tests {
             diag_ctx: DiagnosticContext,
         },
 
-        WakeUp {
-            lock_ts: TimeStamp,
-            hashes: Vec<u64>,
-            commit_ts: TimeStamp,
-            is_pessimistic_txn: bool,
+        RemoveLockWait {
+            token: LockWaitToken,
         },
     }
 
@@ -6883,21 +6880,8 @@ mod tests {
             LockWaitToken(Some(1))
         }
 
-        fn wake_up(
-            &self,
-            lock_ts: TimeStamp,
-            hashes: Vec<u64>,
-            commit_ts: TimeStamp,
-            is_pessimistic_txn: bool,
-        ) {
-            self.tx
-                .send(Msg::WakeUp {
-                    lock_ts,
-                    hashes,
-                    commit_ts,
-                    is_pessimistic_txn,
-                })
-                .unwrap();
+        fn remove_lock_wait(&self, token: LockWaitToken) {
+            self.tx.send(Msg::RemoveLockWait { token }).unwrap();
         }
 
         fn has_waiter(&self) -> bool {
@@ -7002,335 +6986,326 @@ mod tests {
     }
 
     // Test whether `Storage` sends right wake-up msgs to `LockManager`
-    #[test]
-    fn validate_wake_up_msg() {
-        fn assert_wake_up_msg_eq(
-            msg: Msg,
-            expected_lock_ts: TimeStamp,
-            expected_hashes: Vec<u64>,
-            expected_commit_ts: TimeStamp,
-            expected_is_pessimistic_txn: bool,
-        ) {
-            match msg {
-                Msg::WakeUp {
-                    lock_ts,
-                    hashes,
-                    commit_ts,
-                    is_pessimistic_txn,
-                } => {
-                    assert_eq!(lock_ts, expected_lock_ts);
-                    assert_eq!(hashes, expected_hashes);
-                    assert_eq!(commit_ts, expected_commit_ts);
-                    assert_eq!(is_pessimistic_txn, expected_is_pessimistic_txn);
-                }
-                _ => panic!("unexpected msg"),
-            }
-        }
-
-        let (msg_tx, msg_rx) = channel();
-        let mut lock_mgr = ProxyLockMgr::new(msg_tx);
-        lock_mgr.set_has_waiter(true);
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
-            TestEngineBuilder::new().build().unwrap(),
-            lock_mgr,
-            ApiVersion::V1,
-        )
-        .build()
-        .unwrap();
-
-        let (tx, rx) = channel();
-        let prewrite_locks = |keys: &[Key], ts: TimeStamp| {
-            storage
-                .sched_txn_command(
-                    commands::Prewrite::with_defaults(
-                        keys.iter()
-                            .map(|k| Mutation::make_put(k.clone(), b"v".to_vec()))
-                            .collect(),
-                        keys[0].to_raw().unwrap(),
-                        ts,
-                    ),
-                    expect_ok_callback(tx.clone(), 0),
-                )
-                .unwrap();
-            rx.recv().unwrap();
-        };
-        let acquire_pessimistic_locks = |keys: &[Key], ts: TimeStamp| {
-            storage
-                .sched_txn_command(
-                    new_acquire_pessimistic_lock_command(
-                        keys.iter().map(|k| (k.clone(), false)).collect(),
-                        ts,
-                        ts,
-                        false,
-                        false,
-                    ),
-                    expect_ok_callback(tx.clone(), 0),
-                )
-                .unwrap();
-            rx.recv().unwrap();
-        };
-
-        let keys = vec![
-            Key::from_raw(b"a"),
-            Key::from_raw(b"b"),
-            Key::from_raw(b"c"),
-        ];
-        let key_hashes: Vec<u64> = keys.iter().map(|k| k.gen_hash()).collect();
-
-        // Commit
-        prewrite_locks(&keys, 10.into());
-        // If locks don't exsit, hashes of released locks should be empty.
-        for empty_hashes in &[false, true] {
-            storage
-                .sched_txn_command(
-                    commands::Commit::new(keys.clone(), 10.into(), 20.into(), Context::default()),
-                    expect_ok_callback(tx.clone(), 0),
-                )
-                .unwrap();
-            rx.recv().unwrap();
-
-            let msg = msg_rx.recv().unwrap();
-            let hashes = if *empty_hashes {
-                Vec::new()
-            } else {
-                key_hashes.clone()
-            };
-            assert_wake_up_msg_eq(msg, 10.into(), hashes, 20.into(), false);
-        }
-
-        // Cleanup
-        for pessimistic in &[false, true] {
-            let mut ts = TimeStamp::new(30);
-            if *pessimistic {
-                ts.incr();
-                acquire_pessimistic_locks(&keys[..1], ts);
-            } else {
-                prewrite_locks(&keys[..1], ts);
-            }
-            for empty_hashes in &[false, true] {
-                storage
-                    .sched_txn_command(
-                        commands::Cleanup::new(
-                            keys[0].clone(),
-                            ts,
-                            TimeStamp::max(),
-                            Context::default(),
-                        ),
-                        expect_ok_callback(tx.clone(), 0),
-                    )
-                    .unwrap();
-                rx.recv().unwrap();
-
-                let msg = msg_rx.recv().unwrap();
-                let (hashes, pessimistic) = if *empty_hashes {
-                    (Vec::new(), false)
-                } else {
-                    (key_hashes[..1].to_vec(), *pessimistic)
-                };
-                assert_wake_up_msg_eq(msg, ts, hashes, 0.into(), pessimistic);
-            }
-        }
-
-        // Rollback
-        for pessimistic in &[false, true] {
-            let mut ts = TimeStamp::new(40);
-            if *pessimistic {
-                ts.incr();
-                acquire_pessimistic_locks(&keys, ts);
-            } else {
-                prewrite_locks(&keys, ts);
-            }
-            for empty_hashes in &[false, true] {
-                storage
-                    .sched_txn_command(
-                        commands::Rollback::new(keys.clone(), ts, Context::default()),
-                        expect_ok_callback(tx.clone(), 0),
-                    )
-                    .unwrap();
-                rx.recv().unwrap();
-
-                let msg = msg_rx.recv().unwrap();
-                let (hashes, pessimistic) = if *empty_hashes {
-                    (Vec::new(), false)
-                } else {
-                    (key_hashes.clone(), *pessimistic)
-                };
-                assert_wake_up_msg_eq(msg, ts, hashes, 0.into(), pessimistic);
-            }
-        }
-
-        // PessimisticRollback
-        acquire_pessimistic_locks(&keys, 50.into());
-        for empty_hashes in &[false, true] {
-            storage
-                .sched_txn_command(
-                    commands::PessimisticRollback::new(
-                        keys.clone(),
-                        50.into(),
-                        50.into(),
-                        Context::default(),
-                    ),
-                    expect_ok_callback(tx.clone(), 0),
-                )
-                .unwrap();
-            rx.recv().unwrap();
-
-            let msg = msg_rx.recv().unwrap();
-            let (hashes, pessimistic) = if *empty_hashes {
-                (Vec::new(), false)
-            } else {
-                (key_hashes.clone(), true)
-            };
-            assert_wake_up_msg_eq(msg, 50.into(), hashes, 0.into(), pessimistic);
-        }
-
-        // ResolveLockLite
-        for commit in &[false, true] {
-            let mut start_ts = TimeStamp::new(60);
-            let commit_ts = if *commit {
-                start_ts.incr();
-                start_ts.next()
-            } else {
-                TimeStamp::zero()
-            };
-            prewrite_locks(&keys, start_ts);
-            for empty_hashes in &[false, true] {
-                storage
-                    .sched_txn_command(
-                        commands::ResolveLockLite::new(
-                            start_ts,
-                            commit_ts,
-                            keys.clone(),
-                            Context::default(),
-                        ),
-                        expect_ok_callback(tx.clone(), 0),
-                    )
-                    .unwrap();
-                rx.recv().unwrap();
-
-                let msg = msg_rx.recv().unwrap();
-                let hashes = if *empty_hashes {
-                    Vec::new()
-                } else {
-                    key_hashes.clone()
-                };
-                assert_wake_up_msg_eq(msg, start_ts, hashes, commit_ts, false);
-            }
-        }
-
-        // ResolveLock
-        let mut txn_status = HashMap::default();
-        acquire_pessimistic_locks(&keys, 70.into());
-        // Rollback start_ts=70
-        txn_status.insert(TimeStamp::new(70), TimeStamp::zero());
-        let committed_keys = vec![
-            Key::from_raw(b"d"),
-            Key::from_raw(b"e"),
-            Key::from_raw(b"f"),
-        ];
-        let committed_key_hashes: Vec<u64> = committed_keys.iter().map(|k| k.gen_hash()).collect();
-        // Commit start_ts=75
-        prewrite_locks(&committed_keys, 75.into());
-        txn_status.insert(TimeStamp::new(75), TimeStamp::new(76));
-        storage
-            .sched_txn_command(
-                commands::ResolveLockReadPhase::new(txn_status, None, Context::default()),
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-
-        let mut msg1 = msg_rx.recv().unwrap();
-        let mut msg2 = msg_rx.recv().unwrap();
-        match msg1 {
-            Msg::WakeUp { lock_ts, .. } => {
-                if lock_ts != TimeStamp::new(70) {
-                    // Let msg1 be the msg of rolled back transaction.
-                    std::mem::swap(&mut msg1, &mut msg2);
-                }
-                assert_wake_up_msg_eq(msg1, 70.into(), key_hashes, 0.into(), true);
-                assert_wake_up_msg_eq(msg2, 75.into(), committed_key_hashes, 76.into(), false);
-            }
-            _ => panic!("unexpect msg"),
-        }
-
-        // CheckTxnStatus
-        let key = Key::from_raw(b"k");
-        let start_ts = TimeStamp::compose(100, 0);
-        storage
-            .sched_txn_command(
-                commands::Prewrite::with_lock_ttl(
-                    vec![Mutation::make_put(key.clone(), b"v".to_vec())],
-                    key.to_raw().unwrap(),
-                    start_ts,
-                    100,
-                ),
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-
-        // Not expire
-        storage
-            .sched_txn_command(
-                commands::CheckTxnStatus::new(
-                    key.clone(),
-                    start_ts,
-                    TimeStamp::compose(110, 0),
-                    TimeStamp::compose(150, 0),
-                    false,
-                    false,
-                    false,
-                    Context::default(),
-                ),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    TxnStatus::uncommitted(
-                        txn_types::Lock::new(
-                            LockType::Put,
-                            b"k".to_vec(),
-                            start_ts,
-                            100,
-                            Some(b"v".to_vec()),
-                            0.into(),
-                            0,
-                            0.into(),
-                        ),
-                        false,
-                    ),
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        // No msg
-        assert!(msg_rx.try_recv().is_err());
-
-        // Expired
-        storage
-            .sched_txn_command(
-                commands::CheckTxnStatus::new(
-                    key.clone(),
-                    start_ts,
-                    TimeStamp::compose(110, 0),
-                    TimeStamp::compose(201, 0),
-                    false,
-                    false,
-                    false,
-                    Context::default(),
-                ),
-                expect_value_callback(tx.clone(), 0, TxnStatus::TtlExpire),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        assert_wake_up_msg_eq(
-            msg_rx.recv().unwrap(),
-            start_ts,
-            vec![key.gen_hash()],
-            0.into(),
-            false,
-        );
-    }
+    // #[test]
+    // fn validate_wake_up_msg() {
+    //     fn assert_wake_up_msg_eq(
+    //         msg: Msg,
+    //         expected_token: LockWaitToken,
+    //     ) {
+    //         match msg {
+    //             Msg::RemoveLockWait {
+    //                 token,
+    //             } => {
+    //                 assert_eq!(token, expected_token);
+    //             }
+    //             _ => panic!("unexpected msg"),
+    //         }
+    //     }
+    //
+    //     let (msg_tx, msg_rx) = channel();
+    //     let mut lock_mgr = ProxyLockMgr::new(msg_tx);
+    //     lock_mgr.set_has_waiter(true);
+    //     let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+    //         TestEngineBuilder::new().build().unwrap(),
+    //         lock_mgr,
+    //         ApiVersion::V1,
+    //     )
+    //     .build()
+    //     .unwrap();
+    //
+    //     let (tx, rx) = channel();
+    //     let prewrite_locks = |keys: &[Key], ts: TimeStamp| {
+    //         storage
+    //             .sched_txn_command(
+    //                 commands::Prewrite::with_defaults(
+    //                     keys.iter()
+    //                         .map(|k| Mutation::make_put(k.clone(), b"v".to_vec()))
+    //                         .collect(),
+    //                     keys[0].to_raw().unwrap(),
+    //                     ts,
+    //                 ),
+    //                 expect_ok_callback(tx.clone(), 0),
+    //             )
+    //             .unwrap();
+    //         rx.recv().unwrap();
+    //     };
+    //     let acquire_pessimistic_locks = |keys: &[Key], ts: TimeStamp| {
+    //         storage
+    //             .sched_txn_command(
+    //                 new_acquire_pessimistic_lock_command(
+    //                     keys.iter().map(|k| (k.clone(), false)).collect(),
+    //                     ts,
+    //                     ts,
+    //                     false,
+    //                     false,
+    //                 ),
+    //                 expect_ok_callback(tx.clone(), 0),
+    //             )
+    //             .unwrap();
+    //         rx.recv().unwrap();
+    //     };
+    //
+    //     let keys = vec![
+    //         Key::from_raw(b"a"),
+    //         Key::from_raw(b"b"),
+    //         Key::from_raw(b"c"),
+    //     ];
+    //     let key_hashes: Vec<u64> = keys.iter().map(|k| k.gen_hash()).collect();
+    //
+    //     // Commit
+    //     prewrite_locks(&keys, 10.into());
+    //     // If locks don't exsit, hashes of released locks should be empty.
+    //     for empty_hashes in &[false, true] {
+    //         storage
+    //             .sched_txn_command(
+    //                 commands::Commit::new(keys.clone(), 10.into(), 20.into(), Context::default()),
+    //                 expect_ok_callback(tx.clone(), 0),
+    //             )
+    //             .unwrap();
+    //         rx.recv().unwrap();
+    //
+    //         let msg = msg_rx.recv().unwrap();
+    //         let hashes = if *empty_hashes {
+    //             Vec::new()
+    //         } else {
+    //             key_hashes.clone()
+    //         };
+    //         assert_wake_up_msg_eq(msg, 10.into(), hashes, 20.into(), false);
+    //     }
+    //
+    //     // Cleanup
+    //     for pessimistic in &[false, true] {
+    //         let mut ts = TimeStamp::new(30);
+    //         if *pessimistic {
+    //             ts.incr();
+    //             acquire_pessimistic_locks(&keys[..1], ts);
+    //         } else {
+    //             prewrite_locks(&keys[..1], ts);
+    //         }
+    //         for empty_hashes in &[false, true] {
+    //             storage
+    //                 .sched_txn_command(
+    //                     commands::Cleanup::new(
+    //                         keys[0].clone(),
+    //                         ts,
+    //                         TimeStamp::max(),
+    //                         Context::default(),
+    //                     ),
+    //                     expect_ok_callback(tx.clone(), 0),
+    //                 )
+    //                 .unwrap();
+    //             rx.recv().unwrap();
+    //
+    //             let msg = msg_rx.recv().unwrap();
+    //             let (hashes, pessimistic) = if *empty_hashes {
+    //                 (Vec::new(), false)
+    //             } else {
+    //                 (key_hashes[..1].to_vec(), *pessimistic)
+    //             };
+    //             assert_wake_up_msg_eq(msg, ts, hashes, 0.into(), pessimistic);
+    //         }
+    //     }
+    //
+    //     // Rollback
+    //     for pessimistic in &[false, true] {
+    //         let mut ts = TimeStamp::new(40);
+    //         if *pessimistic {
+    //             ts.incr();
+    //             acquire_pessimistic_locks(&keys, ts);
+    //         } else {
+    //             prewrite_locks(&keys, ts);
+    //         }
+    //         for empty_hashes in &[false, true] {
+    //             storage
+    //                 .sched_txn_command(
+    //                     commands::Rollback::new(keys.clone(), ts, Context::default()),
+    //                     expect_ok_callback(tx.clone(), 0),
+    //                 )
+    //                 .unwrap();
+    //             rx.recv().unwrap();
+    //
+    //             let msg = msg_rx.recv().unwrap();
+    //             let (hashes, pessimistic) = if *empty_hashes {
+    //                 (Vec::new(), false)
+    //             } else {
+    //                 (key_hashes.clone(), *pessimistic)
+    //             };
+    //             assert_wake_up_msg_eq(msg, ts, hashes, 0.into(), pessimistic);
+    //         }
+    //     }
+    //
+    //     // PessimisticRollback
+    //     acquire_pessimistic_locks(&keys, 50.into());
+    //     for empty_hashes in &[false, true] {
+    //         storage
+    //             .sched_txn_command(
+    //                 commands::PessimisticRollback::new(
+    //                     keys.clone(),
+    //                     50.into(),
+    //                     50.into(),
+    //                     Context::default(),
+    //                 ),
+    //                 expect_ok_callback(tx.clone(), 0),
+    //             )
+    //             .unwrap();
+    //         rx.recv().unwrap();
+    //
+    //         let msg = msg_rx.recv().unwrap();
+    //         let (hashes, pessimistic) = if *empty_hashes {
+    //             (Vec::new(), false)
+    //         } else {
+    //             (key_hashes.clone(), true)
+    //         };
+    //         assert_wake_up_msg_eq(msg, 50.into(), hashes, 0.into(), pessimistic);
+    //     }
+    //
+    //     // ResolveLockLite
+    //     for commit in &[false, true] {
+    //         let mut start_ts = TimeStamp::new(60);
+    //         let commit_ts = if *commit {
+    //             start_ts.incr();
+    //             start_ts.next()
+    //         } else {
+    //             TimeStamp::zero()
+    //         };
+    //         prewrite_locks(&keys, start_ts);
+    //         for empty_hashes in &[false, true] {
+    //             storage
+    //                 .sched_txn_command(
+    //                     commands::ResolveLockLite::new(
+    //                         start_ts,
+    //                         commit_ts,
+    //                         keys.clone(),
+    //                         Context::default(),
+    //                     ),
+    //                     expect_ok_callback(tx.clone(), 0),
+    //                 )
+    //                 .unwrap();
+    //             rx.recv().unwrap();
+    //
+    //             let msg = msg_rx.recv().unwrap();
+    //             let hashes = if *empty_hashes {
+    //                 Vec::new()
+    //             } else {
+    //                 key_hashes.clone()
+    //             };
+    //             assert_wake_up_msg_eq(msg, start_ts, hashes, commit_ts, false);
+    //         }
+    //     }
+    //
+    //     // ResolveLock
+    //     let mut txn_status = HashMap::default();
+    //     acquire_pessimistic_locks(&keys, 70.into());
+    //     // Rollback start_ts=70
+    //     txn_status.insert(TimeStamp::new(70), TimeStamp::zero());
+    //     let committed_keys = vec![
+    //         Key::from_raw(b"d"),
+    //         Key::from_raw(b"e"),
+    //         Key::from_raw(b"f"),
+    //     ];
+    //     let committed_key_hashes: Vec<u64> = committed_keys.iter().map(|k| k.gen_hash()).collect();
+    //     // Commit start_ts=75
+    //     prewrite_locks(&committed_keys, 75.into());
+    //     txn_status.insert(TimeStamp::new(75), TimeStamp::new(76));
+    //     storage
+    //         .sched_txn_command(
+    //             commands::ResolveLockReadPhase::new(txn_status, None, Context::default()),
+    //             expect_ok_callback(tx.clone(), 0),
+    //         )
+    //         .unwrap();
+    //     rx.recv().unwrap();
+    //
+    //     let mut msg1 = msg_rx.recv().unwrap();
+    //     let mut msg2 = msg_rx.recv().unwrap();
+    //     match msg1 {
+    //         Msg::RemoveLockWait { lock_ts, .. } => {
+    //             if lock_ts != TimeStamp::new(70) {
+    //                 // Let msg1 be the msg of rolled back transaction.
+    //                 std::mem::swap(&mut msg1, &mut msg2);
+    //             }
+    //             assert_wake_up_msg_eq(msg1, 70.into(), key_hashes, 0.into(), true);
+    //             assert_wake_up_msg_eq(msg2, 75.into(), committed_key_hashes, 76.into(), false);
+    //         }
+    //         _ => panic!("unexpect msg"),
+    //     }
+    //
+    //     // CheckTxnStatus
+    //     let key = Key::from_raw(b"k");
+    //     let start_ts = TimeStamp::compose(100, 0);
+    //     storage
+    //         .sched_txn_command(
+    //             commands::Prewrite::with_lock_ttl(
+    //                 vec![Mutation::make_put(key.clone(), b"v".to_vec())],
+    //                 key.to_raw().unwrap(),
+    //                 start_ts,
+    //                 100,
+    //             ),
+    //             expect_ok_callback(tx.clone(), 0),
+    //         )
+    //         .unwrap();
+    //     rx.recv().unwrap();
+    //
+    //     // Not expire
+    //     storage
+    //         .sched_txn_command(
+    //             commands::CheckTxnStatus::new(
+    //                 key.clone(),
+    //                 start_ts,
+    //                 TimeStamp::compose(110, 0),
+    //                 TimeStamp::compose(150, 0),
+    //                 false,
+    //                 false,
+    //                 false,
+    //                 Context::default(),
+    //             ),
+    //             expect_value_callback(
+    //                 tx.clone(),
+    //                 0,
+    //                 TxnStatus::uncommitted(
+    //                     txn_types::Lock::new(
+    //                         LockType::Put,
+    //                         b"k".to_vec(),
+    //                         start_ts,
+    //                         100,
+    //                         Some(b"v".to_vec()),
+    //                         0.into(),
+    //                         0,
+    //                         0.into(),
+    //                     ),
+    //                     false,
+    //                 ),
+    //             ),
+    //         )
+    //         .unwrap();
+    //     rx.recv().unwrap();
+    //     // No msg
+    //     assert!(msg_rx.try_recv().is_err());
+    //
+    //     // Expired
+    //     storage
+    //         .sched_txn_command(
+    //             commands::CheckTxnStatus::new(
+    //                 key.clone(),
+    //                 start_ts,
+    //                 TimeStamp::compose(110, 0),
+    //                 TimeStamp::compose(201, 0),
+    //                 false,
+    //                 false,
+    //                 false,
+    //                 Context::default(),
+    //             ),
+    //             expect_value_callback(tx.clone(), 0, TxnStatus::TtlExpire),
+    //         )
+    //         .unwrap();
+    //     rx.recv().unwrap();
+    //     assert_wake_up_msg_eq(
+    //         msg_rx.recv().unwrap(),
+    //         start_ts,
+    //         vec![key.gen_hash()],
+    //         0.into(),
+    //         false,
+    //     );
+    // }
 
     #[test]
     fn test_check_memory_locks() {

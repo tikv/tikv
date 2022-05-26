@@ -50,7 +50,9 @@ use crate::storage::kv::{
     self, with_tls_engine, Engine, Error as EngineError, ExtCallback, Result as EngineResult,
     SnapContext, Statistics,
 };
-use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
+use crate::storage::lock_manager::{
+    self, DiagnosticContext, LockManager, LockWaitToken, WaitTimeout,
+};
 use crate::storage::metrics::{self, *};
 use crate::storage::txn::commands::{
     self, CallbackWithArcError, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
@@ -730,31 +732,39 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_latches(&tctx.lock, cid, wait_for_locks, released_locks);
     }
 
-    // /// Event handler for the request of waiting for lock
-    // fn on_wait_for_lock(
-    //     &self,
-    //     cid: u64,
-    //     start_ts: TimeStamp,
-    //     pr: ProcessResult,
-    //     lock: lock_manager::LockDigest,
-    //     is_first_lock: bool,
-    //     wait_timeout: Option<WaitTimeout>,
-    //     diag_ctx: DiagnosticContext,
-    // ) {
-    //     debug!("command waits for lock released"; "cid" => cid);
-    //     let tctx = self.inner.dequeue_task_context(cid);
-    //     SCHED_STAGE_COUNTER_VEC.get(tctx.tag).lock_wait.inc();
-    //     self.inner.lock_mgr.wait_for(
-    //         start_ts,
-    //         tctx.cb.unwrap(),
-    //         pr,
-    //         lock,
-    //         is_first_lock,
-    //         wait_timeout,
-    //         diag_ctx,
-    //     );
-    //     self.release_latches(&tctx.lock, cid);
-    // }
+    /// Event handler for the request of waiting for lock
+    fn on_wait_for_lock(
+        &self,
+        context: &Context,
+        start_ts: TimeStamp,
+        is_first_lock: bool,
+        lock_info: &[WriteResultLockInfo],
+        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
+        wait_timeout: Option<WaitTimeout>,
+        diag_ctx: DiagnosticContext,
+    ) -> LockWaitToken {
+        debug!("command waits for lock released"; "cid" => cid);
+        let wait_info = lock_info.iter().map(|lock| lock_manager::KeyLockWaitInfo {
+            key: lock.key.clone(),
+            lock_digest: lock.lock_digest,
+            lock_info: lock.lock_info.clone(),
+        });
+        self.inner.lock_mgr.wait_for(
+            context.get_region_id(),
+            context.get_region_epoch().clone(),
+            context.get_term(),
+            start_ts,
+            wait_info,
+            is_first_lock,
+            wait_timeout,
+            cancel_callback,
+            diag_ctx,
+        )
+    }
+
+    fn update_wait_for_lock(&self) {
+        // TODO: unimplemented.
+    }
 
     fn need_wake_up_pessimistic_lock_on_error(_e: &EngineError) -> bool {
         // TODO: If there's some cases that `engine.async_write` returns error but it's still
@@ -931,27 +941,27 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-        // if let Some(lock_info) = lock_info {
-        //     let WriteResultLockInfo {
-        //         locks,
-        //         is_first_lock,
-        //         wait_timeout,
-        //     } = lock_info;
-        //     let diag_ctx = DiagnosticContext {
-        //         key,
-        //         resource_group_tag: ctx.get_resource_group_tag().into(),
-        //     };
-        //     scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout, diag_ctx);
-        //     return;
-        // }
-
         let mut pr = Some(pr);
         if tag == CommandKind::acquire_pessimistic_lock {
             if let Some(cmd_meta) = pessimistic_lock_single_request_meta {
                 if let Some(l) = lock_info.as_mut() {
+                    let diag_ctx = DiagnosticContext {
+                        key: l[0].key.clone(),
+                        resource_group_tag: ctx.get_resource_group_tag().into(),
+                    };
+                    let wait_token = scheduler.on_wait_for_lock(
+                        &ctx,
+                        cmd_meta.start_ts,
+                        cmd_meta.is_first_lock,
+                        l,
+                        ctx.get_callback_for_cancellation(),
+                        l[0].parameters.wait_timeout,
+                        diag_ctx,
+                    );
                     // Enter key-wise waiting state.
                     let ctx = scheduler.convert_to_keywise_callbacks(
                         cid,
+                        wait_token,
                         cmd_meta.start_ts,
                         cmd_meta.for_update_ts,
                         pr.take().unwrap(),
@@ -967,11 +977,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     }
                 }
             } else {
-                // It's already in keywise mode.
+                // It's already in key-wise mode.
+                scheduler.update_wait_for_lock();
                 if let Some(l) = lock_info.as_mut() {
                     scheduler.take_waiting_locks_from_result(cid, pr.as_mut().unwrap(), l);
                 }
             }
+        } else {
+            assert!(lock_info.is_none());
         }
 
         if to_be_write.modifies.is_empty() {
@@ -1302,12 +1315,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     fn convert_to_keywise_callbacks(
         &self,
         cid: u64,
+        lock_wait_token: LockWaitToken,
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
         first_batch_pr: ProcessResult,
         total_size: usize,
         first_batch_size: usize,
-    ) -> PartialPessimisticLockRequestContext {
+    ) -> PartialPessimisticLockRequestContext<L> {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
         let cb = match task_ctx.cb.take() {
@@ -1316,6 +1330,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
 
         let ctx = PartialPessimisticLockRequestContext::new(
+            self.inner.lock_mgr.clone(),
+            lock_wait_token,
             start_ts,
             for_update_ts,
             first_batch_pr,
@@ -1370,20 +1386,22 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 }
 
-struct PartialPessimisticLockRequestContextInner {
+struct PartialPessimisticLockRequestContextInner<L: LockManager> {
     pr: ProcessResult,
     cb: StorageCallback,
     result_rx: std::sync::mpsc::Receiver<(
         usize,
         std::result::Result<PessimisticLockKeyResult, Arc<StorageError>>,
     )>,
+    lock_manager: L,
+    lock_wait_token: LockWaitToken,
 }
 
 #[derive(Clone)]
-struct PartialPessimisticLockRequestContext {
+struct PartialPessimisticLockRequestContext<L: LockManager> {
     // (inner_ctx, remaining_count)
     shared_states: Arc<(
-        Mutex<Option<PartialPessimisticLockRequestContextInner>>,
+        Mutex<Option<PartialPessimisticLockRequestContextInner<L>>>,
         AtomicUsize,
     )>,
     tx: std::sync::mpsc::Sender<(
@@ -1396,8 +1414,10 @@ struct PartialPessimisticLockRequestContext {
     for_update_ts: TimeStamp,
 }
 
-impl PartialPessimisticLockRequestContext {
+impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
     fn new(
+        lock_manager: L,
+        lock_wait_token: LockWaitToken,
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
         first_batch_pr: ProcessResult,
@@ -1409,6 +1429,8 @@ impl PartialPessimisticLockRequestContext {
             pr: first_batch_pr,
             cb,
             result_rx: rx,
+            lock_manager,
+            lock_wait_token,
         };
         Self {
             shared_states: Arc::new((Mutex::new(Some(inner)), AtomicUsize::new(size))),
@@ -1472,6 +1494,9 @@ impl PartialPessimisticLockRequestContext {
             return;
         };
 
+        ctx_inner
+            .lock_manager
+            .remove_lock_wait(ctx_inner.lock_wait_token);
         let results = match ctx_inner.pr {
             ProcessResult::PessimisticLockRes {
                 res: Ok(PessimisticLockResults(ref mut v)),

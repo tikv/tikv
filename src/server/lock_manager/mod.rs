@@ -43,9 +43,9 @@ use txn_types::TimeStamp;
 const DETECTED_SLOTS_NUM: usize = 128;
 
 #[inline]
-fn detected_slot_idx(txn_ts: TimeStamp) -> usize {
+fn detected_slot_idx(token: LockWaitToken) -> usize {
     let mut s = DefaultHasher::new();
-    txn_ts.hash(&mut s);
+    token.hash(&mut s);
     (s.finish() as usize) & (DETECTED_SLOTS_NUM - 1)
 }
 
@@ -62,7 +62,7 @@ pub struct LockManager {
     waiter_count: Arc<AtomicUsize>,
 
     /// Record transactions which have sent requests to detect deadlock.
-    detected: Arc<[CachePadded<Mutex<HashSet<TimeStamp>>>]>,
+    detected: Arc<[CachePadded<Mutex<HashSet<LockWaitToken>>>]>,
 
     token_allocator: Arc<AtomicU64>,
 
@@ -238,14 +238,14 @@ impl LockManager {
         }
     }
 
-    fn add_to_detected(&self, txn_ts: TimeStamp) {
-        let mut detected = self.detected[detected_slot_idx(txn_ts)].lock();
-        detected.insert(txn_ts);
+    fn add_to_detected(&self, token: LockWaitToken) {
+        let mut detected = self.detected[detected_slot_idx(token)].lock();
+        detected.insert(token);
     }
 
-    fn remove_from_detected(&self, txn_ts: TimeStamp) -> bool {
-        let mut detected = self.detected[detected_slot_idx(txn_ts)].lock();
-        detected.remove(&txn_ts)
+    fn remove_from_detected(&self, token: LockWaitToken) -> bool {
+        let mut detected = self.detected[detected_slot_idx(token)].lock();
+        detected.remove(&token)
     }
 
     fn allocate_waiter_token(&self) -> LockWaitToken {
@@ -280,7 +280,7 @@ impl LockManagerTrait for LockManager {
         let token = self.allocate_waiter_token();
         // If it is the first lock the transaction tries to lock, it won't cause deadlock.
         if !is_first_lock {
-            self.add_to_detected(start_ts);
+            self.add_to_detected(token);
             self.detector_scheduler
                 .detect(token, start_ts, wait_info.clone(), diag_ctx.clone()); // TODO: Try to avoid cloning.
         }
@@ -299,24 +299,17 @@ impl LockManagerTrait for LockManager {
         token
     }
 
-    fn wake_up(
-        &self,
-        lock_ts: TimeStamp,
-        hashes: Vec<u64>,
-        commit_ts: TimeStamp,
-        is_pessimistic_txn: bool,
-    ) {
+    fn remove_lock_wait(&self, token: LockWaitToken) {
         // If `hashes` is some, there may be some waiters waiting for these locks.
         // Try to wake up them.
-        if !hashes.is_empty() && self.has_waiter() {
-            self.waiter_mgr_scheduler
-                .wake_up(lock_ts, hashes, commit_ts);
+        if self.has_waiter() {
+            self.waiter_mgr_scheduler.remove_lock_wait(token);
         }
         // If a pessimistic transaction is committed or rolled back and it once sent requests to
         // detect deadlock, clean up its wait-for entries in the deadlock detector.
-        if is_pessimistic_txn && self.remove_from_detected(lock_ts) {
-            self.detector_scheduler.clean_up(lock_ts);
-        }
+        // if is_pessimistic_txn && self.remove_from_detected(token) {
+        //     self.detector_scheduler.clean_up(token);
+        // }
     }
 
     fn has_waiter(&self) -> bool {

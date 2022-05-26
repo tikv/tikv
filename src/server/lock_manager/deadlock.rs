@@ -292,6 +292,7 @@ impl DetectTable {
     /// Removes the corresponding wait_for_entry.
     fn clean_up_wait_for(
         &mut self,
+        token: LockWaitToken,
         txn_ts: TimeStamp,
         locks: impl IntoIterator<Item = LockDigest>,
     ) {
@@ -468,12 +469,12 @@ impl Scheduler {
         });
     }
 
-    pub fn clean_up_wait_for(&self, token: LockWaitToken) {
+    pub fn clean_up_wait_for(&self, token: LockWaitToken, wait_info: Vec<KeyLockWaitInfo>) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUpWaitFor,
             token,
             txn_ts: TimeStamp::default(),
-            wait_info: vec![],
+            wait_info,
             diag_ctx: DiagnosticContext::default(),
         });
     }
@@ -902,8 +903,11 @@ where
                     }
                 }
             }
-            DetectType::CleanUpWaitFor => detect_table
-                .clean_up_wait_for(txn_ts, wait_info.iter().map(|item| item.lock_digest)),
+            DetectType::CleanUpWaitFor => detect_table.clean_up_wait_for(
+                token,
+                txn_ts,
+                wait_info.iter().map(|item| item.lock_digest),
+            ),
             DetectType::CleanUp => detect_table.clean_up(txn_ts),
         }
     }

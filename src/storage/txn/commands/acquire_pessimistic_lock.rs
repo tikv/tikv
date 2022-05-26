@@ -168,25 +168,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                             PessimisticLockKeyContext::from_key(index, &key, params.start_ts);
                         (key, should_not_exist, params, lock_key_ctx)
                     });
-                Self::process_write_impl(
-                    snapshot,
-                    context,
-                    self.ctx,
-                    iter,
-                    count,
-                    self.is_first_lock,
-                )
+                Self::process_write_impl(snapshot, context, self.ctx, iter, count)
             }
             PessimisticLockCmdInner::BatchResumedRequests(items) => {
                 let count = items.len();
-                Self::process_write_impl(
-                    snapshot,
-                    context,
-                    self.ctx,
-                    items.into_iter(),
-                    count,
-                    false,
-                )
+                Self::process_write_impl(snapshot, context, self.ctx, items.into_iter(), count)
             }
         }
     }
@@ -199,7 +185,6 @@ impl AcquirePessimisticLock {
         pb_ctx: Context,
         items: I,
         items_count: usize,
-        is_first_lock: bool,
     ) -> Result<WriteResult>
     where
         S: Snapshot,
@@ -296,7 +281,6 @@ impl AcquirePessimisticLock {
                         should_not_exist,
                         lock_info,
                         snapshot.ext().get_term(),
-                        is_first_lock,
                         params,
                         lock_key_ctx.lock_digest,
                         lock_key_ctx.hash_for_latch,
@@ -443,6 +427,7 @@ impl AcquirePessimisticLock {
                     start_ts: params.start_ts,
                     for_update_ts: params.for_update_ts,
                     keys_count: keys.len(),
+                    is_first_lock: self.is_first_lock,
                 })
             }
             PessimisticLockCmdInner::BatchResumedRequests(_) => None,
@@ -454,6 +439,7 @@ pub struct SingleRequestPessimisticLockCommandMeta {
     pub start_ts: TimeStamp,
     pub for_update_ts: TimeStamp,
     pub keys_count: usize,
+    pub is_first_lock: bool,
 }
 
 #[cfg(test)]

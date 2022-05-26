@@ -76,8 +76,14 @@ pub struct KeyLockWaitInfo {
     pub lock_info: LockInfo,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
 pub struct LockWaitToken(pub Option<u64>);
+
+impl LockWaitToken {
+    pub fn is_valid(&self) -> bool {
+        self.0.is_some()
+    }
+}
 
 /// `LockManager` manages transactions waiting for locks held by other transactions.
 /// It has responsibility to handle deadlocks between transactions.
@@ -93,7 +99,7 @@ pub trait LockManager: Clone + Send + 'static {
         &self,
         region_id: u64,
         region_epoch: RegionEpoch,
-        term: NonZeroU64,
+        term: u64,
         start_ts: TimeStamp,
         wait_info: Vec<KeyLockWaitInfo>,
         is_first_lock: bool,
@@ -105,18 +111,9 @@ pub trait LockManager: Clone + Send + 'static {
     fn update_wait_for() {
         unimplemented!()
     }
-    fn clean_up_wait_for() {
-        unimplemented!()
-    }
 
     /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
-    fn wake_up(
-        &self,
-        lock_ts: TimeStamp,
-        hashes: Vec<u64>,
-        commit_ts: TimeStamp,
-        is_pessimistic_txn: bool,
-    );
+    fn remove_lock_wait(&self, token: LockWaitToken);
 
     /// Returns true if there are waiters in the `LockManager`.
     ///
@@ -148,14 +145,7 @@ impl LockManager for DummyLockManager {
         LockWaitToken(None)
     }
 
-    fn wake_up(
-        &self,
-        _lock_ts: TimeStamp,
-        _hashes: Vec<u64>,
-        _commit_ts: TimeStamp,
-        _is_pessimistic_txn: bool,
-    ) {
-    }
+    fn remove_lock_wait(&self, _token: LockWaitToken) {}
 
     fn dump_wait_for_entries(&self, cb: Callback) {
         cb(vec![])

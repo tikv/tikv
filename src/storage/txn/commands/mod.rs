@@ -397,7 +397,6 @@ pub struct WriteResultLockInfo {
     pub key_cb: Option<CallbackWithArcError<PessimisticLockKeyResult>>,
     // pub locks: Vec<(usize, LockInfo, lock_manager::LockDigest, Option<Callback<PessimisticLockKeyResult>>)>,
     pub term: Option<NonZeroU64>,
-    pub is_first_lock: bool,
     pub parameters: PessimisticLockParameters,
 }
 
@@ -408,7 +407,6 @@ impl WriteResultLockInfo {
         should_not_exist: bool,
         last_found_lock: LockInfo,
         term: Option<NonZeroU64>,
-        is_first_lock: bool,
         parameters: PessimisticLockParameters,
         lock_digest: lock_manager::LockDigest,
         hash_for_latch: u64,
@@ -423,7 +421,6 @@ impl WriteResultLockInfo {
             hash_for_latch,
             key_cb,
             term,
-            is_first_lock,
             parameters,
         }
     }
