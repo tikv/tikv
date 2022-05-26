@@ -629,7 +629,7 @@ mod tests {
         // it will result in split by keys failed.
         cfg.region_max_size = Some(ReadableSize(region_size * 6 / 5));
         cfg.region_split_size = ReadableSize(region_size * 4 / 5);
-        runnable = SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        runnable = SplitCheckRunner::new(engine, tx.clone(), CoprocessorHost::new(tx, cfg));
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
