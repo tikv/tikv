@@ -92,8 +92,8 @@ use crate::{
             RegionTask, SplitCheckTask,
         },
         AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
-        PeerTick, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, SignificantMsg, SnapKey,
-        StoreMsg,
+        PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult,
+        SignificantMsg, SnapKey, StoreMsg,
     },
     Error, Result,
 };
@@ -899,11 +899,6 @@ where
         region_local_state.set_region(self.region().clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
-        debug!(
-            "Unsafe recovery, scan raft";
-            "commit" => self.fsm.peer.raft_group.store().commit_index(),
-            "last" => self.fsm.peer.get_store().last_index(),
-        );
         if let Ok(entries) = self.fsm.peer.get_store().entries(
             self.fsm.peer.raft_group.store().commit_index() + 1,
             self.fsm.peer.get_store().last_index() + 1,
@@ -911,16 +906,8 @@ where
             GetEntriesContext::empty(false),
         ) {
             for entry in entries {
-                let index = entry.get_index();
-                let cmd: RaftCmdRequest = util::parse_data_at(
-                    entry.get_data(),
-                    index,
-                    "Unsafe recovery, whether has commit merge",
-                );
-                debug!("Unsafe recovery, log"; "entry" => ?cmd);
-                if cmd.has_admin_request() && cmd.get_admin_request().has_commit_merge() {
-                    self_report.set_has_commit_merge(true);
-                }
+                let ctx = ProposalContext::from_bytes(&entry.context);
+                self_report.set_has_commit_merge(ctx.contains(ProposalContext::COMMIT_MERGE));
             }
         }
         syncer.report_for_self(self_report);
