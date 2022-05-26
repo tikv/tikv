@@ -8,7 +8,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::util::find_peer;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 fn confirm_quorum_is_lost<T: Simulator>(cluster: &mut Cluster<T>, region: &metapb::Region) {
     let put = new_put_cmd(b"k2", b"v2");
@@ -1076,35 +1076,44 @@ fn test_unsafe_recovery_has_commit_merge() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
     let pd_client = Arc::clone(&cluster.pd_client);
+    // pd_client.disable_default_operator();
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
+
     let left = pd_client.get_region(b"k1").unwrap();
-    let right = pd_client.get_region(b"k2").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    let left_on_store1 = find_peer(&left, 1).unwrap();
+    cluster.must_transfer_leader(left.get_id(), left_on_store1.clone());
     let right_on_store1 = find_peer(&right, 1).unwrap();
     cluster.must_transfer_leader(right.get_id(), right_on_store1.clone());
 
-    // Blocks the MsgAppendResponse so that the CommitMerge message will only be replicated but not
-    // committed.
-    let _ = Box::new(
+    // Block the target region from receiving MsgAppendResponse, so that the commit merge message
+    // will only be replicated but not committed.
+    let recv_filter = Box::new(
         RegionPacketFilter::new(right.get_id(), 1)
             .direction(Direction::Recv)
             .msg_type(MessageType::MsgAppendResponse),
     );
+    cluster.sim.wl().add_recv_filter(1, recv_filter);
+
     pd_client.merge_region(left.get_id(), right.get_id());
+    // Wait until the commit merge is proposed.
+    sleep_ms(300);
     // Send a empty recovery plan to trigger report.
     let plan = pdpb::RecoveryPlan::default();
     pd_client.must_set_unsafe_recovery_plan(1, plan);
     cluster.must_send_store_heartbeat(1);
     let mut store_report = None;
-    for _ in 0..10 {
+    for _ in 0..20 {
         store_report = pd_client.must_get_store_report(1);
         if store_report.is_some() {
             break;
         }
+        sleep_ms(200);
     }
     assert_ne!(store_report, None);
     let mut has_commit_merge = false;
-    info!("print report"; "report" => ?store_report.as_ref().unwrap());
     for peer_report in store_report.unwrap().get_peer_reports().iter() {
         if peer_report.get_region_state().get_region().get_id() == right.get_id()
             && peer_report.get_has_commit_merge()
