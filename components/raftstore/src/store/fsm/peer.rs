@@ -1999,6 +1999,9 @@ where
             }) => {
                 if self.fsm.peer.raft_group.raft.raft_log.applied >= *target_index {
                     if *demote_after_exit {
+                        let syncer_clone = syncer.clone();
+                        let failed_voters_clone = failed_voters.clone();
+                        self.fsm.peer.unsafe_recovery_state = None;
                         if !self.fsm.peer.is_force_leader() {
                             error!(
                                 "Unsafe recovery, lost forced leadership after exiting joint state";
@@ -2006,8 +2009,6 @@ where
                             );
                             return;
                         }
-                        let syncer_clone = syncer.clone();
-                        let failed_voters_clone = failed_voters.clone();
                         self.unsafe_recovery_demote_failed_voters(
                             syncer_clone,
                             failed_voters_clone,
