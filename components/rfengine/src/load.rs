@@ -133,6 +133,8 @@ impl RfEngine {
         let filename = states_file_name(&self.dir, epoch_id);
         let bin = fs::read(filename)?;
         let mut data = bin.as_slice();
+        let _header = StatesHeader::decode(data)?;
+        data = &data[StatesHeader::len()..];
         let payload_len = data.len() - 4;
         let checksum = LittleEndian::read_u32(&data[payload_len..]);
         data = &data[..payload_len];
@@ -167,23 +169,18 @@ impl RfEngine {
         end: u64,
     ) -> Result<()> {
         let rlog_filename = raft_log_file_name(&self.dir, epoch_id, region_id, first, end);
-        let bin = read_checksum_file(&rlog_filename)?;
-        let new_data = RegionBatch::decode(&bin);
+        let bin = fs::read(&rlog_filename)?;
+        let _header = RlogHeader::decode(bin.as_slice())?;
+        let mut data = &bin[RlogHeader::len()..];
+        let checksum = LittleEndian::read_u32(&data[data.len() - 4..]);
+        data = &data[..data.len() - 4];
+        if crc32fast::hash(data) != checksum {
+            return Err(Error::Checksum);
+        }
+        let new_data = RegionBatch::decode(data);
         let old_data_ref = self.get_or_init_region_data(new_data.region_id);
         let mut old_data = old_data_ref.write().unwrap();
         let _ = old_data.apply(&new_data);
         Ok(())
     }
-}
-
-fn read_checksum_file(filename: &PathBuf) -> Result<Vec<u8>> {
-    let mut bin = fs::read(filename)?;
-    let checksum_off = bin.len() - 4;
-    let checksum_expect = LittleEndian::read_u32(&bin[checksum_off..]);
-    let checksum_got = crc32fast::hash(&bin[..checksum_off]);
-    if checksum_got != checksum_expect {
-        return Err(Error::Checksum);
-    }
-    bin.truncate(checksum_off);
-    Ok(bin)
 }

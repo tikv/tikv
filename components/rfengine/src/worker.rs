@@ -100,6 +100,8 @@ impl Worker {
 
     fn write_all_states(&mut self, epoch_id: u32) -> Result<()> {
         self.buf.truncate(0);
+        let header = StatesHeader::default();
+        header.encode_to(&mut self.buf);
         for (id, region_states) in &self.all_states {
             for (k, v) in region_states {
                 self.buf.put_u64_le(*id);
@@ -109,7 +111,7 @@ impl Worker {
                 self.buf.extend_from_slice(v.chunk());
             }
         }
-        let crc32 = crc32fast::hash(&self.buf);
+        let crc32 = crc32fast::hash(&self.buf[StatesHeader::len()..]);
         self.buf.put_u32_le(crc32);
         let filename = states_file_name(&self.dir, epoch_id);
         self.writer.write_to_file(&self.buf, &filename)?;
@@ -199,8 +201,10 @@ impl Worker {
             end,
         );
         self.buf.truncate(0);
+        let header = RlogHeader::default();
+        header.encode_to(&mut self.buf);
         region_batch.encode_to(&mut self.buf);
-        let checksum = crc32fast::hash(&self.buf);
+        let checksum = crc32fast::hash(&self.buf[RlogHeader::len()..]);
         self.buf.put_u32_le(checksum);
         self.writer.write_to_file(&self.buf, &filename)?;
         self.epoches[epoch_idx]
@@ -271,8 +275,110 @@ pub(crate) fn raft_log_file_name(
     ))
 }
 
+/// Magic Number of rlog files. It's picked by running
+///    echo rfengine.rlog | sha1sum
+/// and taking the leading 64 bits.
+const RLOG_MAGIC_NUMBER: u64 = 0x50ed2c1e89d6aa91;
+
+#[derive(Clone, Copy)]
+#[repr(u64)]
+enum RlogVersion {
+    V1 = 1,
+}
+
+pub(crate) struct RlogHeader {
+    version: RlogVersion,
+}
+
+impl Default for RlogHeader {
+    fn default() -> Self {
+        Self {
+            version: RlogVersion::V1,
+        }
+    }
+}
+
+impl RlogHeader {
+    pub(crate) const fn len() -> usize {
+        16 // magic number + version
+    }
+
+    fn encode_to(&self, buf: &mut Vec<u8>) {
+        buf.put_u64_le(RLOG_MAGIC_NUMBER);
+        buf.put_u64_le(self.version as u64)
+    }
+
+    pub(crate) fn decode(mut buf: &[u8]) -> Result<Self> {
+        if buf.len() < Self::len() {
+            return Err(Error::Corruption("states header mismatch".to_owned()));
+        }
+        let magic_number = buf.get_u64_le();
+        if magic_number != RLOG_MAGIC_NUMBER {
+            return Err(Error::Corruption("states magic number mismatch".to_owned()));
+        }
+        let version = buf.get_u64_le();
+        if version != StatesVersion::V1 as u64 {
+            return Err(Error::Corruption("states version mismatch".to_owned()));
+        }
+        Ok(Self {
+            version: RlogVersion::V1,
+        })
+    }
+}
+
 pub(crate) fn states_file_name(dir: &Path, epoch_id: u32) -> PathBuf {
     dir.join(format!("{:08x}.states", epoch_id))
+}
+
+/// Magic Number of states files. It's picked by running
+///    echo rfengine.states | sha1sum
+/// and taking the leading 64 bits.
+const STATES_MAGIC_NUMBER: u64 = 0xde2d5fe79dea8188;
+
+#[derive(Clone, Copy)]
+#[repr(u64)]
+enum StatesVersion {
+    V1 = 1,
+}
+
+pub(crate) struct StatesHeader {
+    version: StatesVersion,
+}
+
+impl Default for StatesHeader {
+    fn default() -> Self {
+        Self {
+            version: StatesVersion::V1,
+        }
+    }
+}
+
+impl StatesHeader {
+    pub(crate) const fn len() -> usize {
+        16 // magic number + version
+    }
+
+    fn encode_to(&self, buf: &mut Vec<u8>) {
+        buf.put_u64_le(STATES_MAGIC_NUMBER);
+        buf.put_u64_le(self.version as u64)
+    }
+
+    pub(crate) fn decode(mut buf: &[u8]) -> Result<Self> {
+        if buf.len() < Self::len() {
+            return Err(Error::Corruption("states header mismatch".to_owned()));
+        }
+        let magic_number = buf.get_u64_le();
+        if magic_number != STATES_MAGIC_NUMBER {
+            return Err(Error::Corruption("states magic number mismatch".to_owned()));
+        }
+        let version = buf.get_u64_le();
+        if version != StatesVersion::V1 as u64 {
+            return Err(Error::Corruption("states version mismatch".to_owned()));
+        }
+        Ok(Self {
+            version: StatesVersion::V1,
+        })
+    }
 }
 
 pub(crate) fn wal_file_name(dir: &Path, epoch_id: u32) -> PathBuf {

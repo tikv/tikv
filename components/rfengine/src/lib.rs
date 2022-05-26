@@ -47,6 +47,8 @@ pub enum Error {
     Checksum,
     #[error("Open error: {0}")]
     Open(String),
+    #[error("Corruption: {0}")]
+    Corruption(String),
 }
 
 impl From<std::io::Error> for Error {

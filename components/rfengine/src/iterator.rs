@@ -6,13 +6,13 @@ use std::{
     path::PathBuf,
 };
 
-use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BytesMut};
+use slog_global::warn;
 
 use crate::{
     worker::wal_file_name,
     write_batch::RegionBatch,
-    writer::{DmaBuffer, BATCH_HEADER_SIZE},
+    writer::{DmaBuffer, WalHeader, BATCH_HEADER_SIZE},
     Error, Result,
 };
 
@@ -42,8 +42,17 @@ impl WALIterator {
         let filename = wal_file_name(self.dir.as_path(), self.epoch_id);
         let fd = fs::File::open(filename)?;
         let mut buf_reader = BufReader::new(fd);
+        let header = match self.check_wal_header(&mut buf_reader) {
+            Ok(header) => header,
+            Err(e) => {
+                // FIXME(youjiali1995): Due to recycling WAL file, we can't distinguish data
+                // corruption at the tail of WAL.
+                warn!("failed to check WAL header: {}", e);
+                return Ok(());
+            }
+        };
         loop {
-            match self.read_batch(&mut buf_reader) {
+            match self.read_batch(&mut buf_reader, &header) {
                 Err(err) => {
                     if let Error::EOF = err {
                         return Ok(());
@@ -65,15 +74,27 @@ impl WALIterator {
         }
     }
 
-    pub(crate) fn read_batch(&mut self, reader: &mut BufReader<File>) -> Result<&[u8]> {
-        let header_buf = &mut [0u8; BATCH_HEADER_SIZE][..];
-        reader.read_exact(header_buf)?;
-        let epoch_id = LittleEndian::read_u32(header_buf);
+    fn check_wal_header(&mut self, reader: &mut BufReader<File>) -> Result<WalHeader> {
+        let mut buf = [0u8; WalHeader::len()];
+        reader.read_exact(&mut buf)?;
+        self.offset += WalHeader::len() as u64;
+        WalHeader::decode(&buf)
+    }
+
+    pub(crate) fn read_batch(
+        &mut self,
+        reader: &mut BufReader<File>,
+        _header: &WalHeader,
+    ) -> Result<&[u8]> {
+        let mut header_buf = [0u8; BATCH_HEADER_SIZE];
+        reader.read_exact(header_buf.as_mut_slice())?;
+        let mut header_buf = header_buf.as_slice();
+        let epoch_id = header_buf.get_u32_le();
         if epoch_id != self.epoch_id {
             return Err(Error::EOF);
         }
-        let checksum = LittleEndian::read_u32(&header_buf[4..]);
-        let length = LittleEndian::read_u32(&header_buf[8..]) as usize;
+        let checksum = header_buf.get_u32_le();
+        let length = header_buf.get_u32_le() as usize;
         if length > MAX_BATCH_SIZE {
             return Err(Error::EOF);
         }

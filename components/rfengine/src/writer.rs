@@ -9,7 +9,7 @@ use std::{
     ptr::NonNull,
 };
 
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 use file_system::open_direct_file;
 use tikv_util::time::Instant;
 
@@ -144,41 +144,101 @@ impl AsMut<[u8]> for DmaBuffer {
     }
 }
 
-pub(crate) struct WALWriter {
+/// Magic Number of the WAL file. It's picked by running
+///    echo rfengine.wal | sha1sum
+/// and taking the leading 64 bits.
+const WAL_MAGIC_NUMBER: u64 = 0xf126b8135c90588e;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u64)]
+enum Version {
+    V1 = 1,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub(crate) struct WalHeader {
+    version: Version,
+}
+
+impl Default for WalHeader {
+    fn default() -> Self {
+        Self {
+            version: Version::V1,
+        }
+    }
+}
+
+impl WalHeader {
+    pub(crate) const fn len() -> usize {
+        4096
+    }
+
+    fn encode_to(&self, mut buf: &mut [u8]) {
+        assert!(buf.len() >= Self::len());
+        buf.put_u64_le(WAL_MAGIC_NUMBER);
+        buf.put_u64_le(self.version as u64)
+    }
+
+    pub(crate) fn decode(mut buf: &[u8]) -> Result<Self> {
+        if buf.len() < Self::len() {
+            return Err(Error::Corruption("WAL header mismatch".to_owned()));
+        }
+        let magic_number = buf.get_u64_le();
+        if magic_number != WAL_MAGIC_NUMBER {
+            return Err(Error::Corruption("WAL magic number mismatch".to_owned()));
+        }
+        let version = buf.get_u64_le();
+        if version != Version::V1 as u64 {
+            return Err(Error::Corruption("WAL version mismatch".to_owned()));
+        }
+        Ok(Self {
+            version: Version::V1,
+        })
+    }
+}
+
+pub(crate) struct WalWriter {
     dir: PathBuf,
     pub(crate) epoch_id: u32,
     pub(crate) wal_size: usize,
-    fd: File,
+    header: WalHeader,
+    fd: Option<File>,
     buf: DmaBuffer,
     // file_off is always aligned.
     file_off: u64,
 }
 
-impl WALWriter {
+impl WalWriter {
     pub(crate) fn new(dir: &Path, epoch_id: u32, wal_size: usize) -> Result<Self> {
-        let wal_size = DmaBuffer::aligned_len(wal_size);
-        let file_path = get_wal_file_path(dir, epoch_id)?;
-        let fd = open_direct_file(&file_path, true)?;
-        file_system::sync_dir(dir)?;
         let mut buf = DmaBuffer::new(INITIAL_BUF_SIZE);
         buf.ensure_space(BATCH_HEADER_SIZE);
         // Safety: ensured enough space and `flush` will init the header.
         unsafe {
             buf.advance_mut(BATCH_HEADER_SIZE);
         }
-        Ok(Self {
+        let mut writer = Self {
             dir: dir.to_path_buf(),
             epoch_id,
-            wal_size,
-            fd,
+            wal_size: DmaBuffer::aligned_len(wal_size),
+            header: WalHeader::default(),
+            fd: None,
             buf,
             file_off: 0,
-        })
+        };
+        writer.open_file()?;
+        Ok(writer)
+    }
+
+    fn file(&self) -> &File {
+        self.fd.as_ref().unwrap()
     }
 
     pub(crate) fn seek(&mut self, file_offset: u64) {
-        assert_eq!(file_offset & (DmaBuffer::DMA_ALIGN - 1) as u64, 0);
-        self.file_off = file_offset;
+        assert_eq!(
+            file_offset as usize,
+            DmaBuffer::aligned_len(file_offset as usize)
+        );
+        self.file_off = cmp::max(self.file_off, file_offset);
     }
 
     pub(crate) fn append_region_data(&mut self, region_batch: &RegionBatch) {
@@ -209,7 +269,7 @@ impl WALWriter {
         self.buf.pad_to_align();
 
         let timer = Instant::now_coarse();
-        self.fd.write_all_at(self.buf.as_ref(), self.file_off)?;
+        self.file().write_all_at(self.buf.as_ref(), self.file_off)?;
         ENGINE_WAL_WRITE_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
         self.file_off += self.buf.len() as u64;
         self.buf.truncate(BATCH_HEADER_SIZE);
@@ -230,8 +290,21 @@ impl WALWriter {
         let file = open_direct_file(&filename, true)?;
         file_system::sync_dir(&self.dir)?;
         file.set_len(self.wal_size as u64)?;
-        self.fd = file;
+        self.fd = Some(file);
         self.file_off = 0;
+        self.write_header()?;
+        Ok(())
+    }
+
+    fn write_header(&mut self) -> Result<()> {
+        let mut buf = DmaBuffer::new(WalHeader::len());
+        unsafe {
+            self.header.encode_to(buf.chunk_mut());
+            buf.advance_mut(WalHeader::len());
+        }
+        buf.pad_to_align();
+        self.file().write_all_at(buf.as_ref(), 0)?;
+        self.file_off = buf.len() as u64;
         Ok(())
     }
 }
@@ -263,6 +336,7 @@ pub(crate) fn find_recycled_file(dir: &Path) -> Result<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::DmaBuffer;
+    use crate::WalHeader;
 
     #[test]
     fn test_dma_buffer() {
@@ -284,5 +358,13 @@ mod tests {
         assert_eq!(buf.layout.size(), 8192);
         let addr = buf.data.as_ptr() as usize;
         assert_eq!(addr, DmaBuffer::aligned_len(addr));
+    }
+
+    #[test]
+    fn test_wal_header() {
+        let wal_header = WalHeader::default();
+        let mut buf = [0_u8; WalHeader::len()];
+        wal_header.encode_to(buf.as_mut_slice());
+        assert_eq!(WalHeader::decode(buf.as_slice()).unwrap(), wal_header);
     }
 }

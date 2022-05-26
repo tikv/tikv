@@ -70,7 +70,7 @@ use crate::{
 pub struct RfEngine {
     pub dir: PathBuf,
 
-    pub(crate) writer: Arc<Mutex<WALWriter>>,
+    pub(crate) writer: Arc<Mutex<WalWriter>>,
 
     pub(crate) regions: Arc<dashmap::DashMap<u64, RwLock<RegionData>>>,
 
@@ -86,7 +86,7 @@ impl RfEngine {
         let epoch_id = epoches.last().map(|e| e.id).unwrap_or(1);
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1024);
-        let writer = WALWriter::new(dir, epoch_id, wal_size)?;
+        let writer = WalWriter::new(dir, epoch_id, wal_size)?;
         let mut en = Self {
             dir: dir.to_owned(),
             regions: Arc::default(),
