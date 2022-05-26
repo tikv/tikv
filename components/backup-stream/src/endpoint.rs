@@ -354,6 +354,9 @@ where
                         }
                         _ => panic!("BUG: invalid event {:?}", event),
                     }
+                } else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    break;
                 }
             }
         }
@@ -399,6 +402,9 @@ where
                         }
                         _ => panic!("BUG: invalid event {:?}", event),
                     }
+                } else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    break;
                 }
             }
         }
@@ -647,12 +653,10 @@ where
         if let Some(cli) = self.meta_client.as_ref() {
             let task = self.pool.block_on(cli.get_task(&task_name));
             match task {
-                Ok(t) => match t {
-                    Some(stream_task) => self.load_task(stream_task),
-                    None => {
-                        info!("backup stream task not existed"; "task" => %task_name);
-                    }
-                },
+                Ok(Some(stream_task)) => self.load_task(stream_task),
+                Ok(None) => {
+                    info!("backup stream task not existed"; "task" => %task_name);
+                }
                 Err(err) => {
                     err.report(format!("failed to resume backup stream task {}", task_name));
                     let sched = self.scheduler.clone();
