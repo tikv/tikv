@@ -239,7 +239,10 @@ mod tests {
     use super::{
         super::{
             calc_split_keys_count,
-            size::tests::{must_split_at, must_split_with},
+            size::{
+                get_region_approximate_size,
+                tests::{must_split_at, must_split_with},
+            },
         },
         *,
     };
@@ -585,20 +588,22 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let cfg = Config {
+        let mut cfg = Config {
+            // to make the expected split key generated very late as total count is 160
             region_max_keys: Some(159),
             region_split_keys: Some(80),
             batch_split_limit: 5,
             enable_region_bucket: true,
-            region_max_size: Some(ReadableSize(301376)),
-            region_split_size: ReadableSize(160616),
             // need check split region buckets, but region size does not exceed the split threshold
             region_bucket_size: ReadableSize(100),
             ..Default::default()
         };
 
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx.clone(), cfg.clone()),
+        );
 
         put_data(&engine, 0, 90, false);
         runnable.run(SplitCheckTask::split_check(
@@ -617,6 +622,14 @@ mod tests {
         }
 
         put_data(&engine, 90, 160, true);
+        let region_size =
+            get_region_approximate_size(&engine, &region, ReadableSize::mb(1000).0).unwrap();
+        // to make the region_max_size < region_split_size + region_size
+        // The split by keys should still work. But if the bug in on_kv() in size.rs exists,
+        // it will result in split by keys failed.
+        cfg.region_max_size = Some(ReadableSize(region_size * 6 / 5));
+        cfg.region_split_size = ReadableSize(region_size * 4 / 5);
+        runnable = SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,

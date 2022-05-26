@@ -51,6 +51,10 @@ where
     E: KvEngine,
 {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
+        // If there's no need to check region split, skip it.
+        // Otherwise, the region whose keys > max region keys will not be splitted when batch_split_limit is zero,
+        // because eventually "over_limit && self.current_size + self.split_size >= self.max_size"
+        // will return true.
         if self.batch_split_limit == 0 {
             return false;
         }
