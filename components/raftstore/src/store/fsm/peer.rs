@@ -841,6 +841,8 @@ where
         } else {
             warn!(
                 "Unsafe recovery, no need to demote failed voters";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.fsm.peer_id(),
                 "region" => ?self.region(),
             );
         }
@@ -1999,15 +2001,17 @@ where
             }) => {
                 if self.fsm.peer.raft_group.raft.raft_log.applied >= *target_index {
                     if *demote_after_exit {
+                        let syncer_clone = syncer.clone();
+                        let failed_voters_clone = failed_voters.clone();
+                        self.fsm.peer.unsafe_recovery_state = None;
                         if !self.fsm.peer.is_force_leader() {
                             error!(
                                 "Unsafe recovery, lost forced leadership after exiting joint state";
                                 "region_id" => self.region().get_id(),
+                                "peer_id" => self.fsm.peer_id(),
                             );
                             return;
                         }
-                        let syncer_clone = syncer.clone();
-                        let failed_voters_clone = failed_voters.clone();
                         self.unsafe_recovery_demote_failed_voters(
                             syncer_clone,
                             failed_voters_clone,
@@ -2016,7 +2020,8 @@ where
                         if self.fsm.peer.in_joint_state() {
                             info!(
                                 "Unsafe recovery, exiting joint state";
-                                "region_id" => self.region().get_id()
+                                "region_id" => self.region().get_id(),
+                                "peer_id" => self.fsm.peer_id(),
                             );
                             if self.fsm.peer.is_force_leader() {
                                 self.propose_raft_command_internal(
@@ -2035,6 +2040,7 @@ where
                                 error!(
                                     "Unsafe recovery, lost forced leadership while trying to exit joint state";
                                     "region_id" => self.region().get_id(),
+                                    "peer_id" => self.fsm.peer_id(),
                                 );
                             }
                         }
