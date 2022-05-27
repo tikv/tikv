@@ -15,7 +15,7 @@ use super::{
         error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
         SplitChecker,
     },
-    Host,
+    calc_split_keys_count, Host,
 };
 use crate::store::{CasualMessage, CasualRouter};
 
@@ -51,6 +51,13 @@ where
     E: KvEngine,
 {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
+        // If there's no need to check region split, skip it.
+        // Otherwise, the region whose keys > max region keys will not be splitted when batch_split_limit is zero,
+        // because eventually "over_limit && self.current_size + self.split_size >= self.max_size"
+        // will return true.
+        if self.batch_split_limit == 0 {
+            return false;
+        }
         let size = entry.entry_size() as u64;
         self.current_size += size;
 
@@ -91,11 +98,24 @@ where
 
     fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
         if self.batch_split_limit != 0 {
-            return Ok(box_try!(get_approximate_split_keys(
+            let region_size = get_region_approximate_size(
                 engine,
                 region,
+                self.max_size * self.batch_split_limit,
+            )?;
+            let split_keys_count = calc_split_keys_count(
+                region_size,
+                self.split_size,
+                self.max_size,
                 self.batch_split_limit,
-            )));
+            );
+            if split_keys_count >= 1 {
+                return Ok(box_try!(get_approximate_split_keys(
+                    engine,
+                    region,
+                    split_keys_count,
+                )));
+            }
         }
         Ok(vec![])
     }
@@ -173,23 +193,25 @@ where
         if region_size >= host.cfg.region_max_size().0
             || host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0
         {
-            info!(
-                "approximate size over threshold, need to do split check";
-                "region_id" => region.get_id(),
-                "size" => region_size,
-                "threshold" => host.cfg.region_max_size().0,
-            );
-            // when meet large region use approximate way to produce split keys
             let batch_split_limit = if region_size >= host.cfg.region_max_size().0 {
                 host.cfg.batch_split_limit
             } else {
+                // no region split check needed
                 0
             };
-            if region_size >= host.cfg.region_max_size().0 * host.cfg.batch_split_limit
-                || region_size >= host.cfg.region_size_threshold_for_approximate.0
-            {
+            // when it's a large region use approximate way to produce split keys
+            if region_size >= host.cfg.region_size_threshold_for_approximate.0 {
                 policy = CheckPolicy::Approximate;
             }
+
+            info!(
+                "Run size checker";
+                "region_id" => region.get_id(),
+                "size" => region_size,
+                "threshold" => host.cfg.region_max_size().0,
+                "policy" => ?policy,
+                "split_check" => batch_split_limit > 0,
+            );
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 host.cfg.region_max_size().0,
@@ -224,7 +246,7 @@ pub fn get_region_approximate_size(
 }
 
 /// Get region approximate split keys based on default, write and lock cf.
-fn get_approximate_split_keys(
+pub fn get_approximate_split_keys(
     db: &impl KvEngine,
     region: &Region,
     batch_split_limit: u64,
@@ -303,6 +325,36 @@ pub mod tests {
         exp_split_keys: Vec<Vec<u8>>,
     ) {
         must_split_at_impl(rx, exp_region, exp_split_keys, false)
+    }
+
+    pub fn must_split_with(
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        exp_region: &Region,
+        exp_split_keys_count: usize,
+    ) {
+        loop {
+            match rx.try_recv() {
+                Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
+                | Ok((region_id, CasualMessage::RegionApproximateKeys { .. })) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                }
+                Ok((
+                    region_id,
+                    CasualMessage::SplitRegion {
+                        region_epoch,
+                        split_keys,
+                        ..
+                    },
+                )) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                    assert_eq!(&region_epoch, exp_region.get_region_epoch());
+                    assert_eq!(split_keys.len(), exp_split_keys_count);
+                    break;
+                }
+                Ok((_region_id, CasualMessage::RefreshRegionBuckets { .. })) => {}
+                others => panic!("expect split check result, but got {:?}", others),
+            }
+        }
     }
 
     pub fn must_generate_buckets(
