@@ -841,6 +841,8 @@ where
         } else {
             warn!(
                 "Unsafe recovery, no need to demote failed voters";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.fsm.peer_id(),
                 "region" => ?self.region(),
             );
         }
@@ -2006,6 +2008,7 @@ where
                             error!(
                                 "Unsafe recovery, lost forced leadership after exiting joint state";
                                 "region_id" => self.region().get_id(),
+                                "peer_id" => self.fsm.peer_id(),
                             );
                             return;
                         }
@@ -2017,7 +2020,8 @@ where
                         if self.fsm.peer.in_joint_state() {
                             info!(
                                 "Unsafe recovery, exiting joint state";
-                                "region_id" => self.region().get_id()
+                                "region_id" => self.region().get_id(),
+                                "peer_id" => self.fsm.peer_id(),
                             );
                             if self.fsm.peer.is_force_leader() {
                                 self.propose_raft_command_internal(
@@ -2036,6 +2040,7 @@ where
                                 error!(
                                     "Unsafe recovery, lost forced leadership while trying to exit joint state";
                                     "region_id" => self.region().get_id(),
+                                    "peer_id" => self.fsm.peer_id(),
                                 );
                             }
                         }
