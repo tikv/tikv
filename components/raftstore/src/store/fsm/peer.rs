@@ -908,7 +908,10 @@ where
             Ok(entries) => {
                 for entry in entries {
                     let ctx = ProposalContext::from_bytes(&entry.context);
-                    self_report.set_has_commit_merge(ctx.contains(ProposalContext::COMMIT_MERGE));
+                    if ctx.contains(ProposalContext::COMMIT_MERGE) {
+                        self_report.set_has_commit_merge(true);
+                        break;
+                    }
                 }
             }
             Err(e) => panic!("Unsafe recovery, fail to get uncommitted entries, {:?}", e),
