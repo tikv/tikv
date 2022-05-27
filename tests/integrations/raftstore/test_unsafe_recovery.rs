@@ -77,7 +77,7 @@ fn test_unsafe_recovery_demote_failed_voters() {
         }
         sleep_ms(200);
     }
-    assert_eq!(demoted, true);
+    assert!(demoted);
 }
 
 // Demote non-exist voters will not work, but TiKV should still report to PD.
@@ -215,8 +215,8 @@ fn test_unsafe_recovery_auto_promote_learner() {
         }
         sleep_ms(100);
     }
-    assert_eq!(demoted, true);
-    assert_eq!(promoted, true);
+    assert!(demoted);
+    assert!(promoted);
 }
 
 #[test]
@@ -301,8 +301,8 @@ fn test_unsafe_recovery_already_in_joint_state() {
         }
         sleep_ms(100);
     }
-    assert_eq!(demoted, true);
-    assert_eq!(promoted, true);
+    assert!(demoted);
+    assert!(promoted);
 }
 
 #[test]
@@ -1122,4 +1122,94 @@ fn test_unsafe_recovery_has_commit_merge() {
         }
     }
     assert!(has_commit_merge);
+}
+
+#[test]
+fn test_unsafe_recovery_during_merge() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    let left_on_store1 = find_peer(&left, 1).unwrap();
+    cluster.must_transfer_leader(left.get_id(), left_on_store1.clone());
+    let right_on_store1 = find_peer(&right, 1).unwrap();
+    cluster.must_transfer_leader(right.get_id(), right_on_store1.clone());
+
+    // Blocks the replication of prepare merge message, so that the commit merge back fills it
+    // in CatchUpLogs.
+    let append_filter = Box::new(
+        RegionPacketFilter::new(left.get_id(), 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    );
+    // Blocks the target region from receiving MsgAppendResponse, so that the commit merge message
+    // will only be replicated but not committed.
+    let commit_filter = Box::new(
+        RegionPacketFilter::new(right.get_id(), 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppendResponse),
+    );
+    cluster.sim.wl().add_recv_filter(1, append_filter);
+    cluster.sim.wl().add_recv_filter(1, commit_filter);
+
+    pd_client.merge_region(left.get_id(), right.get_id());
+    // Wait until the commit merge is proposed.
+    sleep_ms(300);
+
+    cluster.stop_node(1);
+    cluster.stop_node(3);
+    confirm_quorum_is_lost(&mut cluster, &region);
+
+    let report = cluster.must_enter_force_leader(right.get_id(), 2, vec![1, 3]);
+    assert_eq!(report.get_peer_reports().len(), 1);
+    let peer_report = &report.get_peer_reports()[0];
+    assert_eq!(peer_report.get_has_commit_merge(), false);
+    let region = peer_report.get_region_state().get_region();
+    assert_eq!(region.get_id(), right.get_id());
+    assert_eq!(region.get_start_key().len(), 0);
+    assert_eq!(region.get_end_key().len(), 0);
+
+    let to_be_removed: Vec<metapb::Peer> = right
+        .get_peers()
+        .iter()
+        .filter(|&peer| peer.get_store_id() != 2)
+        .cloned()
+        .collect();
+    let mut plan = pdpb::RecoveryPlan::default();
+    let mut demote = pdpb::DemoteFailedVoters::default();
+    demote.set_region_id(right.get_id());
+    demote.set_failed_voters(to_be_removed.into());
+    plan.mut_demotes().push(demote);
+    pd_client.must_set_unsafe_recovery_plan(2, plan);
+    cluster.must_send_store_heartbeat(2);
+
+    let mut demoted = true;
+    for _ in 0..10 {
+        let region = block_on(pd_client.get_region_by_id(right.get_id()))
+            .unwrap()
+            .unwrap();
+
+        demoted = true;
+        for peer in region.get_peers() {
+            if peer.get_id() != 2 && peer.get_role() == metapb::PeerRole::Voter {
+                demoted = false;
+            }
+        }
+        if demoted {
+            break;
+        }
+        sleep_ms(200);
+    }
+    assert!(demoted);
 }
