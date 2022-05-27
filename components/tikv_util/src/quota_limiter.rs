@@ -136,12 +136,12 @@ impl QuotaLimiter {
 
     pub fn set_write_bandwidth_limit(&self, write_bandwidth: ReadableSize) {
         self.write_bandwidth_limiter
-            .set_speed_limit(write_bandwidth.0 as f64);
+            .set_speed_limit(Self::speed_limit(write_bandwidth.0 as f64));
     }
 
     pub fn set_read_bandwidth_limit(&self, read_bandwidth: ReadableSize) {
         self.read_bandwidth_limiter
-            .set_speed_limit(read_bandwidth.0 as f64);
+            .set_speed_limit(Self::speed_limit(read_bandwidth.0 as f64));
     }
 
     pub fn set_max_delay_duration(&self, duration: ReadableDuration) {
@@ -318,5 +318,32 @@ mod tests {
         sample.add_write_bytes(512);
         let should_delay = block_on(quota_limiter.async_consume(sample));
         check_duration(should_delay, Duration::from_millis(40));
+
+        // test change limiter to 0
+        quota_limiter.set_cpu_time_limit(0);
+        let mut sample = quota_limiter.new_sample();
+        sample.add_cpu_time(Duration::from_millis(100));
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        check_duration(should_delay, Duration::ZERO);
+
+        quota_limiter.set_write_bandwidth_limit(ReadableSize::kb(0));
+        let mut sample = quota_limiter.new_sample();
+        sample.add_write_bytes(256);
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        check_duration(should_delay, Duration::ZERO);
+
+        quota_limiter.set_read_bandwidth_limit(ReadableSize::kb(0));
+        let mut sample = quota_limiter.new_sample();
+        sample.add_read_bytes(256);
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        check_duration(should_delay, Duration::ZERO);
+
+        // set bandwidth back
+        quota_limiter.set_write_bandwidth_limit(ReadableSize::kb(1));
+        quota_limiter.set_max_delay_duration(ReadableDuration::millis(0));
+        let mut sample = quota_limiter.new_sample();
+        sample.add_write_bytes(128);
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        check_duration(should_delay, Duration::from_millis(125));
     }
 }
