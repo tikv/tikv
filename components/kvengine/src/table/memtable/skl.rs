@@ -428,7 +428,11 @@ impl SkipListCore {
             }
             val_off = vn.next_val_addr;
         }
-        self.arena.get_val(val_off)
+        let v = self.arena.get_val(val_off);
+        if version >= v.version {
+            return v;
+        }
+        Value::new()
     }
 
     pub fn calculate_recompute_height(
@@ -1228,5 +1232,20 @@ mod tests {
             it.next();
         }
         assert_eq!(cnt, cnt_got);
+    }
+
+    #[test]
+    fn test_get_with_hint_version() {
+        let l = SkipList::new(None);
+        let mut wb = WriteBatch::new();
+        let key = random_key();
+        wb.put(key.as_slice(), 0, &[], 2, key.as_slice());
+        let entry = &wb.entries[0];
+        l.put(&wb.buf, entry);
+        let mut h = Hint::new();
+        let v = l.get_with_hint(&key, 1, &mut h);
+        assert!(v.is_empty());
+        let v = l.get_with_hint(&key, 2, &mut h);
+        assert_eq!(v.get_value(), key.as_slice());
     }
 }
