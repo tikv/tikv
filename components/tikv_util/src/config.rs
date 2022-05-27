@@ -86,10 +86,6 @@ impl From<ConfigValue> for ReadableSize {
 }
 
 impl ReadableSize {
-    pub const fn b(count: u64) -> ReadableSize {
-        ReadableSize(count)
-    }
-
     pub const fn kb(count: u64) -> ReadableSize {
         ReadableSize(count * KIB)
     }

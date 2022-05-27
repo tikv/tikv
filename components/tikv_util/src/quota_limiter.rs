@@ -5,7 +5,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use cpu_time::ThreadTime;
@@ -26,17 +26,16 @@ const CPU_LIMITER_REFILL_DURATION: Duration = Duration::from_millis(100);
 // completion time of tasks through restrictions of different metrics.
 #[derive(Debug)]
 pub struct QuotaLimiter {
-    cputime_limiter: Limiter,
-    write_bandwidth_limiter: Limiter,
-    read_bandwidth_limiter: Limiter,
+    foreground_cputime_limiter: Limiter,
+    foreground_write_bandwidth_limiter: Limiter,
+    foreground_read_bandwidth_limiter: Limiter,
+    background_cputime_limiter: Limiter,
+    background_write_bandwidth_limiter: Limiter,
+    background_read_bandwidth_limiter: Limiter,
     // max delay nano seconds
     max_delay_duration: AtomicU64,
     // if supports auto tune
     support_auto_tune: AtomicBool,
-    // last time tuned
-    last_time_tuned: Instant,
-    // auto tune interval in nano seconds
-    auto_tune_interval: AtomicU64,
 }
 
 // Throttle must be consumed in quota limiter.
@@ -93,59 +92,64 @@ impl<'a> Drop for CpuObserveGuard<'a> {
 impl Default for QuotaLimiter {
     fn default() -> Self {
         Self {
-            cputime_limiter: Limiter::new(f64::INFINITY),
-            write_bandwidth_limiter: Limiter::new(f64::INFINITY),
-            read_bandwidth_limiter: Limiter::new(f64::INFINITY),
+            foreground_cputime_limiter: Limiter::new(f64::INFINITY),
+            foreground_write_bandwidth_limiter: Limiter::new(f64::INFINITY),
+            foreground_read_bandwidth_limiter: Limiter::new(f64::INFINITY),
+            background_cputime_limiter: Limiter::new(f64::INFINITY),
+            background_write_bandwidth_limiter: Limiter::new(f64::INFINITY),
+            background_read_bandwidth_limiter: Limiter::new(f64::INFINITY),
             max_delay_duration: AtomicU64::new(0),
             support_auto_tune: AtomicBool::new(false),
-            last_time_tuned: Instant::now(),
-            auto_tune_interval: AtomicU64::new(1_000_000),
         }
     }
 }
 
 impl QuotaLimiter {
-    pub fn copy_from_arc(arc_quota: Arc<QuotaLimiter>) -> Self {
-        QuotaLimiter::new(
-            (arc_quota.cputime_limiter.speed_limit() / 1000.0) as usize,
-            ReadableSize::b(arc_quota.write_bandwidth_limiter.speed_limit() as u64),
-            ReadableSize::b(arc_quota.read_bandwidth_limiter.speed_limit() as u64),
-            ReadableDuration::micros(arc_quota.max_delay_duration().as_micros() as u64),
-            arc_quota.support_auto_tune.load(Ordering::Relaxed),
-            ReadableDuration::micros(arc_quota.get_auto_tune_interval().as_micros() as u64),
-        )
-    }
-
     // 1000 millicpu equals to 1vCPU, 0 means unlimited
     pub fn new(
-        cpu_quota: usize,
-        write_bandwidth: ReadableSize,
-        read_bandwidth: ReadableSize,
+        foreground_cpu_quota: usize,
+        foreground_write_bandwidth: ReadableSize,
+        foreground_read_bandwidth: ReadableSize,
+        background_cpu_quota: usize,
+        background_write_bandwidth: ReadableSize,
+        background_read_bandwidth: ReadableSize,
         max_delay_duration: ReadableDuration,
         support_auto_tune: bool,
-        auto_tune_interval: ReadableDuration,
     ) -> Self {
-        let cputime_limiter = Limiter::builder(Self::speed_limit(cpu_quota as f64 * 1000_f64))
-            .refill(CPU_LIMITER_REFILL_DURATION)
-            .build();
+        let foreground_cputime_limiter =
+            Limiter::builder(Self::speed_limit(foreground_cpu_quota as f64 * 1000_f64))
+                .refill(CPU_LIMITER_REFILL_DURATION)
+                .build();
 
-        let write_bandwidth_limiter = Limiter::new(Self::speed_limit(write_bandwidth.0 as f64));
+        let foreground_write_bandwidth_limiter =
+            Limiter::new(Self::speed_limit(foreground_write_bandwidth.0 as f64));
 
-        let read_bandwidth_limiter = Limiter::new(Self::speed_limit(read_bandwidth.0 as f64));
+        let foreground_read_bandwidth_limiter =
+            Limiter::new(Self::speed_limit(foreground_read_bandwidth.0 as f64));
+
+        let background_cputime_limiter =
+            Limiter::builder(Self::speed_limit(background_cpu_quota as f64 * 1000_f64))
+                .refill(CPU_LIMITER_REFILL_DURATION)
+                .build();
+
+        let background_write_bandwidth_limiter =
+            Limiter::new(Self::speed_limit(background_write_bandwidth.0 as f64));
+
+        let background_read_bandwidth_limiter =
+            Limiter::new(Self::speed_limit(background_read_bandwidth.0 as f64));
 
         let max_delay_duration = AtomicU64::new(max_delay_duration.0.as_nanos() as u64);
         let support_auto_tune = AtomicBool::new(support_auto_tune);
-        let last_time_tuned = Instant::now();
-        let auto_tune_interval = AtomicU64::new(auto_tune_interval.0.as_nanos() as u64);
 
         Self {
-            cputime_limiter,
-            write_bandwidth_limiter,
-            read_bandwidth_limiter,
+            foreground_cputime_limiter,
+            foreground_write_bandwidth_limiter,
+            foreground_read_bandwidth_limiter,
+            background_cputime_limiter,
+            background_write_bandwidth_limiter,
+            background_read_bandwidth_limiter,
             max_delay_duration,
             support_auto_tune,
-            last_time_tuned,
-            auto_tune_interval,
         }
     }
 
@@ -157,18 +161,33 @@ impl QuotaLimiter {
         }
     }
 
-    pub fn set_cpu_time_limit(&self, quota_limit: usize) {
-        self.cputime_limiter
+    pub fn set_foreground_cpu_time_limit(&self, quota_limit: usize) {
+        self.foreground_cputime_limiter
             .set_speed_limit(Self::speed_limit(quota_limit as f64 * 1000_f64));
     }
 
-    pub fn set_write_bandwidth_limit(&self, write_bandwidth: ReadableSize) {
-        self.write_bandwidth_limiter
+    pub fn set_foreground_write_bandwidth_limit(&self, write_bandwidth: ReadableSize) {
+        self.foreground_write_bandwidth_limiter
             .set_speed_limit(write_bandwidth.0 as f64);
     }
 
-    pub fn set_read_bandwidth_limit(&self, read_bandwidth: ReadableSize) {
-        self.read_bandwidth_limiter
+    pub fn set_foreground_read_bandwidth_limit(&self, read_bandwidth: ReadableSize) {
+        self.foreground_read_bandwidth_limiter
+            .set_speed_limit(read_bandwidth.0 as f64);
+    }
+
+    pub fn set_background_cpu_time_limit(&self, quota_limit: usize) {
+        self.background_cputime_limiter
+            .set_speed_limit(Self::speed_limit(quota_limit as f64 * 1000_f64));
+    }
+
+    pub fn set_background_write_bandwidth_limit(&self, write_bandwidth: ReadableSize) {
+        self.background_cputime_limiter
+            .set_speed_limit(write_bandwidth.0 as f64);
+    }
+
+    pub fn set_background_read_bandwidth_limit(&self, read_bandwidth: ReadableSize) {
+        self.background_cputime_limiter
             .set_speed_limit(read_bandwidth.0 as f64);
     }
 
@@ -177,29 +196,16 @@ impl QuotaLimiter {
             .store(duration.0.as_nanos() as u64, Ordering::Relaxed);
     }
 
-    pub fn set_auto_tune_interval(&self, interval: ReadableDuration) {
-        self.auto_tune_interval
-            .store(interval.0.as_nanos() as u64, Ordering::Relaxed);
+    pub fn foreground_cputime_limiter(&self) -> f64 {
+        self.foreground_cputime_limiter.speed_limit()
     }
 
-    pub fn cputime_limiter(&self) -> f64 {
-        self.cputime_limiter.speed_limit()
+    pub fn background_cputime_limiter(&self) -> f64 {
+        self.background_cputime_limiter.speed_limit()
     }
 
     fn max_delay_duration(&self) -> Duration {
         Duration::from_nanos(self.max_delay_duration.load(Ordering::Relaxed))
-    }
-
-    pub fn get_auto_tune_interval(&self) -> Duration {
-        Duration::from_nanos(self.auto_tune_interval.load(Ordering::Relaxed))
-    }
-
-    pub fn get_last_time_tuned(&self) -> Instant {
-        self.last_time_tuned
-    }
-
-    pub fn set_last_time_tuned(&mut self, new_time: Instant) {
-        self.last_time_tuned = new_time;
     }
 
     pub fn supports_auto_tune(&self) -> bool {
@@ -212,29 +218,71 @@ impl QuotaLimiter {
             read_bytes: 0,
             write_bytes: 0,
             cpu_time: Duration::ZERO,
-            enable_cpu_limit: !self.cputime_limiter.speed_limit().is_infinite(),
+            enable_cpu_limit: !self.foreground_cputime_limiter.speed_limit().is_infinite()
+                || !self.background_cputime_limiter.speed_limit().is_infinite(),
         }
     }
 
-    // To consume a sampler and return delayed duration.
+    // To consume a sampler and return delayed duration for foreground request.
     // If the sampler is null, the speed limiter will just return ZERO.
-    pub async fn async_consume(&self, sample: Sample) -> Duration {
+    pub async fn async_foreground_consume(&self, sample: Sample) -> Duration {
         let cpu_dur = if sample.cpu_time > Duration::ZERO {
-            self.cputime_limiter
+            self.foreground_cputime_limiter
                 .consume_duration(sample.cpu_time.as_micros() as usize)
         } else {
             Duration::ZERO
         };
 
         let w_bw_dur = if sample.write_bytes > 0 {
-            self.write_bandwidth_limiter
+            self.foreground_write_bandwidth_limiter
                 .consume_duration(sample.write_bytes)
         } else {
             Duration::ZERO
         };
 
         let r_bw_dur = if sample.read_bytes > 0 {
-            self.read_bandwidth_limiter
+            self.foreground_read_bandwidth_limiter
+                .consume_duration(sample.read_bytes)
+        } else {
+            Duration::ZERO
+        };
+
+        let mut exec_delay = std::cmp::max(cpu_dur, std::cmp::max(w_bw_dur, r_bw_dur));
+        let delay_duration = self.max_delay_duration();
+        if !delay_duration.is_zero() {
+            exec_delay = std::cmp::min(delay_duration, exec_delay);
+        };
+
+        if !exec_delay.is_zero() {
+            GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + exec_delay)
+                .compat()
+                .await
+                .unwrap();
+        }
+
+        exec_delay
+    }
+
+    // To consume a sampler and return delayed duration for background request.
+    // If the sampler is null, the speed limiter will just return ZERO.
+    pub async fn async_background_consume(&self, sample: Sample) -> Duration {
+        let cpu_dur = if sample.cpu_time > Duration::ZERO {
+            self.background_cputime_limiter
+                .consume_duration(sample.cpu_time.as_micros() as usize)
+        } else {
+            Duration::ZERO
+        };
+
+        let w_bw_dur = if sample.write_bytes > 0 {
+            self.background_write_bandwidth_limiter
+                .consume_duration(sample.write_bytes)
+        } else {
+            Duration::ZERO
+        };
+
+        let r_bw_dur = if sample.read_bytes > 0 {
+            self.background_read_bandwidth_limiter
                 .consume_duration(sample.read_bytes)
         } else {
             Duration::ZERO
@@ -259,12 +307,12 @@ impl QuotaLimiter {
 }
 
 pub struct QuotaLimitConfigManager {
-    limiter: Arc<QuotaLimiter>,
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 impl QuotaLimitConfigManager {
-    pub fn new(limiter: Arc<QuotaLimiter>) -> Self {
-        Self { limiter }
+    pub fn new(quota_limiter: Arc<QuotaLimiter>) -> Self {
+        Self { quota_limiter }
     }
 }
 
@@ -274,19 +322,39 @@ impl ConfigManager for QuotaLimitConfigManager {
         change: ConfigChange,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if let Some(cpu_limit) = change.get("foreground_cpu_time") {
-            self.limiter.set_cpu_time_limit(cpu_limit.into());
+            self.quota_limiter
+                .set_foreground_cpu_time_limit(cpu_limit.into());
         }
         if let Some(write_bandwidth) = change.get("foreground_write_bandwidth") {
-            self.limiter
-                .set_write_bandwidth_limit(write_bandwidth.clone().into())
+            self.quota_limiter
+                .set_foreground_write_bandwidth_limit(write_bandwidth.clone().into())
         }
         if let Some(read_bandwidth) = change.get("foreground_read_bandwidth") {
-            self.limiter
-                .set_write_bandwidth_limit(read_bandwidth.clone().into());
+            self.quota_limiter
+                .set_foreground_write_bandwidth_limit(read_bandwidth.clone().into());
         }
         if let Some(duration) = change.get("max_delay_duration") {
             let delay_dur: ReadableDuration = duration.clone().into();
-            self.limiter
+            self.quota_limiter
+                .max_delay_duration
+                .store(delay_dur.0.as_nanos() as u64, Ordering::Relaxed);
+        }
+
+        if let Some(cpu_limit) = change.get("background_cpu_time") {
+            self.quota_limiter
+                .set_background_cpu_time_limit(cpu_limit.into());
+        }
+        if let Some(write_bandwidth) = change.get("background_write_bandwidth") {
+            self.quota_limiter
+                .set_background_write_bandwidth_limit(write_bandwidth.clone().into())
+        }
+        if let Some(read_bandwidth) = change.get("background_read_bandwidth") {
+            self.quota_limiter
+                .set_background_write_bandwidth_limit(read_bandwidth.clone().into());
+        }
+        if let Some(duration) = change.get("background_max_delay_duration") {
+            let delay_dur: ReadableDuration = duration.clone().into();
+            self.quota_limiter
                 .max_delay_duration
                 .store(delay_dur.0.as_nanos() as u64, Ordering::Relaxed);
         }
@@ -308,9 +376,11 @@ mod tests {
             1000,
             ReadableSize::kb(1),
             ReadableSize::kb(1),
+            1000,
+            ReadableSize::kb(1),
+            ReadableSize::kb(1),
             ReadableDuration::millis(0),
             false,
-            ReadableDuration::millis(100),
         );
 
         let thread_start_time = ThreadTime::now();
@@ -324,68 +394,106 @@ mod tests {
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(60));
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
         check_duration(should_delay, Duration::ZERO);
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(50));
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
         check_duration(should_delay, Duration::from_millis(110));
 
         std::thread::sleep(Duration::from_millis(10));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(20));
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
         // should less 60+50+20
         assert!(should_delay < Duration::from_millis(130));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(200));
         sample.add_write_bytes(256);
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
         check_duration(should_delay, Duration::from_millis(250));
 
         // ThreadTime elapsed time is not long.
         assert!(thread_start_time.elapsed() < Duration::from_millis(50));
 
-        quota_limiter.set_cpu_time_limit(2000);
+        quota_limiter.set_foreground_cpu_time_limit(2000);
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(200));
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
         check_duration(should_delay, Duration::from_millis(100));
 
-        quota_limiter.set_read_bandwidth_limit(ReadableSize(512));
+        quota_limiter.set_foreground_read_bandwidth_limit(ReadableSize(512));
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(128);
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
         check_duration(should_delay, Duration::from_millis(250));
 
-        quota_limiter.set_write_bandwidth_limit(ReadableSize::kb(2));
+        quota_limiter.set_foreground_write_bandwidth_limit(ReadableSize::kb(2));
         let mut sample = quota_limiter.new_sample();
         sample.add_write_bytes(256);
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
         check_duration(should_delay, Duration::from_millis(125));
 
         quota_limiter.set_max_delay_duration(ReadableDuration::millis(40));
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(256);
         sample.add_write_bytes(512);
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
         check_duration(should_delay, Duration::from_millis(40));
 
-        let arc_quota_limiter = Arc::new(quota_limiter);
-        arc_quota_limiter.set_cpu_time_limit(2000);
-        let quota_limiter_copy1 = QuotaLimiter::copy_from_arc(arc_quota_limiter.clone());
-        quota_limiter_copy1.set_cpu_time_limit(3000);
-        let quota_limiter_copy2 = QuotaLimiter::copy_from_arc(arc_quota_limiter.clone());
-        quota_limiter_copy2.set_cpu_time_limit(4000);
-        let quota_limiter_copy3 = QuotaLimiter::copy_from_arc(arc_quota_limiter.clone());
-        assert!(arc_quota_limiter.cputime_limiter() < quota_limiter_copy1.cputime_limiter());
-        assert!(quota_limiter_copy1.cputime_limiter() < quota_limiter_copy2.cputime_limiter());
-        assert_eq!(
-            arc_quota_limiter.cputime_limiter(),
-            quota_limiter_copy3.cputime_limiter()
-        );
+        let mut sample = quota_limiter.new_sample();
+        sample.add_cpu_time(Duration::from_millis(60));
+        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        check_duration(should_delay, Duration::ZERO);
+
+        let mut sample = quota_limiter.new_sample();
+        sample.add_cpu_time(Duration::from_millis(50));
+        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        check_duration(should_delay, Duration::from_millis(110));
+
+        std::thread::sleep(Duration::from_millis(10));
+
+        let mut sample = quota_limiter.new_sample();
+        sample.add_cpu_time(Duration::from_millis(20));
+        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        // should less 60+50+20
+        assert!(should_delay < Duration::from_millis(130));
+
+        let mut sample = quota_limiter.new_sample();
+        sample.add_cpu_time(Duration::from_millis(200));
+        sample.add_write_bytes(256);
+        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        check_duration(should_delay, Duration::from_millis(250));
+
+        // ThreadTime elapsed time is not long.
+        assert!(thread_start_time.elapsed() < Duration::from_millis(50));
+
+        quota_limiter.set_background_cpu_time_limit(2000);
+        let mut sample = quota_limiter.new_sample();
+        sample.add_cpu_time(Duration::from_millis(200));
+        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        check_duration(should_delay, Duration::from_millis(100));
+
+        quota_limiter.set_background_read_bandwidth_limit(ReadableSize(512));
+        let mut sample = quota_limiter.new_sample();
+        sample.add_read_bytes(128);
+        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        check_duration(should_delay, Duration::from_millis(250));
+
+        quota_limiter.set_background_write_bandwidth_limit(ReadableSize::kb(2));
+        let mut sample = quota_limiter.new_sample();
+        sample.add_write_bytes(256);
+        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        check_duration(should_delay, Duration::from_millis(125));
+
+        quota_limiter.set_max_delay_duration(ReadableDuration::millis(40));
+        let mut sample = quota_limiter.new_sample();
+        sample.add_read_bytes(256);
+        sample.add_write_bytes(512);
+        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        check_duration(should_delay, Duration::from_millis(40));
     }
 }
