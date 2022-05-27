@@ -31,6 +31,7 @@ pub struct Config {
     /// we assume that the success rate of pessimistic transactions is important to
     /// people who disable the pipelined pessimistic lock feature.
     pub in_memory: bool,
+    pub wait_history_capacity: u64,
 }
 
 // u64 is for backward compatibility since v3.x uses it.
@@ -62,6 +63,7 @@ impl Default for Config {
             wake_up_delay_duration: ReadableDuration::millis(20),
             pipelined: true,
             in_memory: true,
+            wait_history_capacity: 0,
         }
     }
 }

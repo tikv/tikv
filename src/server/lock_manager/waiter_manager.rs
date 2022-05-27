@@ -300,14 +300,16 @@ struct WaitTable {
     wait_table: HashMap<u64, Waiters>,
     waiter_count: Arc<AtomicUsize>,
     history: VecDeque<WaitHistory>,
+    wait_history_capacity: u64,
 }
 
 impl WaitTable {
-    fn new(waiter_count: Arc<AtomicUsize>) -> Self {
+    fn new(waiter_count: Arc<AtomicUsize>, wait_history_capacity: u64) -> Self {
         Self {
             wait_table: HashMap::default(),
             waiter_count,
-            history: VecDeque::new()
+            history: VecDeque::with_capacity(wait_history_capacity),
+            wait_history_capacity
         }
     }
 
@@ -504,7 +506,7 @@ impl WaiterManager {
         cfg: &Config,
     ) -> Self {
         Self {
-            wait_table: Rc::new(RefCell::new(WaitTable::new(waiter_count))),
+            wait_table: Rc::new(RefCell::new(WaitTable::new(waiter_count, cfg.wait_history_capacity))),
             detector_scheduler,
             default_wait_for_lock_timeout: cfg.wait_for_lock_timeout,
             wake_up_delay_duration: cfg.wake_up_delay_duration,
@@ -960,7 +962,7 @@ pub mod tests {
 
     #[test]
     fn test_wait_table_add_and_remove() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)), 0);
         let mut waiter_info = Vec::new();
         let mut rng = rand::thread_rng();
         for _ in 0..20 {
@@ -1001,7 +1003,7 @@ pub mod tests {
 
     #[test]
     fn test_wait_table_add_duplicated_waiter() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)), 0);
         let waiter_ts = 10.into();
         let lock = Lock {
             ts: 20.into(),
@@ -1021,7 +1023,7 @@ pub mod tests {
 
     #[test]
     fn test_wait_table_remove_oldest_waiter() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)), 0);
         let lock = Lock {
             ts: 10.into(),
             hash: 10,
@@ -1049,7 +1051,7 @@ pub mod tests {
     #[test]
     fn test_wait_table_is_empty() {
         let waiter_count = Arc::new(AtomicUsize::new(0));
-        let mut wait_table = WaitTable::new(Arc::clone(&waiter_count));
+        let mut wait_table = WaitTable::new(Arc::clone(&waiter_count), 0);
 
         let lock = Lock {
             ts: 2.into(),
@@ -1085,7 +1087,7 @@ pub mod tests {
 
     #[test]
     fn test_wait_table_to_wait_for_entries() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)), 0);
         assert!(wait_table.to_wait_for_entries().is_empty());
 
         for i in 1..5 {
