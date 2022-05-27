@@ -305,6 +305,93 @@ fn test_unsafe_recovery_already_in_joint_state() {
     assert_eq!(promoted, true);
 }
 
+// Tests whether unsafe recovery behaves correctly when the failed region is already in the
+// middle of a joint state, once exit, it recovers itself without any further demotions.
+#[test]
+fn test_unsafe_recovery_early_return_after_exit_joint_state() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+
+    // Changes the group config to
+    let peer_on_store0 = find_peer(&region, nodes[0]).unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[1]).unwrap();
+    let peer_on_store2 = find_peer(&region, nodes[2]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store2.clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), peer_on_store0.clone());
+    cluster.pd_client.must_add_peer(
+        region.get_id(),
+        new_learner_peer(nodes[0], peer_on_store0.get_id()),
+    );
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), peer_on_store2.clone());
+    cluster.pd_client.must_add_peer(
+        region.get_id(),
+        new_learner_peer(nodes[2], peer_on_store2.get_id()),
+    );
+    // Wait the new learner to be initialized.
+    sleep_ms(100);
+    pd_client.must_joint_confchange(
+        region.get_id(),
+        vec![
+            (
+                ConfChangeType::AddNode,
+                new_peer(nodes[0], peer_on_store0.get_id()),
+            ),
+            (
+                ConfChangeType::AddLearnerNode,
+                new_learner_peer(nodes[1], peer_on_store1.get_id()),
+            ),
+        ],
+    );
+    cluster.stop_node(nodes[1]);
+    cluster.stop_node(nodes[2]);
+    cluster.must_wait_for_leader_expire(nodes[0], region.get_id());
+
+    confirm_quorum_is_lost(&mut cluster, &region);
+    cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
+
+    let to_be_removed: Vec<metapb::Peer> = region
+        .get_peers()
+        .iter()
+        .filter(|&peer| peer.get_store_id() != nodes[0])
+        .cloned()
+        .collect();
+    let mut plan = pdpb::RecoveryPlan::default();
+    let mut demote = pdpb::DemoteFailedVoters::default();
+    demote.set_region_id(region.get_id());
+    demote.set_failed_voters(to_be_removed.into());
+    plan.mut_demotes().push(demote);
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    cluster.must_send_store_heartbeat(nodes[0]);
+
+    let mut demoted = true;
+    for _ in 0..10 {
+        let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+
+        demoted = region
+            .get_peers()
+            .iter()
+            .filter(|peer| peer.get_store_id() != nodes[0])
+            .all(|peer| peer.get_role() == metapb::PeerRole::Learner);
+        if demoted {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert_eq!(demoted, true);
+}
+
 #[test]
 fn test_unsafe_recovery_create_region() {
     let mut cluster = new_server_cluster(0, 3);
