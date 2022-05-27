@@ -465,7 +465,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 )?
             };
 
-            let quota_delay = self.quota_limiter.async_consume(sample).await;
+            let quota_delay = self.quota_limiter.async_foreground_consume(sample).await;
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::dag)

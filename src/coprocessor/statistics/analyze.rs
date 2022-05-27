@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, cmp::Reverse, collections::BinaryHeap, mem, sync::Arc};
+use std::{cmp::Reverse, collections::BinaryHeap, mem, sync::Arc};
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
@@ -30,7 +30,6 @@ use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
 use tikv_util::{
     metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
     quota_limiter::QuotaLimiter,
-    sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
 };
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
@@ -45,15 +44,6 @@ use crate::{
 const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;
 
-// minimum number of core kept for analyze
-const ANALYZER_CORE_LOWER_BOUND: usize = 1;
-// max number of cores kept for analyze = core_number - ANALYZER_CORE_EXCLUSIVE_BOUND
-const ANALYZER_CORE_EXCLUSIVE_BOUND: usize = 1;
-// indication of TiKV instance is short of cpu
-const SYSTEM_BUSY_THRESHOLD: f64 = 0.90;
-// indication of TiKV instance in healthy state when cpu usage is in [0.75, 0.9)
-const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.75;
-
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
@@ -61,6 +51,7 @@ pub struct AnalyzeContext<S: Snapshot> {
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
     quota_limiter: Arc<QuotaLimiter>,
+    is_auto: bool,
 }
 
 impl<S: Snapshot> AnalyzeContext<S> {
@@ -71,6 +62,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         snap: S,
         req_ctx: &ReqContext,
         quota_limiter: Arc<QuotaLimiter>,
+        is_auto: bool,
     ) -> Result<Self> {
         let store = SnapshotStore::new(
             snap,
@@ -87,6 +79,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             ranges,
             storage_stats: Statistics::default(),
             quota_limiter,
+            is_auto,
         })
     }
 
@@ -119,8 +112,11 @@ impl<S: Snapshot> AnalyzeContext<S> {
         Ok(res_data)
     }
 
-    async fn handle_full_sampling(builder: &mut RowSampleBuilder<S>) -> Result<Vec<u8>> {
-        let sample_res = builder.collect_column_stats().await?;
+    async fn handle_full_sampling(
+        builder: &mut RowSampleBuilder<S>,
+        is_auto: bool,
+    ) -> Result<Vec<u8>> {
+        let sample_res = builder.collect_column_stats(is_auto).await?;
         let res_data = {
             let res = sample_res.into_proto();
             box_try!(res.write_to_bytes())
@@ -282,14 +278,11 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let col_req = self.req.take_col_req();
                 let storage = self.storage.take().unwrap();
                 let ranges = std::mem::take(&mut self.ranges);
-                let mut builder = RowSampleBuilder::new(
-                    col_req,
-                    storage,
-                    ranges,
-                    self.quota_limiter.clone(),
-                    self.req.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0,
-                )?;
-                let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
+
+                let mut builder =
+                    RowSampleBuilder::new(col_req, storage, ranges, self.quota_limiter.clone())?;
+
+                let res = AnalyzeContext::handle_full_sampling(&mut builder, self.is_auto).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
             }
@@ -328,8 +321,7 @@ struct RowSampleBuilder<S: Snapshot> {
     sample_rate: f64,
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
-    quota_limiter: QuotaLimiter,
-    is_auto_analyze: bool,
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 impl<S: Snapshot> RowSampleBuilder<S> {
@@ -338,7 +330,6 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         storage: TiKvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
         quota_limiter: Arc<QuotaLimiter>,
-        is_auto_analyze: bool,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
         if columns_info.is_empty() {
@@ -355,9 +346,6 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             false, // Streaming mode is not supported in Analyze request, always false here
             req.take_primary_prefix_column_ids(),
         )?;
-        // Make a dedicated copy quota_limiter for current sampler
-        let copy_quota_limiter = QuotaLimiter::copy_from_arc(quota_limiter);
-
         Ok(Self {
             data: table_scanner,
             max_sample_size: req.get_sample_size() as usize,
@@ -365,8 +353,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             sample_rate: req.get_sample_rate(),
             columns_info,
             column_groups: req.take_column_groups().into(),
-            quota_limiter: copy_quota_limiter,
-            is_auto_analyze,
+            quota_limiter,
         })
     }
 
@@ -385,58 +372,12 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         ))
     }
 
-    // Support tuning of cpu quota at present, io bandwidth tuning is on the way
-    // some smarter tuning algorithm like PID could be considered
-    fn tune_quota_limiter(&mut self, mut proc_stat: ProcessStat) {
-        // rule based tuning:
-        //      1) if instance is busy, shrink cpu quota for analyze by 1 core until lower bound is hit;
-        //      2) if instance cpu usage is at healthy state, no op;
-        //      3) if instance is idle, increase cpu quota by 1 core until upper bound is hit.
-
-        let cpu_util = (proc_stat.cpu_usage().unwrap() / 100.0) / SysQuota::cpu_cores_quota();
-
-        let old_quota = self.quota_limiter.cputime_limiter();
-
-        if cpu_util >= SYSTEM_BUSY_THRESHOLD {
-            self.quota_limiter.set_cpu_time_limit(
-                1_000
-                    * cmp::max(
-                        (self.quota_limiter.cputime_limiter() / 1_000_000.0) as usize - 1,
-                        ANALYZER_CORE_LOWER_BOUND,
-                    ),
-            );
-        } else if cpu_util < SYSTEM_HEALTHY_THRESHOLD {
-            self.quota_limiter.set_cpu_time_limit(
-                1_000
-                    * cmp::min(
-                        (self.quota_limiter.cputime_limiter() / 1_000_000.0) as usize + 1,
-                        SysQuota::cpu_cores_quota() as usize - ANALYZER_CORE_EXCLUSIVE_BOUND,
-                    ),
-            );
-        }
-
-        if old_quota != self.quota_limiter.cputime_limiter() {
-            debug!("cpu_time_limiter tuned";
-                            "cpu_util" => ?cpu_util,
-                            "new quota" => ?self.quota_limiter.cputime_limiter() / 1_000.0);
-            NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-                .get(ThrottleType::quota_limiter_auto_tuned)
-                .inc_by(1_u64);
-        }
-
-        self.quota_limiter
-            .set_last_time_tuned(std::time::Instant::now());
-    }
-
-    async fn collect_column_stats(&mut self) -> Result<AnalyzeSamplingResult> {
+    async fn collect_column_stats(&mut self, is_auto: bool) -> Result<AnalyzeSamplingResult> {
         use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
 
         let mut is_drained = false;
         let mut time_slice_start = Instant::now();
         let mut collector = self.new_collector();
-
-        let proc_stat = ProcessStat::cur_proc_stat().unwrap();
-
         while !is_drained {
             let time_slice_elapsed = time_slice_start.saturating_elapsed();
             if time_slice_elapsed > MAX_TIME_SLICE {
@@ -497,17 +438,15 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 }
             }
 
-            // Try adjust the quota if necessary
-            if self.is_auto_analyze
-                && self.quota_limiter.supports_auto_tune()
-                && self.quota_limiter.get_last_time_tuned().elapsed()
-                    >= self.quota_limiter.get_auto_tune_interval()
-            {
-                self.tune_quota_limiter(proc_stat);
-            }
-
             // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
-            let quota_delay = self.quota_limiter.async_consume(sample).await;
+            let quota_delay = {
+                if !is_auto {
+                    self.quota_limiter.async_foreground_consume(sample).await
+                } else {
+                    self.quota_limiter.async_background_consume(sample).await
+                }
+            };
+
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::analyze_full_sampling)

@@ -108,8 +108,9 @@ use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
+    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    sys::{disk, register_memory_usage_high_water, SysQuota},
+    sys::{cpu_time::ProcessStat, disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
@@ -120,6 +121,15 @@ use crate::{
     memory::*, raft_engine_switch::*, setup::*, signal_handler,
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
+
+// minimum number of core kept for background requests
+const BACKGROUND_REQUEST_CORE_LOWER_BOUND: usize = 1;
+// max number of cores kept for background requests = core_number / 2
+const BACKGROUND_REQUEST_CORE_MAX_RATIO: f64 = 0.5;
+// indication of TiKV instance is short of cpu
+const SYSTEM_BUSY_THRESHOLD: f64 = 0.90;
+// indication of TiKV instance in healthy state when cpu usage is in [0.75, 0.9)
+const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.75;
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
@@ -144,6 +154,10 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
     tikv.init_storage_stats_task(engines);
     tikv.run_server(server_config);
     tikv.run_status_server();
+
+    if tikv.quota_limiter.supports_auto_tune() {
+        tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
+    }
 
     signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
     tikv.stop();
@@ -185,6 +199,7 @@ const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
 const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
 struct TiKvServer<ER: RaftEngine> {
@@ -279,13 +294,16 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
+        // use different quota limiters for front-end and back-end requests
         let quota_limiter = Arc::new(QuotaLimiter::new(
             config.quota.foreground_cpu_time,
             config.quota.foreground_write_bandwidth,
             config.quota.foreground_read_bandwidth,
+            config.quota.background_cpu_time,
+            config.quota.background_write_bandwidth,
+            config.quota.background_read_bandwidth,
             config.quota.max_delay_duration,
-            config.quota.support_auto_tune,
-            config.quota.auto_tune_interval,
+            false,
         ));
 
         TiKvServer {
@@ -1222,6 +1240,84 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 let now = Instant::now();
                 mem_trace_metrics.flush(now);
             });
+    }
+
+    // Only background cpu quota tuning is implemented at present. iops and frontend quota tuning is on the way
+    fn init_quota_tuning_task(&self, quota_limiter: Arc<QuotaLimiter>) {
+        let mut proc_stats: ProcessStat = ProcessStat::cur_proc_stat().unwrap();
+        self.background_worker.spawn_interval_task(
+            DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL,
+            move || {
+                // if cpu quota is not specified, try capping it to half of the core number
+                if quota_limiter.background_cputime_limiter().is_infinite() {
+                    quota_limiter.set_background_cpu_time_limit(
+                        1000 * cmp::max(
+                            BACKGROUND_REQUEST_CORE_LOWER_BOUND,
+                            (SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO)
+                                as usize,
+                        ),
+                    );
+
+                    debug!("cpu_time_limiter tuned for backend request";
+                            "cpu_util" => ? 0.5f64,
+                            "new quota" => ?quota_limiter.background_cputime_limiter() / 1_000.0);
+
+                    NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                        .get(ThrottleType::quota_limiter_auto_tuned)
+                        .inc_by(1_u64);
+                } else {
+                    let cpu_usage = match proc_stats.cpu_usage() {
+                        Ok(r) => r,
+                        Err(_e) => 0.0,
+                    };
+
+                    // Try tuning quota when cpu_usage is correctly collected.
+                    // rule based tuning:
+                    //      1) if instance is busy, shrink cpu quota for analyze by 1 core until lower bound is hit;
+                    //      2) if instance cpu usage is at healthy state, no op;
+                    //      3) if instance is idle, increase cpu quota by 1 core until upper bound is hit.
+                    if cpu_usage > 0.0f64 {
+                        let cpu_util = (cpu_usage / 100.0) / SysQuota::cpu_cores_quota();
+
+                        let old_quota = quota_limiter.background_cputime_limiter();
+
+                        if cpu_util >= SYSTEM_BUSY_THRESHOLD {
+                            quota_limiter.set_background_cpu_time_limit(
+                                1_000
+                                    * cmp::max(
+                                        (quota_limiter.background_cputime_limiter() / 1_000_000.0)
+                                            as usize
+                                            - 1,
+                                        BACKGROUND_REQUEST_CORE_LOWER_BOUND,
+                                    ),
+                            );
+                        } else if cpu_util < SYSTEM_HEALTHY_THRESHOLD {
+                            quota_limiter.set_background_cpu_time_limit(
+                                1_000
+                                    * cmp::min(
+                                        (quota_limiter.background_cputime_limiter() / 1_000_000.0)
+                                            as usize
+                                            + 1,
+                                        (SysQuota::cpu_cores_quota()
+                                            * BACKGROUND_REQUEST_CORE_MAX_RATIO)
+                                            as usize,
+                                    ),
+                            );
+                        }
+
+                        if old_quota != quota_limiter.background_cputime_limiter() {
+                            debug!("cpu_time_limiter tuned for backend request";
+                            "cpu_util" => ?cpu_util,
+                            "new quota" => ?quota_limiter.background_cputime_limiter() / 1_000.0);
+                        }
+
+                        NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                            .get(ThrottleType::quota_limiter_auto_tuned)
+                            .inc_by(1_u64);
+                    }
+                }
+            },
+        );
     }
 
     fn init_storage_stats_task(&self, engines: Engines<RocksEngine, ER>) {

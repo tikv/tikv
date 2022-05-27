@@ -274,7 +274,9 @@ impl<E: Engine> Endpoint<E> {
                 });
 
                 self.check_memory_locks(&req_ctx)?;
+
                 let quota_limiter = self.quota_limiter.clone();
+                let is_auto = analyze.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0;
 
                 builder = Box::new(move |snap, req_ctx| {
                     statistics::analyze::AnalyzeContext::new(
@@ -284,6 +286,7 @@ impl<E: Engine> Endpoint<E> {
                         snap,
                         req_ctx,
                         quota_limiter,
+                        is_auto,
                     )
                     .map(|h| h.into_boxed())
                 });
