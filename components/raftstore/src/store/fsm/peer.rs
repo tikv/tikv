@@ -899,16 +899,19 @@ where
         region_local_state.set_region(self.region().clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
-        if let Ok(entries) = self.fsm.peer.get_store().entries(
+        match self.fsm.peer.get_store().entries(
             self.fsm.peer.raft_group.store().commit_index() + 1,
             self.fsm.peer.get_store().last_index() + 1,
             NO_LIMIT,
             GetEntriesContext::empty(false),
         ) {
-            for entry in entries {
-                let ctx = ProposalContext::from_bytes(&entry.context);
-                self_report.set_has_commit_merge(ctx.contains(ProposalContext::COMMIT_MERGE));
+            Ok(entries) => {
+                for entry in entries {
+                    let ctx = ProposalContext::from_bytes(&entry.context);
+                    self_report.set_has_commit_merge(ctx.contains(ProposalContext::COMMIT_MERGE));
+                }
             }
+            Err(e) => panic!("Unsafe recovery, fail to get uncommitted entries, {:?}", e),
         }
         syncer.report_for_self(self_report);
     }
