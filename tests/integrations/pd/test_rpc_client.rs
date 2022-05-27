@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use error_code::ErrorCodeExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
@@ -234,6 +235,37 @@ fn test_get_tombstone_stores() {
     client.get_store(store_id).unwrap();
     client.get_store(99).unwrap_err();
     client.get_store(199).unwrap_err();
+}
+
+#[test]
+fn test_get_tombstone_store() {
+    let eps_count = 1;
+    let server = MockServer::new(eps_count);
+    let eps = server.bind_addrs();
+    let client = new_client(eps, None);
+
+    let mut all_stores = vec![];
+    let store_id = client.alloc_id().unwrap();
+    let mut store = metapb::Store::default();
+    store.set_id(store_id);
+    let region_id = client.alloc_id().unwrap();
+    let mut region = metapb::Region::default();
+    region.set_id(region_id);
+    client.bootstrap_cluster(store.clone(), region).unwrap();
+
+    all_stores.push(store);
+    assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
+    let s = client.get_all_stores(false).unwrap();
+    assert_eq!(s, all_stores);
+
+    // Add tombstone store.
+    let mut store99 = metapb::Store::default();
+    store99.set_id(99);
+    store99.set_state(metapb::StoreState::Tombstone);
+    server.default_handler().add_store(store99.clone());
+
+    let r = block_on(client.get_store_async(99));
+    assert_eq!(r.unwrap_err().error_code(), error_code::pd::STORE_TOMBSTONE);
 }
 
 #[test]
