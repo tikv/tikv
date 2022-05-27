@@ -169,6 +169,10 @@ pub struct Config {
     // * system=32G, memory_usage_limit=24G, reject_at=4.8G
     pub reject_messages_on_memory_ratio: f64,
 
+    // whether to compact metrics or not.
+    #[doc(hidden)]
+    pub simplify_metrics: bool,
+
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
     pub labels: HashMap<String, String>,
@@ -247,6 +251,7 @@ impl Default for Config {
             end_point_slow_log_threshold: ReadableDuration::secs(1),
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
+            simplify_metrics: false,
         }
     }
 }
