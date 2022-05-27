@@ -1076,7 +1076,7 @@ fn test_unsafe_recovery_has_commit_merge() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
     let pd_client = Arc::clone(&cluster.pd_client);
-    // pd_client.disable_default_operator();
+    pd_client.disable_default_operator();
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
 
