@@ -2035,11 +2035,20 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         let mut is_overlapped = false;
         let mut regions_to_destroy = vec![];
-        for (_, id) in meta.region_ranges.range((
+        for (key, id) in meta.region_ranges.range((
             Excluded(data_key(msg.get_start_key())),
             Unbounded::<Vec<u8>>,
         )) {
-            let exist_region = &meta.regions[id];
+            let exist_region = match meta.regions.get(id) {
+                Some(r) => r,
+                None => panic!(
+                    "meta corrupted: no region for {} {} when creating {} {:?}",
+                    id,
+                    log_wrappers::Value::key(key),
+                    region_id,
+                    msg,
+                ),
+            };
             if enc_start_key(exist_region) >= data_end_key(msg.get_end_key()) {
                 break;
             }
