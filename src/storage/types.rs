@@ -178,19 +178,19 @@ impl PessimisticLockResults {
                 let mut res_pb = kvrpcpb::PessimisticLockKeyResult::default();
                 match res {
                     PessimisticLockKeyResult::Empty => {
-                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResult::Empty)
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::Empty)
                     }
                     PessimisticLockKeyResult::Value(v) => {
-                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResult::Value);
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::Value);
                         res_pb.set_existence(v.is_some());
                         res_pb.set_value(v.unwrap_or_default());
                     }
                     PessimisticLockKeyResult::Existence(e) => {
-                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResult::Existence);
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::Existence);
                         res_pb.set_existence(e);
                     }
                     PessimisticLockKeyResult::LockedWithConflict { value, conflict_ts } => {
-                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResult::LockedWithConflict);
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::LockedWithConflict);
                         res_pb.set_existence(value.is_some());
                         res_pb.set_value(value.unwrap_or_default());
                         res_pb.set_locked_with_conflict_ts(conflict_ts.into_inner());
@@ -200,7 +200,7 @@ impl PessimisticLockResults {
                         if error.is_none() {
                             error = Some(e)
                         }
-                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResult::Failed);
+                        res_pb.set_type(kvrpcpb::PessimisticLockKeyResultType::Failed);
                     }
                 }
                 res_pb

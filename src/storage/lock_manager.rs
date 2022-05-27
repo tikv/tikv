@@ -5,7 +5,6 @@ use crate::server::lock_manager::waiter_manager::Callback;
 use crate::storage::Error as StorageError;
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::metapb::RegionEpoch;
-use std::num::NonZeroU64;
 use std::time::Duration;
 use txn_types::{Key, TimeStamp};
 
@@ -88,15 +87,16 @@ impl LockWaitToken {
 /// `LockManager` manages transactions waiting for locks held by other transactions.
 /// It has responsibility to handle deadlocks between transactions.
 pub trait LockManager: Clone + Send + 'static {
+    fn allocate_token(&self) -> LockWaitToken;
     /// Transaction with `start_ts` waits for `lock` released.
     ///
     /// If the lock is released or waiting times out or deadlock occurs, the transaction
     /// should be waken up and call `cb` with `pr` to notify the caller.
     ///
     /// If the lock is the first lock the transaction waits for, it won't result in deadlock.
-    #[must_use]
     fn wait_for(
         &self,
+        token: LockWaitToken,
         region_id: u64,
         region_epoch: RegionEpoch,
         term: u64,
@@ -106,7 +106,7 @@ pub trait LockManager: Clone + Send + 'static {
         timeout: Option<WaitTimeout>,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         diag_ctx: DiagnosticContext,
-    ) -> LockWaitToken;
+    );
 
     fn update_wait_for() {
         unimplemented!()
@@ -130,19 +130,23 @@ pub trait LockManager: Clone + Send + 'static {
 pub struct DummyLockManager;
 
 impl LockManager for DummyLockManager {
+    fn allocate_token(&self) -> LockWaitToken {
+        LockWaitToken(None)
+    }
+
     fn wait_for(
         &self,
+        _token: LockWaitToken,
         _region_id: u64,
         _region_epoch: RegionEpoch,
-        _term: NonZeroU64,
+        _term: u64,
         _start_ts: TimeStamp,
         _wait_info: Vec<KeyLockWaitInfo>,
         _is_first_lock: bool,
         _timeout: Option<WaitTimeout>,
         _cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         _diag_ctx: DiagnosticContext,
-    ) -> LockWaitToken {
-        LockWaitToken(None)
+    ) {
     }
 
     fn remove_lock_wait(&self, _token: LockWaitToken) {}

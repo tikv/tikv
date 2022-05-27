@@ -891,6 +891,7 @@ where
 
                         // Clean up edges that are already added.
                         detect_table.clean_up_wait_for(
+                            token,
                             txn_ts,
                             wait_info
                                 .iter()
@@ -999,6 +1000,7 @@ where
                 }
                 DeadlockRequestType::CleanUpWaitFor => {
                     detect_table.clean_up_wait_for(
+                        LockWaitToken(None),
                         txn.into(),
                         std::iter::once(LockDigest {
                             ts: wait_for_txn.into(),
@@ -1219,8 +1221,10 @@ pub mod tests {
             1
         );
 
+        let token = LockWaitToken(None);
         // Clean up entries shrinking the map.
         detect_table.clean_up_wait_for(
+            token,
             3.into(),
             vec![LockDigest {
                 ts: 1.into(),
@@ -1239,6 +1243,7 @@ pub mod tests {
             1
         );
         detect_table.clean_up_wait_for(
+            token,
             3.into(),
             vec![LockDigest {
                 ts: 1.into(),
@@ -1247,6 +1252,7 @@ pub mod tests {
         );
         assert_eq!(detect_table.wait_for_map.get(&3.into()).unwrap().len(), 1);
         detect_table.clean_up_wait_for(
+            token,
             3.into(),
             vec![LockDigest {
                 ts: 2.into(),
@@ -1258,6 +1264,7 @@ pub mod tests {
         // Clean up non-exist entry
         detect_table.clean_up(3.into());
         detect_table.clean_up_wait_for(
+            token,
             3.into(),
             vec![LockDigest {
                 ts: 1.into(),

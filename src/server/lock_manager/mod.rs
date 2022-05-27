@@ -12,7 +12,6 @@ pub use self::waiter_manager::Scheduler as WaiterMgrScheduler;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -23,7 +22,7 @@ use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{
-    lock_manager::{LockDigest, LockManager as LockManagerTrait, WaitTimeout},
+    lock_manager::{LockManager as LockManagerTrait, WaitTimeout},
     Error as StorageError,
 };
 use raftstore::coprocessor::CoprocessorHost;
@@ -247,37 +246,37 @@ impl LockManager {
         let mut detected = self.detected[detected_slot_idx(token)].lock();
         detected.remove(&token)
     }
-
-    fn allocate_waiter_token(&self) -> LockWaitToken {
-        LockWaitToken(Some(self.token_allocator.fetch_add(1, Ordering::SeqCst)))
-    }
 }
 
 impl LockManagerTrait for LockManager {
+    fn allocate_token(&self) -> LockWaitToken {
+        LockWaitToken(Some(self.token_allocator.fetch_add(1, Ordering::SeqCst)))
+    }
+
     fn wait_for(
         &self,
+        token: LockWaitToken,
         region_id: u64,
         region_epoch: RegionEpoch,
-        term: NonZeroU64,
+        term: u64,
         start_ts: TimeStamp,
         wait_info: Vec<KeyLockWaitInfo>,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         diag_ctx: DiagnosticContext,
-    ) -> LockWaitToken {
+    ) {
         let timeout = match timeout {
             Some(t) => t,
             None => {
                 Waiter::cancel_no_timeout(wait_info, cancel_callback);
-                return LockWaitToken(None);
+                return;
             }
         };
 
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
-        let token = self.allocate_waiter_token();
         // If it is the first lock the transaction tries to lock, it won't cause deadlock.
         if !is_first_lock {
             self.add_to_detected(token);
@@ -295,8 +294,6 @@ impl LockManagerTrait for LockManager {
             cancel_callback,
             diag_ctx,
         );
-
-        token
     }
 
     fn remove_lock_wait(&self, token: LockWaitToken) {
@@ -327,6 +324,7 @@ mod tests {
     use self::metrics::*;
     use self::waiter_manager::tests::*;
     use super::*;
+    use crate::storage::lock_manager::LockDigest;
     use engine_test::kv::KvTestEngine;
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
@@ -391,9 +389,10 @@ mod tests {
         assert!(!lock_mgr.has_waiter());
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
         lock_mgr.wait_for(
+            lock_mgr.allocate_token(),
             1,
             RegionEpoch::default(),
-            NonZeroU64::new(1).unwrap(),
+            1,
             waiter.start_ts,
             waiter.wait_info,
             true,
@@ -418,10 +417,12 @@ mod tests {
             },
         );
         let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
+        let token = lock_mgr.allocate_token();
         lock_mgr.wait_for(
+            token,
             1,
             RegionEpoch::default(),
-            NonZeroU64::new(1).unwrap(),
+            1,
             waiter.start_ts,
             waiter.wait_info,
             true,
@@ -430,7 +431,8 @@ mod tests {
             DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
-        lock_mgr.wake_up(lock.ts, vec![lock.hash], 30.into(), false);
+        // lock_mgr.wake_up(lock.ts, vec![lock.hash], 30.into(), false);
+        lock_mgr.remove_lock_wait(token);
         assert_elapsed(
             || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, 30.into()),
             0,
@@ -441,9 +443,10 @@ mod tests {
         // Deadlock
         let (waiter1, lock_info1, f1) = new_test_waiter(10.into(), 20.into(), 20);
         lock_mgr.wait_for(
+            lock_mgr.allocate_token(),
             1,
             RegionEpoch::default(),
-            NonZeroU64::new(1).unwrap(),
+            1,
             waiter1.start_ts,
             waiter1.wait_info,
             false,
@@ -453,10 +456,12 @@ mod tests {
         );
         assert!(lock_mgr.has_waiter());
         let (waiter2, lock_info2, f2) = new_test_waiter(20.into(), 10.into(), 10);
+        let token = lock_mgr.allocate_token();
         lock_mgr.wait_for(
+            token,
             1,
             RegionEpoch::default(),
-            NonZeroU64::new(1).unwrap(),
+            1,
             waiter2.start_ts,
             waiter2.wait_info,
             false,
@@ -479,7 +484,7 @@ mod tests {
             500,
         );
         // Waiter2 releases its lock.
-        lock_mgr.wake_up(20.into(), vec![20], 20.into(), true);
+        lock_mgr.remove_lock_wait(token);
         assert_elapsed(
             || expect_write_conflict(block_on(f1).unwrap(), 10.into(), lock_info1, 20.into()),
             0,
@@ -491,10 +496,12 @@ mod tests {
         // If it's not, detect deadlock.
         for is_first_lock in &[true, false] {
             let (waiter, _, f) = new_test_waiter(30.into(), 40.into(), 40);
+            let token = lock_mgr.allocate_token();
             lock_mgr.wait_for(
+                token,
                 1,
                 RegionEpoch::default(),
-                NonZeroU64::new(1).unwrap(),
+                1,
                 waiter.start_ts,
                 waiter.wait_info,
                 *is_first_lock,
@@ -503,34 +510,35 @@ mod tests {
                 DiagnosticContext::default(),
             );
             assert!(lock_mgr.has_waiter());
-            assert_eq!(lock_mgr.remove_from_detected(30.into()), !is_first_lock);
-            lock_mgr.wake_up(40.into(), vec![40], 40.into(), false);
+            assert_eq!(lock_mgr.remove_from_detected(token), !is_first_lock);
+            lock_mgr.remove_lock_wait(token);
             // block_on(f).unwrap().unwrap_err();
         }
         assert!(!lock_mgr.has_waiter());
 
-        // If key_hashes is empty, no wake up.
-        let prev_wake_up = TASK_COUNTER_METRICS.wake_up.get();
-        lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
-        assert_eq!(TASK_COUNTER_METRICS.wake_up.get(), prev_wake_up);
-
-        // If it's non-pessimistic-txn, no clean up.
-        let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
-        lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
-        assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
-
-        // If the txn doesn't wait for locks, no clean up.
-        let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
-        lock_mgr.wake_up(10.into(), vec![], 10.into(), true);
-        assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
+        // // If key_hashes is empty, no wake up.
+        // let prev_wake_up = TASK_COUNTER_METRICS.wake_up.get();
+        // lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
+        // assert_eq!(TASK_COUNTER_METRICS.wake_up.get(), prev_wake_up);
+        //
+        // // If it's non-pessimistic-txn, no clean up.
+        // let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
+        // lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
+        // assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
+        //
+        // // If the txn doesn't wait for locks, no clean up.
+        // let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
+        // lock_mgr.wake_up(10.into(), vec![], 10.into(), true);
+        // assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
 
         // If timeout is none, no wait for.
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
         let prev_wait_for = TASK_COUNTER_METRICS.wait_for.get();
         lock_mgr.wait_for(
+            lock_mgr.allocate_token(),
             1,
             RegionEpoch::default(),
-            NonZeroU64::new(1).unwrap(),
+            1,
             waiter.start_ts,
             waiter.wait_info,
             false,

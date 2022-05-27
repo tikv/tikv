@@ -10,8 +10,8 @@ use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
 };
 use crate::storage::txn::commands::{
-    Command, CommandExt, PessimisticLockParameters, ReaderWithStats, ResponsePolicy, TypedCommand,
-    WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
+    Command, CommandExt, PessimisticLockParameters, ResponsePolicy, TypedCommand, WriteCommand,
+    WriteContext, WriteResult, WriteResultLockInfo,
 };
 use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::types::PessimisticLockKeyResult;
@@ -444,7 +444,7 @@ pub struct SingleRequestPessimisticLockCommandMeta {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // use super::*;
 
     // #[test]
     // fn test_gen_lock_info_from_result() {

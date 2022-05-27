@@ -70,7 +70,7 @@ use crate::storage::types::{PessimisticLockKeyResult, PessimisticLockResults};
 use crate::storage::DynamicConfigs;
 use crate::storage::{
     get_priority_tag, kv::FlowStatsReporter, types::StorageCallback, Error as StorageError,
-    ErrorInner as StorageErrorInner, Result as StorageResult,
+    ErrorInner as StorageErrorInner,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -736,20 +736,25 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     fn on_wait_for_lock(
         &self,
         context: &Context,
+        token: LockWaitToken,
         start_ts: TimeStamp,
         is_first_lock: bool,
         lock_info: &[WriteResultLockInfo],
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         wait_timeout: Option<WaitTimeout>,
         diag_ctx: DiagnosticContext,
-    ) -> LockWaitToken {
-        debug!("command waits for lock released"; "cid" => cid);
-        let wait_info = lock_info.iter().map(|lock| lock_manager::KeyLockWaitInfo {
-            key: lock.key.clone(),
-            lock_digest: lock.lock_digest,
-            lock_info: lock.lock_info.clone(),
-        });
+    ) {
+        // debug!("command waits for lock released"; "cid" => cid);
+        let wait_info = lock_info
+            .iter()
+            .map(|lock| lock_manager::KeyLockWaitInfo {
+                key: lock.key.clone(),
+                lock_digest: lock.lock_digest,
+                lock_info: lock.last_found_lock.clone(),
+            })
+            .collect();
         self.inner.lock_mgr.wait_for(
+            token,
             context.get_region_id(),
             context.get_region_epoch().clone(),
             context.get_term(),
@@ -759,7 +764,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             wait_timeout,
             cancel_callback,
             diag_ctx,
-        )
+        );
     }
 
     fn update_wait_for_lock(&self) {
@@ -945,21 +950,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         if tag == CommandKind::acquire_pessimistic_lock {
             if let Some(cmd_meta) = pessimistic_lock_single_request_meta {
                 if let Some(l) = lock_info.as_mut() {
+                    // Enter key-wise waiting state.
                     let diag_ctx = DiagnosticContext {
-                        key: l[0].key.clone(),
+                        key: l[0].key.to_raw().unwrap(),
                         resource_group_tag: ctx.get_resource_group_tag().into(),
                     };
-                    let wait_token = scheduler.on_wait_for_lock(
-                        &ctx,
-                        cmd_meta.start_ts,
-                        cmd_meta.is_first_lock,
-                        l,
-                        ctx.get_callback_for_cancellation(),
-                        l[0].parameters.wait_timeout,
-                        diag_ctx,
-                    );
-                    // Enter key-wise waiting state.
-                    let ctx = scheduler.convert_to_keywise_callbacks(
+                    let wait_token = scheduler.inner.lock_mgr.allocate_token();
+
+                    let lock_req_ctx = scheduler.convert_to_keywise_callbacks(
                         cid,
                         wait_token,
                         cmd_meta.start_ts,
@@ -968,11 +966,22 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         cmd_meta.keys_count,
                         cmd_meta.keys_count - l.len(),
                     );
+
+                    scheduler.on_wait_for_lock(
+                        &ctx,
+                        wait_token,
+                        cmd_meta.start_ts,
+                        cmd_meta.is_first_lock,
+                        l,
+                        Box::new(lock_req_ctx.get_callback_for_cancellation()),
+                        l[0].parameters.wait_timeout,
+                        diag_ctx,
+                    );
                     for lock_info in l {
                         assert!(lock_info.key_cb.is_none());
                         // TODO: Check if there are paths that the cb is never invoked.
                         lock_info.key_cb = Some(Box::new(
-                            ctx.get_callback_for_blocked_key(lock_info.index_in_request),
+                            lock_req_ctx.get_callback_for_blocked_key(lock_info.index_in_request),
                         ));
                     }
                 }

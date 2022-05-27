@@ -1904,7 +1904,6 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
     match v {
         Ok(Ok(res)) => {
-            // TODO: Adapt to new protocol.
             let (res, error) = res.into_pb();
             resp.set_results(res.into());
             if let Some(e) = error {

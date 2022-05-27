@@ -93,7 +93,6 @@ use kvproto::kvrpcpb::{
     ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo,
     RawGetRequest,
 };
-use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::QueryKind;
 use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, TxnExt};
@@ -2948,7 +2947,6 @@ pub mod test_util {
         done: Sender<i32>,
         pessimistic_lock_res: PessimisticLockResults,
     ) -> Callback<Result<PessimisticLockResults>> {
-        use types::PessimisticLockKeyResult;
         fn key_res_matches_ignoring_error_content(
             lhs: &PessimisticLockKeyResult,
             rhs: &PessimisticLockKeyResult,
@@ -3145,7 +3143,6 @@ mod tests {
         config::BlockCacheConfig,
         kv::{Error as KvError, ErrorInner as EngineErrorInner},
         lock_manager::{LockDigest, WaitTimeout},
-        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
         types::PessimisticLockKeyResult,
     };
@@ -3158,7 +3155,7 @@ mod tests {
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op};
-    use std::num::NonZeroU64;
+    use kvproto::metapb::RegionEpoch;
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -6816,7 +6813,7 @@ mod tests {
         WaitFor {
             region_id: u64,
             region_epoch: RegionEpoch,
-            term: NonZeroU64,
+            term: u64,
             start_ts: TimeStamp,
             wait_info: Vec<KeyLockWaitInfo>,
             is_first_lock: bool,
@@ -6852,18 +6849,23 @@ mod tests {
     }
 
     impl LockManager for ProxyLockMgr {
+        fn allocate_token(&self) -> LockWaitToken {
+            LockWaitToken(Some(1))
+        }
+
         fn wait_for(
             &self,
+            token: LockWaitToken,
             region_id: u64,
             region_epoch: RegionEpoch,
-            term: NonZeroU64,
+            term: u64,
             start_ts: TimeStamp,
             wait_info: Vec<KeyLockWaitInfo>,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
             cancel_callback: Box<dyn FnOnce(Error) + Send>,
             diag_ctx: DiagnosticContext,
-        ) -> LockWaitToken {
+        ) {
             self.tx
                 .send(Msg::WaitFor {
                     region_id,
@@ -6877,7 +6879,6 @@ mod tests {
                     diag_ctx,
                 })
                 .unwrap();
-            LockWaitToken(Some(1))
         }
 
         fn remove_lock_wait(&self, token: LockWaitToken) {

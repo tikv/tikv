@@ -7,10 +7,8 @@ use crate::storage::lock_manager::{
     DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken, WaitTimeout,
 };
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
-use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use crate::storage::{
-    Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
-};
+use crate::storage::txn::Error as TxnError;
+use crate::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
 use collections::{HashMap, HashSet};
 use engine_traits::KvEngine;
 use raftstore::coprocessor::RoleChange;
@@ -22,14 +20,13 @@ use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::num::NonZeroU64;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use futures::compat::Compat01As03;
 use futures::compat::Future01CompatExt;
@@ -112,7 +109,7 @@ pub enum Task {
         token: LockWaitToken,
         region_id: u64,
         region_epoch: RegionEpoch,
-        term: NonZeroU64,
+        term: u64,
         // which txn waits for the lock
         start_ts: TimeStamp,
         wait_info: Vec<KeyLockWaitInfo>,
@@ -215,7 +212,7 @@ impl Display for Task {
 pub(crate) struct Waiter {
     region_id: u64,
     region_epoch: RegionEpoch,
-    term: NonZeroU64,
+    term: u64,
     pub(crate) start_ts: TimeStamp,
     pub(crate) wait_info: Vec<KeyLockWaitInfo>,
     pub(crate) cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
@@ -228,7 +225,7 @@ impl Waiter {
     fn new(
         region_id: u64,
         region_epoch: RegionEpoch,
-        term: NonZeroU64,
+        term: u64,
         start_ts: TimeStamp,
         wait_info: Vec<KeyLockWaitInfo>,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
@@ -397,11 +394,11 @@ impl Waiter {
 #[derive(PartialEq)]
 struct RegionState {
     region_epoch: RegionEpoch,
-    term: NonZeroU64,
+    term: u64,
 }
 
 impl RegionState {
-    fn new(region_epoch: RegionEpoch, term: NonZeroU64) -> Self {
+    fn new(region_epoch: RegionEpoch, term: u64) -> Self {
         Self { region_epoch, term }
     }
 }
@@ -647,7 +644,7 @@ impl Scheduler {
         token: LockWaitToken,
         region_id: u64,
         region_epoch: RegionEpoch,
-        term: NonZeroU64,
+        term: u64,
         start_ts: TimeStamp,
         wait_info: Vec<KeyLockWaitInfo>,
         timeout: WaitTimeout,
@@ -972,7 +969,6 @@ impl RegionChangeObserver for RegionLockWaitCancellationObserver {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::storage::PessimisticLockResults;
     use tikv_util::future::paired_future_callback;
     use tikv_util::worker::FutureWorker;
 
@@ -987,6 +983,8 @@ pub mod tests {
     use tikv_util::time::InstantExt;
     use txn_types::Key;
 
+    use crate::storage::txn::ErrorInner as TxnErrorInner;
+
     impl Waiter {
         fn region_id(mut self, id: u64) -> Self {
             self.region_id = id;
@@ -1000,7 +998,7 @@ pub mod tests {
         }
 
         fn term(mut self, term: u64) -> Self {
-            self.term = NonZeroU64::new(term).unwrap();
+            self.term = term;
             self
         }
     }
@@ -1009,7 +1007,7 @@ pub mod tests {
         Waiter {
             region_id: 1,
             region_epoch: Default::default(),
-            term: NonZeroU64::new(1).unwrap(),
+            term: 1,
             start_ts,
             wait_info: vec![KeyLockWaitInfo {
                 key: Key::from_raw(b""),
@@ -1110,7 +1108,7 @@ pub mod tests {
         let waiter = Waiter::new(
             1,
             Default::default(),
-            NonZeroU64::new(1).unwrap(),
+            1,
             waiter_ts,
             vec![KeyLockWaitInfo {
                 key: Key::from_raw(&raw_key),
@@ -1467,7 +1465,7 @@ pub mod tests {
             let entry = wait_table.region_waiters.get(&3).unwrap();
             assert_eq!(entry.0.region_epoch.get_version(), 1);
             assert_eq!(entry.0.region_epoch.get_conf_ver(), 1);
-            assert_eq!(entry.0.term.get(), 2);
+            assert_eq!(entry.0.term, 2);
             assert_eq!(entry.1.len(), 1);
             assert!(entry.1.contains(&LockWaitToken(Some(13))));
         }
@@ -1501,7 +1499,7 @@ pub mod tests {
             let entry = wait_table.region_waiters.get(&3).unwrap();
             assert_eq!(entry.0.region_epoch.get_version(), 1);
             assert_eq!(entry.0.region_epoch.get_conf_ver(), 1);
-            assert_eq!(entry.0.term.get(), 2);
+            assert_eq!(entry.0.term, 2);
             assert_eq!(entry.1.len(), 1);
             assert!(entry.1.contains(&LockWaitToken(Some(13))));
         }
@@ -1636,7 +1634,7 @@ pub mod tests {
             LockWaitToken(Some(1)),
             1,
             RegionEpoch::default(),
-            NonZeroU64::new(1).unwrap(),
+            1,
             waiter.start_ts,
             waiter.wait_info,
             WaitTimeout::Millis(1000),
@@ -1655,7 +1653,7 @@ pub mod tests {
             LockWaitToken(Some(2)),
             1,
             RegionEpoch::default(),
-            NonZeroU64::new(1).unwrap(),
+            1,
             waiter.start_ts,
             waiter.wait_info,
             WaitTimeout::Millis(100),
@@ -1674,7 +1672,7 @@ pub mod tests {
             LockWaitToken(Some(3)),
             1,
             RegionEpoch::default(),
-            NonZeroU64::new(1).unwrap(),
+            1,
             waiter.start_ts,
             waiter.wait_info,
             WaitTimeout::Millis(3000),
@@ -1839,7 +1837,7 @@ pub mod tests {
             LockWaitToken(Some(1)),
             1,
             RegionEpoch::default(),
-            NonZeroU64::new(1).unwrap(),
+            1,
             waiter.start_ts,
             waiter.wait_info,
             WaitTimeout::Millis(1000),
