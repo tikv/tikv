@@ -4163,8 +4163,7 @@ where
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
         self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff().0;
-        self.fsm.peer.region_buckets = None;
-        self.fsm.peer.last_region_buckets = None;
+        self.fsm.peer.reset_region_buckets();
         if self.fsm.peer.is_leader() {
             info!(
                 "notify pd with merge";
@@ -5221,6 +5220,12 @@ where
             let bucket_version: u64 = if current_version_term == term {
                 current_version + 1
             } else {
+                if term > u32::MAX.into() {
+                    error!(
+                        "unexpected term {} more than u32::MAX. Bucket version will be backward.",
+                        term
+                    );
+                }
                 term << 32
             };
             bucket_version
@@ -5254,19 +5259,32 @@ where
             return;
         }
 
-        let current_version = self
+        let mut current_version = self
             .fsm
             .peer
             .region_buckets
             .as_ref()
             .map(|b| b.meta.version)
             .unwrap_or_default();
+        if current_version == 0 {
+            current_version = self
+                .fsm
+                .peer
+                .last_region_buckets
+                .as_ref()
+                .map(|b| b.meta.version)
+                .unwrap_or_default();
+        }
         let mut region_buckets: BucketStat;
         if let Some(bucket_ranges) = bucket_ranges {
             assert_eq!(buckets.len(), bucket_ranges.len());
             let mut i = 0;
             region_buckets = self.fsm.peer.region_buckets.clone().unwrap();
             let mut meta = (*region_buckets.meta).clone();
+            if !buckets.is_empty() {
+                meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
+            }
+            meta.region_epoch = region_epoch;
             for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
                 while i < meta.keys.len() && meta.keys[i] != bucket_range.0 {
                     i += 1;
@@ -5305,8 +5323,6 @@ where
                 }
                 i += 1;
             }
-            meta.region_epoch = region_epoch;
-            meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
             region_buckets.meta = Arc::new(meta);
         } else {
             debug!(
