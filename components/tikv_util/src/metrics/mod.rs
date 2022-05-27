@@ -49,6 +49,7 @@ pub fn dump_to(w: &mut impl Write, should_simplify: bool) {
         if let Err(e) = encoder.encode(&*metric_families, w) {
             warn!("prometheus encoding error"; "err" => ?e);
         }
+        return;
     }
 
     // filter out mertics that has no sample values
