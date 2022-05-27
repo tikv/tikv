@@ -182,12 +182,16 @@ where
         }
 
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
-        if region_keys >= host.cfg.region_max_keys() {
+        // if bucket checker using scan is added, to utilize the scan,
+        // add keys checker as well for free
+        // It has the assumption that the size's checker is before the keys's check in the host
+        let need_split_region = region_keys >= host.cfg.region_max_keys();
+        if need_split_region || host.get_bucket_scan_checker_added() {
             info!(
                 "approximate keys over threshold, need to do split check";
                 "region_id" => region.get_id(),
                 "keys" => region_keys,
-                "threshold" => host.cfg.region_max_keys,
+                "threshold" => host.cfg.region_max_keys(),
             );
             // Need to check keys.
             host.add_checker(Box::new(Checker::new(
@@ -241,7 +245,7 @@ mod tests {
             calc_split_keys_count,
             size::{
                 get_region_approximate_size,
-                tests::{must_split_at, must_split_with},
+                tests::{must_generate_buckets, must_split_at, must_split_with},
             },
         },
         *,
@@ -692,5 +696,64 @@ mod tests {
         region.set_end_key(b"c".to_vec());
         let range_keys = get_region_approximate_keys(&db, &region, 0).unwrap();
         assert_eq!(range_keys, 1);
+    }
+
+    #[test]
+    fn test_check_region_bucket_split_by_scan_keys() {
+        let path = Builder::new()
+            .prefix("_test_check_region_bucket_split_by_scan_keys")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::default();
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| {
+                let cf_opts = ColumnFamilyOptions::new();
+                CFOptions::new(cf, cf_opts)
+            })
+            .collect();
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            // make sure size based split won't happen
+            region_max_size: Some(ReadableSize(22000_u64)),
+            region_split_size: ReadableSize(15000_u64),
+            region_split_keys: Some(4),
+            region_max_keys: Some(100),
+            enable_region_bucket: true,
+            // so that each key below will form a bucket
+            region_bucket_size: ReadableSize(20_u64),
+            ..Default::default()
+        };
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+
+        // so bucket key will be all these keys
+        let mut exp_bucket_keys = vec![];
+        for i in 0..11 {
+            let k = format!("{:04}", i).into_bytes();
+            exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_WRITE, &k, &k).unwrap();
+        }
+        engine.flush_cf(CF_WRITE, false).unwrap();
+        // the region keys is less than the max region keys,
+        // but we expect keys based split check is triggered even though the approximate keys count is less
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+            None,
+        ));
+        must_generate_buckets(&rx, &exp_bucket_keys);
+        must_split_with(&rx, &region, 1);
     }
 }
