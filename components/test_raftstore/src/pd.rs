@@ -814,6 +814,15 @@ pub struct TestPdClient {
     trigger_tso_failure: AtomicBool,
     feature_gate: FeatureGate,
     trigger_leader_info_loss: AtomicBool,
+
+    pub gc_safepoints: RwLock<Vec<GcSafePoint>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct GcSafePoint {
+    pub serivce: String,
+    pub ttl: Duration,
+    pub safepoint: TimeStamp,
 }
 
 impl TestPdClient {
@@ -830,6 +839,7 @@ impl TestPdClient {
             trigger_tso_failure: AtomicBool::new(false),
             trigger_leader_info_loss: AtomicBool::new(false),
             feature_gate,
+            gc_safepoints: Default::default(),
         }
     }
 
@@ -1704,10 +1714,17 @@ impl PdClient for TestPdClient {
 
     fn update_service_safe_point(
         &self,
-        _name: String,
-        _safepoint: TimeStamp,
-        _ttl: Duration,
+        name: String,
+        safepoint: TimeStamp,
+        ttl: Duration,
     ) -> PdFuture<()> {
+        if ttl.as_secs() > 0 {
+            self.gc_safepoints.wl().push(GcSafePoint {
+                serivce: name,
+                ttl,
+                safepoint,
+            });
+        }
         Box::pin(ok(()))
     }
 
