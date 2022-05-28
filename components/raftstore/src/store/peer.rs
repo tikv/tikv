@@ -82,7 +82,7 @@ use super::{
     DestroyPeerJob,
 };
 use crate::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RoleChange},
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
     errors::RAFTSTORE_IS_BUSY,
     store::{
         async_io::{write::WriteMsg, write_router::WriteRouter},
@@ -1461,6 +1461,7 @@ where
         host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
+        reason: RegionChangeReason,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
@@ -1484,7 +1485,11 @@ where
         }
 
         if !self.pending_remove {
-            host.on_region_changed(self.region(), RegionChangeEvent::Update, self.get_role());
+            host.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Update(reason),
+                self.get_role(),
+            );
         }
     }
 
