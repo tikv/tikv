@@ -20,7 +20,6 @@ pub struct Host<'a, E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,
     auto_split: bool,
     cfg: &'a Config,
-    added_bucket_scan_checker: bool,
 }
 
 impl<'a, E> Host<'a, E> {
@@ -29,7 +28,6 @@ impl<'a, E> Host<'a, E> {
             auto_split,
             checkers: vec![],
             cfg,
-            added_bucket_scan_checker: false,
         }
     }
 
@@ -128,16 +126,6 @@ impl<'a, E> Host<'a, E> {
     #[inline]
     pub fn region_bucket_size(&self) -> u64 {
         self.cfg.region_bucket_size.0
-    }
-
-    #[inline]
-    pub fn set_bucket_scan_checker_added(&mut self, added: bool) {
-        self.added_bucket_scan_checker = added;
-    }
-
-    #[inline]
-    pub fn get_bucket_scan_checker_added(&self) -> bool {
-        self.added_bucket_scan_checker
     }
 }
 
