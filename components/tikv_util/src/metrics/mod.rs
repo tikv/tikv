@@ -114,3 +114,63 @@ pub fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use prometheus::*;
+
+    use super::*;
+
+    #[test]
+    fn test_dump_metrics() {
+        // register some metrics
+        let _counter = register_int_counter!("test_counter", "this is a counter for test").unwrap();
+        let counter_vec =
+            register_int_counter_vec!("test_counter_vec", "test counter vec", &["label"]).unwrap();
+        let histogram = register_histogram_vec!(
+            "test_histogram",
+            "test histogram",
+            &["type"],
+            exponential_buckets(0.01, 2.0, 20).unwrap()
+        )
+        .unwrap();
+
+        fn check_duplicate(s: &str) {
+            let mut lines = HashSet::new();
+            for l in s.lines().into_iter() {
+                assert!(lines.insert(l));
+            }
+        }
+
+        // test all data is 0.
+        let full_metrics = dump(false);
+        assert!(!full_metrics.is_empty());
+        check_duplicate(&full_metrics);
+
+        let filterd_metrics = dump(true);
+        // there is no data, result should be empty
+        assert!(filterd_metrics.is_empty());
+
+        // gauge should not be filtered
+        let gauge = register_gauge!("test_gauge", "test gauge").unwrap();
+        let filterd_metrics = dump(true);
+        // there is no data, result should be empty
+        assert!(!filterd_metrics.is_empty());
+
+        counter_vec.with_label_values(&["test"]).inc();
+        histogram.with_label_values(&["test"]).observe(1.0);
+        gauge.inc();
+
+        let new_full_metrics = dump(false);
+        assert!(!new_full_metrics.is_empty());
+        check_duplicate(&new_full_metrics);
+        assert!(new_full_metrics.len() > full_metrics.len());
+
+        let new_filtered_metrics = dump(true);
+        check_duplicate(&new_filtered_metrics);
+        assert!(new_filtered_metrics.len() > filterd_metrics.len());
+        assert!(new_full_metrics.len() > new_filtered_metrics.len());
+    }
+}
