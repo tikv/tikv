@@ -20,7 +20,7 @@ pub struct Host<'a, E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,
     auto_split: bool,
     cfg: &'a Config,
-    added_bucket_scan_checker: bool, 
+    added_bucket_scan_checker: bool,
 }
 
 impl<'a, E> Host<'a, E> {
