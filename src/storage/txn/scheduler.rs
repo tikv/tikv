@@ -413,7 +413,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
         let cid = self.inner.gen_id();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
+        info!("received new command"; "cid" => cid, "cmd" => ?cmd);
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
@@ -558,7 +558,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     where
         StorageError: From<ER>,
     {
-        debug!("write command finished with error"; "cid" => cid);
+        info!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
 
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
@@ -618,7 +618,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        debug!("write command finished";
+        info!("write command finished";
             "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -820,7 +820,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                debug!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
+                info!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
                 return;
             }

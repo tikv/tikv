@@ -23,7 +23,9 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext},
     EvalType, FieldTypeAccessor,
 };
+use tikv_util::info;
 use tipb::{ColumnInfo, FieldType, IndexScan};
+use txn_types::Key;
 use DecodeHandleStrategy::*;
 
 use super::util::scan_executor::*;
@@ -332,6 +334,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
+        info!("process kv"; "key" => ?Key::from_encoded_slice(key));
         check_index_key(key)?;
         if self.physical_table_id_column_cnt > 0 {
             self.process_physical_table_id_column(key, columns)?;

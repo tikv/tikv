@@ -16,6 +16,10 @@ pub type OwnedKvPair = (Vec<u8>, Vec<u8>);
 pub trait Storage: Send {
     type Statistics;
 
+    fn start_ts(&self) -> u64 {
+        0
+    }
+
     // TODO: Use const generics.
     // TODO: Use reference is better.
     fn begin_scan(
@@ -38,6 +42,10 @@ pub trait Storage: Send {
 
 impl<T: Storage + ?Sized> Storage for Box<T> {
     type Statistics = T::Statistics;
+
+    fn start_ts(&self) -> u64 {
+        (**self).start_ts()
+    }
 
     fn begin_scan(
         &mut self,

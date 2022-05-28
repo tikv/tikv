@@ -17,6 +17,10 @@ pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
     type Scanner: Scanner;
 
+    fn start_ts(&self) -> TimeStamp {
+        TimeStamp::zero()
+    }
+
     /// Fetch the provided key.
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
 
@@ -272,6 +276,10 @@ pub struct SnapshotStore<S: Snapshot> {
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
+
+    fn start_ts(&self) -> TimeStamp {
+        self.start_ts
+    }
 
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)

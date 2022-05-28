@@ -26,7 +26,7 @@ command! {
     /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock:
         cmd_ty => StorageResult<PessimisticLockRes>,
-        display => "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}", (keys.len, start_ts, for_update_ts, ctx),
+        display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} | {:?}", (keys, start_ts, for_update_ts, ctx),
         content => {
             /// The set of keys to lock.
             keys: Vec<(Key, bool)>,

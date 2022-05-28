@@ -201,6 +201,15 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                let ranges: Vec<_> = req_ctx
+                    .ranges
+                    .iter()
+                    .map(|range| {
+                        let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
+                        let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
+                        (start_key, end_key)
+                    })
+                    .collect();
 
                 self.check_memory_locks(&req_ctx)?;
 
@@ -208,6 +217,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
                 builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
+                    info!("dag request"; "start_ts" => req_ctx.txn_start_ts, "ctx" => ?req_ctx.context, "ranges" => ?ranges, "data_version" => data_version);
                     let store = SnapshotStore::new(
                         snap,
                         start_ts.into(),

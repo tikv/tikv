@@ -30,7 +30,7 @@ command! {
     /// This should follow after a `ResolveLockReadPhase`.
     ResolveLock:
         cmd_ty => (),
-        display => "kv::resolve_lock", (),
+        display => "kv::resolve_lock {:?}", (txn_status),
         content => {
             /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
             ///

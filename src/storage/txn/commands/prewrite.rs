@@ -42,7 +42,7 @@ command! {
     /// or a [`Rollback`](Command::Rollback) should follow.
     Prewrite:
         cmd_ty => PrewriteResult,
-        display => "kv::command::prewrite mutations({}) @ {} | {:?}", (mutations.len, start_ts, ctx),
+        display => "kv::command::prewrite mutations({:?}) @ {} | {:?}", (mutations, start_ts, ctx),
         content => {
             /// The set of mutations to apply.
             mutations: Vec<Mutation>,

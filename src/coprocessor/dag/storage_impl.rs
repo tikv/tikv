@@ -36,6 +36,10 @@ impl<S: Store> TiKvStorage<S> {
 impl<S: Store> Storage for TiKvStorage<S> {
     type Statistics = Statistics;
 
+    fn start_ts(&self) -> u64 {
+        self.store.start_ts().into_inner()
+    }
+
     fn begin_scan(
         &mut self,
         is_backward_scan: bool,

@@ -65,6 +65,7 @@ use tikv_util::{
     Either, MustConsumeVec,
 };
 use time::Timespec;
+use txn_types::Key;
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -1196,7 +1197,7 @@ where
             return exec_result;
         }
 
-        debug!(
+        info!(
             "applied command";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
@@ -1521,8 +1522,10 @@ where
 
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += value.len() as i64;
+        info!("handle put"; "key" => ?Key::from_encoded_slice(key), "cf" => req.get_put().get_cf(), "index" => ctx.exec_log_index, "region_id" => self.region.id);
         if !req.get_put().get_cf().is_empty() {
             let cf = req.get_put().get_cf();
+
             // TODO: don't allow write preseved cfs.
             if cf == CF_LOCK {
                 self.metrics.lock_cf_written_bytes += key.len() as u64;
@@ -1567,6 +1570,7 @@ where
 
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
         self.metrics.size_diff_hint -= key.len() as i64;
+        info!("handle delete"; "key" => ?Key::from_encoded_slice(key), "cf" => req.get_put().get_cf(), "index" => ctx.exec_log_index, "region_id" => self.region.id);
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
