@@ -168,12 +168,12 @@ impl QuotaLimiter {
 
     pub fn set_foreground_write_bandwidth_limit(&self, write_bandwidth: ReadableSize) {
         self.foreground_write_bandwidth_limiter
-            .set_speed_limit(write_bandwidth.0 as f64);
+            .set_speed_limit(Self::speed_limit(write_bandwidth.0 as f64));
     }
 
     pub fn set_foreground_read_bandwidth_limit(&self, read_bandwidth: ReadableSize) {
         self.foreground_read_bandwidth_limiter
-            .set_speed_limit(read_bandwidth.0 as f64);
+            .set_speed_limit(Self::speed_limit(read_bandwidth.0 as f64));
     }
 
     pub fn set_background_cpu_time_limit(&self, quota_limit: usize) {
@@ -183,12 +183,12 @@ impl QuotaLimiter {
 
     pub fn set_background_write_bandwidth_limit(&self, write_bandwidth: ReadableSize) {
         self.background_write_bandwidth_limiter
-            .set_speed_limit(write_bandwidth.0 as f64);
+            .set_speed_limit(Self::speed_limit(write_bandwidth.0 as f64));
     }
 
     pub fn set_background_read_bandwidth_limit(&self, read_bandwidth: ReadableSize) {
         self.background_read_bandwidth_limiter
-            .set_speed_limit(read_bandwidth.0 as f64);
+            .set_speed_limit(Self::speed_limit(read_bandwidth.0 as f64));
     }
 
     pub fn set_max_delay_duration(&self, duration: ReadableDuration) {

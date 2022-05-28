@@ -108,7 +108,7 @@ use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
-    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
+    metrics::INSTANCE_CPU_USAGE,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{cpu_time::ProcessStat, disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
@@ -303,7 +303,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             config.quota.background_write_bandwidth,
             config.quota.background_read_bandwidth,
             config.quota.max_delay_duration,
-            false,
+            config.quota.support_auto_tune,
         ));
 
         TiKvServer {
@@ -1258,13 +1258,9 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                         ),
                     );
 
-                    debug!("cpu_time_limiter tuned for backend request";
+                    info!("cpu_time_limiter tuned for backend request";
                             "cpu_util" => ? 0.5f64,
                             "new quota" => ?quota_limiter.background_cputime_limiter() / 1_000.0);
-
-                    NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-                        .get(ThrottleType::quota_limiter_auto_tuned)
-                        .inc_by(1_u64);
                 } else {
                     let cpu_usage = match proc_stats.cpu_usage() {
                         Ok(r) => r,
@@ -1306,14 +1302,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                         }
 
                         if old_quota != quota_limiter.background_cputime_limiter() {
-                            debug!("cpu_time_limiter tuned for backend request";
+                            info!("cpu_time_limiter tuned for backend request";
                             "cpu_util" => ?cpu_util,
                             "new quota" => ?quota_limiter.background_cputime_limiter() / 1_000.0);
+                            INSTANCE_CPU_USAGE.set((cpu_util * 100.0) as i64);
                         }
-
-                        NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-                            .get(ThrottleType::quota_limiter_auto_tuned)
-                            .inc_by(1_u64);
                     }
                 }
             },
