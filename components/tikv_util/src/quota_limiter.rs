@@ -331,7 +331,7 @@ impl ConfigManager for QuotaLimitConfigManager {
         }
         if let Some(read_bandwidth) = change.get("foreground_read_bandwidth") {
             self.quota_limiter
-                .set_foreground_write_bandwidth_limit(read_bandwidth.clone().into());
+                .set_foreground_read_bandwidth_limit(read_bandwidth.clone().into());
         }
         if let Some(duration) = change.get("max_delay_duration") {
             let delay_dur: ReadableDuration = duration.clone().into();
@@ -351,12 +351,6 @@ impl ConfigManager for QuotaLimitConfigManager {
         if let Some(read_bandwidth) = change.get("background_read_bandwidth") {
             self.quota_limiter
                 .set_background_read_bandwidth_limit(read_bandwidth.clone().into());
-        }
-        if let Some(duration) = change.get("background_max_delay_duration") {
-            let delay_dur: ReadableDuration = duration.clone().into();
-            self.quota_limiter
-                .max_delay_duration
-                .store(delay_dur.0.as_nanos() as u64, Ordering::Relaxed);
         }
         Ok(())
     }
