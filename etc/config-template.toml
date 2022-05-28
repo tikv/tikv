@@ -54,9 +54,9 @@
 # foreground-read-bandwidth = "0B"
 ## CPU quota for these background requests can use, default value is 0, it means unlimited.
 ## The unit is millicpu but for now this config is approximate and soft limit.
-# backgroundground-cpu-time = 0
+# background-cpu-time = 0
 ## Write bandwidth limitation for backgroud request for this TiKV instance, default value is 0 which means unlimited.
-# backgroundround-write-bandwidth = "0B"
+# background-write-bandwidth = "0B"
 ## Read bandwidth limitation for background request for this TiKV instance, default value is 0 which means unlimited.
 # background-read-bandwidth = "0B"
 ## Limitation of max delay duration, default value is 0 which means unlimited.

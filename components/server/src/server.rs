@@ -1273,7 +1273,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                     //      2) if instance cpu usage is at healthy state, no op;
                     //      3) if instance is idle, increase cpu quota by 1 core until upper bound is hit.
                     if cpu_usage > 0.0f64 {
-                        let cpu_util = (cpu_usage / 100.0) / SysQuota::cpu_cores_quota();
+                        let cpu_util = cpu_usage / SysQuota::cpu_cores_quota();
 
                         let old_quota = quota_limiter.background_cputime_limiter();
 
