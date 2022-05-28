@@ -4,13 +4,17 @@ use std::sync::Arc;
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_traits::KvEngine;
-use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
+use kvproto::{
+    metapb::Region,
+    raft_cmdpb::{CmdType, Request as RaftRequest},
+};
 use raft::StateRole;
 use raftstore::{
     coprocessor,
     coprocessor::{
-        BoxQueryObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-        QueryObserver, RoleChange, RoleObserver,
+        BoxCmdObserver, BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver, CmdBatch,
+        CmdObserver, Coprocessor, CoprocessorHost, ObserveLevel, ObserverContext, QueryObserver,
+        RegionChangeEvent, RegionChangeObserver, RegionChangeReason, RoleChange, RoleObserver,
     },
 };
 
@@ -47,6 +51,13 @@ impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
         coprocessor_host
             .registry
             .register_role_observer(CAUSAL_OBSERVER_PRIORITY, BoxRoleObserver::new(self.clone()));
+        coprocessor_host.registry.register_region_change_observer(
+            CAUSAL_OBSERVER_PRIORITY,
+            BoxRegionChangeObserver::new(self.clone()),
+        );
+        coprocessor_host
+            .registry
+            .register_cmd_observer(CAUSAL_OBSERVER_PRIORITY, BoxCmdObserver::new(self.clone()));
     }
 }
 
@@ -55,9 +66,10 @@ impl<Ts: CausalTsProvider> Coprocessor for CausalObserver<Ts> {}
 impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
     fn pre_propose_query(
         &self,
-        _: &mut ObserverContext<'_>,
+        ctx: &mut ObserverContext<'_>,
         requests: &mut Vec<RaftRequest>,
     ) -> coprocessor::Result<()> {
+        let region_id = ctx.region().get_id();
         let mut ts = None;
 
         for req in requests.iter_mut().filter(|r| {
@@ -71,6 +83,8 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
             }
 
             ApiV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
+            trace!("causal_ts tracing: pre_propose_query, append_ts"; "region" => region_id,
+                "ts" => ?ts.unwrap(), "key" => &log_wrappers::Value::key(req.get_put().get_key()));
         }
         Ok(())
     }
@@ -92,9 +106,65 @@ impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
             if let Err(err) = self.causal_ts_provider.flush() {
                 warn!("CausalObserver::on_role_change, flush timestamp error"; "region" => region_id, "error" => ?err);
             } else {
-                debug!("CausalObserver::on_role_change, flush timestamp succeed"; "region" => region_id);
+                debug!("CausalObserver::on_role_change, flush timestamp succeed";
+                    "region" => region_id, "region_info" => ?ctx.region());
             }
         }
+    }
+}
+
+impl<Ts: CausalTsProvider> RegionChangeObserver for CausalObserver<Ts> {
+    fn on_region_changed(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        event: RegionChangeEvent,
+        role: StateRole,
+    ) {
+        match event {
+            RegionChangeEvent::Update(RegionChangeReason::CommitMerge) => {
+                if role == StateRole::Leader {
+                    let region_id = ctx.region().get_id();
+                    if let Err(err) = self.causal_ts_provider.flush() {
+                        warn!("CausalObserver::on_region_changed(CommitMerge), flush timestamp error"; "region" => region_id, "error" => ?err);
+                    } else {
+                        debug!("CausalObserver::on_region_changed(CommitMerge), flush timestamp succeed"; "region" => region_id);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl<Ts: CausalTsProvider, E: KvEngine> CmdObserver<E> for CausalObserver<Ts> {
+    fn on_flush_applied_cmd_batch(&self, _: ObserveLevel, _: &mut Vec<CmdBatch>, _: &E) {}
+
+    fn on_applied_current_term(&self, role: StateRole, region: &Region) {
+        let region_id = region.get_id();
+        let is_leader = role == StateRole::Leader;
+        //
+        // if is_leader {
+        //     if let Err(err) = self.causal_ts_provider.flush() {
+        //         warn!("CausalObserver::on_applied_current_term, flush timestamp error"; "region" => region_id, "error" => ?err);
+        //     } else {
+        //         debug!("CausalObserver::on_applied_current_term, flush timestamp succeed"; "region" => region_id);
+        //
+        //         let _ = self
+        //             .causal_ts_provider
+        //             .get_ts()
+        //             .map(|ts| {
+        //                 info!("causal_ts tracing: on_applied_current_term flush"; "region" => region_id, "ts" => ts);
+        //                 ts
+        //             })
+        //             .map_err(|err| {
+        //                 error!("causal_ts tracing: on_applied_current_term flush, get_ts fail"; "region" => region_id);
+        //                 err
+        //             });
+        //     }
+        // }
+        //
+        // self.region_set_leader(region_id, is_leader);
+        trace!("causal_ts tracing: on_applied_current_term"; "role" => ?role, "region" => region_id, "is_leader" => is_leader);
     }
 }
 
