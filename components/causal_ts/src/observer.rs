@@ -4,7 +4,10 @@ use std::sync::Arc;
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_traits::KvEngine;
-use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
+use kvproto::{
+    metapb::Region,
+    raft_cmdpb::{CmdType, Request as RaftRequest},
+};
 use raft::StateRole;
 use raftstore::{
     coprocessor,
@@ -55,6 +58,21 @@ impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
     }
 }
 
+const REASON_LEADER_TRANSFER: &str = "leader_transfer";
+const REASON_REGION_MERGE: &str = "region_merge";
+
+impl<Ts: CausalTsProvider> CausalObserver<Ts> {
+    fn flush_timestamp(&self, region: &Region, reason: &'static str) {
+        fail::fail_point!("causal_observer_flush_timestamp", |_| ());
+
+        if let Err(err) = self.causal_ts_provider.flush() {
+            warn!("CausalObserver::flush_timestamp error"; "error" => ?err, "region_id" => region.get_id(), "region" => ?region, "reason" => reason);
+        } else {
+            debug!("CausalObserver::flush_timestamp succeed"; "region_id" => region.get_id(), "region" => ?region, "reason" => reason);
+        }
+    }
+}
+
 impl<Ts: CausalTsProvider> Coprocessor for CausalObserver<Ts> {}
 
 impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
@@ -96,12 +114,7 @@ impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
         if role_change.state == StateRole::Candidate
             || (ctx.region().peers.len() == 1 && role_change.state == StateRole::Leader)
         {
-            let region_id = ctx.region().get_id();
-            if let Err(err) = self.causal_ts_provider.flush() {
-                warn!("CausalObserver::on_role_change, flush timestamp error"; "region_id" => region_id, "error" => ?err);
-            } else {
-                debug!("CausalObserver::on_role_change, flush timestamp succeed"; "region_id" => region_id, "region" => ?ctx.region());
-            }
+            self.flush_timestamp(ctx.region(), REASON_LEADER_TRANSFER);
         }
     }
 }
@@ -116,18 +129,14 @@ impl<Ts: CausalTsProvider> RegionChangeObserver for CausalObserver<Ts> {
         if role != StateRole::Leader {
             return;
         }
+
         // In the scenario of region merge, the target region would merge some entries from source
         // region with larger timestamps (when leader of source region is in another store with
         // larger TSO batch than the store where leader of target region exists).
         // So we need a flush after commit merge. See issue #12680.
         // TODO: do not need flush if leaders of source & target region are in the same store.
         if let RegionChangeEvent::Update(RegionChangeReason::CommitMerge) = event {
-            let region_id = ctx.region().get_id();
-            if let Err(err) = self.causal_ts_provider.flush() {
-                warn!("CausalObserver::on_region_changed(CommitMerge), flush timestamp error"; "region_id" => region_id, "error" => ?err);
-            } else {
-                debug!("CausalObserver::on_region_changed(CommitMerge), flush timestamp succeed"; "region_id" => region_id);
-            }
+            self.flush_timestamp(ctx.region(), REASON_REGION_MERGE);
         }
     }
 }
