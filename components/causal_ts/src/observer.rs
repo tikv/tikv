@@ -4,17 +4,14 @@ use std::sync::Arc;
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_traits::KvEngine;
-use kvproto::{
-    metapb::Region,
-    raft_cmdpb::{CmdType, Request as RaftRequest},
-};
+use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use raft::StateRole;
 use raftstore::{
     coprocessor,
     coprocessor::{
-        BoxCmdObserver, BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver, CmdBatch,
-        CmdObserver, Coprocessor, CoprocessorHost, ObserveLevel, ObserverContext, QueryObserver,
-        RegionChangeEvent, RegionChangeObserver, RegionChangeReason, RoleChange, RoleObserver,
+        BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost,
+        ObserverContext, QueryObserver, RegionChangeEvent, RegionChangeObserver,
+        RegionChangeReason, RoleChange, RoleObserver,
     },
 };
 
@@ -55,9 +52,6 @@ impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
             CAUSAL_OBSERVER_PRIORITY,
             BoxRegionChangeObserver::new(self.clone()),
         );
-        coprocessor_host
-            .registry
-            .register_cmd_observer(CAUSAL_OBSERVER_PRIORITY, BoxCmdObserver::new(self.clone()));
     }
 }
 
@@ -83,8 +77,8 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
             }
 
             ApiV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
-            trace!("causal_ts tracing: pre_propose_query, append_ts"; "region" => region_id,
-                "ts" => ?ts.unwrap(), "key" => &log_wrappers::Value::key(req.get_put().get_key()));
+            trace!("CausalObserver::pre_propose_query, append_ts"; "region_id" => region_id,
+                "key" => &log_wrappers::Value::key(req.get_put().get_key()), "ts" => ?ts.unwrap());
         }
         Ok(())
     }
@@ -104,10 +98,9 @@ impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
         {
             let region_id = ctx.region().get_id();
             if let Err(err) = self.causal_ts_provider.flush() {
-                warn!("CausalObserver::on_role_change, flush timestamp error"; "region" => region_id, "error" => ?err);
+                warn!("CausalObserver::on_role_change, flush timestamp error"; "region_id" => region_id, "error" => ?err);
             } else {
-                debug!("CausalObserver::on_role_change, flush timestamp succeed";
-                    "region" => region_id, "region_info" => ?ctx.region());
+                debug!("CausalObserver::on_role_change, flush timestamp succeed"; "region_id" => region_id, "region" => ?ctx.region());
             }
         }
     }
@@ -120,51 +113,22 @@ impl<Ts: CausalTsProvider> RegionChangeObserver for CausalObserver<Ts> {
         event: RegionChangeEvent,
         role: StateRole,
     ) {
-        match event {
-            RegionChangeEvent::Update(RegionChangeReason::CommitMerge) => {
-                if role == StateRole::Leader {
-                    let region_id = ctx.region().get_id();
-                    if let Err(err) = self.causal_ts_provider.flush() {
-                        warn!("CausalObserver::on_region_changed(CommitMerge), flush timestamp error"; "region" => region_id, "error" => ?err);
-                    } else {
-                        debug!("CausalObserver::on_region_changed(CommitMerge), flush timestamp succeed"; "region" => region_id);
-                    }
-                }
-            }
-            _ => {}
+        if role != StateRole::Leader {
+            return;
         }
-    }
-}
-
-impl<Ts: CausalTsProvider, E: KvEngine> CmdObserver<E> for CausalObserver<Ts> {
-    fn on_flush_applied_cmd_batch(&self, _: ObserveLevel, _: &mut Vec<CmdBatch>, _: &E) {}
-
-    fn on_applied_current_term(&self, role: StateRole, region: &Region) {
-        let region_id = region.get_id();
-        let is_leader = role == StateRole::Leader;
-        //
-        // if is_leader {
-        //     if let Err(err) = self.causal_ts_provider.flush() {
-        //         warn!("CausalObserver::on_applied_current_term, flush timestamp error"; "region" => region_id, "error" => ?err);
-        //     } else {
-        //         debug!("CausalObserver::on_applied_current_term, flush timestamp succeed"; "region" => region_id);
-        //
-        //         let _ = self
-        //             .causal_ts_provider
-        //             .get_ts()
-        //             .map(|ts| {
-        //                 info!("causal_ts tracing: on_applied_current_term flush"; "region" => region_id, "ts" => ts);
-        //                 ts
-        //             })
-        //             .map_err(|err| {
-        //                 error!("causal_ts tracing: on_applied_current_term flush, get_ts fail"; "region" => region_id);
-        //                 err
-        //             });
-        //     }
-        // }
-        //
-        // self.region_set_leader(region_id, is_leader);
-        trace!("causal_ts tracing: on_applied_current_term"; "role" => ?role, "region" => region_id, "is_leader" => is_leader);
+        // In the scenario of region merge, the target region would merge some entries from source
+        // region with larger timestamps (when leader of source region is in another store with
+        // larger TSO batch than the store where leader of target region exists).
+        // So we need a flush after commit merge. See issue #12680.
+        // TODO: do not need flush if leaders of source & target region are in the same store.
+        if let RegionChangeEvent::Update(RegionChangeReason::CommitMerge) = event {
+            let region_id = ctx.region().get_id();
+            if let Err(err) = self.causal_ts_provider.flush() {
+                warn!("CausalObserver::on_region_changed(CommitMerge), flush timestamp error"; "region_id" => region_id, "error" => ?err);
+            } else {
+                debug!("CausalObserver::on_region_changed(CommitMerge), flush timestamp succeed"; "region_id" => region_id);
+            }
+        }
     }
 }
 
