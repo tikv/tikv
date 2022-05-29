@@ -145,9 +145,9 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
     tikv.run_server(server_config);
     tikv.run_status_server();
 
-    if tikv.quota_limiter.supports_auto_tune() {
-        tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
-    }
+    // if tikv.quota_limiter.supports_auto_tune() {
+    tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
+    //}
 
     signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
     tikv.stop();
