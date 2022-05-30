@@ -132,7 +132,7 @@ impl<Ts: CausalTsProvider> RegionChangeObserver for CausalObserver<Ts> {
 
         // In the scenario of region merge, the target region would merge some entries from source
         // region with larger timestamps (when leader of source region is in another store with
-        // larger TSO batch than the store where leader of target region exists).
+        // larger TSO batch than the store of target region's leader).
         // So we need a flush after commit merge. See issue #12680.
         // TODO: do not need flush if leaders of source & target region are in the same store.
         if let RegionChangeEvent::Update(RegionChangeReason::CommitMerge) = event {
