@@ -2231,7 +2231,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#e22d8864c9579660424f83b62ca196c03ef85927"
+source = "git+https://github.com/pingcap/kvproto.git#0e2f26c0a46ae7d666d6ca4410046a39e0c96f36"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3490,6 +3490,7 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "futures-util",
+ "getset",
  "into_other",
  "itertools 0.10.0",
  "keys",

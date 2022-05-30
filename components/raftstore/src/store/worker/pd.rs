@@ -3,12 +3,12 @@
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::sync::{atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io};
 
-use engine_traits::{KvEngine, RaftEngine, CF_RAFT};
+use engine_traits::{KvEngine, RaftEngine};
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
 use kvproto::kvrpcpb::DiskFullOpt;
@@ -16,7 +16,7 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
     SplitRequest,
 };
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus};
 use kvproto::{metapb, pdpb};
 use ordered_float::OrderedFloat;
@@ -26,31 +26,31 @@ use yatp::Remote;
 
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
-use crate::store::util::{
-    is_epoch_stale, ConfChangeKind, KeysInfoFormatter, LatencyInspector, RaftstoreDuration,
-};
+use crate::store::util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration};
 use crate::store::worker::query_stats::QueryStats;
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats, WriteStats};
 use crate::store::{
+    peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
+    transport::SignificantRouter,
     Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-    RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
+    RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
 };
 
 use collections::HashMap;
+use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
-use protobuf::Message;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
-use tikv_util::{box_err, box_try, debug, error, info, thd_name, warn};
+use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -135,7 +135,7 @@ where
     StoreHeartbeat {
         stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        send_detailed_report: bool,
+        report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     },
     ReportBatchSplit {
@@ -1024,7 +1024,7 @@ where
         &mut self,
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        send_detailed_report: bool,
+        store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let store_stats = self.engine_store_server_helper.handle_compute_store_stats();
@@ -1117,119 +1117,72 @@ where
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
 
-        let mut optional_report = None;
-        if send_detailed_report {
-            let mut store_report = pdpb::StoreReport::new();
-            store_info
-                .kv_engine
-                .scan_cf(
-                    CF_RAFT,
-                    keys::REGION_META_MIN_KEY,
-                    keys::REGION_META_MAX_KEY,
-                    false,
-                    |key, value| {
-                        let (_, suffix) = box_try!(keys::decode_region_meta_key(key));
-                        if suffix != keys::REGION_STATE_SUFFIX {
-                            return Ok(true);
-                        }
-
-                        let mut region_local_state = RegionLocalState::default();
-                        region_local_state.merge_from_bytes(value)?;
-                        if region_local_state.get_state() == PeerState::Tombstone {
-                            return Ok(true);
-                        }
-                        let raft_local_state = match store_info
-                            .raft_engine
-                            .get_raft_state(region_local_state.get_region().get_id())
-                            .unwrap()
-                        {
-                            None => return Ok(true),
-                            Some(value) => value,
-                        };
-                        let mut peer_report = pdpb::PeerReport::new();
-                        peer_report.set_region_state(region_local_state);
-                        peer_report.set_raft_state(raft_local_state);
-                        store_report.mut_peer_reports().push(peer_report);
-                        Ok(true)
-                    },
-                )
-                .unwrap();
-            optional_report = Some(store_report);
-        }
         let router = self.router.clone();
-        let scheduler = self.scheduler.clone();
-        let stats_copy = stats.clone();
-        let resp =
-            self.pd_client
-                .store_heartbeat(stats, optional_report, dr_autosync_status.clone());
+        let resp = self
+            .pd_client
+            .store_heartbeat(stats, store_report, dr_autosync_status);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
-                    if resp.get_require_detailed_report() {
-                        // This store needs to report detailed info of hosted regions to PD.
-                        //
-                        // The info has to be up to date, meaning that all committed changes til now have to be applied before the report is sent.
-                        // The entire process may include:
-                        // 1.	`broadcast_normal` "wait apply" messsages to all peers.
-                        // 2.	`on_unsafe_recovery_wait_apply` examines whether the peer have not-yet-applied entries, if so, memorize the target index.
-                        // 3.	`on_apply_res` checks whether entries before the "unsafe recovery report target commit index" have all been applied.
-                        // The one who finally finds out the number of remaining tasks is 0 schedules an unsafe recovery reporting store heartbeat.
-                        info!("required to send detailed report in the next heartbeat");
-                        // Init the counter with 1 in case the msg processing is faster than the distributing thus cause FSMs race to send a report.
-                        let counter = Arc::new(AtomicUsize::new(1));
-                        let counter_clone = counter.clone();
-                        router.broadcast_normal(|| {
-                            let _ = counter_clone.fetch_add(1, Ordering::Relaxed);
-                            PeerMsg::UnsafeRecoveryWaitApply(counter_clone.clone())
-                        });
-                        // Reporting needs to be triggered here in case there is no message to be sent or messages processing finished before above function returns.
-                        if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
-                            let task = Task::StoreHeartbeat {
-                                stats: stats_copy,
-                                store_info,
-                                send_detailed_report: true,
-                                dr_autosync_status,
-                            };
-                            if let Err(e) = scheduler.schedule(task) {
-                                error!("notify pd failed"; "err" => ?e);
+                    if let Some(mut plan) = resp.recovery_plan.take() {
+                        info!("Unsafe recovery, received a recovery plan");
+                        if plan.has_force_leader() {
+                            let mut failed_stores = HashSet::default();
+                            for failed_store in plan.get_force_leader().get_failed_stores() {
+                                failed_stores.insert(*failed_store);
                             }
-                        }
-                    } else if resp.has_plan() {
-                        info!("asked to execute recovery plan");
-                        for create in resp.get_plan().get_creates() {
-                            info!("asked to create region"; "region" => ?create);
-                            if let Err(e) =
-                                router.send_control(StoreMsg::CreatePeer(create.clone()))
-                            {
-                                error!("fail to send creat peer message for recovery"; "err" => ?e);
+                            let syncer = UnsafeRecoveryForceLeaderSyncer::new(
+                                plan.get_step(),
+                                router.clone(),
+                            );
+                            for region in plan.get_force_leader().get_enter_force_leaders() {
+                                if let Err(e) = router.significant_send(
+                                    *region,
+                                    SignificantMsg::EnterForceLeaderState {
+                                        syncer: syncer.clone(),
+                                        failed_stores: failed_stores.clone(),
+                                    },
+                                ) {
+                                    error!("fail to send force leader message for recovery"; "err" => ?e);
+                                }
                             }
-                        }
-                        for delete in resp.get_plan().get_deletes() {
-                            info!("asked to delete peer"; "peer" => delete);
-                            if let Err(e) = router.force_send(*delete, PeerMsg::Destroy(*delete)) {
-                                error!("fail to send delete peer message for recovery"; "err" => ?e);
+                        } else {
+                            let syncer = UnsafeRecoveryExecutePlanSyncer::new(
+                                plan.get_step(),
+                                router.clone(),
+                            );
+                            for create in plan.take_creates().into_iter() {
+                                if let Err(e) =
+                                    router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
+                                        syncer: syncer.clone(),
+                                        create,
+                                    })
+                                {
+                                    error!("fail to send create peer message for recovery"; "err" => ?e);
+                                }
                             }
-                        }
-                        for update in resp.get_plan().get_updates() {
-                            info!("asked to update region's range"; "region" => ?update);
-                            if let Err(e) = router.force_send(
-                                update.get_id(),
-                                PeerMsg::UpdateRegionForUnsafeRecover(update.clone()),
-                            ) {
-                                error!("fail to send update range message for recovery"; "err" => ?e);
+                            for delete in plan.take_tombstones().into_iter() {
+                                if let Err(e) = router.significant_send(
+                                    delete,
+                                    SignificantMsg::UnsafeRecoveryDestroy(syncer.clone()),
+                                ) {
+                                    error!("fail to send delete peer message for recovery"; "err" => ?e);
+                                }
                             }
-                        }
-                        let task = Task::StoreHeartbeat {
-                            stats: stats_copy,
-                            store_info,
-                            send_detailed_report: true,
-                            dr_autosync_status,
-                        };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!("notify pd failed"; "err" => ?e);
+                            for mut demote in plan.take_demotes().into_iter() {
+                                if let Err(e) = router.significant_send(
+                                    demote.get_region_id(),
+                                    SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
+                                        syncer: syncer.clone(),
+                                        failed_voters: demote.take_failed_voters().into_vec(),
+                                    },
+                                ) {
+                                    error!("fail to send update peer list message for recovery"; "err" => ?e);
+                                }
+                            }
                         }
                     }
                 }
@@ -1358,7 +1311,6 @@ where
                         "try to change peer";
                         "region_id" => region_id,
                         "changes" => ?change_peer_v2.get_changes(),
-                        "kind" => ?ConfChangeKind::confchange_kind(change_peer_v2.get_changes().len()),
                     );
                     let req = new_change_peer_v2_request(change_peer_v2.take_changes().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
@@ -1787,14 +1739,9 @@ where
             Task::StoreHeartbeat {
                 stats,
                 store_info,
-                send_detailed_report,
+                report,
                 dr_autosync_status,
-            } => self.handle_store_heartbeat(
-                stats,
-                store_info,
-                send_detailed_report,
-                dr_autosync_status,
-            ),
+            } => self.handle_store_heartbeat(stats, store_info, report, dr_autosync_status),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
@@ -1889,7 +1836,7 @@ fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> A
     req
 }
 
-fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
+pub fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ChangePeerV2);
     let change_peer_reqs = changes
