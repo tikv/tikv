@@ -1,20 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{mpsc, Arc},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
-use engine_rocks::RocksSnapshot;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::*,
     metapb::{Peer, Region},
     tikvpb::TikvClient,
 };
-use raftstore::store::{Callback, ReadResponse};
 use test_raftstore::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{time::Instant, HandyRwLock};
 
 struct TestSuite {
     pub cluster: Cluster<ServerCluster>,
@@ -89,16 +84,22 @@ impl TestSuite {
         let target = self.cluster.get_region(target_key);
         assert_ne!(source.get_id(), target.get_id());
 
-        let (merge_tx, merge_rx) = mpsc::channel();
-        let cb = Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
-            merge_tx.send(resp.response).unwrap()
-        }));
         self.cluster
-            .merge_region(source.get_id(), target.get_id(), cb);
-        merge_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            .must_try_merge(source.get_id(), target.get_id());
 
-        let merged = self.cluster.get_region(source_key);
-        assert_eq!(merged.get_id(), target.get_id());
+        let mut merged;
+        let timer = Instant::now();
+        loop {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!("region merge failed");
+            }
+            merged = self.cluster.get_region(source_key);
+            if merged.get_id() == target.get_id() {
+                break;
+            }
+            sleep_ms(100);
+        }
+
         assert_eq!(merged.get_start_key(), source.get_start_key());
         assert_eq!(merged.get_end_key(), target.get_end_key())
     }
