@@ -58,7 +58,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         for k in self.keys {
             released_locks.push(commit(&mut txn, &mut reader, k, self.commit_ts)?);
         }
-        released_locks.wake_up(context.lock_mgr);
 
         let pr = ProcessResult::TxnStatus {
             txn_status: TxnStatus::committed(self.commit_ts),

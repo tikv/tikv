@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use kvproto::kvrpcpb::{Context, ExtraOp, LockInfo};
+use kvproto::kvrpcpb::{Context, ExtraOp};
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::kv::WriteData;
@@ -13,12 +13,9 @@ use crate::storage::txn::commands::{
     Command, CommandExt, PessimisticLockParameters, ResponsePolicy, TypedCommand, WriteCommand,
     WriteContext, WriteResult, WriteResultLockInfo,
 };
-use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
+use crate::storage::txn::{acquire_pessimistic_lock, Error, Result};
 use crate::storage::types::PessimisticLockKeyResult;
-use crate::storage::{
-    Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockResults, ProcessResult,
-    Result as StorageResult, Snapshot,
-};
+use crate::storage::{PessimisticLockResults, ProcessResult, Result as StorageResult, Snapshot};
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
@@ -37,6 +34,7 @@ pub enum PessimisticLockCmdInner {
     SingleRequest {
         params: PessimisticLockParameters,
         keys: Vec<(Key, bool)>,
+        allow_lock_with_conflict: bool,
     },
     BatchResumedRequests(
         Vec<(
@@ -51,14 +49,23 @@ pub enum PessimisticLockCmdInner {
 impl std::fmt::Display for PessimisticLockCmdInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            PessimisticLockCmdInner::SingleRequest { params, keys } => {
+            PessimisticLockCmdInner::SingleRequest {
+                params,
+                keys,
+                allow_lock_with_conflict,
+            } => {
                 write!(
                     f,
-                    "keys({}) @ {} {} | {:?}",
+                    "keys({}) @ {} {} | {:?}{}",
                     keys.len(),
                     params.start_ts,
                     params.for_update_ts,
-                    params.pb_ctx
+                    params.pb_ctx,
+                    if !allow_lock_with_conflict {
+                        " (legacy mode)"
+                    } else {
+                        ""
+                    }
                 )
             }
             PessimisticLockCmdInner::BatchResumedRequests(items) => {
@@ -130,7 +137,7 @@ impl CommandExt for AcquirePessimisticLock {
 
     fn write_bytes(&self) -> usize {
         match &self.inner {
-            PessimisticLockCmdInner::SingleRequest { params: _, keys } => {
+            PessimisticLockCmdInner::SingleRequest { keys, .. } => {
                 keys.iter().map(|(key, _)| key.as_encoded().len()).sum()
             }
             PessimisticLockCmdInner::BatchResumedRequests(v) => {
@@ -140,24 +147,28 @@ impl CommandExt for AcquirePessimisticLock {
     }
 
     gen_lock!(inner: matching {
-        PessimisticLockCmdInner::SingleRequest { params: _, keys } => keys.iter().map(|k| &k.0),
+        PessimisticLockCmdInner::SingleRequest { keys, .. } => keys.iter().map(|k| &k.0),
         PessimisticLockCmdInner::BatchResumedRequests(v) => v.iter().map(|item| &item.0)
     });
 }
 
-fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
-    match res {
-        Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::KeyIsLocked(info),
-        )))))) => info,
-        _ => panic!("unexpected mvcc error"),
-    }
-}
+// fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
+//     match res {
+//         Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
+//             box MvccErrorInner::KeyIsLocked(info),
+//         )))))) => info,
+//         _ => panic!("unexpected mvcc error"),
+//     }
+// }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         match self.inner {
-            PessimisticLockCmdInner::SingleRequest { params, keys } => {
+            PessimisticLockCmdInner::SingleRequest {
+                params,
+                keys,
+                allow_lock_with_conflict,
+            } => {
                 let count = keys.len();
                 let iter = std::iter::repeat(params)
                     .take(keys.len())
@@ -168,11 +179,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                             PessimisticLockKeyContext::from_key(index, &key, params.start_ts);
                         (key, should_not_exist, params, lock_key_ctx)
                     });
-                Self::process_write_impl(snapshot, context, self.ctx, iter, count)
+                Self::process_write_impl(
+                    snapshot,
+                    context,
+                    self.ctx,
+                    iter,
+                    count,
+                    allow_lock_with_conflict,
+                )
             }
             PessimisticLockCmdInner::BatchResumedRequests(items) => {
                 let count = items.len();
-                Self::process_write_impl(snapshot, context, self.ctx, items.into_iter(), count)
+                Self::process_write_impl(
+                    snapshot,
+                    context,
+                    self.ctx,
+                    items.into_iter(),
+                    count,
+                    true,
+                )
             }
         }
     }
@@ -185,6 +210,7 @@ impl AcquirePessimisticLock {
         pb_ctx: Context,
         items: I,
         items_count: usize,
+        allow_lock_with_conflict: bool,
     ) -> Result<WriteResult>
     where
         S: Snapshot,
@@ -229,7 +255,7 @@ impl AcquirePessimisticLock {
                 .map_or(true, |t: &MvccTxn| t.start_ts != params.start_ts)
             {
                 if let Some(txn) = txn {
-                    if txn.write_size() > 0 {
+                    if !txn.is_empty() {
                         modifies.extend(txn.into_modifies());
                     }
                 }
@@ -262,6 +288,7 @@ impl AcquirePessimisticLock {
                 params.check_existence,
                 params.min_commit_ts,
                 need_old_value,
+                allow_lock_with_conflict,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -292,7 +319,7 @@ impl AcquirePessimisticLock {
         }
 
         if let Some(txn) = txn {
-            if txn.write_size() > 0 {
+            if !txn.is_empty() {
                 modifies.extend(txn.into_modifies());
             }
         }
@@ -383,7 +410,44 @@ impl AcquirePessimisticLock {
             min_commit_ts,
             check_existence,
         };
-        let inner = PessimisticLockCmdInner::SingleRequest { params, keys };
+        let inner = PessimisticLockCmdInner::SingleRequest {
+            params,
+            keys,
+            allow_lock_with_conflict: true,
+        };
+        Self::new(inner, is_first_lock, ctx)
+    }
+
+    pub fn new_disallow_lock_with_conflict(
+        keys: Vec<(Key, bool)>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+        lock_ttl: u64,
+        is_first_lock: bool,
+        for_update_ts: TimeStamp,
+        wait_timeout: Option<WaitTimeout>,
+        return_values: bool,
+        min_commit_ts: TimeStamp,
+        _old_values: OldValues, // TODO: Remove it
+        check_existence: bool,
+        ctx: kvproto::kvrpcpb::Context,
+    ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
+        let params = PessimisticLockParameters {
+            pb_ctx: ctx.clone(),
+            primary,
+            start_ts,
+            lock_ttl,
+            for_update_ts,
+            wait_timeout,
+            return_values,
+            min_commit_ts,
+            check_existence,
+        };
+        let inner = PessimisticLockCmdInner::SingleRequest {
+            params,
+            keys,
+            allow_lock_with_conflict: false,
+        };
         Self::new(inner, is_first_lock, ctx)
     }
 
@@ -422,7 +486,7 @@ impl AcquirePessimisticLock {
 
     pub fn get_single_request_meta(&self) -> Option<SingleRequestPessimisticLockCommandMeta> {
         match &self.inner {
-            PessimisticLockCmdInner::SingleRequest { params, keys } => {
+            PessimisticLockCmdInner::SingleRequest { params, keys, .. } => {
                 Some(SingleRequestPessimisticLockCommandMeta {
                     start_ts: params.start_ts,
                     for_update_ts: params.for_update_ts,

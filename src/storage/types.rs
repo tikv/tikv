@@ -151,6 +151,59 @@ impl PessimisticLockKeyResult {
             Self::Empty
         }
     }
+
+    #[cfg(test)]
+    pub fn assert_empty(&self) {
+        assert!(matches!(self, Self::Empty));
+    }
+
+    #[cfg(test)]
+    pub fn assert_value(&self, expected_value: Option<&[u8]>) {
+        match self {
+            Self::Value(v) if v.as_ref().map(|v| v.as_slice()) == expected_value => (),
+            x => panic!(
+                "pessimistic lock key result not match, expected Value({:?}), got {:?}",
+                expected_value, x
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn assert_existence(&self, expected_existence: bool) {
+        match self {
+            Self::Existence(e) if *e == expected_existence => (),
+            x => panic!(
+                "pessimistic lock key result not match, expected Existence({:?}), got {:?}",
+                expected_existence, x
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn assert_locked_with_conflict(
+        &self,
+        expected_value: Option<&[u8]>,
+        expected_conflict_ts: impl Into<TimeStamp>,
+    ) {
+        let expected_conflict_ts = expected_conflict_ts.into();
+        match self {
+            Self::LockedWithConflict { value, conflict_ts }
+                if value.as_ref().map(|v| v.as_slice()) == expected_value
+                    && *conflict_ts == expected_conflict_ts =>
+            {
+                ()
+            }
+            x => panic!(
+                "pessimistic lock key result not match, expected LockedWithConflict{{ value: {:?}, conflict_ts: {} }}, got {:?}",
+                expected_value, expected_conflict_ts, x
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn assert_waiting(&self) {
+        assert!(matches!(self, Self::Waiting));
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -292,7 +292,7 @@ impl DetectTable {
     /// Removes the corresponding wait_for_entry.
     fn clean_up_wait_for(
         &mut self,
-        token: LockWaitToken,
+        _token: LockWaitToken,
         txn_ts: TimeStamp,
         locks: impl IntoIterator<Item = LockDigest>,
     ) {

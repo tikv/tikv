@@ -1260,7 +1260,7 @@ pub mod tests {
 
         // Deadlock
         let waiter_ts = TimeStamp::new(10);
-        let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
+        let (waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
         // waiter.deadlock_with(111, vec![]);
         waiter.cancel_for_deadlock(
             LockDigest {

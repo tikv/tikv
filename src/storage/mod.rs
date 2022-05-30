@@ -6802,15 +6802,390 @@ mod tests {
         }
     }
 
+    #[ignore]
     #[test]
     fn test_pessimistic_lock() {
         test_pessimistic_lock_impl(false);
         test_pessimistic_lock_impl(true);
     }
 
+    fn test_pessimistic_lock_new_impl(pipelined_pessimistic_lock: bool) {
+        type Res = PessimisticLockKeyResult;
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+            .pipelined_pessimistic_lock(pipelined_pessimistic_lock)
+            .build()
+            .unwrap();
+        let cm = storage.concurrency_manager.clone();
+        let (tx, rx) = channel();
+
+        let results_empty =
+            |len| PessimisticLockResults(vec![PessimisticLockKeyResult::Empty; len]);
+
+        // Put key "k1".
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec())],
+                    b"k1".to_vec(),
+                    10.into(),
+                    3000,
+                    false,
+                    1,
+                    TimeStamp::zero(),
+                    TimeStamp::default(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k1")],
+                    10.into(),
+                    20.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Put key "k2".
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec())],
+                    b"k2".to_vec(),
+                    30.into(),
+                    3000,
+                    false,
+                    1,
+                    TimeStamp::zero(),
+                    TimeStamp::default(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k2")],
+                    30.into(),
+                    40.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Lock successfully, nothing to wait.
+        for &(return_values, check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
+            let pessimistic_lock_res = if return_values {
+                PessimisticLockResults(vec![
+                    Res::Value(Some(b"v1".to_vec())),
+                    Res::LockedWithConflict {
+                        value: Some(b"v2".to_vec()),
+                        conflict_ts: 40.into(),
+                    },
+                    Res::Value(None),
+                ])
+            } else if check_existence {
+                PessimisticLockResults(vec![
+                    Res::Existence(true),
+                    Res::LockedWithConflict {
+                        value: Some(b"v2".to_vec()),
+                        conflict_ts: 40.into(),
+                    },
+                    Res::Existence(false),
+                ])
+            } else {
+                PessimisticLockResults(vec![
+                    Res::Empty,
+                    Res::LockedWithConflict {
+                        value: Some(b"v2".to_vec()),
+                        conflict_ts: 40.into(),
+                    },
+                    Res::Empty,
+                ])
+            };
+
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![
+                            (Key::from_raw(b"k1"), false),
+                            (Key::from_raw(b"k2"), false),
+                            (Key::from_raw(b"k3"), false),
+                        ],
+                        25,
+                        25,
+                        return_values,
+                        check_existence,
+                    ),
+                    expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res.clone()),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            // if return_values || check_existence {
+            //     assert_eq!(cm.max_ts(), 25.into());
+            // }
+
+            // Duplicated command
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![
+                            (Key::from_raw(b"k1"), false),
+                            (Key::from_raw(b"k2"), false),
+                            (Key::from_raw(b"k3"), false),
+                        ],
+                        25,
+                        25,
+                        return_values,
+                        check_existence,
+                    ),
+                    expect_pessimistic_lock_res_callback(tx.clone(), pessimistic_lock_res.clone()),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k1"), 25, 25);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k2"), 25, 40);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k3"), 25, 25);
+        }
+
+        // Pessimistic-lock k3, and we will pessimistic-rollback it.
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![(Key::from_raw(b"k3"), false)],
+                    30,
+                    30,
+                    false,
+                    false,
+                ),
+                expect_pessimistic_lock_res_callback(tx.clone(), results_empty(1)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Pessimistic-lock k4, and we will prewrite and commit it.
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![(Key::from_raw(b"k4"), false)],
+                    30,
+                    30,
+                    false,
+                    false,
+                ),
+                expect_pessimistic_lock_res_callback(tx.clone(), results_empty(1)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Optimistic-lock k5, and we will rollback it.
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k5"), b"v5".to_vec())],
+                    b"k5".to_vec(),
+                    30.into(),
+                    3000,
+                    false,
+                    1,
+                    TimeStamp::zero(),
+                    TimeStamp::default(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Lock successfully, nothing to wait.
+        for &(return_values, check_existence) in &[
+            /*(false, false), */ (false, true), /* (true, false), (true, true) */
+        ] {
+            let pessimistic_lock_res = if return_values {
+                PessimisticLockResults(vec![
+                    Res::Value(Some(b"v1".to_vec())),
+                    Res::LockedWithConflict {
+                        value: Some(b"v2".to_vec()),
+                        conflict_ts: 40.into(),
+                    },
+                    Res::Value(None),
+                    Res::LockedWithConflict {
+                        value: Some(b"v4".to_vec()),
+                        conflict_ts: 40.into(),
+                    },
+                    Res::LockedWithConflict {
+                        value: None,
+                        conflict_ts: 30.into(),
+                    },
+                    Res::Value(None),
+                ])
+            } else if check_existence {
+                PessimisticLockResults(vec![
+                    Res::Existence(true),
+                    Res::LockedWithConflict {
+                        value: Some(b"v2".to_vec()),
+                        conflict_ts: 40.into(),
+                    },
+                    Res::Existence(false),
+                    Res::LockedWithConflict {
+                        value: Some(b"v4".to_vec()),
+                        conflict_ts: 40.into(),
+                    },
+                    Res::LockedWithConflict {
+                        value: None,
+                        conflict_ts: 30.into(),
+                    },
+                    Res::Existence(false),
+                ])
+            } else {
+                PessimisticLockResults(vec![
+                    Res::Empty,
+                    Res::LockedWithConflict {
+                        value: Some(b"v2".to_vec()),
+                        conflict_ts: 40.into(),
+                    },
+                    Res::Empty,
+                    Res::LockedWithConflict {
+                        value: Some(b"v4".to_vec()),
+                        conflict_ts: 40.into(),
+                    },
+                    Res::LockedWithConflict {
+                        value: None,
+                        conflict_ts: 30.into(),
+                    },
+                    Res::Empty,
+                ])
+            };
+
+            let keys = &[b"k1", b"k2", b"k3", b"k4", b"k5", b"k6"];
+
+            let (tx2, rx2) = channel();
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        keys.iter().map(|k| (Key::from_raw(*k), false)).collect(),
+                        25,
+                        25,
+                        return_values,
+                        check_existence,
+                    ),
+                    expect_pessimistic_lock_res_callback(tx2.clone(), pessimistic_lock_res.clone()),
+                )
+                .unwrap();
+            rx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
+
+            // if return_values || check_existence {
+            //     assert_eq!(cm.max_ts(), 25.into());
+            // }
+
+            storage
+                .sched_txn_command(
+                    commands::PrewritePessimistic::new(
+                        vec![(
+                            Mutation::make_put(Key::from_raw(b"k4"), b"v4".to_vec()),
+                            true,
+                        )],
+                        b"k4".to_vec(),
+                        30.into(),
+                        3000,
+                        30.into(),
+                        1,
+                        TimeStamp::zero(),
+                        TimeStamp::default(),
+                        None,
+                        false,
+                        AssertionLevel::Off,
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            storage
+                .sched_txn_command(
+                    commands::Commit::new(
+                        vec![Key::from_raw(b"k4")],
+                        30.into(),
+                        40.into(),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            rx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
+
+            storage
+                .sched_txn_command(
+                    commands::Rollback::new(
+                        vec![Key::from_raw(b"k5")],
+                        30.into(),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            rx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
+
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k3"), 25, 25);
+            rx2.recv().unwrap();
+
+            // Duplicated command
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        keys.iter().map(|k| (Key::from_raw(*k), false)).collect(),
+                        25,
+                        25,
+                        return_values,
+                        check_existence,
+                    ),
+                    expect_pessimistic_lock_res_callback(tx2.clone(), pessimistic_lock_res.clone()),
+                )
+                .unwrap();
+            rx2.recv().unwrap();
+
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k1"), 25, 25);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k2"), 25, 40);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k3"), 25, 25);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k4"), 25, 40);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k5"), 25, 30);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k6"), 25, 25);
+        }
+    }
+
+    #[test]
+    fn test_pessimistic_lock_new() {
+        test_pessimistic_lock_new_impl(false);
+        test_pessimistic_lock_new_impl(true);
+    }
+
     #[allow(clippy::large_enum_variant)]
     pub enum Msg {
         WaitFor {
+            token: LockWaitToken,
             region_id: u64,
             region_epoch: RegionEpoch,
             term: u64,
@@ -6843,9 +7218,9 @@ mod tests {
             }
         }
 
-        pub fn set_has_waiter(&mut self, has_waiter: bool) {
-            self.has_waiter.store(has_waiter, Ordering::Relaxed);
-        }
+        // pub fn set_has_waiter(&mut self, has_waiter: bool) {
+        //     self.has_waiter.store(has_waiter, Ordering::Relaxed);
+        // }
     }
 
     impl LockManager for ProxyLockMgr {
@@ -6868,6 +7243,7 @@ mod tests {
         ) {
             self.tx
                 .send(Msg::WaitFor {
+                    token,
                     region_id,
                     region_epoch,
                     term,

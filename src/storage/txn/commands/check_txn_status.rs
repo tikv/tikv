@@ -114,10 +114,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         };
 
         let mut released_locks = ReleasedLocks::new();
-        released_locks.push(released);
         // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
         if let TxnStatus::TtlExpire = txn_status {
-            released_locks.wake_up(context.lock_mgr);
+            released_locks.push(released);
         }
 
         let pr = ProcessResult::TxnStatus { txn_status };

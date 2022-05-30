@@ -783,6 +783,7 @@ pub mod tests {
                 false,
                 TimeStamp::zero(),
                 true,
+                false,
             )
             .unwrap();
             self.write(txn.into_modifies());

@@ -26,11 +26,12 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     primary: &[u8],
     should_not_exist: bool,
     lock_ttl: u64,
-    for_update_ts: TimeStamp,
+    mut for_update_ts: TimeStamp,
     need_value: bool,
     need_check_existence: bool,
     min_commit_ts: TimeStamp,
     need_old_value: bool,
+    allow_lock_with_conflict: bool,
 ) -> MvccResult<(PessimisticLockKeyResult, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
@@ -84,12 +85,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             .into());
         }
 
-        let locked_with_conflict_ts = if for_update_ts < lock.for_update_ts {
-            need_load_value = true;
-            Some(lock.for_update_ts)
-        } else {
-            None
-        };
+        let locked_with_conflict_ts =
+            if allow_lock_with_conflict && for_update_ts < lock.for_update_ts {
+                need_load_value = true;
+                for_update_ts = lock.for_update_ts;
+                Some(lock.for_update_ts)
+            } else {
+                None
+            };
 
         if need_load_value {
             val = reader.get(&key, for_update_ts)?;
@@ -150,20 +153,24 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         // whose commit timestamp is larger than current `for_update_ts`, the
         // transaction should retry to get the latest data.
         if commit_ts > for_update_ts {
-            locked_with_conflict_ts = Some(commit_ts);
-            need_load_value = true;
-            // TODO: New metrics.
             MVCC_CONFLICT_COUNTER
                 .acquire_pessimistic_lock_conflict
                 .inc();
-            // return Err(ErrorInner::WriteConflict {
-            //     start_ts: reader.start_ts,
-            //     conflict_start_ts: write.start_ts,
-            //     conflict_commit_ts: commit_ts,
-            //     key: key.into_raw()?,
-            //     primary: primary.to_vec(),
-            // }
-            // .into());
+            if allow_lock_with_conflict {
+                // TODO: New metrics.
+                locked_with_conflict_ts = Some(commit_ts);
+                for_update_ts = commit_ts;
+                need_load_value = true;
+            } else {
+                return Err(ErrorInner::WriteConflict {
+                    start_ts: reader.start_ts,
+                    conflict_start_ts: write.start_ts,
+                    conflict_commit_ts: commit_ts,
+                    key: key.into_raw()?,
+                    primary: primary.to_vec(),
+                }
+                .into());
+            }
         }
 
         // Handle rollback.
@@ -278,6 +285,46 @@ pub mod tests {
         TestEngineBuilder,
     };
 
+    pub fn must_succeed_allow_lock_with_conflict<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        need_value: bool,
+        need_check_existence: bool,
+    ) -> PessimisticLockKeyResult {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new(0.into());
+        let start_ts = start_ts.into();
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        let res = acquire_pessimistic_lock(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            pk,
+            false,
+            1,
+            for_update_ts.into(),
+            need_value,
+            need_check_existence,
+            0.into(),
+            false,
+            true,
+        )
+        .unwrap();
+        let modifies = txn.into_modifies();
+        if !modifies.is_empty() {
+            engine
+                .write(&ctx, WriteData::from_modifies(modifies))
+                .unwrap();
+        }
+
+        res.0
+    }
+
     pub fn must_succeed_impl<E: Engine>(
         engine: &E,
         key: &[u8],
@@ -309,6 +356,7 @@ pub mod tests {
             need_check_existence,
             min_commit_ts,
             false,
+            false,
         )
         .unwrap();
         let modifies = txn.into_modifies();
@@ -327,6 +375,7 @@ pub mod tests {
                     None
                 }
             }
+            PessimisticLockKeyResult::Empty => None,
             _ => todo!(),
         }
     }
@@ -479,6 +528,7 @@ pub mod tests {
             need_value,
             need_check_existence,
             min_commit_ts,
+            false,
             false,
         )
         .unwrap_err()
@@ -944,6 +994,7 @@ pub mod tests {
                         *need_check_existence,
                         min_commit_ts,
                         need_old_value,
+                        false,
                     )
                     .unwrap();
                     assert_eq!(old_value, OldValue::None);
@@ -994,6 +1045,7 @@ pub mod tests {
             need_check_existence,
             min_commit_ts,
             need_old_value,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -1027,6 +1079,7 @@ pub mod tests {
             false,
             min_commit_ts,
             true,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -1069,6 +1122,7 @@ pub mod tests {
                             *need_check_existence,
                             min_commit_ts,
                             need_old_value,
+                            false,
                         )?;
                         Ok(old_value)
                     });
@@ -1120,6 +1174,7 @@ pub mod tests {
             need_check_existence,
             min_commit_ts,
             need_old_value,
+            false,
         )
         .unwrap_err();
 
@@ -1151,6 +1206,7 @@ pub mod tests {
             check_existence,
             min_commit_ts,
             need_old_value,
+            false,
         )
         .unwrap_err();
     }
@@ -1289,5 +1345,77 @@ pub mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_lock_with_conflict() {
+        use pessimistic_rollback::tests::must_success as must_pessimistic_rollback;
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine, b"k1", 10, 20);
+
+        // Normal cases.
+        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 10, 30, false, false)
+            .assert_empty();
+        must_pessimistic_rollback(&engine, b"k1", 10, 30);
+        must_unlocked(&engine, b"k1");
+
+        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 10, 30, false, true)
+            .assert_existence(true);
+        must_pessimistic_rollback(&engine, b"k1", 10, 30);
+        must_unlocked(&engine, b"k1");
+
+        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 10, 30, true, false)
+            .assert_value(Some(b"v1"));
+        must_pessimistic_rollback(&engine, b"k1", 10, 30);
+        must_unlocked(&engine, b"k1");
+
+        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 10, 30, true, true)
+            .assert_value(Some(b"v1"));
+        must_pessimistic_rollback(&engine, b"k1", 10, 30);
+        must_unlocked(&engine, b"k1");
+
+        // Conflicting cases.
+        for &(need_value, need_check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
+            must_succeed_allow_lock_with_conflict(
+                &engine,
+                b"k1",
+                b"k1",
+                10,
+                15,
+                need_value,
+                need_check_existence,
+            )
+            .assert_locked_with_conflict(Some(b"v1"), 20);
+            must_pessimistic_locked(&engine, b"k1", 10, 20);
+            must_pessimistic_rollback(&engine, b"k1", 10, 20);
+            must_unlocked(&engine, b"k1");
+        }
+
+        // Idempotency
+        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 10, 50, false, false)
+            .assert_empty();
+        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 10, 40, false, false)
+            .assert_locked_with_conflict(Some(b"v1"), 50);
+        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 10, 15, false, false)
+            .assert_locked_with_conflict(Some(b"v1"), 50);
+        must_pessimistic_locked(&engine, b"k1", 10, 50);
+        must_pessimistic_rollback(&engine, b"k1", 10, 50);
+        must_unlocked(&engine, b"k1");
+
+        // Lock waiting.
+        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 10, 50, false, false)
+            .assert_empty();
+        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 11, 55, false, false)
+            .assert_waiting();
+        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 9, 9, false, false)
+            .assert_waiting();
+        must_pessimistic_locked(&engine, b"k1", 10, 50);
+        must_pessimistic_rollback(&engine, b"k1", 10, 50);
+        must_unlocked(&engine, b"k1");
     }
 }

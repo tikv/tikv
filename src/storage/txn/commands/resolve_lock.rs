@@ -122,11 +122,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 break;
             }
         }
-        let lock_mgr = context.lock_mgr;
         // released_locks
         //     .into_iter()
         //     .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
-        released_locks.wake_up(lock_mgr);
 
         let pr = if scan_key.is_none() {
             ProcessResult::Res

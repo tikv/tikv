@@ -403,7 +403,6 @@ impl<K: PrewriteKind> Prewriter<K> {
             final_min_commit_ts,
             rows,
             context.async_apply_prewrite,
-            context.lock_mgr,
         ))
     }
 
@@ -567,7 +566,6 @@ impl<K: PrewriteKind> Prewriter<K> {
         final_min_commit_ts: TimeStamp,
         rows: usize,
         async_apply_prewrite: bool,
-        lock_manager: &impl LockManager,
     ) -> WriteResult {
         let async_commit_ts = if self.secondary_keys.is_some() {
             final_min_commit_ts
@@ -578,9 +576,6 @@ impl<K: PrewriteKind> Prewriter<K> {
         let mut result = if locks.is_empty() {
             let (one_pc_commit_ts, released_locks) =
                 one_pc_commit(self.try_one_pc, &mut txn, final_min_commit_ts);
-            if !released_locks.is_empty() {
-                released_locks.wake_up(lock_manager);
-            }
 
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {

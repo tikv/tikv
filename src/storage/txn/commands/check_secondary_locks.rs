@@ -139,8 +139,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
 
         let mut rows = 0;
         if let SecondaryLocksStatus::RolledBack = &result {
-            // Lock is only released when result is `RolledBack`.
-            released_locks.wake_up(context.lock_mgr);
             // One row is mutated only when a secondary lock is rolled back.
             rows = 1;
         }

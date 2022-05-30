@@ -962,7 +962,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         wait_token,
                         cmd_meta.start_ts,
                         cmd_meta.for_update_ts,
-                        pr.take().unwrap(),
+                        mem::replace(&mut pr, Some(ProcessResult::Res)).unwrap(),
                         cmd_meta.keys_count,
                         cmd_meta.keys_count - l.len(),
                     );

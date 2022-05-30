@@ -495,7 +495,7 @@ mod tests {
         // If it's the first lock, no detect.
         // If it's not, detect deadlock.
         for is_first_lock in &[true, false] {
-            let (waiter, _, f) = new_test_waiter(30.into(), 40.into(), 40);
+            let (waiter, _, mut f) = new_test_waiter(30.into(), 40.into(), 40);
             let token = lock_mgr.allocate_token();
             lock_mgr.wait_for(
                 token,
@@ -512,7 +512,8 @@ mod tests {
             assert!(lock_mgr.has_waiter());
             assert_eq!(lock_mgr.remove_from_detected(token), !is_first_lock);
             lock_mgr.remove_lock_wait(token);
-            // block_on(f).unwrap().unwrap_err();
+            // block_on(f).unwrap();
+            f.try_recv().unwrap_err();
         }
         assert!(!lock_mgr.has_waiter());
 

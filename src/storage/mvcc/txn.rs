@@ -107,6 +107,10 @@ impl MvccTxn {
         self.write_size
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.modifies.len() == 0 && self.locks_for_1pc.len() == 0
+    }
+
     pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock) {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
