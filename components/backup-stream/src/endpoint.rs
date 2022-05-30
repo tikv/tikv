@@ -1,11 +1,17 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::AsRef, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    marker::PhantomData,
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use futures::{Future, FutureExt};
+use futures::FutureExt;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -22,7 +28,7 @@ use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
     config::ReadableDuration,
-    debug, defer, error, info,
+    debug, defer, info,
     time::Instant,
     warn,
     worker::{Runnable, Scheduler},
@@ -41,10 +47,7 @@ use crate::{
     annotate,
     errors::{Error, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
-    metadata::{
-        store::{EtcdStore, MetaStore},
-        MetadataClient, MetadataEvent, StreamTask,
-    },
+    metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL},
@@ -55,8 +58,8 @@ use crate::{
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 
-pub struct Endpoint<S: MetaStore + 'static, R, E, RT, PDC> {
-    meta_client: Option<MetadataClient<S>>,
+pub struct Endpoint<S, R, E, RT, PDC> {
+    meta_client: MetadataClient<S>,
     range_router: Router,
     scheduler: Scheduler<Task>,
     observer: BackupStreamObserver,
@@ -80,77 +83,9 @@ where
     PDC: PdClient + 'static,
     S: MetaStore + 'static,
 {
-    pub fn with_client(
+    pub fn new(
         store_id: u64,
-        cli: MetadataClient<S>,
-        config: BackupStreamConfig,
-        scheduler: Scheduler<Task>,
-        observer: BackupStreamObserver,
-        accessor: R,
-        router: RT,
-        pd_client: Arc<PDC>,
-        cm: ConcurrencyManager,
-    ) -> Self {
-        // Always use 2 threads for I/O tasks.
-        let pool = create_tokio_runtime(config.io_threads, "br-stream")
-            .expect("failed to create tokio runtime for backup stream worker.");
-        let scan_pool = create_scan_pool(config.num_threads);
-
-        // TODO consider TLS?
-        let meta_client = Some(cli);
-        let range_router = Router::new(
-            PathBuf::from(config.temp_path.clone()),
-            scheduler.clone(),
-            config.temp_file_size_limit_per_task.0,
-            config.max_flush_interval.0,
-        );
-
-        if let Some(meta_client) = meta_client.as_ref() {
-            // spawn a worker to watch task changes from etcd periodically.
-            let meta_client_clone = meta_client.clone();
-            let scheduler_clone = scheduler.clone();
-            // TODO build a error handle mechanism #error 2
-            pool.spawn(async {
-                if let Err(err) =
-                    Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
-                {
-                    err.report("failed to start watch tasks");
-                }
-            });
-            pool.spawn(Self::starts_flush_ticks(range_router.clone()));
-        }
-        let initial_scan_memory_quota =
-            PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
-        info!("the endpoint of backup stream started"; "path" => %config.temp_path);
-        Endpoint {
-            meta_client,
-            range_router,
-            scheduler,
-            observer,
-            pool,
-            store_id,
-            regions: accessor,
-            engine: PhantomData,
-            router,
-            pd_client,
-            subs: Default::default(),
-            concurrency_manager: cm,
-            initial_scan_memory_quota,
-            scan_pool,
-        }
-    }
-}
-
-impl<R, E, RT, PDC> Endpoint<EtcdStore, R, E, RT, PDC>
-where
-    R: RegionInfoProvider + 'static + Clone,
-    E: KvEngine,
-    RT: RaftStoreRouter<E> + 'static,
-    PDC: PdClient + 'static,
-{
-    pub fn new<S: AsRef<str>>(
-        store_id: u64,
-        endpoints: &dyn AsRef<[S]>,
+        store: S,
         config: BackupStreamConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
@@ -158,24 +93,13 @@ where
         router: RT,
         pd_client: Arc<PDC>,
         concurrency_manager: ConcurrencyManager,
-    ) -> Endpoint<EtcdStore, R, E, RT, PDC> {
+    ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
         let pool = create_tokio_runtime(config.io_threads, "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
         let scan_pool = create_scan_pool(config.num_threads);
 
-        // TODO consider TLS?
-        let meta_client = match pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
-            Ok(c) => {
-                let meta_store = EtcdStore::from(c);
-                Some(MetadataClient::new(meta_store, store_id))
-            }
-            Err(e) => {
-                error!("failed to create etcd client for backup stream worker"; "error" => ?e);
-                None
-            }
-        };
-
+        let meta_client = MetadataClient::new(store, store_id);
         let range_router = Router::new(
             PathBuf::from(config.temp_path.clone()),
             scheduler.clone(),
@@ -183,21 +107,18 @@ where
             config.max_flush_interval.0,
         );
 
-        if let Some(meta_client) = meta_client.as_ref() {
-            // spawn a worker to watch task changes from etcd periodically.
-            let meta_client_clone = meta_client.clone();
-            let scheduler_clone = scheduler.clone();
-            // TODO build a error handle mechanism #error 2
-            pool.spawn(async {
-                if let Err(err) =
-                    Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
-                {
-                    err.report("failed to start watch tasks");
-                }
-            });
+        // spawn a worker to watch task changes from etcd periodically.
+        let meta_client_clone = meta_client.clone();
+        let scheduler_clone = scheduler.clone();
+        // TODO build a error handle mechanism #error 2
+        pool.spawn(async {
+            if let Err(err) = Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
+            {
+                err.report("failed to start watch tasks");
+            }
+        });
 
-            pool.spawn(Self::starts_flush_ticks(range_router.clone()));
-        }
+        pool.spawn(Self::starts_flush_ticks(range_router.clone()));
 
         let initial_scan_memory_quota =
             PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
@@ -230,24 +151,30 @@ where
     PDC: PdClient + 'static,
 {
     fn get_meta_client(&self) -> MetadataClient<S> {
-        self.meta_client.as_ref().unwrap().clone()
+        self.meta_client.clone()
     }
 
     fn on_fatal_error(&self, task: String, err: Box<Error>) {
-        // Let's pause the task locally first.
-        let start_ts = self.unload_task(&task).map(|task| task.start_ts);
+        // Let's pause the task first.
+        self.unload_task(&task);
         err.report_fatal();
         metrics::update_task_status(TaskStatus::Error, &task);
 
         let meta_cli = self.get_meta_client();
+        let pdc = self.pd_client.clone();
         let store_id = self.store_id;
         let sched = self.scheduler.clone();
-        let register_safepoint = self
-            .register_guard_service_safepoint(&task, TimeStamp::new(start_ts.unwrap_or_default()));
-
+        let safepoint_name = self.pause_guard_id_for_task(&task);
+        let safepoint_ttl = self.pause_guard_duration();
         self.pool.block_on(async move {
             let err_fut = async {
-                register_safepoint.await?;
+                let safepoint = meta_cli.global_progress_of_task(&task).await?;
+                pdc.update_service_safe_point(
+                    safepoint_name,
+                    TimeStamp::new(safepoint),
+                    safepoint_ttl,
+                )
+                .await?;
                 meta_cli.pause(&task).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(err.error_code().code.to_owned());
@@ -319,19 +246,44 @@ where
         scheduler: Scheduler<Task>,
         revision: i64,
     ) -> Result<()> {
-        let mut watcher = meta_client.events_from(revision).await?;
+        let mut revision_new = revision;
         loop {
-            if let Some(event) = watcher.stream.next().await {
-                info!("backup stream watch event from etcd"; "event" => ?event);
-                match event {
-                    MetadataEvent::AddTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
+            let watcher = meta_client.events_from(revision_new).await;
+            let mut watcher = match watcher {
+                Ok(w) => w,
+                Err(e) => {
+                    e.report("failed to start watch pause");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+
+            loop {
+                if let Some(event) = watcher.stream.next().await {
+                    info!("backup stream watch event from etcd"; "event" => ?event);
+
+                    let revision = meta_client.get_reversion().await;
+                    if let Ok(r) = revision {
+                        revision_new = r;
                     }
-                    MetadataEvent::RemoveTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
+
+                    match event {
+                        MetadataEvent::AddTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
+                        }
+                        MetadataEvent::RemoveTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
+                        }
+                        MetadataEvent::Error { err } => {
+                            err.report("metadata client watch meet error");
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            break;
+                        }
+                        _ => panic!("BUG: invalid event {:?}", event),
                     }
-                    MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
-                    _ => panic!("BUG: invalid event {:?}", event),
+                } else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    break;
                 }
             }
         }
@@ -342,33 +294,57 @@ where
         scheduler: Scheduler<Task>,
         revision: i64,
     ) -> Result<()> {
-        let mut watcher = meta_client.events_from_pause(revision).await?;
+        let mut revision_new = revision;
+
         loop {
-            if let Some(event) = watcher.stream.next().await {
-                info!("backup stream watch event from etcd"; "event" => ?event);
-                match event {
-                    MetadataEvent::PauseTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::PauseTask(task)))?;
+            let watcher = meta_client.events_from_pause(revision_new).await;
+            let mut watcher = match watcher {
+                Ok(w) => w,
+                Err(e) => {
+                    e.report("failed to start watch pause");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
+            };
+
+            loop {
+                if let Some(event) = watcher.stream.next().await {
+                    info!("backup stream watch event from etcd"; "event" => ?event);
+                    let revision = meta_client.get_reversion().await;
+                    if let Ok(r) = revision {
+                        revision_new = r;
                     }
-                    MetadataEvent::ResumeTask { task } => {
-                        let task = meta_client.get_task(&task).await?;
-                        scheduler.schedule(Task::WatchTask(TaskOp::ResumeTask(task)))?;
+
+                    match event {
+                        MetadataEvent::PauseTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::PauseTask(task)))?;
+                        }
+                        MetadataEvent::ResumeTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::ResumeTask(task)))?;
+                        }
+                        MetadataEvent::Error { err } => {
+                            err.report("metadata client watch meet error");
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            break;
+                        }
+                        _ => panic!("BUG: invalid event {:?}", event),
                     }
-                    MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
-                    _ => panic!("BUG: invalid event {:?}", event),
+                } else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    break;
                 }
             }
         }
     }
 
-    fn backup_batch(&self, batch: CmdBatch) {
-        let mut sw = StopWatch::new();
+    /// Convert a batch of events to the cmd batch, and update the resolver status.
+    fn record_batch(subs: SubscriptionTracer, batch: CmdBatch) -> Option<ApplyEvents> {
         let region_id = batch.region_id;
-        let mut resolver = match self.subs.get_subscription_of(region_id) {
+        let mut resolver = match subs.get_subscription_of(region_id) {
             Some(rts) => rts,
             None => {
-                warn!("BUG: the region isn't registered (no resolver found) but sent to backup_batch."; "region_id" => %region_id);
-                return;
+                debug!("the region isn't registered (no resolver found) but sent to backup_batch, maybe stale."; "region_id" => %region_id);
+                return None;
             }
         };
         // Stale data is accpetable, while stale locks may block the checkpoint advancing.
@@ -382,23 +358,29 @@ where
         //                 (Before we refreshing the resolver for this region again)
         if batch.pitr_id != resolver.value().handle.id {
             debug!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
-            return;
+            return None;
         }
-        let sched = self.scheduler.clone();
 
         let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver());
-        drop(resolver);
-        if kvs.is_empty() {
-            return;
-        }
+        Some(kvs)
+    }
 
-        HANDLE_EVENT_DURATION_HISTOGRAM
-            .with_label_values(&["to_stream_event"])
-            .observe(sw.lap().as_secs_f64());
+    fn backup_batch(&self, batch: CmdBatch) {
+        let mut sw = StopWatch::new();
+
         let router = self.range_router.clone();
+        let sched = self.scheduler.clone();
+        let subs = self.subs.clone();
         self.pool.spawn(async move {
+            let region_id = batch.region_id;
+            let kvs = Self::record_batch(subs, batch);
+            if kvs.as_ref().map(|x| x.is_empty()).unwrap_or(true) {
+                return;
+            }
+            let kvs = kvs.unwrap();
+
             HANDLE_EVENT_DURATION_HISTOGRAM
-                .with_label_values(&["get_router_lock"])
+                .with_label_values(&["to_stream_event"])
                 .observe(sw.lap().as_secs_f64());
             let kv_count = kvs.len();
             let total_size = kvs.size();
@@ -442,7 +424,7 @@ where
                 self.on_pause(&task_name);
             }
             TaskOp::ResumeTask(task) => {
-                self.load_task(task);
+                self.on_resume(task);
             }
         }
     }
@@ -497,107 +479,110 @@ where
 
     /// Load the task into memory: this would make the endpint start to observe.
     fn load_task(&self, task: StreamTask) {
-        if let Some(cli) = self.meta_client.as_ref() {
-            let cli = cli.clone();
-            let init = self.make_initial_loader();
-            let range_router = self.range_router.clone();
+        let cli = self.meta_client.clone();
+        let init = self.make_initial_loader();
+        let range_router = self.range_router.clone();
 
-            info!(
-                "register backup stream task";
-                "task" => ?task,
-            );
+        info!(
+            "register backup stream task";
+            "task" => ?task,
+        );
 
-            let task_name = task.info.get_name().to_owned();
-            // clean the safepoint created at pause(if there is)
-            self.pool.spawn(
-                self.deregister_guard_service_safepoint(task.info.get_name())
-                    .map(|r| r.map_err(|err| err.report("removing safe point for pausing"))),
-            );
-            self.pool.block_on(async move {
-                let task_name = task.info.get_name();
-                match cli.ranges_of_task(task_name).await {
-                    Ok(ranges) => {
-                        info!(
-                            "register backup stream ranges";
-                            "task" => ?task,
-                            "ranges-count" => ranges.inner.len(),
-                        );
-                        let ranges = ranges
-                            .inner
-                            .into_iter()
-                            .map(|(start_key, end_key)| {
-                                (utils::wrap_key(start_key), utils::wrap_key(end_key))
-                            })
-                            .collect::<Vec<_>>();
-                        if let Err(err) = range_router
-                            .register_task(task.clone(), ranges.clone())
-                            .await
-                        {
-                            err.report(format!(
-                                "failed to register backup stream task {}",
-                                task.info.name
-                            ));
-                            return;
-                        }
-
-                        for (start_key, end_key) in ranges {
-                            let init = init.clone();
-
-                            self.observe_and_scan_region(init, &task, start_key, end_key)
-                                .await
-                                .unwrap();
-                        }
-                        info!(
-                            "finish register backup stream ranges";
-                            "task" => ?task,
-                        );
-                    }
-                    Err(e) => {
-                        e.report(format!(
-                            "failed to register backup stream task {} to router: ranges not found",
-                            task.info.get_name()
+        let task_name = task.info.get_name().to_owned();
+        // clean the safepoint created at pause(if there is)
+        self.pool.spawn(
+            self.pd_client
+                .update_service_safe_point(
+                    self.pause_guard_id_for_task(task.info.get_name()),
+                    TimeStamp::zero(),
+                    Duration::new(0, 0),
+                )
+                .map(|r| {
+                    r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
+                }),
+        );
+        self.pool.block_on(async move {
+            let task_name = task.info.get_name();
+            match cli.ranges_of_task(task_name).await {
+                Ok(ranges) => {
+                    info!(
+                        "register backup stream ranges";
+                        "task" => ?task,
+                        "ranges-count" => ranges.inner.len(),
+                    );
+                    let ranges = ranges
+                        .inner
+                        .into_iter()
+                        .map(|(start_key, end_key)| {
+                            (utils::wrap_key(start_key), utils::wrap_key(end_key))
+                        })
+                        .collect::<Vec<_>>();
+                    if let Err(err) = range_router
+                        .register_task(task.clone(), ranges.clone())
+                        .await
+                    {
+                        err.report(format!(
+                            "failed to register backup stream task {}",
+                            task.info.name
                         ));
+                        return;
                     }
+
+                    for (start_key, end_key) in ranges {
+                        let init = init.clone();
+
+                        self.observe_and_scan_region(init, &task, start_key, end_key)
+                            .await
+                            .unwrap();
+                    }
+                    info!(
+                        "finish register backup stream ranges";
+                        "task" => ?task,
+                    );
                 }
-            });
-            metrics::update_task_status(TaskStatus::Running, &task_name);
-        };
+                Err(e) => {
+                    e.report(format!(
+                        "failed to register backup stream task {} to router: ranges not found",
+                        task.info.get_name()
+                    ));
+                }
+            }
+        });
+        metrics::update_task_status(TaskStatus::Running, &task_name);
     }
 
-    fn register_guard_service_safepoint(
-        &self,
-        task_name: &str,
-        // hint for make optimized safepoint when we cannot get that from `SubscriptionTracker`
-        start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<()>> + Send + 'static {
-        self.pd_client
-            .update_service_safe_point(
-                format!("{}-{}-guard", task_name, self.store_id),
-                self.subs.safepoint().max(start_ts),
-                ReadableDuration::hours(24).0,
-            )
-            .map(|r| r.map_err(|err| err.into()))
+    fn pause_guard_id_for_task(&self, task: &str) -> String {
+        format!("{}-{}-pause-guard", task, self.store_id)
     }
 
-    fn deregister_guard_service_safepoint(
-        &self,
-        task_name: &str,
-    ) -> impl Future<Output = Result<()>> + Send + 'static {
-        self.pd_client
-            .update_service_safe_point(
-                format!("{}-{}-guard", task_name, self.store_id),
-                TimeStamp::zero(),
-                Duration::new(0, 0),
-            )
-            .map(|r| r.map_err(|err| err.into()))
+    fn pause_guard_duration(&self) -> Duration {
+        ReadableDuration::hours(24).0
     }
 
-    pub fn on_pause(&self, task_name: &str) {
-        let task = self.unload_task(task_name);
-        if let Some(t) = task {
-            info!("pause backup stream task."; "task" => %t.name);
+    pub fn on_pause(&self, task: &str) {
+        self.unload_task(task);
+
+        metrics::update_task_status(TaskStatus::Paused, task);
+    }
+
+    pub fn on_resume(&self, task_name: String) {
+        let task = self.pool.block_on(self.meta_client.get_task(&task_name));
+        match task {
+            Ok(Some(stream_task)) => self.load_task(stream_task),
+            Ok(None) => {
+                info!("backup stream task not existed"; "task" => %task_name);
+            }
+            Err(err) => {
+                err.report(format!("failed to resume backup stream task {}", task_name));
+                let sched = self.scheduler.clone();
+                tokio::task::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    sched
+                        .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
+                        .unwrap();
+                });
+            }
         }
-        metrics::update_task_status(TaskStatus::Paused, task_name);
     }
 
     pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
@@ -632,6 +617,7 @@ where
             .await
             .map_err(|err| Error::from(err).report("failed to get tso from pd"))
             .unwrap_or_default();
+        cm.update_max_ts(pd_tso);
         let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
         let tso = Ord::min(pd_tso, min_ts);
         let ts = resolvers.resolve_with(tso);
@@ -652,6 +638,8 @@ where
         // NOTE: Maybe push down the resolve step to the router?
         //       Or if there are too many duplicated `Flush` command, we may do some useless works.
         let new_rts = Self::try_resolve(&concurrency_manager, pd_cli.clone(), resolvers).await;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("delay_on_flush");
         metrics::FLUSH_DURATION
             .with_label_values(&["resolve_by_now"])
             .observe(start.saturating_elapsed_secs());
@@ -664,7 +652,11 @@ where
                 // We cannot advance the resolved ts for now.
                 return;
             }
-            concurrency_manager.update_max_ts(TimeStamp::new(rts));
+            let in_flight = crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.load(Ordering::SeqCst);
+            if in_flight > 0 {
+                warn!("inflight leader detected, skipping advancing resolved ts"; "in_flight" => %in_flight);
+                return;
+            }
             if let Err(err) = pd_cli
                 .update_service_safe_point(
                     format!("backup-stream-{}-{}", task, store_id),
@@ -694,11 +686,7 @@ where
 
     pub fn on_force_flush(&self, task: String, store_id: u64) {
         let router = self.range_router.clone();
-        let cli = self
-            .meta_client
-            .as_ref()
-            .expect("on_flush: executed from an endpoint without cli")
-            .clone();
+        let cli = self.meta_client.clone();
         let pd_cli = self.pd_client.clone();
         let resolvers = self.subs.clone();
         let cm = self.concurrency_manager.clone();
@@ -712,11 +700,7 @@ where
 
     pub fn on_flush(&self, task: String, store_id: u64) {
         let router = self.range_router.clone();
-        let cli = self
-            .meta_client
-            .as_ref()
-            .expect("on_flush: executed from an endpoint without cli")
-            .clone();
+        let cli = self.meta_client.clone();
         let pd_cli = self.pd_client.clone();
         let resolvers = self.subs.clone();
         let cm = self.concurrency_manager.clone();
@@ -745,7 +729,7 @@ where
     ) -> Result<()> {
         let init = self.make_initial_loader();
 
-        let meta_cli = self.meta_client.as_ref().unwrap().clone();
+        let meta_cli = self.meta_client.clone();
         let last_checkpoint = TimeStamp::new(
             self.pool
                 .block_on(meta_cli.global_progress_of_task(&task))?,
@@ -802,10 +786,13 @@ where
                 region,
                 needs_initial_scanning,
             } => {
+                #[cfg(feature = "failpoints")]
+                fail::fail_point!("delay_on_start_observe");
                 self.start_observe(region, needs_initial_scanning);
                 metrics::INITIAL_SCAN_REASON
                     .with_label_values(&["leader-changed"])
                     .inc();
+                crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_sub(1, Ordering::SeqCst);
             }
             ObserveOp::Stop { ref region } => {
                 self.subs.deregister_region(region, |_, _| true);
@@ -970,7 +957,7 @@ where
     }
 
     pub fn run_task(&self, task: Task) {
-        debug!("run backup stream task"; "task" => ?task);
+        debug!("run backup stream task"; "task" => ?task, "store_id" => %self.store_id);
         let now = Instant::now_coarse();
         let label = task.label();
         defer! {
@@ -1066,7 +1053,7 @@ pub enum TaskOp {
     AddTask(StreamTask),
     RemoveTask(String),
     PauseTask(String),
-    ResumeTask(StreamTask),
+    ResumeTask(String),
 }
 
 #[derive(Debug)]

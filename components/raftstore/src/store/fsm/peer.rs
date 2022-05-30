@@ -92,8 +92,8 @@ use crate::{
             RegionTask, SplitCheckTask,
         },
         AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
-        PeerTick, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, SignificantMsg, SnapKey,
-        StoreMsg,
+        PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult,
+        SignificantMsg, SnapKey, StoreMsg,
     },
     Error, Result,
 };
@@ -841,6 +841,8 @@ where
         } else {
             warn!(
                 "Unsafe recovery, no need to demote failed voters";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.fsm.peer_id(),
                 "region" => ?self.region(),
             );
         }
@@ -893,12 +895,32 @@ where
     }
 
     fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
+        if self.fsm.peer.pending_remove || self.fsm.stopped {
+            return;
+        }
         let mut self_report = pdpb::PeerReport::default();
         self_report.set_raft_state(self.fsm.peer.get_store().raft_state().clone());
         let mut region_local_state = RegionLocalState::default();
         region_local_state.set_region(self.region().clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
+        match self.fsm.peer.get_store().entries(
+            self.fsm.peer.raft_group.store().commit_index() + 1,
+            self.fsm.peer.get_store().last_index() + 1,
+            NO_LIMIT,
+            GetEntriesContext::empty(false),
+        ) {
+            Ok(entries) => {
+                for entry in entries {
+                    let ctx = ProposalContext::from_bytes(&entry.context);
+                    if ctx.contains(ProposalContext::COMMIT_MERGE) {
+                        self_report.set_has_commit_merge(true);
+                        break;
+                    }
+                }
+            }
+            Err(e) => panic!("Unsafe recovery, fail to get uncommitted entries, {:?}", e),
+        }
         syncer.report_for_self(self_report);
     }
 
@@ -1999,15 +2021,17 @@ where
             }) => {
                 if self.fsm.peer.raft_group.raft.raft_log.applied >= *target_index {
                     if *demote_after_exit {
+                        let syncer_clone = syncer.clone();
+                        let failed_voters_clone = failed_voters.clone();
+                        self.fsm.peer.unsafe_recovery_state = None;
                         if !self.fsm.peer.is_force_leader() {
                             error!(
                                 "Unsafe recovery, lost forced leadership after exiting joint state";
                                 "region_id" => self.region().get_id(),
+                                "peer_id" => self.fsm.peer_id(),
                             );
                             return;
                         }
-                        let syncer_clone = syncer.clone();
-                        let failed_voters_clone = failed_voters.clone();
                         self.unsafe_recovery_demote_failed_voters(
                             syncer_clone,
                             failed_voters_clone,
@@ -2016,7 +2040,8 @@ where
                         if self.fsm.peer.in_joint_state() {
                             info!(
                                 "Unsafe recovery, exiting joint state";
-                                "region_id" => self.region().get_id()
+                                "region_id" => self.region().get_id(),
+                                "peer_id" => self.fsm.peer_id(),
                             );
                             if self.fsm.peer.is_force_leader() {
                                 self.propose_raft_command_internal(
@@ -2035,6 +2060,7 @@ where
                                 error!(
                                     "Unsafe recovery, lost forced leadership while trying to exit joint state";
                                     "region_id" => self.region().get_id(),
+                                    "peer_id" => self.fsm.peer_id(),
                                 );
                             }
                         }
@@ -4163,8 +4189,7 @@ where
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
         self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff().0;
-        self.fsm.peer.region_buckets = None;
-        self.fsm.peer.last_region_buckets = None;
+        self.fsm.peer.reset_region_buckets();
         if self.fsm.peer.is_leader() {
             info!(
                 "notify pd with merge";
@@ -5221,6 +5246,12 @@ where
             let bucket_version: u64 = if current_version_term == term {
                 current_version + 1
             } else {
+                if term > u32::MAX.into() {
+                    error!(
+                        "unexpected term {} more than u32::MAX. Bucket version will be backward.",
+                        term
+                    );
+                }
                 term << 32
             };
             bucket_version
@@ -5254,19 +5285,32 @@ where
             return;
         }
 
-        let current_version = self
+        let mut current_version = self
             .fsm
             .peer
             .region_buckets
             .as_ref()
             .map(|b| b.meta.version)
             .unwrap_or_default();
+        if current_version == 0 {
+            current_version = self
+                .fsm
+                .peer
+                .last_region_buckets
+                .as_ref()
+                .map(|b| b.meta.version)
+                .unwrap_or_default();
+        }
         let mut region_buckets: BucketStat;
         if let Some(bucket_ranges) = bucket_ranges {
             assert_eq!(buckets.len(), bucket_ranges.len());
             let mut i = 0;
             region_buckets = self.fsm.peer.region_buckets.clone().unwrap();
             let mut meta = (*region_buckets.meta).clone();
+            if !buckets.is_empty() {
+                meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
+            }
+            meta.region_epoch = region_epoch;
             for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
                 while i < meta.keys.len() && meta.keys[i] != bucket_range.0 {
                     i += 1;
@@ -5305,8 +5349,6 @@ where
                 }
                 i += 1;
             }
-            meta.region_epoch = region_epoch;
-            meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
             region_buckets.meta = Arc::new(meta);
         } else {
             debug!(
