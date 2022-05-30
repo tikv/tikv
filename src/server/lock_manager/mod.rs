@@ -107,17 +107,16 @@ impl LockManager {
     }
 
     /// Starts `WaiterManager` and `Detector`.
-    pub fn start<S, P>(
+    pub fn start<S>(
         &mut self,
         store_id: u64,
-        pd_client: Arc<P>,
+        pd_client: Arc<dyn PdClient>,
         resolver: S,
         security_mgr: Arc<SecurityManager>,
         cfg: &Config,
     ) -> Result<()>
     where
         S: StoreAddrResolver + 'static,
-        P: PdClient + 'static,
     {
         self.start_waiter_manager(cfg)?;
         self.start_deadlock_detector(store_id, pd_client, resolver, security_mgr, cfg)?;
@@ -157,17 +156,16 @@ impl LockManager {
         }
     }
 
-    fn start_deadlock_detector<S, P>(
+    fn start_deadlock_detector<S>(
         &mut self,
         store_id: u64,
-        pd_client: Arc<P>,
+        pd_client: Arc<dyn PdClient>,
         resolver: S,
         security_mgr: Arc<SecurityManager>,
         cfg: &Config,
     ) -> Result<()>
     where
         S: StoreAddrResolver + 'static,
-        P: PdClient + 'static,
     {
         let detector_runner = Detector::new(
             store_id,

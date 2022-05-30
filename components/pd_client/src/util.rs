@@ -269,10 +269,10 @@ impl Client {
         );
     }
 
-    pub fn handle_region_heartbeat_response<F>(self: &Arc<Self>, f: F) -> PdFuture<()>
-    where
-        F: Fn(RegionHeartbeatResponse) + Send + 'static,
-    {
+    pub fn handle_region_heartbeat_response(
+        self: &Arc<Self>,
+        f: Box<dyn Fn(RegionHeartbeatResponse) + Send + 'static>,
+    ) -> PdFuture<()> {
         let recv = HeartbeatReceiver {
             receiver: None,
             inner: self.clone(),

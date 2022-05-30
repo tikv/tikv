@@ -30,22 +30,14 @@ mod status_server;
 mod tikv_server;
 mod transport;
 
-pub use tikv_server::run_tikv;
+pub use tikv_server::*;
 
 #[cfg(test)]
 mod tests {
     use tikv::config::TiKvConfig;
 
-    use crate::tikv_server::run_tikv;
-
     #[test]
     fn test_run() {
         println!("run")
-    }
-
-    #[test]
-    fn test_run_tikv() {
-        let config = TiKvConfig::default();
-        run_tikv(config);
     }
 }

@@ -258,12 +258,9 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<T>
-where
-    T: PdClient + 'static,
-{
+pub struct Runner {
     store_id: u64,
-    pd_client: Arc<T>,
+    pd_client: Arc<dyn PdClient>,
     router: RaftRouter,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -311,22 +308,19 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
-impl<T> Runner<T>
-where
-    T: PdClient + 'static,
-{
+impl Runner {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
         store_id: u64,
-        pd_client: Arc<T>,
+        pd_client: Arc<dyn PdClient>,
         router: RaftRouter,
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: Duration,
         concurrency_manager: ConcurrencyManager,
         remote: Remote<yatp::task::future::TaskCell>,
         kv: kvengine::Engine,
-    ) -> Runner<T> {
+    ) -> Runner {
         // TODO(x): support stats monitor.
         Runner {
             store_id,
@@ -661,7 +655,7 @@ where
         let store_id = self.store_id;
 
         let fut = self.pd_client
-            .handle_region_heartbeat_response(self.store_id, move |mut resp| {
+            .handle_region_heartbeat_response(self.store_id, Box::new(move |mut resp: pdpb::RegionHeartbeatResponse| {
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
                 let peer = resp.take_target_peer();
@@ -738,7 +732,7 @@ where
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
-            });
+            }));
         let f = async move {
             match fut.await {
                 Ok(_) => {
@@ -895,10 +889,7 @@ where
     }
 }
 
-impl<T> Runnable for Runner<T>
-where
-    T: PdClient + 'static,
-{
+impl Runnable for Runner {
     type Task = Task;
 
     fn run(&mut self, task: Task) {

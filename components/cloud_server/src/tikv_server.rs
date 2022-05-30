@@ -80,50 +80,6 @@ use crate::{
     status_server::StatusServer,
 };
 
-/// Run a TiKV server. Returns when the server is shutdown by the user, in which
-/// case the server will be properly stopped.
-pub fn run_tikv(config: TiKvConfig) {
-    // Sets the global logger ASAP.
-    // It is okay to use the config w/o `validate()`,
-    // because `initial_logger()` handles various conditions.
-    initial_logger(&config);
-
-    // Print version information.
-    let build_timestamp = option_env!("TIKV_BUILD_TIME");
-    tikv::log_tikv_info(build_timestamp);
-
-    // Print resource quota.
-    SysQuota::log_quota();
-    CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());
-
-    // Do some prepare works before start.
-    pre_start();
-
-    let _m = Monitor::default();
-
-    let mut tikv = TiKVServer::new(config);
-    info!("created tikv server");
-
-    // Must be called after `TiKVServer::init`.
-    let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
-    let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
-    register_memory_usage_high_water(high_water);
-
-    tikv.check_conflict_addr();
-    tikv.init_fs();
-    tikv.init_yatp();
-    tikv.init_encryption();
-    // TODO(x) io limiter and metrics flusher
-    tikv.init_engines();
-    let server_config = tikv.init_servers::<ApiV1>();
-    tikv.register_services();
-    tikv.run_server(server_config);
-    tikv.run_status_server();
-
-    signal_handler::wait_for_signal(Some(tikv.raw_engines.clone().into()));
-    tikv.stop();
-}
-
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
@@ -131,11 +87,11 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
-struct TiKVServer {
+pub struct TiKVServer {
     config: TiKvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
-    pd_client: Arc<RpcClient>,
+    pd_client: Arc<dyn PdClient>,
     system: Option<RaftBatchSystem>,
     router: RaftRouter,
     resolver: resolve::PdStoreAddrResolver,
@@ -162,11 +118,35 @@ struct TiKVEngines {
 struct Servers {
     lock_mgr: LockManager,
     server: Server<RaftRouter, resolve::PdStoreAddrResolver>,
-    node: Node<RpcClient>,
+    node: Node,
 }
 
 impl TiKVServer {
-    fn new(mut config: TiKvConfig) -> TiKVServer {
+    pub fn new(mut config: TiKvConfig) -> TiKVServer {
+        let (security_mgr, env, pd) = Self::prepare(&mut config);
+        Self::setup(config, security_mgr, env, pd)
+    }
+
+    pub fn prepare(
+        config: &mut TiKvConfig,
+    ) -> (Arc<SecurityManager>, Arc<Environment>, Arc<dyn PdClient>) {
+        // Sets the global logger ASAP.
+        // It is okay to use the config w/o `validate()`,
+        // because `initial_logger()` handles various conditions.
+        initial_logger(config);
+
+        // Print version information.
+        let build_timestamp = option_env!("TIKV_BUILD_TIME");
+        tikv::log_tikv_info(build_timestamp);
+
+        // Print resource quota.
+        SysQuota::log_quota();
+        CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());
+
+        // Do some prepare works before start.
+        pre_start();
+
+        let _m = Monitor::default();
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -182,8 +162,16 @@ impl TiKVServer {
                 .build(),
         );
         let pd_client =
-            Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
+            TiKVServer::connect_to_pd_cluster(config, env.clone(), Arc::clone(&security_mgr));
+        (security_mgr, env, pd_client)
+    }
 
+    pub fn setup(
+        mut config: TiKvConfig,
+        security_mgr: Arc<SecurityManager>,
+        env: Arc<Environment>,
+        pd_client: Arc<dyn PdClient>,
+    ) -> TiKVServer {
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
         let config = cfg_controller.get_current();
@@ -218,7 +206,7 @@ impl TiKVServer {
             config.quota.foreground_read_bandwidth,
             config.quota.max_delay_duration,
         ));
-
+        info!("created tikv server");
         TiKVServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -241,6 +229,23 @@ impl TiKVServer {
             background_worker,
             quota_limiter,
         }
+    }
+
+    pub fn run(&mut self) {
+        let memory_limit = self.config.memory_usage_limit.unwrap().0;
+        let high_water = (self.config.memory_usage_high_water * memory_limit as f64) as u64;
+        register_memory_usage_high_water(high_water);
+
+        self.check_conflict_addr();
+        self.init_fs();
+        self.init_yatp();
+        self.init_encryption();
+        // TODO(x) io limiter and metrics flusher
+        self.init_engines();
+        let server_config = self.init_servers::<ApiV1>();
+        self.register_services();
+        self.run_server(server_config);
+        self.run_status_server();
     }
 
     /// Initialize and check the config
@@ -691,7 +696,7 @@ impl TiKVServer {
         }
     }
 
-    fn stop(self) {
+    pub fn stop(self) {
         tikv_util::thread_group::mark_shutdown();
         let mut servers = self.servers.unwrap();
         servers
@@ -706,10 +711,18 @@ impl TiKVServer {
 
         self.to_stop.into_iter().for_each(|s| s.stop());
     }
+
+    pub fn get_kv_engine(&self) -> kvengine::Engine {
+        self.raw_engines.kv.clone()
+    }
+
+    pub fn get_raft_engine(&self) -> rfengine::RfEngine {
+        self.raw_engines.raft.clone()
+    }
 }
 
 impl TiKVServer {
-    fn init_raw_engines(pd: Arc<pd_client::RpcClient>, conf: &TiKvConfig) -> Engines {
+    fn init_raw_engines(pd: Arc<dyn pd_client::PdClient>, conf: &TiKvConfig) -> Engines {
         // Create raft engine.
         let raft_db_path = Path::new(&conf.raft_store.raftdb_path);
         let kv_engine_path = PathBuf::from(&conf.storage.data_dir).join(Path::new("db"));
@@ -796,7 +809,7 @@ fn convert_compression_type(tp: DBCompressionType) -> u8 {
 }
 
 struct PdIDAllocator {
-    pd: Arc<pd_client::RpcClient>,
+    pd: Arc<dyn pd_client::PdClient>,
 }
 
 impl kvengine::IDAllocator for PdIDAllocator {

@@ -88,9 +88,9 @@ fn test_pd_client_deadlock() {
             tx.send(()).unwrap();
         });
         // Only allow to reconnect once for a func.
-        client.handle_reconnect(move || {
+        client.handle_reconnect(Box::new(move || {
             fail::cfg(pd_client_reconnect_fp, "return").unwrap();
-        });
+        }));
         // Remove the fail point to let the PD client thread go on.
         fail::remove(pd_client_reconnect_fp);
 
