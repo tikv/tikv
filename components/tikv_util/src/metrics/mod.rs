@@ -150,7 +150,7 @@ mod tests {
         assert!(!full_metrics.is_empty());
         check_duplicate(&full_metrics);
 
-        let filterd_metrics = dump(true);
+        let filtered_metrics = dump(true);
         check_duplicate(&full_metrics);
         assert!(full_metrics.len() > filtered_metrics.len());
 
@@ -165,7 +165,7 @@ mod tests {
 
         let new_filtered_metrics = dump(true);
         check_duplicate(&new_filtered_metrics);
-        assert!(new_filtered_metrics.len() > filterd_metrics.len());
+        assert!(new_filtered_metrics.len() > filtered_metrics.len());
         assert!(new_full_metrics.len() > new_filtered_metrics.len());
     }
 }
