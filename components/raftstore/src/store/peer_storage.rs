@@ -471,6 +471,10 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
     // (snapshot_raft_state), and set snapshot_raft_state.last_index = snapshot_index.
     // after restart, we need check last_index.
     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
+        // There is a gap between existing raft logs and snapshot. Clean them up.
+        engines
+            .raft
+            .clean(region_id, 0 /*first_index*/, &raft_state, raft_wb)?;
         raft_wb.put_raft_state(region_id, &snapshot_raft_state)?;
     }
     Ok(())

@@ -451,7 +451,11 @@ impl ServerCluster {
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
         raft_store
-            .validate(cfg.coprocessor.region_split_size)
+            .validate(
+                cfg.coprocessor.region_split_size,
+                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.region_bucket_size,
+            )
             .unwrap();
         let health_service = HealthService::default();
         let mut node = Node::new(

@@ -523,11 +523,11 @@ where
             .report_min_resolved_ts_interval
             .div_duration_f64(tick_interval) as u64;
 
-        let (tx, rx) = mpsc::channel();
-        self.timer = Some(tx);
+        let (timer_tx, timer_rx) = mpsc::channel();
+        self.timer = Some(timer_tx);
 
-        let (sender, receiver) = mpsc::channel();
-        self.read_stats_sender = Some(sender);
+        let (read_stats_sender, read_stats_receiver) = mpsc::channel();
+        self.read_stats_sender = Some(read_stats_sender);
 
         let scheduler = self.scheduler.clone();
         let props = tikv_util::thread_group::current_properties();
@@ -541,14 +541,16 @@ where
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(tick_interval) {
+                while let Err(mpsc::RecvTimeoutError::Timeout) =
+                    timer_rx.recv_timeout(tick_interval)
+                {
                     if is_enable_tick(timer_cnt, collect_store_infos_interval) {
                         StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
                     }
                     if is_enable_tick(timer_cnt, load_base_split_check_interval) {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
-                            &receiver,
+                            &read_stats_receiver,
                             &scheduler,
                         );
                     }
@@ -655,7 +657,7 @@ where
         }
     }
 
-    pub fn get_sender(&self) -> &Option<Sender<ReadStats>> {
+    pub fn get_read_stats_sender(&self) -> &Option<Sender<ReadStats>> {
         &self.read_stats_sender
     }
 }
@@ -1504,7 +1506,7 @@ where
             self.merge_buckets(region_buckets);
         }
         if !read_stats.region_infos.is_empty() {
-            if let Some(sender) = self.stats_monitor.get_sender() {
+            if let Some(sender) = self.stats_monitor.get_read_stats_sender() {
                 if sender.send(read_stats).is_err() {
                     warn!("send read_stats failed, are we shutting down?")
                 }
