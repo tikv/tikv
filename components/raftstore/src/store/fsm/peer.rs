@@ -92,8 +92,8 @@ use crate::{
             RegionTask, SplitCheckTask,
         },
         AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
-        PeerTick, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, SignificantMsg, SnapKey,
-        StoreMsg,
+        PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult,
+        SignificantMsg, SnapKey, StoreMsg,
     },
     Error, Result,
 };
@@ -895,12 +895,32 @@ where
     }
 
     fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
+        if self.fsm.peer.pending_remove || self.fsm.stopped {
+            return;
+        }
         let mut self_report = pdpb::PeerReport::default();
         self_report.set_raft_state(self.fsm.peer.get_store().raft_state().clone());
         let mut region_local_state = RegionLocalState::default();
         region_local_state.set_region(self.region().clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
+        match self.fsm.peer.get_store().entries(
+            self.fsm.peer.raft_group.store().commit_index() + 1,
+            self.fsm.peer.get_store().last_index() + 1,
+            NO_LIMIT,
+            GetEntriesContext::empty(false),
+        ) {
+            Ok(entries) => {
+                for entry in entries {
+                    let ctx = ProposalContext::from_bytes(&entry.context);
+                    if ctx.contains(ProposalContext::COMMIT_MERGE) {
+                        self_report.set_has_commit_merge(true);
+                        break;
+                    }
+                }
+            }
+            Err(e) => panic!("Unsafe recovery, fail to get uncommitted entries, {:?}", e),
+        }
         syncer.report_for_self(self_report);
     }
 
