@@ -136,6 +136,7 @@ mod tests {
             exponential_buckets(0.01, 2.0, 20).unwrap()
         )
         .unwrap();
+        let gauge = register_gauge!("test_gauge", "test gauge").unwrap();
 
         fn check_duplicate(s: &str) {
             let mut lines = HashSet::new();
@@ -150,14 +151,8 @@ mod tests {
         check_duplicate(&full_metrics);
 
         let filterd_metrics = dump(true);
-        // there is no data, result should be empty
-        assert!(filterd_metrics.is_empty());
-
-        // gauge should not be filtered
-        let gauge = register_gauge!("test_gauge", "test gauge").unwrap();
-        let filterd_metrics = dump(true);
-        // there is no data, result should be empty
-        assert!(!filterd_metrics.is_empty());
+        check_duplicate(&full_metrics);
+        assert!(full_metrics.len() > filtered_metrics.len());
 
         counter_vec.with_label_values(&["test"]).inc();
         histogram.with_label_values(&["test"]).observe(1.0);
