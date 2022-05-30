@@ -614,6 +614,7 @@ fn test_cdc_rawkv_scan() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
 
     suite.set_tso(10);
+    suite.flush_causal_timestamp_for_region(1);
     let (k1, v1) = (b"rkey1".to_vec(), b"value1".to_vec());
     suite.must_kv_put(1, k1, v1);
 
@@ -621,6 +622,7 @@ fn test_cdc_rawkv_scan() {
     suite.must_kv_put(1, k2, v2);
 
     suite.set_tso(1000);
+    suite.flush_causal_timestamp_for_region(1);
     let (k3, v3) = (b"rkey3".to_vec(), b"value3".to_vec());
     suite.must_kv_put(1, k3.clone(), v3.clone());
 
