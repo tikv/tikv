@@ -92,11 +92,10 @@ mod linux {
             let path = "/proc/diskstats";
             let lines = read_to_string(&path).map_err(|e| format!("open({}): {}", path, e))?;
             for line in lines.split('\n').map(|x| x.trim()) {
-                let stat = procfs::DiskStat::from_line(line)
-                    .map_err(|e| {
-                        warn!("parse disk stats failed"; "data" => lines);
-                        format!("parse disk stat failed, line: '{}', err: {}", line, e)
-                    })?;
+                let stat = procfs::DiskStat::from_line(line).map_err(|e| {
+                    warn!("parse disk stats failed"; "data" => &lines);
+                    format!("parse disk stat failed, line: '{}', err: {}", line, e)
+                })?;
                 if stat.major as u32 == dev.0 && stat.minor as u32 == dev.1 {
                     return Ok(Some(stat.into()));
                 }
