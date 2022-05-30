@@ -26,7 +26,11 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
-use backup_stream::{config::BackupStreamConfigManager, observer::BackupStreamObserver};
+use backup_stream::{
+    config::BackupStreamConfigManager,
+    metadata::{ConnectionConfig, LazyEtcdClient},
+    observer::BackupStreamObserver,
+};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -863,9 +867,17 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
             );
 
-            let backup_stream_endpoint = backup_stream::Endpoint::new::<String>(
+            let etcd_cli = LazyEtcdClient::new(
+                self.config.pd.endpoints.as_slice(),
+                ConnectionConfig {
+                    keep_alive_interval: self.config.server.grpc_keepalive_time.0,
+                    keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
+                    tls: self.security_mgr.tonic_tls_config(),
+                },
+            );
+            let backup_stream_endpoint = backup_stream::Endpoint::new(
                 node.id(),
-                &self.config.pd.endpoints,
+                etcd_cli,
                 self.config.backup_stream.clone(),
                 backup_stream_scheduler,
                 backup_stream_ob,
