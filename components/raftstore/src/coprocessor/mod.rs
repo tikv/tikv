@@ -178,9 +178,18 @@ pub trait RoleObserver: Coprocessor {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RegionChangeReason {
+    ChangePeer,
+    Split,
+    PrepareMerge,
+    CommitMerge,
+    RollbackMerge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RegionChangeEvent {
     Create,
-    Update,
+    Update(RegionChangeReason),
     Destroy,
     UpdateBuckets(usize),
 }
