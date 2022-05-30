@@ -332,19 +332,44 @@ where
         scheduler: Scheduler<Task>,
         revision: i64,
     ) -> Result<()> {
-        let mut watcher = meta_client.events_from(revision).await?;
+        let mut revision_new = revision;
         loop {
-            if let Some(event) = watcher.stream.next().await {
-                info!("backup stream watch event from etcd"; "event" => ?event);
-                match event {
-                    MetadataEvent::AddTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
+            let watcher = meta_client.events_from(revision_new).await;
+            let mut watcher = match watcher {
+                Ok(w) => w,
+                Err(e) => {
+                    e.report("failed to start watch pause");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+
+            loop {
+                if let Some(event) = watcher.stream.next().await {
+                    info!("backup stream watch event from etcd"; "event" => ?event);
+
+                    let revision = meta_client.get_reversion().await;
+                    if let Ok(r) = revision {
+                        revision_new = r;
                     }
-                    MetadataEvent::RemoveTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
+
+                    match event {
+                        MetadataEvent::AddTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
+                        }
+                        MetadataEvent::RemoveTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
+                        }
+                        MetadataEvent::Error { err } => {
+                            err.report("metadata client watch meet error");
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            break;
+                        }
+                        _ => panic!("BUG: invalid event {:?}", event),
                     }
-                    MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
-                    _ => panic!("BUG: invalid event {:?}", event),
+                } else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    break;
                 }
             }
         }
@@ -355,20 +380,44 @@ where
         scheduler: Scheduler<Task>,
         revision: i64,
     ) -> Result<()> {
-        let mut watcher = meta_client.events_from_pause(revision).await?;
+        let mut revision_new = revision;
+
         loop {
-            if let Some(event) = watcher.stream.next().await {
-                info!("backup stream watch event from etcd"; "event" => ?event);
-                match event {
-                    MetadataEvent::PauseTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::PauseTask(task)))?;
+            let watcher = meta_client.events_from_pause(revision_new).await;
+            let mut watcher = match watcher {
+                Ok(w) => w,
+                Err(e) => {
+                    e.report("failed to start watch pause");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
+            };
+
+            loop {
+                if let Some(event) = watcher.stream.next().await {
+                    info!("backup stream watch event from etcd"; "event" => ?event);
+                    let revision = meta_client.get_reversion().await;
+                    if let Ok(r) = revision {
+                        revision_new = r;
                     }
-                    MetadataEvent::ResumeTask { task } => {
-                        let task = meta_client.get_task(&task).await?;
-                        scheduler.schedule(Task::WatchTask(TaskOp::ResumeTask(task)))?;
+
+                    match event {
+                        MetadataEvent::PauseTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::PauseTask(task)))?;
+                        }
+                        MetadataEvent::ResumeTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::ResumeTask(task)))?;
+                        }
+                        MetadataEvent::Error { err } => {
+                            err.report("metadata client watch meet error");
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            break;
+                        }
+                        _ => panic!("BUG: invalid event {:?}", event),
                     }
-                    MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
-                    _ => panic!("BUG: invalid event {:?}", event),
+                } else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    break;
                 }
             }
         }
@@ -455,7 +504,7 @@ where
                 self.on_pause(&task_name);
             }
             TaskOp::ResumeTask(task) => {
-                self.load_task(task);
+                self.on_resume(task);
             }
         }
     }
@@ -596,6 +645,28 @@ where
         self.unload_task(task);
 
         metrics::update_task_status(TaskStatus::Paused, task);
+    }
+
+    pub fn on_resume(&self, task_name: String) {
+        if let Some(cli) = self.meta_client.as_ref() {
+            let task = self.pool.block_on(cli.get_task(&task_name));
+            match task {
+                Ok(Some(stream_task)) => self.load_task(stream_task),
+                Ok(None) => {
+                    info!("backup stream task not existed"; "task" => %task_name);
+                }
+                Err(err) => {
+                    err.report(format!("failed to resume backup stream task {}", task_name));
+                    let sched = self.scheduler.clone();
+                    tokio::task::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        sched
+                            .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
+                            .unwrap();
+                    });
+                }
+            }
+        }
     }
 
     pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
@@ -1074,7 +1145,7 @@ pub enum TaskOp {
     AddTask(StreamTask),
     RemoveTask(String),
     PauseTask(String),
-    ResumeTask(StreamTask),
+    ResumeTask(String),
 }
 
 #[derive(Debug)]
