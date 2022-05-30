@@ -139,7 +139,7 @@ mod tests {
 
         fn check_duplicate(s: &str) {
             let mut lines = HashSet::new();
-            for l in s.lines().into_iter() {
+            for l in s.lines() {
                 assert!(lines.insert(l));
             }
         }
