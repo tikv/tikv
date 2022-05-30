@@ -38,19 +38,17 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T, RR>
+struct Runner<RR>
 where
-    T: PdClient,
     RR: RaftStoreRouter,
 {
-    pd_client: Arc<T>,
+    pd_client: Arc<dyn PdClient>,
     store_addrs: HashMap<u64, StoreAddr>,
     router: RR,
 }
 
-impl<T, RR> Runner<T, RR>
+impl<RR> Runner<RR>
 where
-    T: PdClient,
     RR: RaftStoreRouter,
 {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
@@ -112,9 +110,8 @@ where
     }
 }
 
-impl<T, RR> Runnable for Runner<T, RR>
+impl<RR> Runnable for Runner<RR>
 where
-    T: PdClient,
     RR: RaftStoreRouter,
 {
     type Task = Task;
@@ -138,13 +135,12 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T, RR: 'static>(
-    pd_client: Arc<T>,
+pub fn new_resolver<RR: 'static>(
+    pd_client: Arc<dyn PdClient>,
     worker: &Worker,
     router: RR,
 ) -> PdStoreAddrResolver
 where
-    T: PdClient + 'static,
     RR: RaftStoreRouter,
 {
     let runner = Runner {
@@ -220,7 +216,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RaftStoreBlackHole> {
+    fn new_runner(store: metapb::Store) -> Runner<RaftStoreBlackHole> {
         let client = MockPdClient {
             start: Instant::now(),
             store,

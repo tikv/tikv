@@ -1475,10 +1475,13 @@ impl PdClient for TestPdClient {
         }
     }
 
-    fn handle_region_heartbeat_response<F>(&self, store_id: u64, f: F) -> PdFuture<()>
+    fn handle_region_heartbeat_response(
+        &self,
+        store_id: u64,
+        f: Box<dyn Fn(pdpb::RegionHeartbeatResponse) + Send + 'static>,
+    ) -> PdFuture<()>
     where
         Self: Sized,
-        F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
     {
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();

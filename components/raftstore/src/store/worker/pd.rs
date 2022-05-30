@@ -1375,7 +1375,7 @@ where
         let store_id = self.store_id;
 
         let fut = self.pd_client
-            .handle_region_heartbeat_response(self.store_id, move |mut resp| {
+            .handle_region_heartbeat_response(self.store_id, Box::new(move |mut resp| {
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
                 let peer = resp.take_target_peer();
@@ -1464,7 +1464,7 @@ where
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
-            });
+            }));
         let f = async move {
             match fut.await {
                 Ok(_) => {

@@ -72,29 +72,26 @@ pub fn create_raft_storage<R: FlowStatsReporter, F: KvFormat>(
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
     system: RaftBatchSystem,
     has_started: bool,
 
-    pd_client: Arc<C>,
+    pd_client: Arc<dyn PdClient>,
     bg_worker: Worker,
 }
 
-impl<C> Node<C>
-where
-    C: PdClient,
-{
+impl Node {
     /// Creates a new Node.
     pub fn new(
         system: RaftBatchSystem,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
-        pd_client: Arc<C>,
+        pd_client: Arc<dyn PdClient>,
         bg_worker: Worker,
-    ) -> Node<C> {
+    ) -> Node {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {

@@ -598,10 +598,9 @@ struct Inner {
 
 /// Detector is used to detect deadlocks between transactions. There is a leader
 /// in the cluster which collects all `wait_for_entry` from other followers.
-pub struct Detector<S, P>
+pub struct Detector<S>
 where
     S: StoreAddrResolver + 'static,
-    P: PdClient + 'static,
 {
     /// The store id of the node.
     store_id: u64,
@@ -612,7 +611,7 @@ where
     /// The connection to the leader.
     leader_client: Option<Client>,
     /// Used to get the leader of leader region from PD.
-    pd_client: Arc<P>,
+    pd_client: Arc<dyn PdClient>,
     /// Used to resolve store address.
     resolver: S,
     /// Used to connect other nodes.
@@ -623,21 +622,15 @@ where
     inner: Rc<RefCell<Inner>>,
 }
 
-unsafe impl<S, P> Send for Detector<S, P>
-where
-    S: StoreAddrResolver + 'static,
-    P: PdClient + 'static,
-{
-}
+unsafe impl<S> Send for Detector<S> where S: StoreAddrResolver + 'static {}
 
-impl<S, P> Detector<S, P>
+impl<S> Detector<S>
 where
     S: StoreAddrResolver + 'static,
-    P: PdClient + 'static,
 {
     pub fn new(
         store_id: u64,
-        pd_client: Arc<P>,
+        pd_client: Arc<dyn PdClient>,
         resolver: S,
         security_mgr: Arc<SecurityManager>,
         waiter_mgr_scheduler: WaiterMgrScheduler,
@@ -983,10 +976,9 @@ where
     }
 }
 
-impl<S, P> FutureRunnable<Task> for Detector<S, P>
+impl<S> FutureRunnable<Task> for Detector<S>
 where
     S: StoreAddrResolver + 'static,
-    P: PdClient + 'static,
 {
     fn run(&mut self, task: Task) {
         match task {

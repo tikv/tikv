@@ -5,6 +5,7 @@
 use std::{path::Path, process};
 
 use clap::{crate_authors, App, Arg};
+use cloud_server::{signal_handler, TiKVServer};
 use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use tikv::config::TiKvConfig;
 
@@ -185,5 +186,8 @@ fn main() {
         println!("config check successful");
         process::exit(0)
     }
-    cloud_server::run_tikv(config);
+    let mut tikv = TiKVServer::new(config);
+    tikv.run();
+    signal_handler::wait_for_signal();
+    tikv.stop();
 }

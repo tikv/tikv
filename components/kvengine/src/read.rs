@@ -145,7 +145,6 @@ impl SnapAccessCore {
         version: u64,
         path: &mut AccessPath,
     ) -> table::Value {
-        let key_hash = farmhash::fingerprint64(key);
         for i in 0..self.data.mem_tbls.len() {
             let tbl = self.data.mem_tbls.as_slice()[i].get_cf(cf);
             let v = if i == 0 && cf == 0 {
@@ -160,6 +159,7 @@ impl SnapAccessCore {
                 return v;
             }
         }
+        let key_hash = farmhash::fingerprint64(key);
         for l0 in &self.data.l0_tbls {
             if let Some(tbl) = &l0.get_cf(cf) {
                 let v = tbl.get(key, version, key_hash);

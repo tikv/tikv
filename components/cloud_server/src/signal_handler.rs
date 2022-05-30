@@ -4,13 +4,12 @@ pub use self::imp::wait_for_signal;
 
 #[cfg(unix)]
 mod imp {
-    use engine_traits::Engines;
     use libc::c_int;
     use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
     use signal::trap::Trap;
 
     #[allow(dead_code)]
-    pub fn wait_for_signal(_engines: Option<Engines<kvengine::Engine, rfengine::RfEngine>>) {
+    pub fn wait_for_signal() {
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {
             match sig {

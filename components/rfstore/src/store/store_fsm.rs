@@ -81,13 +81,13 @@ impl RaftBatchSystem {
     }
 
     // TODO: reduce arguments
-    pub fn spawn<C: PdClient + 'static>(
+    pub fn spawn(
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
         engines: Engines,
         trans: Box<dyn Transport>,
-        pd_client: Arc<C>,
+        pd_client: Arc<dyn PdClient>,
         pd_worker: LazyWorker<PdTask>,
         mut store_meta: StoreMeta,
         mut coprocessor_host: CoprocessorHost<kvengine::Engine>,

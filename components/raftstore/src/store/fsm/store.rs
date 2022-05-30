@@ -1565,12 +1565,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
 
         let router = Mutex::new(self.router.clone());
-        pd_client.handle_reconnect(move || {
+        pd_client.handle_reconnect(Box::new(move || {
             router
                 .lock()
                 .unwrap()
                 .broadcast_normal(|| PeerMsg::HeartbeatPd);
-        });
+        }));
 
         let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
 

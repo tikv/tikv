@@ -544,7 +544,7 @@ impl ServerCluster {
         lock_mgr
             .start(
                 node.id(),
-                Arc::clone(&self.pd_client),
+                self.pd_client.clone(),
                 resolver,
                 Arc::clone(&security_mgr),
                 &pessimistic_txn_cfg,
