@@ -380,8 +380,8 @@ where
             let kvs = kvs.unwrap();
 
             HANDLE_EVENT_DURATION_HISTOGRAM
-            .with_label_values(&["to_stream_event"])
-            .observe(sw.lap().as_secs_f64());
+                .with_label_values(&["to_stream_event"])
+                .observe(sw.lap().as_secs_f64());
             let kv_count = kvs.len();
             let total_size = kvs.size();
             metrics::HEAP_MEMORY
@@ -566,23 +566,21 @@ where
     }
 
     pub fn on_resume(&self, task_name: String) {
-        if let Some(cli) = self.meta_client.as_ref() {
-            let task = self.pool.block_on(cli.get_task(&task_name));
-            match task {
-                Ok(Some(stream_task)) => self.load_task(stream_task),
-                Ok(None) => {
-                    info!("backup stream task not existed"; "task" => %task_name);
-                }
-                Err(err) => {
-                    err.report(format!("failed to resume backup stream task {}", task_name));
-                    let sched = self.scheduler.clone();
-                    tokio::task::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        sched
-                            .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
-                            .unwrap();
-                    });
-                }
+        let task = self.pool.block_on(self.meta_client.get_task(&task_name));
+        match task {
+            Ok(Some(stream_task)) => self.load_task(stream_task),
+            Ok(None) => {
+                info!("backup stream task not existed"; "task" => %task_name);
+            }
+            Err(err) => {
+                err.report(format!("failed to resume backup stream task {}", task_name));
+                let sched = self.scheduler.clone();
+                tokio::task::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    sched
+                        .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
+                        .unwrap();
+                });
             }
         }
     }
