@@ -391,7 +391,8 @@ impl EngineCore {
                     let mut buf = BytesMut::with_capacity(builder.estimated_size());
                     let res = builder.finish(0, &mut buf);
                     if level == 0 {
-                        let offsets = vec![buf.len() as u32; NUM_CFS];
+                        let mut offsets = vec![buf.len() as u32; NUM_CFS];
+                        offsets[0] = 0;
                         for offset in offsets {
                             buf.put_u32_le(offset);
                         }

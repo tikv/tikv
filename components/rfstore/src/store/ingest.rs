@@ -61,6 +61,8 @@ pub(crate) fn convert_sst(
         combined_iters.push(combined_iter);
     }
     let concat_iter = ConcatIterator::new(combined_iters);
+    // TODO(x): check if the old data in the shard overlap with the ingested files, so we can
+    // ingest to lower level.
     let mut level = 0;
     let shard = kv.get_shard_with_ver(region_id, region_ver)?;
     let stats = shard.get_stats();
