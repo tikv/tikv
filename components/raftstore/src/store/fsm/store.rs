@@ -68,6 +68,7 @@ use crate::{
     bytes_capacity,
     coprocessor::{
         split_observer::SplitObserver, BoxAdminObserver, CoprocessorHost, RegionChangeEvent,
+        RegionChangeReason,
     },
     store::{
         async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg},
@@ -173,6 +174,7 @@ impl StoreMeta {
         host: &CoprocessorHost<EK>,
         region: Region,
         peer: &mut crate::store::Peer<EK, ER>,
+        reason: RegionChangeReason,
     ) {
         let prev = self.regions.insert(region.get_id(), region.clone());
         if prev.map_or(true, |r| r.get_id() != region.get_id()) {
@@ -180,7 +182,7 @@ impl StoreMeta {
             panic!("{} region corrupted", peer.tag);
         }
         let reader = self.readers.get_mut(&region.get_id()).unwrap();
-        peer.set_region(host, reader, region);
+        peer.set_region(host, reader, region, reason);
     }
 
     /// Update damaged ranges and return true if overlap exists.
