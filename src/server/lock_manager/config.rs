@@ -67,13 +67,13 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.wait_for_lock_timeout.as_millis() == 0 {
             return Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into());
         }
-        if self.im_memory {
-            warn!("Cloud storage engine doesn't support in-memoty pessimistic locks");
-            self.im_memory = false;
+        if self.in_memory {
+            warn!("Cloud storage engine doesn't support in-memory pessimistic locks");
+            self.in_memory = false;
         }
         Ok(())
     }
