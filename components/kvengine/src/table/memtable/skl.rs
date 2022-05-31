@@ -4,7 +4,6 @@ use std::{
     cmp::Ordering::*,
     iter::Iterator as StdIterator,
     ops::Deref,
-    ptr,
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering, Ordering::*},
         Arc, Mutex,
@@ -256,6 +255,10 @@ impl SkipListCore {
     }
 
     pub fn put_batch(&self, batch: &mut WriteBatch, snap: &SnapAccess, cf: usize) {
+        self.put_batch_impl(batch, Some(snap), cf)
+    }
+
+    fn put_batch_impl(&self, batch: &mut WriteBatch, snap: Option<&SnapAccess>, cf: usize) {
         let mut hint = self.hint.lock().unwrap();
         let data_max_ts = self.data_max_ts.load(Ordering::Acquire);
         let mut batch_max_ts = 0;
@@ -263,7 +266,10 @@ impl SkipListCore {
             let entry = &batch.entries[i];
             if is_deleted(entry.meta) {
                 let key = entry.key(&batch.buf);
-                if snap.contains_in_older_table(key, cf) {
+                if snap
+                    .map(|snap| snap.contains_in_older_table(key, cf))
+                    .unwrap_or_default()
+                {
                     self.put_with_hint(&batch.buf, entry, &mut hint);
                 } else {
                     self.delete_with_hint(key, &mut hint);
@@ -884,7 +890,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_basic() {
         let l = SkipList::new(None);
         let val1 = new_value(42);
@@ -894,11 +899,11 @@ mod tests {
 
         let mut wb = WriteBatch::new();
 
-        wb.put("key1".as_bytes(), 55, &[0], 0, val1.as_bytes());
-        wb.put("key2".as_bytes(), 56, &[0], 2, val2.as_bytes());
-        wb.put("key3".as_bytes(), 57, &[0], 0, val3.as_bytes());
+        wb.put("key1".as_bytes(), 56, &[0], 0, val1.as_bytes());
+        wb.put("key2".as_bytes(), 57, &[0], 2, val2.as_bytes());
+        wb.put("key3".as_bytes(), 58, &[0], 0, val3.as_bytes());
 
-        // l.put_batch(&mut wb);
+        l.put_batch_impl(&mut wb, None, 0);
 
         let mut v = l.get("key".as_bytes(), 0);
         assert_eq!(v.is_empty(), true);
@@ -906,7 +911,7 @@ mod tests {
         v = l.get("key1".as_bytes(), 0);
         assert_eq!(v.is_empty(), false);
         assert_eq!(v.get_value(), "00042".as_bytes());
-        assert_eq!(v.meta, 55);
+        assert_eq!(v.meta, 56);
 
         v = l.get("key2".as_bytes(), 0);
         assert_eq!(v.is_empty(), true);
@@ -914,11 +919,11 @@ mod tests {
         v = l.get("key3".as_bytes(), 0);
         assert_eq!(v.is_empty(), false);
         assert_eq!(v.get_value(), "00062".as_bytes());
-        assert_eq!(v.meta, 57);
+        assert_eq!(v.meta, 58);
 
         let mut wb = WriteBatch::new();
         wb.put("key3".as_bytes(), 12, &[0], 1, val4.as_bytes());
-        // l.put_batch(&mut wb);
+        l.put_batch_impl(&mut wb, None, 0);
         v = l.get("key3".as_bytes(), 1);
         assert_eq!(v.is_empty(), false);
         assert_eq!(v.get_value(), "00072".as_bytes());
@@ -926,14 +931,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_find_near() {
         let l = SkipList::new(None);
         for i in 0..1000 {
             let key = format!("{:05}", i * 10 + 5);
             let mut wb = WriteBatch::new();
             wb.put(key.as_bytes(), 0, &[], 0, new_value(i).as_bytes());
-            // l.put_batch(&mut wb);
+            l.put_batch_impl(&mut wb, None, 0);
         }
 
         let (n, eq) = l.find_near("00001".as_bytes(), false, false);
@@ -1089,7 +1093,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_iterator_next() {
         let n = 100;
         let l = SkipList::new(None);
@@ -1100,7 +1103,7 @@ mod tests {
         for i in 0..n {
             let mut wb = WriteBatch::new();
             wb.put(new_key(i).as_bytes(), 0, &[0], 0, new_value(i).as_bytes());
-            // l.put_batch(&mut wb)
+            l.put_batch_impl(&mut wb, None, 0);
         }
         let mut it = l.new_iterator(false);
         it.rewind();
@@ -1113,7 +1116,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_iterator_prev() {
         let n = 100;
         let l = SkipList::new(None);
@@ -1124,7 +1126,7 @@ mod tests {
         for i in (0..n).rev() {
             let mut wb = WriteBatch::new();
             wb.put(new_key(i).as_bytes(), 0, &[0], 0, new_value(i).as_bytes());
-            // l.put_batch(&mut wb)
+            l.put_batch_impl(&mut wb, None, 0);
         }
         it.seek_to_last();
         for i in (0..n).rev() {
@@ -1136,7 +1138,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_iterator_seek() {
         let n = 100;
         let l = SkipList::new(None);
@@ -1150,7 +1151,7 @@ mod tests {
             let key = format!("{:05}", v);
             let mut wb = WriteBatch::new();
             wb.put(key.as_bytes(), 0, &[0], 0, new_value(v).as_bytes());
-            // l.put_batch(&mut wb)
+            l.put_batch_impl(&mut wb, None, 0)
         }
         it.seek_to_first();
         assert_eq!(it.valid(), true);
@@ -1204,7 +1205,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_put_with_hint() {
         let l = SkipList::new(None);
         let mut wb = WriteBatch::new();
@@ -1216,7 +1216,7 @@ mod tests {
             let key = random_key();
             wb.put(key.as_slice(), 0, &[], 0, key.as_slice());
             cnt += 1;
-            // l.put_batch(&mut wb);
+            l.put_batch_impl(&mut wb, None, 0);
             wb.reset();
         }
         let mut it = l.new_iterator(false);

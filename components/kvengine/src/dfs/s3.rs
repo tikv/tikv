@@ -42,6 +42,20 @@ impl S3FS {
         ));
         Self { core }
     }
+
+    #[cfg(test)]
+    pub fn new_for_test(
+        tenant_id: u32,
+        local_dir: PathBuf,
+        bucket: String,
+        s3c: rusoto_s3::S3Client,
+    ) -> Self {
+        Self {
+            core: Arc::new(S3FSCore::new_with_s3_client(
+                tenant_id, local_dir, bucket, s3c,
+            )),
+        }
+    }
 }
 
 impl Deref for S3FS {
@@ -89,6 +103,15 @@ impl S3FSCore {
         s3c.set_config(S3Config {
             addressing_style: AddressingStyle::Path,
         });
+        Self::new_with_s3_client(tenant_id, local_dir, bucket, s3c)
+    }
+
+    pub fn new_with_s3_client(
+        tenant_id: u32,
+        local_dir: PathBuf,
+        bucket: String,
+        s3c: rusoto_s3::S3Client,
+    ) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -309,31 +332,36 @@ impl File for LocalFile {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::Write, path::PathBuf, str::FromStr};
+    use std::{fs, io::Write, str};
 
     use bytes::Buf;
+    use rusoto_mock::{
+        MockCredentialsProvider, MockRequestDispatcher, MultipleMockRequestDispatcher,
+    };
 
-    use crate::dfs::{s3::S3FS, Options, DFS};
+    use super::*;
 
     #[test]
     fn test_s3() {
         crate::tests::init_logger();
 
-        let end_point = "http://localhost:9000";
-        let local_dir = PathBuf::from_str("/tmp/s3test").unwrap();
-        if !local_dir.exists() {
-            std::fs::create_dir(&local_dir).unwrap();
-        }
-        let s3fs = S3FS::new(
-            123,
-            local_dir,
-            end_point.into(),
-            "minioadmin".into(),
-            "minioadmin".into(),
-            "local".into(),
-            "shard-db".into(),
-        );
+        let local_dir = tempfile::tempdir().unwrap();
         let file_data = "abcdefgh".to_string().into_bytes();
+
+        let s3c = rusoto_s3::S3Client::new_with(
+            MultipleMockRequestDispatcher::new(vec![
+                MockRequestDispatcher::with_status(200),
+                MockRequestDispatcher::with_status(200)
+                    .with_body(str::from_utf8(&file_data).unwrap()),
+                MockRequestDispatcher::with_status(200),
+            ]),
+            MockCredentialsProvider,
+            Region::Custom {
+                name: "local".to_string(),
+                endpoint: Default::default(),
+            },
+        );
+        let s3fs = S3FS::new_for_test(123, local_dir.path().to_path_buf(), "shard-db".into(), s3c);
         let (tx, rx) = tikv_util::mpsc::bounded(1);
 
         let fs = s3fs.clone();

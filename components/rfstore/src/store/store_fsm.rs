@@ -511,10 +511,6 @@ impl<'a> StoreMsgHandler<'a> {
         Self { store, ctx }
     }
 
-    pub(crate) fn get_receiver(&self) -> &Receiver<StoreMsg> {
-        &self.store.receiver
-    }
-
     pub(crate) fn handle_msg(&mut self, msg: StoreMsg) -> Option<u64> {
         let mut apply_region = None;
         match msg {
@@ -860,9 +856,9 @@ impl<'a> StoreMsgHandler<'a> {
     fn maybe_create_peer_internal(
         &mut self,
         region_id: u64,
-        region_ver: u64,
+        _region_ver: u64,
         msg: &RaftMessage,
-        is_local_first: bool,
+        _is_local_first: bool,
     ) -> Result<bool> {
         let target = msg.get_to_peer();
         // New created peers should know it's learner or not.

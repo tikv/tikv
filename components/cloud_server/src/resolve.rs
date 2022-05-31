@@ -44,7 +44,7 @@ where
 {
     pd_client: Arc<dyn PdClient>,
     store_addrs: HashMap<u64, StoreAddr>,
-    router: RR,
+    _router: RR,
 }
 
 impl<RR> Runner<RR>
@@ -146,7 +146,7 @@ where
     let runner = Runner {
         pd_client,
         store_addrs: HashMap::default(),
-        router,
+        _router: router,
     };
     let scheduler = worker.start("addr-resolver", runner);
 
@@ -224,7 +224,7 @@ mod tests {
         Runner {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
-            router: RaftStoreBlackHole,
+            _router: RaftStoreBlackHole,
         }
     }
 

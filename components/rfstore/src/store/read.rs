@@ -10,7 +10,6 @@ use std::{
 
 use fail::fail_point;
 use kvproto::{
-    errorpb,
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
@@ -267,7 +266,6 @@ impl LocalReader {
     fn redirect(&mut self, cmd: RaftCommand) {
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
-        let mut err = errorpb::Error::default();
         self.router.send(region_id, PeerMsg::RaftCommand(cmd));
     }
 

@@ -1,10 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{atomic::AtomicUsize, Arc},
-    time::{Duration, Instant},
-};
-
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use engine_traits::RaftEngineReadOnly;
@@ -72,23 +67,6 @@ pub struct ApplySnapResult {
     pub change_set: kvenginepb::ChangeSet,
 }
 
-#[derive(Default)]
-pub(crate) struct SplitJobStates {
-    pub(crate) split_file_job_status: Option<Arc<AtomicUsize>>,
-    pub(crate) scheduled_split_file_time: Option<Instant>,
-    pub(crate) split_file_duration: Option<Duration>,
-    pub(crate) finish_split_job_state: Option<Arc<AtomicUsize>>,
-}
-
-impl SplitJobStates {
-    pub(crate) fn reset(&mut self) {
-        self.split_file_job_status = None;
-        self.scheduled_split_file_time = None;
-        self.split_file_duration = None;
-        self.finish_split_job_state = None;
-    }
-}
-
 pub(crate) struct PeerStorage {
     pub(crate) engines: Engines,
 
@@ -110,8 +88,9 @@ impl raft::Storage for PeerStorage {
         if hard_state == HardState::default() {
             assert!(
                 !self.is_initialized(),
-                "peer for region {:?} is initialized but local state {:?} has empty hard \
+                "peer {} for region {:?} is initialized but local state {:?} has empty hard \
                  state",
+                self.peer_id,
                 self.region,
                 self.raft_state
             );
@@ -129,7 +108,7 @@ impl raft::Storage for PeerStorage {
         low: u64,
         high: u64,
         max_size: impl Into<Option<u64>>,
-        context: GetEntriesContext,
+        _: GetEntriesContext,
     ) -> raft::Result<Vec<eraftpb::Entry>> {
         self.check_range(low, high)?;
         let mut ents = Vec::with_capacity((high - low) as usize);
@@ -176,7 +155,7 @@ impl raft::Storage for PeerStorage {
         Ok(self.raft_state.last_index)
     }
 
-    fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<eraftpb::Snapshot> {
+    fn snapshot(&self, request_index: u64, _to: u64) -> raft::Result<eraftpb::Snapshot> {
         if !self.initial_flushed || self.shard_meta.is_none() {
             info!("shard has not flushed for generating snapshot"; "region" => self.tag());
             return Err(raft::Error::Store(
@@ -277,11 +256,6 @@ impl PeerStorage {
     }
 
     #[inline]
-    pub fn hard_state_term(&self) -> u64 {
-        self.raft_state.term
-    }
-
-    #[inline]
     pub fn set_applied_state(&mut self, apply_state: RaftApplyState) {
         self.apply_state = apply_state;
     }
@@ -304,12 +278,6 @@ impl PeerStorage {
     #[inline]
     pub fn commit_index(&self) -> u64 {
         self.raft_state.commit
-    }
-
-    #[inline]
-    pub fn set_commit_index(&mut self, commit: u64) {
-        assert!(commit >= self.commit_index());
-        self.raft_state.commit = commit;
     }
 
     #[inline]
@@ -435,15 +403,6 @@ impl PeerStorage {
                 }
             }
         }
-    }
-
-    pub fn update_commit_index(&mut self, ctx: &mut RaftContext, commit_idx: u64) {
-        if commit_idx == self.raft_state.commit {
-            return;
-        }
-        assert!(commit_idx > self.raft_state.commit);
-        self.raft_state.commit = commit_idx;
-        self.write_raft_state(ctx);
     }
 
     pub fn write_raft_state(&mut self, ctx: &mut RaftContext) {

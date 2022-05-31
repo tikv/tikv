@@ -61,6 +61,7 @@ impl Clone for RegionSnapshot {
 /// `SnapshotIterator` is dummy implementation for the tikv_kv::Iterator.
 pub struct RegionSnapshotIterator {}
 
+#[allow(unused)]
 #[inline(never)]
 fn handle_check_key_in_region_error(e: crate::Error) -> crate::Result<()> {
     // Split out the error case to reduce hot-path code size.

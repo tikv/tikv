@@ -47,6 +47,7 @@ impl ReqBatcher {
         req.get_context().get_priority() == CommandPri::Normal
     }
 
+    #[allow(unused)]
     pub fn can_batch_raw_get(&self, req: &RawGetRequest) -> bool {
         req.get_context().get_priority() == CommandPri::Normal
     }
@@ -56,6 +57,7 @@ impl ReqBatcher {
         self.get_ids.push(id);
     }
 
+    #[allow(unused)]
     pub fn add_raw_get_request(&mut self, req: RawGetRequest, id: u64) {
         self.raw_gets.push(req);
         self.raw_get_ids.push(id);

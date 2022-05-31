@@ -1,7 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO(youjiali1995): fix lint
-#![allow(unused)]
 #![feature(box_patterns)]
 #![recursion_limit = "400"]
 
@@ -31,13 +29,3 @@ mod tikv_server;
 mod transport;
 
 pub use tikv_server::*;
-
-#[cfg(test)]
-mod tests {
-    use tikv::config::TiKvConfig;
-
-    #[test]
-    fn test_run() {
-        println!("run")
-    }
-}

@@ -264,11 +264,11 @@ impl<T: RaftStoreRouter + 'static, L: LockManager, F: KvFormat> Tikv for Service
 
     fn unsafe_destroy_range(
         &mut self,
-        ctx: RpcContext<'_>,
-        mut req: UnsafeDestroyRangeRequest,
-        sink: UnarySink<UnsafeDestroyRangeResponse>,
+        _ctx: RpcContext<'_>,
+        _req: UnsafeDestroyRangeRequest,
+        _sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
-        let begin_instant = Instant::now_coarse();
+        // let begin_instant = Instant::now_coarse();
         // TODO(x)
         /*
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
@@ -680,9 +680,9 @@ impl<T: RaftStoreRouter + 'static, L: LockManager, F: KvFormat> Tikv for Service
 
     fn check_leader(
         &mut self,
-        ctx: RpcContext<'_>,
-        mut request: CheckLeaderRequest,
-        sink: UnarySink<CheckLeaderResponse>,
+        _ctx: RpcContext<'_>,
+        _request: CheckLeaderRequest,
+        _sink: UnarySink<CheckLeaderResponse>,
     ) {
         unimplemented!()
     }
@@ -690,12 +690,12 @@ impl<T: RaftStoreRouter + 'static, L: LockManager, F: KvFormat> Tikv for Service
     fn get_store_safe_ts(
         &mut self,
         ctx: RpcContext<'_>,
-        mut request: StoreSafeTsRequest,
+        _request: StoreSafeTsRequest,
         sink: UnarySink<StoreSafeTsResponse>,
     ) {
         // TODO(x) implement it.
         let task = async move {
-            let mut response = StoreSafeTsResponse::default();
+            let response = StoreSafeTsResponse::default();
             sink.success(response).await?;
             ServerResult::Ok(())
         }

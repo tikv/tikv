@@ -1047,7 +1047,7 @@ impl Applier {
         // fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
         // ApplyResult::Yield
         // });
-        let (index, term) = (entry.get_index(), entry.get_term());
+        let (index, _) = (entry.get_index(), entry.get_term());
         let conf_change: ConfChangeV2 = match entry.get_entry_type() {
             EntryType::EntryConfChange => {
                 let conf_change: ConfChange = parse_data_at(entry.get_data(), index, self.tag());
@@ -1171,7 +1171,7 @@ impl Applier {
     fn handle_raft_committed_entries(
         &mut self,
         ctx: &mut ApplyContext,
-        mut committed_entries_drainer: Drain<'_, eraftpb::Entry>,
+        committed_entries_drainer: Drain<'_, eraftpb::Entry>,
     ) {
         if committed_entries_drainer.len() == 0 {
             return;
@@ -1278,7 +1278,7 @@ impl Applier {
         *self = Applier::new_from_reg(reg);
     }
 
-    fn destroy(&mut self, ctx: &mut ApplyContext) {
+    fn destroy(&mut self, _: &mut ApplyContext) {
         let region_id = self.region.get_id();
         let peer_id = self.get_peer().get_id();
         fail_point!("before_peer_destroy_1003", peer_id == 1003, |_| {});
