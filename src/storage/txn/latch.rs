@@ -79,6 +79,10 @@ impl Latch {
         self.waiting.push_back(Some((key_hash, cid)));
     }
 
+    pub fn push_preemptive(&mut self, key_hash: u64, cid: u64) {
+        self.waiting.push_front(Some((key_hash, cid)));
+    }
+
     /// For some hot keys, the waiting list maybe very long, so we should shrink the waiting
     /// VecDeque after pop.
     fn maybe_shrink(&mut self) {
@@ -241,6 +245,7 @@ impl Latches {
         who: u64,
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         released_locks: Option<ReleasedLocks>,
+        new_cid_for_holding_latches: Option<u64>,
     ) -> (Vec<u64>, Vec<u64>, Vec<WriteResultLockInfo>) {
         let mut wait_for_locks = if let Some(mut v) = wait_for_locks {
             v.sort_unstable_by_key(|x| x.hash_for_latch);
@@ -286,6 +291,7 @@ impl Latches {
                 }
             } else {
                 latch_keep_list.push(key_hash);
+                latch.push_preemptive(key_hash, new_cid_for_holding_latches.unwrap());
             }
         }
         assert!(wait_for_locks.peek().is_none());
@@ -322,7 +328,7 @@ mod tests {
         assert_eq!(acquired_b, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a, None, None).0;
+        let wakeup = latches.release(&lock_a, cid_a, None, None, None).0;
         assert_eq!(wakeup[0], cid_b);
 
         // b acquire lock success
@@ -357,7 +363,7 @@ mod tests {
         assert_eq!(acquired_c, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a, None, None).0;
+        let wakeup = latches.release(&lock_a, cid_a, None, None, None).0;
         assert_eq!(wakeup[0], cid_c);
 
         // c acquire lock failed again, cause b occupied slot 4
@@ -365,7 +371,7 @@ mod tests {
         assert_eq!(acquired_c, false);
 
         // b release lock, and get wakeup list
-        let wakeup = latches.release(&lock_b, cid_b, None, None).0;
+        let wakeup = latches.release(&lock_b, cid_b, None, None, None).0;
         assert_eq!(wakeup[0], cid_c);
 
         // finally c acquire lock success
@@ -406,7 +412,7 @@ mod tests {
         assert_eq!(acquired_d, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a, None, None).0;
+        let wakeup = latches.release(&lock_a, cid_a, None, None, None).0;
         assert_eq!(wakeup[0], cid_c);
 
         // c acquire lock success
@@ -414,7 +420,7 @@ mod tests {
         assert_eq!(acquired_c, true);
 
         // b release lock, and get wakeup list
-        let wakeup = latches.release(&lock_b, cid_b, None, None).0;
+        let wakeup = latches.release(&lock_b, cid_b, None, None, None).0;
         assert_eq!(wakeup[0], cid_d);
 
         // finally d acquire lock success

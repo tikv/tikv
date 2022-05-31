@@ -432,6 +432,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return;
         }
         self.schedule_command(
+            None,
             cmd,
             SchedulerTaskCallback::NormalRequestCallback(callback),
             None,
@@ -446,10 +447,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         released_locks: Option<ReleasedLocks>,
     ) {
-        let (cmd_wakeup_list, latch_keep_list, txn_lock_wakeup_list) =
-            self.inner
-                .latches
-                .release(lock, cid, wait_for_locks, released_locks);
+        let next_cid_for_holding_latches = if released_locks.is_some() {
+            Some(self.inner.gen_id())
+        } else {
+            None
+        };
+        let (cmd_wakeup_list, latch_keep_list, txn_lock_wakeup_list) = self.inner.latches.release(
+            lock,
+            cid,
+            wait_for_locks,
+            released_locks,
+            next_cid_for_holding_latches,
+        );
         for wcid in cmd_wakeup_list {
             self.try_to_wake_up(wcid);
         }
@@ -458,17 +467,22 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         if !txn_lock_wakeup_list.is_empty() {
             let acquired_latches = Lock::new_already_acquired(latch_keep_list);
-            self.schedule_awakened_pessimistic_locks(txn_lock_wakeup_list, acquired_latches);
+            self.schedule_awakened_pessimistic_locks(
+                next_cid_for_holding_latches.unwrap(),
+                txn_lock_wakeup_list,
+                acquired_latches,
+            );
         }
     }
 
     fn schedule_command(
         &self,
+        specified_cid: Option<u64>,
         cmd: Command,
         callback: SchedulerTaskCallback,
         already_acquired_latches: Option<Lock>,
     ) {
-        let cid = self.inner.gen_id();
+        let cid = specified_cid.unwrap_or_else(|| self.inner.gen_id());
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
 
         let tag = cmd.tag();
@@ -547,6 +561,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     fn schedule_awakened_pessimistic_locks(
         &self,
+        cid: u64,
         mut awakened_locks_info: Vec<WriteResultLockInfo>,
         latches: Lock,
     ) {
@@ -557,6 +572,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let cmd = commands::AcquirePessimisticLock::new_resumed(awakened_locks_info);
         // TODO: Make flow control take effect on this thing.
         self.schedule_command(
+            Some(cid),
             cmd.into(),
             SchedulerTaskCallback::LockKeyCallbacks(key_callbacks),
             Some(latches),
@@ -662,7 +678,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb.unwrap(), None);
+            self.schedule_command(None, cmd, tctx.cb.unwrap(), None);
         } else {
             tctx.cb.unwrap().execute(pr);
         }
@@ -722,7 +738,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                self.schedule_command(cmd, cb, None);
+                self.schedule_command(None, cmd, cb, None);
             } else {
                 cb.execute(pr);
             }
@@ -1681,7 +1697,7 @@ mod tests {
             if id != 0 {
                 assert!(latches.acquire(&mut lock, id));
             }
-            let unlocked = latches.release(&lock, id, None, None).0;
+            let unlocked = latches.release(&lock, id, None, None, None).0;
             if id as u64 == max_id {
                 assert!(unlocked.is_empty());
             } else {

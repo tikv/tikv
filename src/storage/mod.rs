@@ -6815,7 +6815,6 @@ mod tests {
             .pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
-        let cm = storage.concurrency_manager.clone();
         let (tx, rx) = channel();
 
         let results_empty =
@@ -7149,7 +7148,7 @@ mod tests {
             rx.recv().unwrap();
             rx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
 
-            delete_pessimistic_lock(&storage, Key::from_raw(b"k3"), 25, 25);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k3"), 30, 30);
             rx2.recv().unwrap();
 
             // Duplicated command
