@@ -1483,6 +1483,7 @@ mod tests {
             ("16九a", 10, 8, "20"),
             ("+", 10, 8, "0"),
             ("-", 10, 8, "0"),
+            ("", 2, 16, "0"),
         ];
         for (n, f, t, e) in tests {
             let n = Datum::Bytes(n.as_bytes().to_vec());

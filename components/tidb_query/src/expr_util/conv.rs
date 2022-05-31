@@ -65,7 +65,7 @@ fn is_valid_base(base: IntWithSign) -> bool {
 
 fn extract_num_str(s: &str, from_base: IntWithSign) -> Option<(String, bool)> {
     let mut iter = s.chars().peekable();
-    let head = *iter.peek().unwrap();
+    let head = *iter.peek()?;
     let mut is_neg = false;
     if head == '+' || head == '-' {
         is_neg = head == '-';
