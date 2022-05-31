@@ -30,6 +30,7 @@ use file_system::{
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
+use kvengine::dfs::DFS;
 use kvproto::deadlock::create_deadlock;
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
@@ -67,7 +68,6 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
-use kvengine::dfs::DFS;
 
 use crate::{
     node::*,

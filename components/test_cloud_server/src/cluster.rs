@@ -1,15 +1,16 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
-use grpcio::{ChannelBuilder, EnvBuilder, Environment};
-use kvproto::kvrpcpb::{Context, Mutation, Op};
-use kvproto::tikvpb::TikvClient;
-use tempfile::TempDir;
+use std::{collections::HashMap, path::Path, sync::Arc};
+
 use cloud_server::TiKVServer;
+use grpcio::{ChannelBuilder, EnvBuilder, Environment};
+use kvproto::{
+    kvrpcpb::{Context, Mutation, Op},
+    tikvpb::TikvClient,
+};
 use pd_client::PdClient;
 use security::SecurityManager;
+use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv::config::TiKvConfig;
 
@@ -29,24 +30,21 @@ impl ServerCluster {
     pub fn new(nodes: Vec<u8>) -> ServerCluster {
         let tmp_dir = TempDir::new().unwrap();
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(2)
-                .build(),
-        );
+        let env = Arc::new(EnvBuilder::new().cq_count(2).build());
         let pd_client = Arc::new(TestPdClient::new(1, true));
         let mut servers = HashMap::new();
         let mut kv_clients = HashMap::new();
         for node_id in nodes {
-            let config = new_test_config(tmp_dir.path(), *node_id);
-            let mut server = TiKVServer::setup(config, security_mgr.clone(), env.clone(), pd_client.clone());
+            let config = new_test_config(tmp_dir.path(), node_id);
+            let mut server =
+                TiKVServer::setup(config, security_mgr.clone(), env.clone(), pd_client.clone());
             server.run();
             let store_id = server.get_store_id();
-            let addr = node_addr(*node_id);
+            let addr = node_addr(node_id);
             let channel = ChannelBuilder::new(env.clone()).connect(&addr);
             let kv_client = TikvClient::new(channel);
             kv_clients.insert(store_id, kv_client);
-            servers.insert(*node_id, server);
+            servers.insert(node_id, server);
         }
         Self {
             servers,

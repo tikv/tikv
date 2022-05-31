@@ -150,7 +150,6 @@ impl CustomRaftLog<'a> {
         Ok(cs)
     }
 
-
     #[allow(unused)]
     pub(crate) fn get_delete_range(&'a self) -> (&'a [u8], &'a [u8]) {
         let mut i = HEADER_SIZE;

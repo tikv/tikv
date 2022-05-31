@@ -15,7 +15,13 @@ mod tests {
         assert_eq!(stores.len(), 1);
         let ctx = cluster.new_rpc_context("abc".as_bytes());
         let client = cluster.get_kv_client(ctx.get_peer().get_store_id());
-        test_raftstore::must_kv_prewrite(&client, ctx.clone(), vec![put_mut("abc", "v")], "abc".into(), 1);
+        test_raftstore::must_kv_prewrite(
+            &client,
+            ctx.clone(),
+            vec![put_mut("abc", "v")],
+            "abc".into(),
+            1,
+        );
         test_raftstore::must_kv_commit(&client, ctx.clone(), vec!["abc".into()], 1, 2, 2);
         test_raftstore::must_kv_read_equal(&client, ctx, "abc".into(), "v".into(), 3);
         cluster.stop();
