@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use kvenginepb as pb;
 use protobuf::Message;
 use slog_global::*;
@@ -255,7 +255,7 @@ impl ShardMeta {
 
     fn apply_ingest_files(&mut self, ingest_files: &pb::IngestFiles) {
         let mut min_level = 4;
-        for (id, file) in &self.files {
+        for file in self.files.values() {
             if min_level < file.level {
                 min_level = file.level;
             }

@@ -2,25 +2,21 @@
 
 use std::{
     cmp::Ordering,
-    collections::VecDeque,
-    fmt::format,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
 
-use collections::{HashMap, HashSet};
 use engine_rocks::RocksSstReader;
-use engine_traits::{Error, Iterator as TraitIterator, SstReader, CF_DEFAULT, CF_WRITE};
-use kvengine::{table::Value, Iterator};
+use engine_traits::{Iterator as TraitIterator, SstReader, CF_DEFAULT, CF_WRITE};
+use kvengine::table::Value;
 use kvproto::{import_sstpb::SstMeta, raft_cmdpb::RaftCmdRequest};
 use sst_importer::SstImporter;
 use tikv_util::{codec, error, info};
 use txn_types::{WriteRef, WriteType};
 
-use crate::{mvcc, RaftRouter, UserMeta};
+use crate::{mvcc, UserMeta};
 
 pub(crate) fn convert_sst(
-    router: &RaftRouter,
     kv: kvengine::Engine,
     importer: Arc<SstImporter>,
     req: &RaftCmdRequest,
@@ -155,7 +151,7 @@ impl CombinedIterator {
                     self.current_value = encode_table_value(user_meta, short_val);
                 }
                 None => {
-                    let mut default_iter = self.default_iter.as_mut().unwrap();
+                    let default_iter = self.default_iter.as_mut().unwrap();
                     if !default_iter.valid()? {
                         let err_msg =
                             format!("default value not found for key {:?}", &self.current_key);
@@ -261,7 +257,7 @@ impl kvengine::table::Iterator for ConcatIterator {
         }
     }
 
-    fn seek(&mut self, key: &[u8]) {
+    fn seek(&mut self, _key: &[u8]) {
         unreachable!()
     }
 

@@ -19,7 +19,6 @@ use dashmap::{mapref::entry::Entry, DashMap};
 use file_system::IORateLimiter;
 use fslock;
 use moka::sync::SegmentedCache;
-use slog::kv;
 use slog_global::info;
 use tikv_util::mpsc;
 
@@ -28,7 +27,7 @@ use crate::{
     meta::ShardMeta,
     table::{
         memtable::CFTable,
-        sstable::{BlockCacheKey, MAGIC_NUMBER, NO_COMPRESSION, TABLE_FORMAT_V1, ZSTD_COMPRESSION},
+        sstable::{BlockCacheKey, MAGIC_NUMBER, NO_COMPRESSION, ZSTD_COMPRESSION},
     },
     *,
 };
@@ -358,7 +357,7 @@ impl EngineCore {
         let shard = self.get_shard_with_ver(shard_id, shard_ver)?;
         let l0_version = shard.load_mem_table_version();
         let mut cs = new_change_set(shard_id, shard_ver);
-        let mut ingest_files = cs.mut_ingest_files();
+        let ingest_files = cs.mut_ingest_files();
         ingest_files
             .mut_properties()
             .mut_keys()

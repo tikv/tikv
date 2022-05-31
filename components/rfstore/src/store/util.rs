@@ -289,14 +289,3 @@ pub(crate) fn raw_end_key(region: &metapb::Region) -> Bytes {
     let end_key = decode_bytes(&mut slice, false).unwrap();
     Bytes::from(end_key)
 }
-
-// Get the `end_key` of current region in raw form.
-pub(crate) fn decode_end_key(mut end_key: &[u8]) -> Bytes {
-    // only initialized region's end_key can be encoded, otherwise there must be bugs
-    // somewhere.
-    if end_key.is_empty() {
-        return Bytes::from_static(RAW_INITIAL_END_KEY);
-    }
-    let end_key = decode_bytes(&mut end_key, false).unwrap();
-    Bytes::from(end_key)
-}

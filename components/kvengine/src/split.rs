@@ -6,7 +6,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::Buf;
 use dashmap::mapref::entry::Entry;
 use kvenginepb as pb;
-use slog_global::{info, warn};
+use slog_global::info;
 
 use crate::{table::memtable::CFTable, *};
 

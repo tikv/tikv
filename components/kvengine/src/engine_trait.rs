@@ -1,15 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::BTreeMap, ops::Deref, path::PathBuf};
+use std::{collections::BTreeMap, ops::Deref};
 
-use engine_rocks::RocksEngine;
 use engine_traits::{
-    CFNamesExt, CFOptionsExt, ColumnFamilyOptions, CompactExt, CompactedEvent, DBOptions,
-    DBOptionsExt, DBVector, DeleteStrategy, ExternalSstFileInfo, FlowControlFactorsExt, ImportExt,
-    IngestExternalFileOptions, IterOptions, Iterable, KvEngine, MiscExt, Mutable, MvccProperties,
-    MvccPropertiesExt, Peekable, PerfContext, PerfContextExt, PerfContextKind, PerfLevel, Range,
-    RangePropertiesExt, ReadOptions, SeekKey, Snapshot, SstCompressionType, SstExt,
-    SstPartitionerFactory, SstReader, SstWriter, SstWriterBuilder, SyncMutable, TablePropertiesExt,
+    CFNamesExt, CFOptionsExt, CompactExt, CompactedEvent, DBOptions, DBOptionsExt, DBVector,
+    DeleteStrategy, FlowControlFactorsExt, ImportExt, IngestExternalFileOptions, IterOptions,
+    Iterable, KvEngine, MiscExt, Mutable, MvccProperties, MvccPropertiesExt, Peekable, PerfContext,
+    PerfContextExt, PerfContextKind, PerfLevel, Range, RangePropertiesExt, ReadOptions, SeekKey,
+    Snapshot, SstCompressionType, SstExt, SstWriterBuilder, SyncMutable, TablePropertiesExt,
     TitanDBOptions, TtlProperties, TtlPropertiesExt, WriteBatchExt, WriteOptions,
 };
 
@@ -583,7 +581,7 @@ impl SstWriterBuilder<Engine> for EngineSstWriterBuilder {
             builder: engine_rocks::RocksSstWriterBuilder::new(),
         }
     }
-    fn set_db(mut self, _db: &Engine) -> Self {
+    fn set_db(self, _db: &Engine) -> Self {
         // TODO(x): need to find a way to pass RocksDB Env and CFOptions to the builder.
         self
     }

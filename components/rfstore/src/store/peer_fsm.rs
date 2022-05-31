@@ -705,7 +705,7 @@ impl<'a> PeerMsgHandler<'a> {
         let router = self.ctx.global.router.clone();
         let kv = self.ctx.global.engines.kv.clone();
         std::thread::spawn(move || {
-            match convert_sst(&router, kv, importer, &msg) {
+            match convert_sst(kv, importer, &msg) {
                 Ok(cs) => {
                     // Make ingest command.
                     let mut cmd = RaftCmdRequest::default();

@@ -1,18 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
     future::Future,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
 use collections::HashSet;
-use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::{
     executor::{ThreadPool, ThreadPoolBuilder},
-    future::join_all,
     sink::SinkExt,
     stream::TryStreamExt,
     TryFutureExt,
@@ -28,7 +25,6 @@ use kvproto::{
     kvrpcpb::Context,
     raft_cmdpb::*,
 };
-use protobuf::Message;
 use rfstore::{
     router::RaftStoreRouter,
     store::{Callback, RegionSnapshot},
@@ -43,7 +39,6 @@ use tikv_util::{
     future::{create_stream_with_buffer, paired_future_callback},
     time::{Instant, Limiter},
 };
-use txn_types::Key;
 
 /// ImportSstService provides tikv-server with the ability to ingest SST files.
 ///
@@ -58,6 +53,7 @@ pub struct ImportSstService<Router> {
     importer: Arc<SstImporter>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
+    #[allow(dead_code)]
     raft_entry_max_size: ReadableSize,
 }
 
@@ -142,77 +138,6 @@ where
             snapshot: res.snapshot.unwrap(),
             term: header.get_current_term(),
         })
-    }
-
-    // we need to remove duplicate keys in here, since
-    // in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
-    // will panic if found duplicated entry during Vec<PutRequest>.
-    fn build_apply_request<'a, 'b>(
-        raft_size: u64,
-        reqs: &'a mut HashMap<Vec<u8>, (Request, u64)>,
-        cmd_reqs: &'a mut Vec<RaftCmdRequest>,
-        is_delete: bool,
-        cf: &'b str,
-        context: Context,
-    ) -> Box<dyn FnMut(Vec<u8>, Vec<u8>) + 'b>
-    where
-        'a: 'b,
-    {
-        let mut req_size = 0_u64;
-
-        // use callback to collect kv data.
-        if is_delete {
-            Box::new(move |k: Vec<u8>, _v: Vec<u8>| {
-                let mut req = Request::default();
-                let mut del = DeleteRequest::default();
-
-                let (encoded_key, ts) = Key::split_on_ts_for(&k).expect("key without ts");
-                del.set_key(k.clone());
-                del.set_cf(cf.to_string());
-                req.set_cmd_type(CmdType::Delete);
-                req.set_delete(del);
-                req_size += req.compute_size() as u64;
-                if reqs
-                    .get(encoded_key)
-                    .map(|(_, old_ts)| *old_ts < ts.into_inner())
-                    .unwrap_or(true)
-                {
-                    reqs.insert(encoded_key.to_owned(), (req, ts.into_inner()));
-                };
-                // When the request size get grow to half of the max request size,
-                // build the request and add it to a batch.
-                if req_size > raft_size / 2 {
-                    req_size = 0;
-                    let cmd = make_request(reqs, context.clone());
-                    cmd_reqs.push(cmd);
-                }
-            })
-        } else {
-            Box::new(move |k: Vec<u8>, v: Vec<u8>| {
-                let mut req = Request::default();
-                let mut put = PutRequest::default();
-
-                let (encoded_key, ts) = Key::split_on_ts_for(&k).expect("key without ts");
-                put.set_key(k.clone());
-                put.set_value(v);
-                put.set_cf(cf.to_string());
-                req.set_cmd_type(CmdType::Put);
-                req.set_put(put);
-                req_size += req.compute_size() as u64;
-                if reqs
-                    .get(encoded_key)
-                    .map(|(_, old_ts)| *old_ts < ts.into_inner())
-                    .unwrap_or(true)
-                {
-                    reqs.insert(encoded_key.to_owned(), (req, ts.into_inner()));
-                };
-                if req_size > raft_size / 2 {
-                    req_size = 0;
-                    let cmd = make_request(reqs, context.clone());
-                    cmd_reqs.push(cmd);
-                }
-            })
-        }
     }
 
     fn ingest_files(
@@ -464,12 +389,7 @@ where
     }
 
     // Downloads KV file and performs key-rewrite then apply kv into this tikv store.
-    fn apply(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut req: ApplyRequest,
-        sink: UnarySink<ApplyResponse>,
-    ) {
+    fn apply(&mut self, ctx: RpcContext<'_>, _req: ApplyRequest, sink: UnarySink<ApplyResponse>) {
         ctx.spawn(
             sink.fail(RpcStatus::new(RpcStatusCode::UNIMPLEMENTED))
                 .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
@@ -538,7 +458,7 @@ where
     fn ingest(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: IngestRequest,
+        _req: IngestRequest,
         sink: UnarySink<IngestResponse>,
     ) {
         let mut resp = IngestResponse::default();
@@ -596,7 +516,7 @@ where
     fn compact(
         &mut self,
         ctx: RpcContext<'_>,
-        req: CompactRequest,
+        _req: CompactRequest,
         sink: UnarySink<CompactResponse>,
     ) {
         ctx.spawn(
@@ -739,23 +659,4 @@ fn make_request_header(mut context: Context) -> RaftRequestHeader {
     header.set_region_id(region_id);
     header.set_region_epoch(context.take_region_epoch());
     header
-}
-
-fn make_request(reqs: &mut HashMap<Vec<u8>, (Request, u64)>, context: Context) -> RaftCmdRequest {
-    let mut cmd = RaftCmdRequest::default();
-    let mut header = make_request_header(context);
-    // Set the UUID of header to prevent raftstore batching our requests.
-    // The current `resolved_ts` observer assumes that each batch of request doesn't has
-    // two writes to the same key. (Even with 2 different TS). That was true for normal cases
-    // because the latches reject concurrency write to keys. However we have bypassed the latch layer :(
-    header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
-    cmd.set_header(header);
-    cmd.set_requests(
-        std::mem::take(reqs)
-            .into_values()
-            .map(|(req, _)| req)
-            .collect::<Vec<Request>>()
-            .into(),
-    );
-    cmd
 }

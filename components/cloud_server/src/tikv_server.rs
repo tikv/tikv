@@ -22,7 +22,7 @@ use std::{
 use api_version::{ApiV1, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::{from_rocks_compression_type, raw::DBCompressionType, PerfLevel};
+use engine_rocks::{from_rocks_compression_type, raw::DBCompressionType};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use error_code::ErrorCodeExt;
 use file_system::{

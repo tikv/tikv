@@ -3,7 +3,6 @@
 use std::{
     collections::HashMap,
     fmt::{Debug, Formatter},
-    iter::Iterator,
     ops::Deref,
 };
 
