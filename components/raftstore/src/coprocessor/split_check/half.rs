@@ -223,8 +223,8 @@ mod tests {
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
         };
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let cop_host = CoprocessorHost::new(tx.clone(), cfg);
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx.clone(), cop_host.clone());
 
         let key_gen = |k: &[u8], i: u64, mvcc: bool| {
             if !mvcc {
@@ -276,6 +276,9 @@ mod tests {
             Some(vec![bucket_range]),
         ));
 
+        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        assert_eq!(host.policy(), CheckPolicy::Scan);
+
         must_generate_buckets(&rx, &exp_bucket_keys);
 
         // testing split bucket with end key ""
@@ -299,6 +302,8 @@ mod tests {
             CheckPolicy::Scan,
             Some(vec![bucket_range]),
         ));
+        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        assert_eq!(host.policy(), CheckPolicy::Scan);
 
         must_generate_buckets(&rx, &exp_bucket_keys);
 

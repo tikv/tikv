@@ -612,8 +612,8 @@ pub mod tests {
                 keys::data_key(Key::from_raw(bytes).append_ts(ts).as_encoded())
             }
         };
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let cop_host = CoprocessorHost::new(tx.clone(), cfg);
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx.clone(), cop_host.clone());
         for i in 0..2000 {
             // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has about 210 keys
             // if mvcc, kv size is about 18*2 = 36, expect each bucket has about 80 keys
@@ -630,6 +630,9 @@ pub mod tests {
             CheckPolicy::Approximate,
             None,
         ));
+
+        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        assert_eq!(host.policy(), CheckPolicy::Approximate);
 
         if !mvcc {
             must_generate_buckets_approximate(&rx, None, 15000, 45000, mvcc);
@@ -657,6 +660,8 @@ pub mod tests {
             CheckPolicy::Approximate,
             Some(vec![BucketRange(start.clone(), end.clone())]),
         ));
+        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        assert_eq!(host.policy(), CheckPolicy::Approximate);
 
         if !mvcc {
             must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 150, 450, mvcc);
