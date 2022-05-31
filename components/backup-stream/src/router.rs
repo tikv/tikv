@@ -1328,7 +1328,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic_file() -> Result<()> {
-        test_util::init_log_for_test();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&tmp).await?;
         let (tx, rx) = dummy_scheduler();
@@ -1485,7 +1484,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_flush_with_error() -> Result<()> {
-        test_util::init_log_for_test();
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let router = Arc::new(RouterInner::new(
@@ -1517,7 +1515,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_resolved_ts() {
-        test_util::init_log_for_test();
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
@@ -1544,7 +1541,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_flush_with_pausing_self() -> Result<()> {
-        test_util::init_log_for_test();
         let (tx, rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let router = Arc::new(RouterInner::new(
@@ -1585,7 +1581,6 @@ mod tests {
 
     #[test]
     fn test_format_datetime() {
-        test_util::init_log_for_test();
         let s = TempFileKey::format_date_time(431656320867237891);
         let s = s.to_string();
         assert_eq!(s, "20220307");
