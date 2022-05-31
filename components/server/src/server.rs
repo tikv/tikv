@@ -1314,6 +1314,8 @@ impl TiKVServer<RocksEngine> {
             )
             .expect("open raft engine");
             dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
+            raft_engine.stop();
+            drop(raft_engine);
             raft_data_state_machine.after_dump_data();
         }
 
@@ -1406,6 +1408,8 @@ impl TiKVServer<RaftLogEngine> {
             .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
             let raftdb = RocksEngine::from_db(Arc::new(raftdb));
             dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
+            raftdb.stop();
+            drop(raftdb);
             raft_data_state_machine.after_dump_data();
         }
 
