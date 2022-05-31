@@ -61,7 +61,7 @@ impl Default for Config {
             wait_for_lock_timeout: ReadableDuration::millis(1000),
             wake_up_delay_duration: ReadableDuration::millis(20),
             pipelined: true,
-            in_memory: true,
+            in_memory: false,
         }
     }
 }
@@ -70,6 +70,10 @@ impl Config {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.wait_for_lock_timeout.as_millis() == 0 {
             return Err("pessimistic-txn.wait-for-lock-timeout can not be 0".into());
+        }
+        if self.im_memory {
+            warn!("Cloud storage engine doesn't support in-memoty pessimistic locks");
+            self.im_memory = false;
         }
         Ok(())
     }
