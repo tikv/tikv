@@ -224,7 +224,7 @@ mod tests {
             ..Default::default()
         };
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
-        let mut runnable = SplitCheckRunner::new(engine.clone(), tx.clone(), cop_host.clone());
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
 
         let key_gen = |k: &[u8], i: u64, mvcc: bool| {
             if !mvcc {

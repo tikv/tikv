@@ -613,7 +613,7 @@ pub mod tests {
             }
         };
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
-        let mut runnable = SplitCheckRunner::new(engine.clone(), tx.clone(), cop_host.clone());
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
         for i in 0..2000 {
             // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has about 210 keys
             // if mvcc, kv size is about 18*2 = 36, expect each bucket has about 80 keys
