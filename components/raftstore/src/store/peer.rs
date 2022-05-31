@@ -82,7 +82,7 @@ use super::{
     DestroyPeerJob,
 };
 use crate::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RoleChange},
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
     errors::RAFTSTORE_IS_BUSY,
     store::{
         async_io::{write::WriteMsg, write_router::WriteRouter},
@@ -223,6 +223,7 @@ bitflags! {
         const SYNC_LOG       = 0b0000_0001;
         const SPLIT          = 0b0000_0010;
         const PREPARE_MERGE  = 0b0000_0100;
+        const COMMIT_MERGE   = 0b0000_1000;
     }
 }
 
@@ -1461,6 +1462,7 @@ where
         host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
+        reason: RegionChangeReason,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
@@ -1484,7 +1486,11 @@ where
         }
 
         if !self.pending_remove {
-            host.on_region_changed(self.region(), RegionChangeEvent::Update, self.get_role());
+            host.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Update(reason),
+                self.get_role(),
+            );
         }
     }
 
@@ -3165,8 +3171,14 @@ where
         // Reset delete_keys_hint and size_diff_hint.
         self.delete_keys_hint = 0;
         self.size_diff_hint = 0;
-        self.region_buckets = None;
-        self.last_region_buckets = None;
+        self.reset_region_buckets();
+    }
+
+    pub fn reset_region_buckets(&mut self) {
+        if self.region_buckets.is_some() {
+            self.last_region_buckets = self.region_buckets.take();
+            self.region_buckets = None;
+        }
     }
 
     /// Try to renew leader lease.
@@ -4127,6 +4139,7 @@ where
                 self.pre_propose_prepare_merge(poll_ctx, req)?;
                 ctx.insert(ProposalContext::PREPARE_MERGE);
             }
+            AdminCmdType::CommitMerge => ctx.insert(ProposalContext::COMMIT_MERGE),
             _ => {}
         }
 
@@ -5515,8 +5528,10 @@ mod tests {
             &[ProposalContext::SPLIT],
             &[ProposalContext::SYNC_LOG],
             &[ProposalContext::PREPARE_MERGE],
+            &[ProposalContext::COMMIT_MERGE],
             &[ProposalContext::SPLIT, ProposalContext::SYNC_LOG],
             &[ProposalContext::PREPARE_MERGE, ProposalContext::SYNC_LOG],
+            &[ProposalContext::COMMIT_MERGE, ProposalContext::SYNC_LOG],
         ];
 
         for flags in tbl {
