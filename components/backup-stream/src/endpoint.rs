@@ -18,15 +18,12 @@ use kvproto::{
 };
 use online_config::ConfigChange;
 use pd_client::PdClient;
-use raft::StateRole;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::RaftStoreRouter,
-    store::fsm::ChangeObserver,
 };
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
-    box_err,
     config::ReadableDuration,
     debug, defer, info,
     time::Instant,
@@ -40,17 +37,16 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
-use yatp::task::callback::Handle as YatpHandle;
 
 use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
 use crate::{
-    annotate,
     errors::{Error, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL},
+    subscription_manager::RegionSubscriptionManager,
     subscription_track::SubscriptionTracer,
     try_send,
     utils::{self, StopWatch},
@@ -72,7 +68,7 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     subs: SubscriptionTracer,
     concurrency_manager: ConcurrencyManager,
     initial_scan_memory_quota: PendingMemoryQuota,
-    scan_pool: ScanPool,
+    region_operator: RegionSubscriptionManager<S, R, PDC>,
 }
 
 impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
@@ -97,7 +93,6 @@ where
         crate::metrics::STREAM_ENABLED.inc();
         let pool = create_tokio_runtime(config.io_threads, "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
-        let scan_pool = create_scan_pool(config.num_threads);
 
         let meta_client = MetadataClient::new(store, store_id);
         let range_router = Router::new(
@@ -123,6 +118,23 @@ where
         let initial_scan_memory_quota =
             PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
+        let subs = SubscriptionTracer::default();
+        let (region_operator, op_loop) = RegionSubscriptionManager::start(
+            InitialDataLoader::new(
+                router.clone(),
+                accessor.clone(),
+                range_router.clone(),
+                subs.clone(),
+                scheduler.clone(),
+                initial_scan_memory_quota.clone(),
+                pool.handle().clone(),
+            ),
+            observer.clone(),
+            meta_client.clone(),
+            pd_client.clone(),
+            config.num_threads,
+        );
+        pool.spawn(op_loop);
         Endpoint {
             meta_client,
             range_router,
@@ -134,10 +146,10 @@ where
             engine: PhantomData,
             router,
             pd_client,
-            subs: Default::default(),
+            subs,
             concurrency_manager,
             initial_scan_memory_quota,
-            scan_pool,
+            region_operator,
         }
     }
 }
@@ -449,20 +461,20 @@ where
                 "end_key" => utils::redact(&end_key),
             );
         }
-        self.spawn_at_scan_pool(move || {
-            let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
-            match range_init_result {
-                Ok(()) => {
-                    info!("backup stream success to initialize"; 
+        // Assuming the `region info provider` would read region info form `StoreMeta` directly and this would be fast.
+        // If this gets slow, maybe make it async again. (Will that bring race conditions? say `Start` handled after `ResfreshResolver` of some region.)
+        let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
+        match range_init_result {
+            Ok(()) => {
+                info!("backup stream success to initialize"; 
                         "start_key" => utils::redact(&start_key),
                         "end_key" => utils::redact(&end_key),
                         "take" => ?start.saturating_elapsed(),)
-                }
-                Err(e) => {
-                    e.report("backup stream initialize failed");
-                }
             }
-        });
+            Err(e) => {
+                e.report("backup stream initialize failed");
+            }
+        }
         Ok(())
     }
 
@@ -670,7 +682,7 @@ where
                 Error::from(err).report("failed to update service safe point!");
                 // don't give up?
             }
-            if let Err(err) = meta_cli.step_task(&task, rts).await {
+            if let Err(err) = meta_cli.set_local_task_checkpoint(&task, rts).await {
                 err.report(format!("on flushing task {}", task));
                 // we can advance the progress at next time.
                 // return early so we won't be mislead by the metrics.
@@ -709,255 +721,15 @@ where
         ));
     }
 
-    /// Start observe over some region.
-    /// This would modify some internal state, and delegate the task to InitialLoader::observe_over.
-    fn observe_over(&self, region: &Region, handle: ObserveHandle) -> Result<()> {
-        let init = self.make_initial_loader();
-        let region_id = region.get_id();
-        self.subs.register_region(region, handle.clone(), None);
-        init.observe_over_with_retry(region, || {
-            ChangeObserver::from_pitr(region_id, handle.clone())
-        })?;
-        Ok(())
-    }
-
-    fn observe_over_with_initial_data_from_checkpoint(
-        &self,
-        region: &Region,
-        task: String,
-        handle: ObserveHandle,
-    ) -> Result<()> {
-        let init = self.make_initial_loader();
-
-        let meta_cli = self.meta_client.clone();
-        let last_checkpoint = TimeStamp::new(
-            self.pool
-                .block_on(meta_cli.global_progress_of_task(&task))?,
-        );
-        self.subs
-            .register_region(region, handle.clone(), Some(last_checkpoint));
-
-        let region_id = region.get_id();
-        let snap = init.observe_over_with_retry(region, move || {
-            ChangeObserver::from_pitr(region_id, handle.clone())
-        })?;
-        let region = region.clone();
-
-        // we should not spawn initial scanning tasks to the tokio blocking pool
-        // beacuse it is also used for converting sync File I/O to async. (for now!)
-        // In that condition, if we blocking for some resouces(for example, the `MemoryQuota`)
-        // at the block threads, we may meet some ghosty deadlock.
-        self.spawn_at_scan_pool(move || {
-            let begin = Instant::now_coarse();
-            match init.do_initial_scan(&region, last_checkpoint, snap) {
-                Ok(stat) => {
-                    info!("initial scanning of leader transforming finished!"; "takes" => ?begin.saturating_elapsed(), "region" => %region.get_id(), "from_ts" => %last_checkpoint);
-                    utils::record_cf_stat("lock", &stat.lock);
-                    utils::record_cf_stat("write", &stat.write);
-                    utils::record_cf_stat("default", &stat.data);
-                }
-                Err(err) => err.report(format!("during initial scanning of region {:?}", region)),
-            }
-        });
-        Ok(())
-    }
-
-    // spawn a task at the scan pool.
-    fn spawn_at_scan_pool(&self, task: impl FnOnce() + Send + 'static) {
-        self.scan_pool.spawn(move |_: &mut YatpHandle<'_>| {
-            tikv_alloc::add_thread_memory_accessor();
-            let _io_guard = file_system::WithIOType::new(file_system::IOType::Replication);
-            task();
-            tikv_alloc::remove_thread_memory_accessor();
-        })
-    }
-
-    fn find_task_by_region(&self, r: &Region) -> Option<String> {
-        self.range_router
-            .find_task_by_range(&r.start_key, &r.end_key)
-    }
-
     /// Modify observe over some region.
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
         info!("backup stream: on_modify_observe"; "op" => ?op);
-        match op {
-            ObserveOp::Start {
-                region,
-                needs_initial_scanning,
-            } => {
-                #[cfg(feature = "failpoints")]
-                fail::fail_point!("delay_on_start_observe");
-                self.start_observe(region, needs_initial_scanning);
-                metrics::INITIAL_SCAN_REASON
-                    .with_label_values(&["leader-changed"])
-                    .inc();
-                crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_sub(1, Ordering::SeqCst);
-            }
-            ObserveOp::Stop { ref region } => {
-                self.subs.deregister_region(region, |_, _| true);
-            }
-            ObserveOp::CheckEpochAndStop { ref region } => {
-                self.subs.deregister_region(region, |old, new| {
-                    raftstore::store::util::compare_region_epoch(
-                        old.meta.get_region_epoch(),
-                        new,
-                        true,
-                        true,
-                        false,
-                    )
-                    .map_err(|err| warn!("check epoch and stop failed."; "err" => %err))
-                    .is_ok()
-                });
-            }
-            ObserveOp::RefreshResolver { ref region } => {
-                let need_refresh_all = !self.subs.try_update_region(region);
-
-                if need_refresh_all {
-                    let canceled = self.subs.deregister_region(region, |_, _| true);
-                    let handle = ObserveHandle::new();
-                    if canceled {
-                        let for_task = self.find_task_by_region(region).unwrap_or_else(|| {
-                            panic!(
-                                "BUG: the region {:?} is register to no task but being observed",
-                                region
-                            )
-                        });
-                        metrics::INITIAL_SCAN_REASON
-                            .with_label_values(&["region-changed"])
-                            .inc();
-                        if let Err(e) = self.observe_over_with_initial_data_from_checkpoint(
-                            region,
-                            for_task,
-                            handle.clone(),
-                        ) {
-                            try_send!(
-                                self.scheduler,
-                                Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
-                                    region: region.clone(),
-                                    handle,
-                                    err: Box::new(e)
-                                })
-                            );
-                        }
-                    }
-                }
-            }
-            ObserveOp::NotifyFailToStartObserve {
-                region,
-                handle,
-                err,
-            } => {
-                info!("retry observe region"; "region" => %region.get_id(), "err" => %err);
-                // No need for retrying observe canceled.
-                if err.error_code() == error_code::backup_stream::OBSERVE_CANCELED {
-                    return;
-                }
-                match self.retry_observe(region, handle) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        try_send!(
-                            self.scheduler,
-                            Task::FatalError(
-                                format!("While retring to observe region, origin error is {}", err),
-                                Box::new(e)
-                            )
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    fn start_observe(&self, region: Region, needs_initial_scanning: bool) {
-        let handle = ObserveHandle::new();
-        let result = if needs_initial_scanning {
-            match self.find_task_by_region(&region) {
-                None => {
-                    warn!(
-                        "the region {:?} is register to no task but being observed (start_key = {}; end_key = {}; task_stat = {:?}): maybe stale, aborting",
-                        region,
-                        utils::redact(&region.get_start_key()),
-                        utils::redact(&region.get_end_key()),
-                        self.range_router
-                    );
-                    return;
-                }
-
-                Some(for_task) => self.observe_over_with_initial_data_from_checkpoint(
-                    &region,
-                    for_task,
-                    handle.clone(),
-                ),
-            }
-        } else {
-            self.observe_over(&region, handle.clone())
-        };
-        if let Err(err) = result {
-            try_send!(
-                self.scheduler,
-                Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
-                    region,
-                    handle,
-                    err: Box::new(err)
-                })
-            );
-        }
-    }
-
-    fn retry_observe(&self, region: Region, handle: ObserveHandle) -> Result<()> {
-        let (tx, rx) = crossbeam::channel::bounded(1);
-        self.regions
-            .find_region_by_id(
-                region.get_id(),
-                Box::new(move |item| {
-                    tx.send(item)
-                        .expect("BUG: failed to send to newly created channel.");
-                }),
-            )
-            .map_err(|err| {
-                annotate!(
-                    err,
-                    "failed to send request to region info accessor, server maybe too too too busy. (region id = {})",
-                    region.get_id()
-                )
-            })?;
-        let new_region_info = rx
-            .recv()
-            .map_err(|err| annotate!(err, "BUG?: unexpected channel message dropped."))?;
-        if new_region_info.is_none() {
-            metrics::SKIP_RETRY
-                .with_label_values(&["region-absent"])
-                .inc();
-            return Ok(());
-        }
-        let new_region_info = new_region_info.unwrap();
-        if new_region_info.role != StateRole::Leader {
-            metrics::SKIP_RETRY.with_label_values(&["not-leader"]).inc();
-            return Ok(());
-        }
-        let removed = self.subs.deregister_region(&region, |old, _| {
-            let should_remove = old.handle().id == handle.id;
-            if !should_remove {
-                warn!("stale retry command"; "region" => ?region, "handle" => ?handle, "old_handle" => ?old.handle());
-            }
-            should_remove
-        });
-        if !removed {
-            metrics::SKIP_RETRY
-                .with_label_values(&["stale-command"])
-                .inc();
-            return Ok(());
-        }
-        metrics::INITIAL_SCAN_REASON
-            .with_label_values(&["retry"])
-            .inc();
-        self.start_observe(region, true);
-        Ok(())
+        self.pool.block_on(self.region_operator.request(op));
     }
 
     pub fn run_task(&self, task: Task) {
-        debug!("run backup stream task"; "task" => ?task, "store_id" => %self.store_id);
+        debug!("run backup stream task"; "task" => ?task);
         let now = Instant::now_coarse();
         let label = task.label();
         defer! {
@@ -993,15 +765,6 @@ where
             self.backup_batch(batch)
         }
     }
-}
-
-type ScanPool = yatp::ThreadPool<yatp::task::callback::TaskCell>;
-
-/// Create a yatp pool for doing initial scanning.
-fn create_scan_pool(num_threads: usize) -> ScanPool {
-    yatp::Builder::new("log-backup-scan")
-        .max_thread_count(num_threads)
-        .build_callback_pool()
 }
 
 /// Create a standard tokio runtime
@@ -1060,10 +823,6 @@ pub enum TaskOp {
 pub enum ObserveOp {
     Start {
         region: Region,
-        // if `true`, would scan and sink change from the global checkpoint ts.
-        // Note: maybe we'd better make it Option<TimeStamp> to make it more generic,
-        //       but that needs the `observer` know where the checkpoint is, which is a little dirty...
-        needs_initial_scanning: bool,
     },
     Stop {
         region: Region,

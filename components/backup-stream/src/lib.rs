@@ -11,6 +11,7 @@ pub mod metadata;
 mod metrics;
 pub mod observer;
 pub mod router;
+mod subscription_manager;
 mod subscription_track;
 mod utils;
 

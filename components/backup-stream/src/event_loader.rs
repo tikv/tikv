@@ -69,7 +69,11 @@ impl PendingMemoryQuota {
 /// EventLoader transforms data from the snapshot into ApplyEvent.
 pub struct EventLoader<S: Snapshot> {
     scanner: DeltaScanner<S>,
+    // pooling the memory.
+    entry_batch: EntryBatch,
 }
+
+const ENTRY_BATCH_SIZE: usize = 1024;
 
 impl<S: Snapshot> EventLoader<S> {
     pub fn load_from(
@@ -93,20 +97,31 @@ impl<S: Snapshot> EventLoader<S> {
                 from_ts, to_ts, region_id
             ))?;
 
-        Ok(Self { scanner })
+        Ok(Self {
+            scanner,
+            entry_batch: EntryBatch::with_capacity(ENTRY_BATCH_SIZE),
+        })
     }
 
-    /// scan a batch of events from the snapshot. Tracking the locks at the same time.
-    /// note: maybe make something like [`EntryBatch`] for reducing allocation.
-    fn scan_batch(
+    /// Scan a batch of events from the snapshot, and save them into the internal buffer.
+    fn fill_entries(&mut self) -> Result<Statistics> {
+        assert!(
+            self.entry_batch.is_empty(),
+            "EventLoader: the entry batch isn't empty when filling entries, which is error-prone, please call `omit_entries` first. (len = {})",
+            self.entry_batch.len()
+        );
+        self.scanner.scan_entries(&mut self.entry_batch)?;
+        Ok(self.scanner.take_statistics())
+    }
+
+    /// Drain the internal buffer, converting them to the [`ApplyEvents`],
+    /// and tracking the locks at the same time.
+    fn omit_entries_to(
         &mut self,
-        batch_size: usize,
         result: &mut ApplyEvents,
         resolver: &mut TwoPhaseResolver,
-    ) -> Result<Statistics> {
-        let mut b = EntryBatch::with_capacity(batch_size);
-        self.scanner.scan_entries(&mut b)?;
-        for entry in b.drain() {
+    ) -> Result<()> {
+        for entry in self.entry_batch.drain() {
             match entry {
                 TxnEntry::Prewrite {
                     default: (key, value),
@@ -149,7 +164,7 @@ impl<S: Snapshot> EventLoader<S> {
                 }
             }
         }
-        Ok(self.scanner.take_statistics())
+        Ok(())
     }
 }
 
@@ -158,15 +173,15 @@ impl<S: Snapshot> EventLoader<S> {
 /// Note: maybe we can merge those two structures?
 #[derive(Clone)]
 pub struct InitialDataLoader<E, R, RT> {
-    router: RT,
-    regions: R,
+    pub(crate) router: RT,
+    pub(crate) regions: R,
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
-    sink: Router,
-    tracing: SubscriptionTracer,
-    scheduler: Scheduler<Task>,
-    quota: PendingMemoryQuota,
-    handle: tokio::runtime::Handle,
+    pub(crate) sink: Router,
+    pub(crate) tracing: SubscriptionTracer,
+    pub(crate) scheduler: Scheduler<Task>,
+    pub(crate) quota: PendingMemoryQuota,
+    pub(crate) handle: tokio::runtime::Handle,
 
     _engine: PhantomData<E>,
 }
@@ -347,8 +362,8 @@ where
         let start = Instant::now();
         loop {
             let mut events = ApplyEvents::with_capacity(1024, region.id);
-            let stat =
-                self.with_resolver(region, |r| event_loader.scan_batch(1024, &mut events, r))?;
+            let stat = event_loader.fill_entries()?;
+            self.with_resolver(region, |r| event_loader.omit_entries_to(&mut events, r))?;
             if events.is_empty() {
                 metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
                 return Ok(stats.stat);
@@ -425,10 +440,7 @@ where
                 //       At that time, we have nowhere to record the lock status of this region.
                 let success = try_send!(
                     self.scheduler,
-                    Task::ModifyObserve(ObserveOp::Start {
-                        region: r.region,
-                        needs_initial_scanning: true
-                    })
+                    Task::ModifyObserve(ObserveOp::Start { region: r.region })
                 );
                 if success {
                     crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_add(1, Ordering::SeqCst);

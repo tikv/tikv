@@ -284,7 +284,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// forward the progress of some task.
-    pub async fn step_task(&self, task_name: &str, ts: u64) -> Result<()> {
+    pub async fn set_local_task_checkpoint(&self, task_name: &str, ts: u64) -> Result<()> {
         let now = Instant::now();
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
