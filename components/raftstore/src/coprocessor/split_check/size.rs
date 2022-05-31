@@ -751,7 +751,7 @@ pub mod tests {
         assert_eq!(host.policy(), CheckPolicy::Scan);
 
         cfg.prefer_gen_bucket_by_approximate = true;
-        let cop_host = CoprocessorHost::new(tx.clone(), cfg);
+        let cop_host = CoprocessorHost::new(tx, cfg);
         let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Approximate);
     }
