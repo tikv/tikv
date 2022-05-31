@@ -67,6 +67,7 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
+use kvengine::dfs::DFS;
 
 use crate::{
     node::*,
@@ -710,6 +711,10 @@ impl TiKVServer {
     pub fn get_raft_engine(&self) -> rfengine::RfEngine {
         self.raw_engines.raft.clone()
     }
+
+    pub fn get_store_id(&self) -> u64 {
+        self.servers.as_ref().unwrap().node.id()
+    }
 }
 
 impl TiKVServer {
@@ -720,15 +725,19 @@ impl TiKVServer {
         let wal_size = conf.raft_engine.config().target_file_size.0 as usize;
         let rf_engine = RfEngine::open(raft_db_path, wal_size).unwrap();
         let dfs_conf = &conf.dfs;
-        let dfs = Arc::new(kvengine::dfs::S3FS::new(
-            dfs_conf.tenant_id,
-            kv_engine_path.clone(),
-            dfs_conf.s3_endpoint.clone(),
-            dfs_conf.s3_key_id.clone(),
-            dfs_conf.s3_secret_key.clone(),
-            dfs_conf.s3_region.clone(),
-            dfs_conf.s3_bucket.clone(),
-        ));
+        let dfs: Arc<dyn DFS> = if dfs_conf.s3_endpoint == "memory" {
+            Arc::new(kvengine::dfs::InMemFS::new(kv_engine_path.clone()))
+        } else {
+            Arc::new(kvengine::dfs::S3FS::new(
+                dfs_conf.tenant_id,
+                kv_engine_path.clone(),
+                dfs_conf.s3_endpoint.clone(),
+                dfs_conf.s3_key_id.clone(),
+                dfs_conf.s3_secret_key.clone(),
+                dfs_conf.s3_region.clone(),
+                dfs_conf.s3_bucket.clone(),
+            ))
+        };
         let mut kv_opts = kvengine::Options::default();
         let capacity = match conf.storage.block_cache.capacity {
             None => {
