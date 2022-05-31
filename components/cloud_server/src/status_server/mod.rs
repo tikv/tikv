@@ -414,6 +414,7 @@ impl StatusServer {
     // Return listening address, this may only be used for outer test
     // to get the real address because we may use "127.0.0.1:0"
     // in test to avoid port conflict.
+    #[allow(unused)]
     pub fn listening_addr(&self) -> SocketAddr {
         self.addr.unwrap()
     }
@@ -432,8 +433,8 @@ fn get_last_path_segment(path: &str) -> &str {
 
 impl StatusServer {
     pub async fn dump_region_meta(
-        req: Request<Body>,
-        router: RaftRouter,
+        _req: Request<Body>,
+        _router: RaftRouter,
     ) -> hyper::Result<Response<Body>> {
         // TODO(x)
         Ok(hyper::Response::new(Body::empty()))

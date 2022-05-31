@@ -128,6 +128,11 @@ impl Config {
         }
         self.io_rate_limit.validate()?;
 
+        if self.flow_control.enable {
+            warn!("Cloud storage engine doesn't support flow control in scheduler");
+            self.flow_control.enable = false;
+        }
+
         Ok(())
     }
 
@@ -176,7 +181,8 @@ pub struct FlowControlConfig {
 impl Default for FlowControlConfig {
     fn default() -> FlowControlConfig {
         FlowControlConfig {
-            enable: true,
+            // NOTE: cloud storage engine doesn't support it.
+            enable: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(1024),
             memtables_threshold: 5,

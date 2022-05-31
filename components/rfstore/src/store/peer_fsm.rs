@@ -42,7 +42,7 @@ use crate::{
 /// Limits the maximum number of regions returned by error.
 ///
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
-const MAX_REGIONS_IN_ERROR: usize = 10;
+const _MAX_REGIONS_IN_ERROR: usize = 10;
 
 pub struct PeerFsm {
     pub(crate) peer: Peer,

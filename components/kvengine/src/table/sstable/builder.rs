@@ -521,7 +521,7 @@ impl BlockBuilder {
             let compress_bound = lz4::liblz4::LZ4_compressBound(self.compression_buf.len() as i32);
             self.buf.reserve(compress_bound as usize);
             let src = &self.compression_buf;
-            let mut dst = &mut self.buf[buf_len..];
+            let dst = &mut self.buf[buf_len..];
             let size = lz4::liblz4::LZ4_compress_default(
                 src.as_ptr() as *const libc::c_char,
                 dst.as_mut_ptr() as *mut libc::c_char,
@@ -538,7 +538,7 @@ impl BlockBuilder {
             let compress_bound = zstd_sys::ZSTD_compressBound(self.compression_buf.len());
             self.buf.reserve(compress_bound);
             let src = &self.compression_buf;
-            let mut dst = &mut self.buf[buf_len..];
+            let dst = &mut self.buf[buf_len..];
             let size = zstd_sys::ZSTD_compress(
                 dst.as_mut_ptr() as *mut libc::c_void,
                 compress_bound,

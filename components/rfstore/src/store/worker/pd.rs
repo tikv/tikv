@@ -309,6 +309,7 @@ fn hotspot_query_num_report_threshold() -> u64 {
 }
 
 impl Runner {
+    #[allow(unused)]
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
@@ -316,7 +317,7 @@ impl Runner {
         pd_client: Arc<dyn PdClient>,
         router: RaftRouter,
         scheduler: Scheduler<Task>,
-        store_heartbeat_interval: Duration,
+        _store_heartbeat_interval: Duration,
         concurrency_manager: ConcurrencyManager,
         remote: Remote<yatp::task::future::TaskCell>,
         kv: kvengine::Engine,
@@ -342,7 +343,7 @@ impl Runner {
     // be called in an asynchronous context.
     fn handle_ask_batch_split(
         router: RaftRouter,
-        scheduler: Scheduler<Task>,
+        _scheduler: Scheduler<Task>,
         pd_client: Arc<dyn PdClient>,
         mut region: metapb::Region,
         split_keys: Vec<Vec<u8>>,
@@ -434,7 +435,7 @@ impl Runner {
         &mut self,
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo,
-        send_detailed_report: bool,
+        _send_detailed_report: bool,
     ) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
             Err(e) => {
@@ -539,14 +540,13 @@ impl Runner {
 
         // TODO(x): set slow score
 
-        let mut optional_report = None;
-        let router = self.router.clone();
+        let optional_report = None;
         let scheduler = self.scheduler.clone();
         let stats_copy = stats.clone();
         let resp = self.pd_client.store_heartbeat(stats, optional_report, None);
         let f = async move {
             match resp.await {
-                Ok(mut resp) => {
+                Ok(resp) => {
                     // TODO(x): UpdateReplicationMode
                     if resp.get_require_detailed_report() {
                         info!("required to send detailed report in the next heartbeat");
@@ -797,6 +797,7 @@ impl Runner {
         }
     }
 
+    #[allow(unused)]
     fn handle_store_infos(
         &mut self,
         cpu_usages: RecordPairVec,
@@ -927,7 +928,7 @@ impl Runnable for Runner {
                     written_keys_delta,
                     last_report_ts,
                     query_stats,
-                    cpu_usage,
+                    _cpu_usage,
                 ) = {
                     let region_id = hb_task.region.get_id();
                     let peer_stat = self
@@ -1092,8 +1093,6 @@ fn send_admin_request(
     request: AdminRequest,
     callback: Callback,
 ) {
-    let cmd_type = request.get_cmd_type();
-
     let mut req = RaftCmdRequest::default();
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(epoch);

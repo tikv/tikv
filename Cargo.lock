@@ -2819,6 +2819,7 @@ dependencies = [
  "rocksdb",
  "rusoto_core",
  "rusoto_credential",
+ "rusoto_mock",
  "rusoto_s3",
  "serde",
  "serde_derive",
@@ -6011,6 +6012,22 @@ dependencies = [
  "tikv",
  "tikv_util",
  "txn_types",
+]
+
+[[package]]
+name = "test_cloud_server"
+version = "0.1.0"
+dependencies = [
+ "cloud_server",
+ "futures 0.3.15",
+ "grpcio",
+ "kvproto",
+ "pd_client",
+ "security",
+ "tempfile",
+ "test_raftstore",
+ "test_util",
+ "tikv",
 ]
 
 [[package]]

@@ -1,10 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{atomic::AtomicBool, Arc},
-    thread,
-    time::Duration,
-};
+use std::{sync::Arc, thread, time::Duration};
 
 use api_version::KvFormat;
 use concurrency_manager::ConcurrencyManager;

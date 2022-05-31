@@ -150,6 +150,7 @@ impl CustomRaftLog<'a> {
         Ok(cs)
     }
 
+    #[allow(unused)]
     pub(crate) fn get_delete_range(&'a self) -> (&'a [u8], &'a [u8]) {
         let mut i = HEADER_SIZE;
         let start_key_len = LittleEndian::read_u16(&self.data[i..]) as usize;

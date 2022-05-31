@@ -2,13 +2,10 @@
 
 use std::{
     collections::{hash_map::Entry, HashMap},
-    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-use kvengine::Engine;
 use kvenginepb::ChangeSet;
-use rfengine::RfEngine;
 use tikv_util::{
     mpsc,
     mpsc::{Receiver, Sender},
@@ -20,7 +17,6 @@ use crate::store::StoreMsg;
 pub struct Engines {
     pub kv: kvengine::Engine,
     pub raft: rfengine::RfEngine,
-    raft_path: PathBuf,
     #[allow(clippy::type_complexity)]
     pub meta_change_channel: Arc<Mutex<Option<(Sender<StoreMsg>, Receiver<StoreMsg>)>>>,
 }
@@ -31,11 +27,9 @@ impl Engines {
         raft: rfengine::RfEngine,
         meta_change_channel: (Sender<StoreMsg>, Receiver<StoreMsg>),
     ) -> Self {
-        let raft_path = raft.dir.clone();
         Self {
             kv,
             raft,
-            raft_path,
             meta_change_channel: Arc::new(Mutex::new(Some(meta_change_channel))),
         }
     }

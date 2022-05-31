@@ -1,8 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO(youjiali1995): fix lint
-#![allow(unused)]
-
 pub mod apply;
 pub mod compaction;
 mod concat_iterator;
@@ -25,7 +22,6 @@ pub mod write;
 extern crate serde_derive;
 #[macro_use]
 extern crate slog_global;
-extern crate core;
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;

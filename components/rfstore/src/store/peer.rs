@@ -303,6 +303,7 @@ impl CmdEpochChecker {
     ///
     /// Note that the cmd of this type must change epoch otherwise it can not be
     /// recorded to `proposed_admin_cmd`.
+    #[allow(unused)]
     pub fn last_cmd_index(&mut self, cmd_type: AdminCmdType) -> Option<u64> {
         self.proposed_admin_cmd
             .iter()
@@ -408,7 +409,6 @@ pub(crate) struct Peer {
 
     // Index of last scheduled committed raft log.
     pub(crate) last_applying_idx: u64,
-    pub(crate) last_compacted_index: u64,
     // The index of the latest urgent proposal index.
     pub(crate) last_urgent_proposal_idx: u64,
     // The index of the latest committed split command.
@@ -421,7 +421,7 @@ pub(crate) struct Peer {
     pub peers_start_pending_time: Vec<(u64, Instant)>,
 
     /// A inaccurate cache about which peer is marked as down.
-    down_peer_ids: Vec<u64>,
+    _down_peer_ids: Vec<u64>,
 
     pub(crate) need_campaign: bool,
 
@@ -506,11 +506,10 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
-            down_peer_ids: vec![],
+            _down_peer_ids: vec![],
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             last_applying_idx: applied_index,
-            last_compacted_index: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
             leader_lease: Lease::new(
@@ -689,6 +688,7 @@ impl Peer {
         self.last_applying_idx == self.get_store().applied_index()
     }
 
+    #[allow(unused)]
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
         metrics.message += ready.messages().len() as u64;
         metrics.commit += ready.committed_entries().len() as u64;
@@ -699,11 +699,13 @@ impl Peer {
         }
     }
 
+    #[allow(unused)]
     fn add_light_ready_metric(&self, light_ready: &LightReady, metrics: &mut RaftReadyMetrics) {
         metrics.message += light_ready.messages().len() as u64;
         metrics.commit += light_ready.committed_entries().len() as u64;
     }
 
+    #[allow(unused)]
     #[inline]
     pub fn in_joint_state(&self) -> bool {
         self.region().get_peers().iter().any(|p| {
@@ -1225,7 +1227,7 @@ impl Peer {
             region_id: self.region_id,
             ready_number: ready.number(),
             peer_id: self.peer_id(),
-            commit_idx: self.get_store().commit_index(),
+            _commit_idx: self.get_store().commit_index(),
             raft_messages: persist_messages,
         });
         self.raft_group.advance_append_async(ready)
@@ -1308,7 +1310,7 @@ impl Peer {
             vec![]
         };
         let apply_msg = ApplyMsg::Apply(MsgApply {
-            region_id: self.region_id,
+            _region_id: self.region_id,
             term: self.term(),
             entries: committed_entries,
             new_role,

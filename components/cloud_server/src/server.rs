@@ -134,7 +134,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     local_addr: SocketAddr,
     // Transport.
     trans: ServerTransport<T, S>,
-    raft_router: T,
+    _raft_router: T,
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
@@ -229,7 +229,7 @@ impl<T: RaftStoreRouter + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
             builder_or_server: Some(builder),
             local_addr: addr,
             trans,
-            raft_router,
+            _raft_router: raft_router,
             stats_pool,
             grpc_thread_load,
             yatp_read_pool,
@@ -285,8 +285,8 @@ impl<T: RaftStoreRouter + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
     /// Notice: Make sure call `build_and_bind` first.
     pub fn start(
         &mut self,
-        cfg: Arc<VersionTrack<Config>>,
-        security_mgr: Arc<SecurityManager>,
+        _cfg: Arc<VersionTrack<Config>>,
+        _security_mgr: Arc<SecurityManager>,
     ) -> Result<()> {
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         info!("listening on addr"; "addr" => &self.local_addr);

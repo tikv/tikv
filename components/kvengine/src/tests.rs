@@ -28,6 +28,8 @@ macro_rules! unwrap_or_return {
     };
 }
 
+// FIXME(youjiali1995): it has data race and may not be suilable for the current kvengine.
+#[ignore]
 #[test]
 fn test_engine() {
     init_logger();

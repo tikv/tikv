@@ -19,22 +19,22 @@ use tokio::runtime::Runtime;
 // DFS represents a distributed file system.
 #[async_trait]
 pub trait DFS: Sync + Send {
-    // open opens an existing file with fileID.
-    // It may take a long time if the file need to be cached in local disk.
+    /// open opens an existing file with fileID.
+    /// It may take a long time if the file need to be cached in local disk.
     fn open(&self, file_id: u64, opts: Options) -> Result<Arc<dyn File>>;
 
-    // read_file reads the whole file to memory.
-    // It can be used by remote compaction server that doesn't have local disk.
+    /// read_file reads the whole file to memory.
+    /// It can be used by remote compaction server that doesn't have local disk.
     async fn read_file(&self, file_id: u64, opts: Options) -> Result<Bytes>;
 
-    // Create creates a new File.
-    // The shard_id and shard_ver can be used determine where to write the file.
+    /// Create creates a new File.
+    /// The shard_id and shard_ver can be used determine where to write the file.
     async fn create(&self, file_id: u64, data: Bytes, opts: Options) -> Result<()>;
 
-    // remove removes the file from the DFS.
+    /// remove removes the file from the DFS.
     async fn remove(&self, file_id: u64, opts: Options);
 
-    // get_runtime gets the tokio runtime for the DFS.
+    /// get_runtime gets the tokio runtime for the DFS.
     fn get_runtime(&self) -> &tokio::runtime::Runtime;
 
     fn local_dir(&self) -> &Path;

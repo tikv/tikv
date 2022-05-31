@@ -119,7 +119,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
         let mut entries = Vec::with_capacity((high_idx - low_idx) as usize);
         self.rf_engine
             .fetch_entries_to(shard.id, low_idx, high_idx, None, &mut entries)
-            .map_err(|e| kvengine::Error::ErrOpen("entries unavailable.".to_string()))?;
+            .map_err(|_| kvengine::Error::ErrOpen("entries unavailable.".to_string()))?;
 
         let snap = shard.new_snap_access();
         let mut applier = Applier::new_for_recover(self.store_id, region_meta, snap, apply_state);

@@ -444,10 +444,10 @@ impl Engine for RaftKv {
 
     fn get_mvcc_properties_cf(
         &self,
-        cf: CfName,
-        safe_point: TimeStamp,
-        start: &[u8],
-        end: &[u8],
+        _cf: CfName,
+        _safe_point: TimeStamp,
+        _start: &[u8],
+        _end: &[u8],
     ) -> Option<MvccProperties> {
         // TODO(x)
         None
@@ -550,7 +550,7 @@ rollback
     | modify::put cf_write::rollback + modify:del cf_lock
     | modify::put cf_lock(has rollback_ts) + modify:put cf_write:rollback
 */
-pub fn modifies_to_requests(ctx: &Context, modifies: Vec<Modify>) -> CustomRequest {
+pub fn modifies_to_requests(_ctx: &Context, modifies: Vec<Modify>) -> CustomRequest {
     let builder = &mut rlog::CustomBuilder::new();
     let custom_type = detect_custom_type(&modifies);
     builder.set_type(custom_type);
@@ -663,12 +663,12 @@ fn build_prewrite(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
 fn build_commit(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
     for m in modifies {
         match m {
-            Modify::Put(CF_WRITE, key, val) => {
+            Modify::Put(CF_WRITE, key, _) => {
                 let commit_ts = key.decode_ts().unwrap();
                 let raw_key = key.to_raw().unwrap();
                 builder.append_commit(&raw_key, commit_ts.into_inner());
             }
-            Modify::Delete(cf, key) => {
+            Modify::Delete(cf, _) => {
                 assert_eq!(cf, CF_LOCK);
             }
             _ => unreachable!(),
@@ -705,7 +705,7 @@ fn build_one_pc(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
                 }
                 _ => unreachable!("cf {:?}", cf),
             },
-            Modify::Delete(cf, key) => {
+            Modify::Delete(cf, _) => {
                 assert_eq!(*cf, CF_LOCK);
             }
             _ => unreachable!("{:?}", m),
@@ -729,14 +729,14 @@ fn build_pessimistic_rollback(builder: &mut CustomBuilder, modifies: Vec<Modify>
 fn build_rollback(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
     for (i, m) in modifies.iter().enumerate() {
         match m {
-            Modify::Put(cf, key, val) => {
+            Modify::Put(cf, key, _) => {
                 assert_eq!(*cf, CF_WRITE);
                 let start_ts = key.decode_ts().unwrap().into_inner();
                 let raw_key = key.to_raw().unwrap();
                 let delete_lock = is_same_key_del_lock(&modifies, i + 1, key);
                 builder.append_rollback(&raw_key, start_ts, delete_lock);
             }
-            Modify::Delete(cf, key) => {
+            Modify::Delete(cf, _) => {
                 assert_eq!(*cf, CF_LOCK)
             }
             _ => unreachable!(),

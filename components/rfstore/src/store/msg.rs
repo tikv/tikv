@@ -34,13 +34,6 @@ pub enum PeerMsg {
 }
 
 impl PeerMsg {
-    pub(crate) fn take_callback(&mut self) -> Callback {
-        match self {
-            PeerMsg::RaftCommand(cmd) => std::mem::replace(&mut cmd.callback, Callback::None),
-            _ => Callback::None,
-        }
-    }
-
     pub(crate) fn size(&self) -> usize {
         match self {
             PeerMsg::RaftMessage(msg) => {
@@ -89,7 +82,7 @@ pub struct PersistReady {
     pub(crate) region_id: u64,
     pub(crate) peer_id: u64,
     pub(crate) ready_number: u64,
-    pub(crate) commit_idx: u64,
+    pub(crate) _commit_idx: u64,
     pub(crate) raft_messages: Vec<RaftMessage>,
 }
 
@@ -118,7 +111,7 @@ impl RaftCommand {
 
 #[derive(Debug)]
 pub struct MsgApply {
-    pub(crate) region_id: u64,
+    pub(crate) _region_id: u64,
     pub(crate) term: u64,
     pub(crate) entries: Vec<eraftpb::Entry>,
     pub(crate) new_role: Option<raft::StateRole>,

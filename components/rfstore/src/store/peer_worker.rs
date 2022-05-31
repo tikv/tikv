@@ -188,7 +188,7 @@ impl RaftWorker {
                     Entry::Occupied(mut entry) => {
                         entry.get_mut().msgs.push(PeerMsg::Tick);
                     }
-                    Entry::Vacant(mut entry) => {
+                    Entry::Vacant(entry) => {
                         entry.insert(PeerInbox {
                             peer: peer.clone(),
                             msgs: vec![PeerMsg::Tick],

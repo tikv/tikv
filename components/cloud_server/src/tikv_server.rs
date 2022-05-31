@@ -11,7 +11,6 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use std::{
-    convert::TryFrom,
     env, fmt,
     fs::{self, File},
     net::SocketAddr,
@@ -32,6 +31,7 @@ use file_system::{
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
+use kvengine::dfs::DFS;
 use kvproto::{
     brpb_grpc::create_backup, deadlock::create_deadlock, import_sstpb_grpc::create_import_sst,
 };
@@ -43,7 +43,6 @@ use raftstore::{
     },
     RegionInfoAccessor,
 };
-use resource_metering::ResourceTagFactory;
 use rfengine::RfEngine;
 use rfstore::{
     store::{
@@ -82,15 +81,12 @@ use crate::{
     server::Server,
     service::ImportSstService,
     setup::{initial_logger, initial_metric, validate_and_persist_config},
-    signal_handler,
     status_server::StatusServer,
 };
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
-const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
-const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
 pub struct TiKVServer {
@@ -174,7 +170,7 @@ impl TiKVServer {
     }
 
     pub fn setup(
-        mut config: TiKvConfig,
+        config: TiKvConfig,
         security_mgr: Arc<SecurityManager>,
         env: Arc<Environment>,
         pd_client: Arc<dyn PdClient>,
@@ -488,10 +484,9 @@ impl TiKVServer {
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
             self.config.resource_metering.receiver_address.clone(),
             self.env.clone(),
-            data_sink_reg_handle.clone(),
+            data_sink_reg_handle,
         );
         self.to_stop.push(single_target_worker);
-        let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
 
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
@@ -532,9 +527,6 @@ impl TiKVServer {
 
         ReplicaReadLockChecker::new(self.concurrency_manager.clone())
             .register(self.coprocessor_host.as_mut().unwrap());
-
-        let bps = i64::try_from(self.config.server.snap_max_write_bytes_per_sec.0)
-            .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));
 
         // Create coprocessor endpoint.
         let cop_read_pool_handle = if self.config.readpool.coprocessor.use_unified_pool() {
@@ -721,6 +713,7 @@ impl TiKVServer {
         backup_worker.start(backup_endpoint);
     }
 
+    #[allow(unused)]
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
         let mut io_metrics = IOMetricsManager::new(fetcher);
         self.background_worker
@@ -793,6 +786,10 @@ impl TiKVServer {
     pub fn get_raft_engine(&self) -> rfengine::RfEngine {
         self.raw_engines.raft.clone()
     }
+
+    pub fn get_store_id(&self) -> u64 {
+        self.servers.as_ref().unwrap().node.id()
+    }
 }
 
 impl TiKVServer {
@@ -803,15 +800,19 @@ impl TiKVServer {
         let wal_size = conf.raft_engine.config().target_file_size.0 as usize;
         let rf_engine = RfEngine::open(raft_db_path, wal_size).unwrap();
         let dfs_conf = &conf.dfs;
-        let dfs = Arc::new(kvengine::dfs::S3FS::new(
-            dfs_conf.tenant_id,
-            kv_engine_path.clone(),
-            dfs_conf.s3_endpoint.clone(),
-            dfs_conf.s3_key_id.clone(),
-            dfs_conf.s3_secret_key.clone(),
-            dfs_conf.s3_region.clone(),
-            dfs_conf.s3_bucket.clone(),
-        ));
+        let dfs: Arc<dyn DFS> = if dfs_conf.s3_endpoint == "memory" {
+            Arc::new(kvengine::dfs::InMemFS::new(kv_engine_path.clone()))
+        } else {
+            Arc::new(kvengine::dfs::S3FS::new(
+                dfs_conf.tenant_id,
+                kv_engine_path.clone(),
+                dfs_conf.s3_endpoint.clone(),
+                dfs_conf.s3_key_id.clone(),
+                dfs_conf.s3_secret_key.clone(),
+                dfs_conf.s3_region.clone(),
+                dfs_conf.s3_bucket.clone(),
+            ))
+        };
         let mut kv_opts = kvengine::Options::default();
         let capacity = match conf.storage.block_cache.capacity {
             None => {
