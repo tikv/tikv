@@ -1,23 +1,23 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    fmt,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{EncryptionKeyManager, Iterable, KvEngine, SstMetaInfo, SstReader};
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
-use kvproto::import_sstpb::*;
-use kvproto::kvrpcpb::ApiVersion;
+use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use crate::metrics::*;
-use crate::{Error, Result};
+use crate::{metrics::*, Error, Result};
 
 // `SyncableWrite` extends io::Write with sync
 trait SyncableWrite: io::Write + Send {
@@ -221,8 +221,12 @@ impl ImportDir {
         })
     }
 
-    pub fn join(&self, meta: &SstMeta) -> Result<ImportPath> {
-        let file_name = sst_meta_to_path(meta)?;
+    pub fn get_root_dir(&self) -> &PathBuf {
+        &self.root_dir
+    }
+
+    /// Make an import path base on the basic path and the file name.
+    pub fn get_import_path(&self, file_name: &str) -> Result<ImportPath> {
         let save_path = self.root_dir.join(&file_name);
         let temp_path = self.temp_dir.join(&file_name);
         let clone_path = self.clone_dir.join(&file_name);
@@ -231,6 +235,11 @@ impl ImportDir {
             temp: temp_path,
             clone: clone_path,
         })
+    }
+
+    pub fn join(&self, meta: &SstMeta) -> Result<ImportPath> {
+        let file_name = sst_meta_to_path(meta)?;
+        self.get_import_path(file_name.to_str().unwrap())
     }
 
     pub fn create(
@@ -346,7 +355,7 @@ impl ImportDir {
             .check_api_version(&meta_vec, key_manager.clone(), api_version)
             .unwrap()
         {
-            panic!("cannot ingest because of imcompatible api version");
+            panic!("cannot ingest because of incompatible api version");
         }
 
         let mut paths = HashMap::new();
@@ -450,8 +459,9 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use engine_traits::CF_DEFAULT;
+
+    use super::*;
 
     #[test]
     fn test_sst_meta_to_path() {

@@ -1,13 +1,17 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    sync::{mpsc::channel, Arc},
+    thread,
+    time::Duration,
+};
+
 use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
-use raftstore::store::util::{find_peer, new_peer};
-use std::sync::mpsc::channel;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use raftstore::{
+    coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor},
+    store::util::{find_peer, new_peer},
+};
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
 use tikv_util::HandyRwLock;
 

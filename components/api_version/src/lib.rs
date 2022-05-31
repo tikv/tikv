@@ -8,7 +8,6 @@ pub mod api_v2;
 
 use engine_traits::Result;
 use kvproto::kvrpcpb::ApiVersion;
-
 pub use match_template::match_template;
 use txn_types::{Key, TimeStamp};
 

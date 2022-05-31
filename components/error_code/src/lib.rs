@@ -28,6 +28,7 @@ pub const UNKNOWN: ErrorCode = ErrorCode {
     workaround: "",
 };
 
+pub mod backup_stream;
 pub mod causal_ts;
 pub mod cloud;
 pub mod codec;

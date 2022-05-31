@@ -3,11 +3,13 @@
 #[macro_use]
 extern crate serde_derive;
 
-use std::error::Error;
-use std::fs::{self, File};
-use std::io::Read;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::{
+    error::Error,
+    fs::{self, File},
+    io::Read,
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
 use collections::HashSet;
 use encryption::EncryptionConfig;
@@ -16,6 +18,7 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
     ServerCredentialsFetcher,
 };
+use tonic::transport::{channel::ClientTlsConfig, Certificate, Identity};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -95,7 +98,7 @@ impl SecurityConfig {
 
     /// Determine if the cert file has been modified.
     /// If modified, update the timestamp of this modification.
-    fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
+    pub fn is_modified(&self, last: &mut Option<SystemTime>) -> Result<bool, Box<dyn Error>> {
         let this = fs::metadata(&self.cert_path)?.modified()?;
         if let Some(last) = last {
             if *last == this {
@@ -117,6 +120,22 @@ impl SecurityManager {
         Ok(SecurityManager {
             cfg: Arc::new(cfg.clone()),
         })
+    }
+
+    /// Make a tonic tls config via the config.
+    pub fn tonic_tls_config(&self) -> Option<ClientTlsConfig> {
+        let (ca, cert, key) = self.cfg.load_certs().unwrap_or_default();
+        if ca.is_empty() && cert.is_empty() && key.is_empty() {
+            return None;
+        }
+        let mut cfg = ClientTlsConfig::new();
+        if !ca.is_empty() {
+            cfg = cfg.ca_certificate(Certificate::from_pem(ca));
+        }
+        if !cert.is_empty() && !key.is_empty() {
+            cfg = cfg.identity(Identity::from_pem(cert, key));
+        }
+        Some(cfg)
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
@@ -255,11 +274,11 @@ pub fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{fs, io::Write};
 
-    use std::fs;
-    use std::io::Write;
     use tempfile::Builder;
+
+    use super::*;
 
     #[test]
     fn test_security() {

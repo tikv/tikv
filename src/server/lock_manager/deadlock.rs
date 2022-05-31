@@ -1,41 +1,53 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::client::{self, Client};
-use super::config::Config;
-use super::metrics::*;
-use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use super::{Error, Result};
-use crate::server::resolve::StoreAddrResolver;
-use crate::storage::lock_manager::{DiagnosticContext, Lock};
+use std::{
+    cell::RefCell,
+    fmt::{self, Display, Formatter},
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
+
 use collections::HashMap;
 use engine_traits::KvEngine;
-use futures::future::{self, FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
+use futures::{
+    future::{self, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::TryStreamExt,
+};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
     WriteFlags,
 };
-use kvproto::deadlock::*;
-use kvproto::metapb::Region;
+use kvproto::{deadlock::*, metapb::Region};
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
-use raftstore::coprocessor::RoleChange;
-use raftstore::coprocessor::{
-    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-    RegionChangeEvent, RegionChangeObserver, RoleObserver,
+use raftstore::{
+    coprocessor::{
+        BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+        RegionChangeEvent, RegionChangeObserver, RoleChange, RoleObserver,
+    },
+    store::util::is_region_initialized,
 };
-use raftstore::store::util::is_region_initialized;
 use security::SecurityManager;
-use std::cell::RefCell;
-use std::fmt::{self, Display, Formatter};
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use tikv_util::future::paired_future_callback;
-use tikv_util::time::{Duration, Instant};
-use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
+use tikv_util::{
+    future::paired_future_callback,
+    time::{Duration, Instant},
+    worker::{FutureRunnable, FutureScheduler, Stopped},
+};
 use tokio::task::spawn_local;
 use txn_types::TimeStamp;
+
+use super::{
+    client::{self, Client},
+    config::Config,
+    metrics::*,
+    waiter_manager::Scheduler as WaiterMgrScheduler,
+    Error, Result,
+};
+use crate::{
+    server::resolve::StoreAddrResolver,
+    storage::lock_manager::{DiagnosticContext, Lock},
+};
 
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
@@ -552,7 +564,7 @@ impl RegionChangeObserver for RoleChangeNotifier {
         let region = ctx.region();
         if Self::is_leader_region(region) {
             match event {
-                RegionChangeEvent::Create | RegionChangeEvent::Update => {
+                RegionChangeEvent::Create | RegionChangeEvent::Update(_) => {
                     *self.leader_region_id.lock().unwrap() = region.get_id();
                     self.scheduler.change_role(role.into());
                 }
@@ -1063,12 +1075,14 @@ impl Deadlock for Service {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::server::resolve::Callback;
     use engine_test::kv::KvTestEngine;
     use futures::executor::block_on;
+    use raftstore::coprocessor::RegionChangeReason;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
+
+    use super::*;
+    use crate::server::resolve::Callback;
 
     #[test]
     fn test_detect_table() {
@@ -1448,7 +1462,7 @@ pub mod tests {
         ];
         let events = [
             RegionChangeEvent::Create,
-            RegionChangeEvent::Update,
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
             RegionChangeEvent::Destroy,
         ];
         let check_role = |role| {
@@ -1484,7 +1498,11 @@ pub mod tests {
         check_role(Role::Follower);
         // Leader region id is changed.
         region.set_id(2);
-        host.on_region_changed(&region, RegionChangeEvent::Update, StateRole::Leader);
+        host.on_region_changed(
+            &region,
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
+            StateRole::Leader,
+        );
         // Destroy the previous leader region.
         region.set_id(1);
         host.on_region_changed(&region, RegionChangeEvent::Destroy, StateRole::Leader);

@@ -1,38 +1,37 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ffi::CString;
-use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::{
+    ffi::CString,
+    sync::{
+        atomic::{AtomicI32, Ordering},
+        Arc, Mutex as StdMutex,
+    },
+    time::Duration,
+};
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use fail::fail_point;
-use futures::compat::Future01CompatExt;
-use futures::future::select_all;
-use futures::{FutureExt, TryFutureExt};
+use futures::{compat::Future01CompatExt, future::select_all, FutureExt, TryFutureExt};
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
-use kvproto::metapb::{Peer, PeerRole};
-use kvproto::tikvpb::TikvClient;
+use kvproto::{
+    kvrpcpb::{CheckLeaderRequest, LeaderInfo},
+    metapb::{Peer, PeerRole},
+    tikvpb::TikvClient,
+};
 use pd_client::PdClient;
 use protobuf::Message;
-use raftstore::store::fsm::StoreMeta;
-use raftstore::store::util::RegionReadProgressRegistry;
+use raftstore::store::{fsm::StoreMeta, util::RegionReadProgressRegistry};
 use security::SecurityManager;
-use tikv_util::info;
-use tikv_util::time::Instant;
-use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::Scheduler;
-use tokio::runtime::{Builder, Runtime};
-use tokio::sync::Mutex;
+use tikv_util::{info, time::Instant, timer::SteadyTimer, worker::Scheduler};
+use tokio::{
+    runtime::{Builder, Runtime},
+    sync::Mutex,
+};
 use txn_types::TimeStamp;
 
-use crate::endpoint::Task;
-use crate::errors::Result;
-use crate::metrics::*;
-use crate::util;
+use crate::{endpoint::Task, metrics::*, util};
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
@@ -235,7 +234,9 @@ pub async fn region_resolved_ts_store(
                 let client =
                     get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
                         .await
-                        .map_err(|e| (to_store, true, format!("[get tikv client] {}", e)))?;
+                        .map_err(|e| {
+                            (to_store, e.retryable(), format!("[get tikv client] {}", e))
+                        })?;
 
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
@@ -364,7 +365,7 @@ async fn get_tikv_client(
     security_mgr: Arc<SecurityManager>,
     env: Arc<Environment>,
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
-) -> Result<TikvClient> {
+) -> pd_client::Result<TikvClient> {
     {
         let clients = tikv_clients.lock().await;
         if let Some(client) = clients.get(&store_id).cloned() {
@@ -372,9 +373,10 @@ async fn get_tikv_client(
         }
     }
     let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
-    let store = box_try!(box_try!(
-        tokio::time::timeout(timeout, pd_client.get_store_async(store_id)).await
-    ));
+    let store = tokio::time::timeout(timeout, pd_client.get_store_async(store_id))
+        .await
+        .map_err(|e| pd_client::Error::Other(Box::new(e)))
+        .flatten()?;
     let mut clients = tikv_clients.lock().await;
     let start = Instant::now_coarse();
     // hack: so it's different args, grpc will always create a new connection.

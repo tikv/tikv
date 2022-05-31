@@ -6,20 +6,26 @@ pub mod data_sink_reg;
 pub mod pubsub;
 pub mod single_target;
 
-use crate::recorder::{CollectorGuard, CollectorRegHandle};
-use crate::reporter::collector_impl::CollectorImpl;
-use crate::reporter::data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle};
-use crate::{Config, DataSink, RawRecords, Records};
-
-use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::Arc,
+};
 
 use collections::HashMap;
 use kvproto::resource_usage_agent::ResourceUsageRecord;
-use tikv_util::time::Duration;
-use tikv_util::warn;
-use tikv_util::worker::{
-    Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler,
+use tikv_util::{
+    time::Duration,
+    warn,
+    worker::{Builder as WorkerBuilder, LazyWorker, Runnable, RunnableWithTimer, Scheduler},
+};
+
+use crate::{
+    recorder::{CollectorGuard, CollectorRegHandle},
+    reporter::{
+        collector_impl::CollectorImpl,
+        data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle},
+    },
+    Config, DataSink, RawRecords, Records,
 };
 
 /// A structure for reporting statistics through [Client].
@@ -227,17 +233,17 @@ pub fn init_reporter(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::error::Result;
-    use crate::{RawRecord, TagInfos};
-
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering::SeqCst;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
     use collections::HashMap;
     use kvproto::resource_usage_agent::ResourceUsageRecord;
-    use tikv_util::config::ReadableDuration;
-    use tikv_util::worker::{LazyWorker, Runnable, RunnableWithTimer};
+    use tikv_util::{
+        config::ReadableDuration,
+        worker::{LazyWorker, Runnable, RunnableWithTimer},
+    };
+
+    use super::*;
+    use crate::{error::Result, RawRecord, TagInfos};
 
     #[derive(Default, Clone)]
     struct MockDataSink {

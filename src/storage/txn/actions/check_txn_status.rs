@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
+
 use crate::storage::{
     mvcc::{
         metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite, ErrorInner, LockType,
@@ -8,7 +10,6 @@ use crate::storage::{
     },
     Snapshot, TxnStatus,
 };
-use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
 
 // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
 // to do the rollback differs according to whether there's an overlapped write record.

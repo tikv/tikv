@@ -1,19 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::{
-    Cursor, CursorBuilder, Error as KvError, ScanMode, Snapshot as EngineSnapshot, Statistics,
-};
-use crate::storage::mvcc::{
-    default_not_found_error,
-    reader::{OverlappedWrite, TxnCommitRecord},
-    Result,
-};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::errorpb::{self, EpochNotMatch, StaleCommand};
-use kvproto::kvrpcpb::Context;
+use kvproto::{
+    errorpb::{self, EpochNotMatch, StaleCommand},
+    kvrpcpb::Context,
+};
 use tikv_kv::SnapshotExt;
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
+
+use crate::storage::{
+    kv::{
+        Cursor, CursorBuilder, Error as KvError, ScanMode, Snapshot as EngineSnapshot, Statistics,
+    },
+    mvcc::{
+        default_not_found_error,
+        reader::{OverlappedWrite, TxnCommitRecord},
+        Result,
+    },
+};
 
 /// Read from an MVCC snapshot, i.e., a logical view of the database at a specific timestamp (the
 /// start_ts).
@@ -612,29 +617,36 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::Modify;
-    use crate::storage::mvcc::{tests::write, MvccReader, MvccTxn};
-    use crate::storage::txn::{
-        acquire_pessimistic_lock, cleanup, commit, gc, prewrite, CommitKind, TransactionKind,
-        TransactionProperties,
-    };
-    use crate::storage::{Engine, TestEngineBuilder};
+    use std::{ops::Bound, sync::Arc, u64};
+
     use concurrency_manager::ConcurrencyManager;
-    use engine_rocks::properties::MvccPropertiesCollectorFactory;
-    use engine_rocks::raw::DB;
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-    use engine_rocks::raw_util::CFOptions;
-    use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{IterOptions, Mutable, WriteBatch, WriteBatchExt};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use kvproto::kvrpcpb::{AssertionLevel, Context};
-    use kvproto::metapb::{Peer, Region};
+    use engine_rocks::{
+        properties::MvccPropertiesCollectorFactory,
+        raw::{ColumnFamilyOptions, DBOptions, DB},
+        raw_util::CFOptions,
+        Compat, RocksSnapshot,
+    };
+    use engine_traits::{
+        IterOptions, Mutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
+        CF_WRITE,
+    };
+    use kvproto::{
+        kvrpcpb::{AssertionLevel, Context},
+        metapb::{Peer, Region},
+    };
     use raftstore::store::RegionSnapshot;
-    use std::ops::Bound;
-    use std::sync::Arc;
-    use std::u64;
     use txn_types::{LockType, Mutation};
+
+    use super::*;
+    use crate::storage::{
+        kv::Modify,
+        mvcc::{tests::write, MvccReader, MvccTxn},
+        txn::{
+            acquire_pessimistic_lock, cleanup, commit, gc, prewrite, CommitKind, TransactionKind,
+            TransactionProperties,
+        },
+        Engine, TestEngineBuilder,
+    };
 
     pub struct RegionEngine {
         db: Arc<DB>,

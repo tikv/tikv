@@ -1,15 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::AggrFunction;
-use tidb_query_datatype::builder::FieldTypeBuilder;
-use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    builder::FieldTypeBuilder, codec::data_type::*, expr::EvalContext, FieldTypeFlag, FieldTypeTp,
+};
+use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
 use super::*;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_expr::RpnExpression;
 
 /// The parser for COUNT aggregate function.
 pub struct AggrFnDefinitionParserCount;
@@ -140,8 +139,7 @@ mod tests {
     use tidb_query_datatype::EvalType;
     use tikv_util::buffer_vec::BufferVec;
 
-    use super::super::AggrFunction;
-    use super::*;
+    use super::{super::AggrFunction, *};
 
     #[test]
     fn test_update() {

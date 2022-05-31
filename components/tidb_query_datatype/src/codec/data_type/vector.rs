@@ -1,11 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{match_template_collator, match_template_evaltype, EvalType, FieldTypeAccessor};
-
-use super::scalar::ScalarValueRef;
-use super::*;
-use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
-use crate::codec::Result;
+use super::{scalar::ScalarValueRef, *};
+use crate::{
+    codec::{mysql::decimal::DECIMAL_STRUCT_SIZE, Result},
+    match_template_collator, match_template_evaltype, EvalType, FieldTypeAccessor,
+};
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
 ///
@@ -435,9 +434,10 @@ impl VectorValue {
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
-        use crate::codec::collation::Collator;
-        use crate::codec::datum_codec::EvaluableDatumEncoder;
-        use crate::Collation;
+        use crate::{
+            codec::{collation::Collator, datum_codec::EvaluableDatumEncoder},
+            Collation,
+        };
 
         match self {
             VectorValue::Bytes(ref vec) => {
