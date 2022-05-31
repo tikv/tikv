@@ -193,7 +193,7 @@ where
                 if region_size >= host.cfg.region_size_threshold_for_approximate.0 {
                     policy = CheckPolicy::Approximate;
                 }
-            } else {
+            } else if host.cfg.prefer_gen_bucket_by_approximate {
                 // when the check is only for bucket, use approximate anyway
                 policy = CheckPolicy::Approximate;
             }
@@ -692,6 +692,68 @@ pub mod tests {
         for cf in LARGE_CFS {
             test_generate_bucket_impl(LARGE_CFS, cf, true);
         }
+    }
+
+    #[test]
+    fn test_check_policy_for_bucket_generation() {
+        let path = Builder::new()
+            .prefix("test_check_policy_for_bucket_generation")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::default();
+        let cfs_with_range_prop: HashSet<_> = LARGE_CFS.iter().cloned().collect();
+        let mut cf_opt = ColumnFamilyOptions::new();
+        cf_opt.set_no_range_properties(true);
+        cf_opt.set_disable_auto_compactions(true);
+
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| {
+                if cfs_with_range_prop.contains(cf) {
+                    let mut opt = ColumnFamilyOptions::new();
+                    opt.set_disable_auto_compactions(true);
+                    CFOptions::new(cf, opt)
+                } else {
+                    CFOptions::new(cf, cf_opt.clone())
+                }
+            })
+            .collect();
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let (tx, _rx) = mpsc::sync_channel(100);
+        let mut cfg = Config {
+            region_max_size: Some(ReadableSize(50000)),
+            region_split_size: ReadableSize(50000),
+            region_max_keys: Some(1000000),
+            region_split_keys: Some(1000000),
+            batch_split_limit: 5,
+            enable_region_bucket: true,
+            region_bucket_size: ReadableSize(1), // minimal bucket size
+            region_size_threshold_for_approximate: ReadableSize(500000000),
+            // follow split region's check policy, not force to use approximate
+            prefer_gen_bucket_by_approximate: false,
+            ..Default::default()
+        };
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+        for i in 0..20 {
+            let s = keys::data_key(format!("{:04}00", i).as_bytes());
+            engine.put_cf(CF_WRITE, &s, &s).unwrap();
+        }
+
+        let cop_host = CoprocessorHost::new(tx.clone(), cfg.clone());
+        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        assert_eq!(host.policy(), CheckPolicy::Scan);
+
+        cfg.prefer_gen_bucket_by_approximate = true;
+        let cop_host = CoprocessorHost::new(tx.clone(), cfg);
+        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        assert_eq!(host.policy(), CheckPolicy::Approximate);
     }
 
     #[test]

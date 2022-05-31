@@ -50,6 +50,8 @@ pub struct Config {
     pub region_bucket_size: ReadableSize,
     // region size threshold for using approximate size instead of scan
     pub region_size_threshold_for_approximate: ReadableSize,
+    #[online_config(skip)]
+    pub prefer_gen_bucket_by_approximate: bool,
     // ratio of region_bucket_size. (0, 0.5)
     // The region_bucket_merge_size_ratio * region_bucket_size is threshold to merge with its left neighbor bucket
     pub region_bucket_merge_size_ratio: f64,
@@ -91,6 +93,7 @@ impl Default for Config {
             region_bucket_size: DEFAULT_BUCKET_SIZE,
             region_size_threshold_for_approximate: DEFAULT_BUCKET_SIZE * BATCH_SPLIT_LIMIT / 2 * 3,
             region_bucket_merge_size_ratio: DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO,
+            prefer_gen_bucket_by_approximate: true,
         }
     }
 }
