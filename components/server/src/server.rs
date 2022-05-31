@@ -1266,6 +1266,7 @@ impl TiKVServer<RocksEngine> {
         let config_raftdb = &self.config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
+<<<<<<< HEAD
         let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
         let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
@@ -1273,6 +1274,26 @@ impl TiKVServer<RocksEngine> {
             raft_db_cf_opts,
         )
         .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+=======
+        let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
+        let raftdb =
+            engine_rocks::raw_util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
+                .expect("failed to open raftdb");
+        let mut raftdb = RocksEngine::from_db(Arc::new(raftdb));
+        raftdb.set_shared_block_cache(block_cache.is_some());
+
+        if should_dump {
+            let raft_engine =
+                RaftLogEngine::new(config.raft_engine.config(), key_manager.clone(), None)
+                    .expect("failed to open raft engine for migration");
+            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
+            raft_engine.stop();
+            drop(raft_engine);
+            raft_data_state_machine.after_dump_data();
+        }
+        raftdb
+    }
+>>>>>>> cfd0b0ea8... server: fix race during raft data migration (#12701)
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
@@ -1325,6 +1346,7 @@ impl TiKVServer<RocksEngine> {
             )),
         );
 
+<<<<<<< HEAD
         let engines_info = Arc::new(EnginesResourceInfo::new(
             engines.kv.clone(),
             Some(engines.raft.clone()),
@@ -1332,6 +1354,45 @@ impl TiKVServer<RocksEngine> {
         ));
 
         (engines, engines_info)
+=======
+impl ConfiguredRaftEngine for RaftLogEngine {
+    fn build(
+        config: &TiKvConfig,
+        env: &Arc<Env>,
+        key_manager: &Option<Arc<DataKeyManager>>,
+        block_cache: &Option<Cache>,
+    ) -> Self {
+        let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &config.storage.data_dir,
+            &config.raft_store.raftdb_path,
+            &config.raft_engine.config().dir,
+        );
+        let should_dump = raft_data_state_machine.before_open_target();
+
+        let raft_config = config.raft_engine.config();
+        let raft_engine =
+            RaftLogEngine::new(raft_config, key_manager.clone(), get_io_rate_limiter())
+                .expect("failed to open raft engine");
+
+        if should_dump {
+            let config_raftdb = &config.raftdb;
+            let mut raft_db_opts = config_raftdb.build_opt();
+            raft_db_opts.set_env(env.clone());
+            let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
+            let raftdb = engine_rocks::raw_util::new_engine_opt(
+                &config.raft_store.raftdb_path,
+                raft_db_opts,
+                raft_cf_opts,
+            )
+            .expect("failed to open raftdb for migration");
+            let raftdb = RocksEngine::from_db(Arc::new(raftdb));
+            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
+            raftdb.stop();
+            drop(raftdb);
+            raft_data_state_machine.after_dump_data();
+        }
+        raft_engine
+>>>>>>> cfd0b0ea8... server: fix race during raft data migration (#12701)
     }
 }
 
