@@ -218,6 +218,7 @@ where
             info!("backup stream: on_modify_observe"; "op" => ?op);
             match op {
                 ObserveOp::Start { region } => {
+                    #[cfg(feature = "failpoints")]
                     fail::fail_point!("delay_on_start_observe");
                     self.start_observe(region).await;
                     IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_sub(1, Ordering::SeqCst);
