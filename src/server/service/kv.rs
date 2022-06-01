@@ -1108,7 +1108,14 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             let mut resp = CheckLeaderResponse::default();
             resp.set_ts(ts);
             resp.set_regions(regions);
-            sink.success(resp).await?;
+            if let Err(e) = sink.success(resp).await {
+                // CheckLeader has a built-in fast-success mechanism, so `RemoteStopped`
+                // can be treated as a general situation.
+                if let GrpcError::RemoteStopped = e {
+                    return ServerResult::Ok(());
+                }
+                return Err(Error::from(e));
+            }
             ServerResult::Ok(())
         }
         .map_err(move |e| {
