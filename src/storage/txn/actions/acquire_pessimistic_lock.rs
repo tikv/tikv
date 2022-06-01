@@ -285,7 +285,7 @@ pub mod tests {
         TestEngineBuilder,
     };
 
-    pub fn must_succeed_allow_lock_with_conflict<E: Engine>(
+    pub fn acquire_pessimistic_lock_allow_lock_with_conflict<E: Engine>(
         engine: &E,
         key: &[u8],
         pk: &[u8],
@@ -293,7 +293,7 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
         need_value: bool,
         need_check_existence: bool,
-    ) -> PessimisticLockKeyResult {
+    ) -> MvccResult<PessimisticLockKeyResult> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(0.into());
@@ -313,16 +313,37 @@ pub mod tests {
             0.into(),
             false,
             true,
-        )
-        .unwrap();
-        let modifies = txn.into_modifies();
-        if !modifies.is_empty() {
-            engine
-                .write(&ctx, WriteData::from_modifies(modifies))
-                .unwrap();
+        );
+        if res.is_ok() {
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
         }
+        res.map(|r| r.0)
+    }
 
-        res.0
+    pub fn must_succeed_allow_lock_with_conflict<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        need_value: bool,
+        need_check_existence: bool,
+    ) -> PessimisticLockKeyResult {
+        acquire_pessimistic_lock_allow_lock_with_conflict(
+            engine,
+            key,
+            pk,
+            start_ts,
+            for_update_ts,
+            need_value,
+            need_check_existence,
+        )
+        .unwrap()
     }
 
     pub fn must_succeed_impl<E: Engine>(
@@ -1410,10 +1431,16 @@ pub mod tests {
         // Lock waiting.
         must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 10, 50, false, false)
             .assert_empty();
-        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 11, 55, false, false)
-            .assert_waiting();
-        must_succeed_allow_lock_with_conflict(&engine, b"k1", b"k1", 9, 9, false, false)
-            .assert_waiting();
+        let err = acquire_pessimistic_lock_allow_lock_with_conflict(
+            &engine, b"k1", b"k1", 11, 55, false, false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, MvccError(box ErrorInner::KeyIsLocked(_))));
+        let err = acquire_pessimistic_lock_allow_lock_with_conflict(
+            &engine, b"k1", b"k1", 9, 9, false, false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, MvccError(box ErrorInner::KeyIsLocked(_))));
         must_pessimistic_locked(&engine, b"k1", 10, 50);
         must_pessimistic_rollback(&engine, b"k1", 10, 50);
         must_unlocked(&engine, b"k1");

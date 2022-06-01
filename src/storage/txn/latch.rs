@@ -104,8 +104,8 @@ impl Latch {
         let key = lock_info.key.clone();
         self.lock_waiting
             .entry(key)
-            .or_insert_with(Vec::new)
-            .push(lock_info);
+            .or_insert_with(VecDeque::new)
+            .push_back(lock_info);
     }
 
     fn pop_lock_waiting(

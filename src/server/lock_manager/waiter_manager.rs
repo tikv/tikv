@@ -26,7 +26,6 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use std::thread::current;
 use std::time::Instant;
 
 use futures::compat::Compat01As03;
@@ -555,7 +554,7 @@ impl WaitTable {
         _event: RegionChangeEvent,
     ) {
         if let Some((region_state, _)) = self.region_waiters.get(&region_id) {
-            if region_state.region_epoch.get_version() < epoch.get_verison()
+            if region_state.region_epoch.get_version() < epoch.get_version()
                 || region_state.region_epoch.get_conf_ver() < epoch.get_conf_ver()
             {
                 self.cancel_region(region_id);
