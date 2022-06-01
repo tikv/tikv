@@ -193,7 +193,7 @@ where
                 if region_size >= host.cfg.region_size_threshold_for_approximate.0 {
                     policy = CheckPolicy::Approximate;
                 }
-            } else if host.cfg.prefer_gen_bucket_by_approximate {
+            } else if host.cfg.prefer_approximate_bucket {
                 // when the check is only for bucket, use approximate anyway
                 policy = CheckPolicy::Approximate;
             }
@@ -731,7 +731,7 @@ pub mod tests {
             region_bucket_size: ReadableSize(1), // minimal bucket size
             region_size_threshold_for_approximate: ReadableSize(500000000),
             // follow split region's check policy, not force to use approximate
-            prefer_gen_bucket_by_approximate: false,
+            prefer_approximate_bucket: false,
             ..Default::default()
         };
         let mut region = Region::default();
@@ -750,7 +750,7 @@ pub mod tests {
         let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Scan);
 
-        cfg.prefer_gen_bucket_by_approximate = true;
+        cfg.prefer_approximate_bucket = true;
         let cop_host = CoprocessorHost::new(tx, cfg);
         let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Approximate);

@@ -232,7 +232,7 @@ enable-region-bucket = true
 region-bucket-size = "1MB"
 region-size-threshold-for-approximate = "3MB"
 region-bucket-merge-size-ratio = 0.4
-prefer-gen-bucket-by-approximate = false
+prefer-approximate-bucket = false
 
 [rocksdb]
 wal-recovery-mode = "absolute-consistency"

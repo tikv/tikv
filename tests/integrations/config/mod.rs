@@ -693,7 +693,7 @@ fn test_serde_custom_tikv_config() {
         enable_region_bucket: true,
         region_bucket_size: ReadableSize::mb(1),
         region_size_threshold_for_approximate: ReadableSize::mb(3),
-        prefer_gen_bucket_by_approximate: false,
+        prefer_approximate_bucket: false,
         region_bucket_merge_size_ratio: 0.4,
     };
     let mut cert_allowed_cn = HashSet::default();
