@@ -352,6 +352,8 @@ impl<'a> PrewriteMutation<'a> {
                             self.write_conflict_error(&write, commit_ts)?;
                         }
                     }
+                    // Note: PessimisticLockNotFound can happen on a non-pessimistically locked key, 
+                    // if it is a retrying prewrite request.
                     TransactionKind::Pessimistic(for_update_ts) => {
                         if commit_ts > for_update_ts {
                             return Err(ErrorInner::PessimisticLockNotFound {
