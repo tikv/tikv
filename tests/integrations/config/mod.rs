@@ -34,7 +34,10 @@ use tikv::{
         BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
     },
 };
-use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
+use tikv_util::{
+    config::{LogFormat, ReadableDuration, ReadableSize},
+    metrics::{MetricsCompactLevel, MetricsLevel},
+};
 
 mod dynamic;
 mod test_config_client;
@@ -119,6 +122,8 @@ fn test_serde_custom_tikv_config() {
         forward_max_connections_per_address: 5,
         reject_messages_on_memory_ratio: 0.8,
         simplify_metrics: false,
+        metrics_compact_level: MetricsCompactLevel::NoCompact,
+        metrics_level: MetricsLevel::All,
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {

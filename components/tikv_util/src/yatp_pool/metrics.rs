@@ -3,13 +3,17 @@
 use lazy_static::lazy_static;
 use prometheus::*;
 
+use crate::metrics::HIGH_PRIORITY_REGISTRY;
+
 lazy_static! {
-    pub static ref FUTUREPOOL_RUNNING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_futurepool_pending_task_total",
-        "Current future_pool pending + running tasks.",
-        &["name"]
-    )
-    .unwrap();
+    pub static ref FUTUREPOOL_RUNNING_TASK_VEC: IntGaugeVec =
+        register_int_gauge_vec_with_registry!(
+            "tikv_futurepool_pending_task_total",
+            "Current future_pool pending + running tasks.",
+            &["name"],
+            HIGH_PRIORITY_REGISTRY
+        )
+        .unwrap();
     pub static ref FUTUREPOOL_HANDLED_TASK_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_futurepool_handled_task_total",
         "Total number of future_pool handled tasks.",

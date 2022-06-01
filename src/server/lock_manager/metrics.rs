@@ -2,6 +2,7 @@
 
 use prometheus::*;
 use prometheus_static_metric::*;
+use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
 
 make_auto_flush_static_metric! {
     pub struct LocalTaskCounter: LocalIntCounter {
@@ -36,22 +37,25 @@ make_static_metric! {
 }
 
 lazy_static! {
-    pub static ref TASK_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+    pub static ref TASK_COUNTER_VEC: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_lock_manager_task_counter",
         "Total number of tasks received",
-        &["type"]
+        &["type"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
-    pub static ref ERROR_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+    pub static ref ERROR_COUNTER_VEC: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_lock_manager_error_counter",
         "Total number of errors",
-        &["type"]
+        &["type"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
-    pub static ref WAITER_LIFETIME_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref WAITER_LIFETIME_HISTOGRAM: Histogram = register_histogram_with_registry!(
         "tikv_lock_manager_waiter_lifetime_duration",
         "Duration of waiters' lifetime in seconds",
-        exponential_buckets(0.0005, 2.0, 20).unwrap() // 0.5ms ~ 524s
+        exponential_buckets(0.0005, 2.0, 20).unwrap(), // 0.5ms ~ 524s
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref DETECT_DURATION_HISTOGRAM: Histogram = register_histogram!(

@@ -10,12 +10,14 @@ use prometheus::{
     proto, IntCounter, IntGauge, Opts,
 };
 
-use crate::sys::thread;
+use crate::{metrics::HIGH_PRIORITY_REGISTRY, sys::thread};
 
 /// Monitors current process.
 pub fn monitor_process() -> Result<()> {
     let pc = ProcessCollector::new();
-    prometheus::register(Box::new(pc)).map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
+    HIGH_PRIORITY_REGISTRY
+        .register(Box::new(pc))
+        .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
 }
 
 /// A collector to collect process metrics.

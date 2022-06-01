@@ -10,6 +10,7 @@ pub use raftstore::store::Config as RaftStoreConfig;
 use regex::Regex;
 use tikv_util::{
     config::{self, ReadableDuration, ReadableSize, VersionTrack},
+    metrics::{MetricsCompactLevel, MetricsLevel},
     sys::SysQuota,
     worker::Scheduler,
 };
@@ -171,7 +172,15 @@ pub struct Config {
 
     // whether to compact metrics or not.
     #[doc(hidden)]
+    // deprecated. use metrics_compact_level and metrics_level instead.
     pub simplify_metrics: bool,
+
+    // the level of metrics compression
+    #[doc(hidden)]
+    pub metrics_compact_level: MetricsCompactLevel,
+    // metrics filter level
+    #[doc(hidden)]
+    pub metrics_level: MetricsLevel,
 
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
@@ -252,6 +261,8 @@ impl Default for Config {
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
             simplify_metrics: false,
+            metrics_compact_level: MetricsCompactLevel::NoCompact,
+            metrics_level: MetricsLevel::All,
         }
     }
 }
@@ -381,6 +392,12 @@ impl Config {
             self.heavy_load_threshold = 75;
         }
 
+        // migrate legacy metrics config.
+        // simplify_metrics == ture has the same effect with MetricsCompactLevel::LoseLess
+        if self.simplify_metrics && self.metrics_compact_level == MetricsCompactLevel::NoCompact {
+            self.metrics_compact_level = MetricsCompactLevel::LoseLess;
+        }
+
         Ok(())
     }
 
@@ -429,6 +446,12 @@ impl ConfigManager for ServerConfigManager {
                 self.grpc_mem_quota
                     .clone()
                     .resize_memory(mem_quota.0 as usize);
+            }
+            if let Some(value) = c.get("simplify_metrics_level") {
+                tikv_util::metrics::set_metrics_compact_level(value.into());
+            }
+            if let Some(value) = c.get("metrics_level") {
+                tikv_util::metrics::set_metrics_level(value.into());
             }
             if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);

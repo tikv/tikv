@@ -9,6 +9,7 @@ use pd_client::BucketMeta;
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{util::build_key_range, ReadStats};
+use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
 
 use crate::{
     server::metrics::{GcKeysCF, GcKeysDetail},
@@ -149,29 +150,32 @@ make_auto_flush_static_metric! {
 }
 
 lazy_static! {
-    pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_coprocessor_request_duration_seconds",
         "Bucketed histogram of coprocessor request duration",
         &["req"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap(),
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref COPR_REQ_HISTOGRAM_STATIC: CoprReqHistogram =
         auto_flush_from!(COPR_REQ_HISTOGRAM_VEC, CoprReqHistogram);
-    pub static ref COPR_REQ_HANDLE_TIME: HistogramVec = register_histogram_vec!(
+    pub static ref COPR_REQ_HANDLE_TIME: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_coprocessor_request_handle_seconds",
         "Bucketed histogram of coprocessor handle request duration",
         &["req"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap(),
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref COPR_REQ_HANDLE_TIME_STATIC: CoprReqHistogram =
         auto_flush_from!(COPR_REQ_HANDLE_TIME, CoprReqHistogram);
-    pub static ref COPR_REQ_WAIT_TIME: HistogramVec = register_histogram_vec!(
+    pub static ref COPR_REQ_WAIT_TIME: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_coprocessor_request_wait_seconds",
         "Bucketed histogram of coprocessor request wait duration",
         &["req", "type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap(),
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref COPR_REQ_WAIT_TIME_STATIC: ReqWaitHistogram =
@@ -185,25 +189,28 @@ lazy_static! {
     .unwrap();
     pub static ref COPR_REQ_HANDLER_BUILD_TIME_STATIC: CoprReqHistogram =
         auto_flush_from!(COPR_REQ_HANDLER_BUILD_TIME, CoprReqHistogram);
-    pub static ref COPR_REQ_ERROR: IntCounterVec = register_int_counter_vec!(
+    pub static ref COPR_REQ_ERROR: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_coprocessor_request_error",
         "Total number of push down request error.",
-        &["reason"]
+        &["reason"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
-    pub static ref COPR_SCAN_KEYS: HistogramVec = register_histogram_vec!(
+    pub static ref COPR_SCAN_KEYS: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_coprocessor_scan_keys",
         "Bucketed histogram of coprocessor per request scan keys",
         &["req", "kind"],
-        exponential_buckets(1.0, 2.0, 20).unwrap()
+        exponential_buckets(1.0, 2.0, 20).unwrap(),
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref COPR_SCAN_KEYS_STATIC: CoprScanKeysHistogram =
         auto_flush_from!(COPR_SCAN_KEYS, CoprScanKeysHistogram);
-    pub static ref COPR_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
+    pub static ref COPR_SCAN_DETAILS: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_coprocessor_scan_details",
         "Bucketed counter of coprocessor scan details for each CF",
-        &["req", "cf", "tag"]
+        &["req", "cf", "tag"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref COPR_SCAN_DETAILS_STATIC: CoprScanDetails =
@@ -241,11 +248,12 @@ lazy_static! {
     )
     .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
-        register_histogram_vec!(
+        register_histogram_vec_with_registry!(
             "tikv_coprocessor_mem_lock_check_duration_seconds",
             "Duration of memory lock checking for coprocessor",
             &["result"],
-            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+            exponential_buckets(1e-6f64, 4f64, 10).unwrap(), // 1us ~ 262ms
+            HIGH_PRIORITY_REGISTRY
         )
         .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =
