@@ -64,9 +64,7 @@ use crate::{
             commands::{Command, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo},
             flow_controller::FlowController,
             latch::{Latches, Lock},
-            sched_pool::{
-                tls_collect_query, tls_collect_read_duration, tls_collect_scan_details, SchedPool,
-            },
+            sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
             Error, ProcessResult,
         },
         types::StorageCallback,
@@ -733,8 +731,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 tag,
                 ts
             );
-
-            tls_collect_read_duration(tag.get_str(), elapsed);
         }
         .in_resource_metering_tag(resource_tag)
         .await;
@@ -748,10 +744,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let tag = task.cmd.tag();
 
+        let begin_instant = Instant::now();
         let pr = task
             .cmd
             .process_read(snapshot, statistics)
             .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() });
+        SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+            .get(tag)
+            .observe(begin_instant.saturating_elapsed_secs());
         self.on_read_finished(task.cid, pr, tag);
     }
 
@@ -782,10 +782,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
             };
-
-            task.cmd
+            let begin_instant = Instant::now();
+            let res = task
+                .cmd
                 .process_write(snapshot, context)
-                .map_err(StorageError::from)
+                .map_err(StorageError::from);
+            SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                .get(tag)
+                .observe(begin_instant.saturating_elapsed_secs());
+            res
         };
 
         if write_result.is_ok() {
