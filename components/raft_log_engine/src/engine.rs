@@ -444,8 +444,6 @@ impl RaftEngine for RaftLogEngine {
         None
     }
 
-    fn stop(&self) {}
-
     fn dump_stats(&self) -> Result<String> {
         // Raft engine won't dump anything.
         Ok("".to_owned())
