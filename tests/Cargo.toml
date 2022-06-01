@@ -141,6 +141,7 @@ security = { path = "../components/security", default-features = false }
 serde_json = "1.0"
 sst_importer = { path = "../components/sst_importer", default-features = false }
 test_backup = { path = "../components/test_backup", default-features = false }
+test_cloud_server = { path = "../components/test_cloud_server" }
 test_coprocessor = { path = "../components/test_coprocessor", default-features = false }
 test_pd = { path = "../components/test_pd", default-features = false }
 test_raftstore = { path = "../components/test_raftstore", default-features = false }

@@ -6214,6 +6214,7 @@ dependencies = [
  "sst_importer",
  "tempfile",
  "test_backup",
+ "test_cloud_server",
  "test_coprocessor",
  "test_pd",
  "test_raftstore",

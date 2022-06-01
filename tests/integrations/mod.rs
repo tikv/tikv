@@ -11,6 +11,7 @@ extern crate test;
 extern crate tikv_util;
 
 mod backup;
+mod cloud_backup;
 mod config;
 mod coprocessor;
 mod import;

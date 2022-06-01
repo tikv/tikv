@@ -3,7 +3,8 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use cloud_server::TiKVServer;
-use grpcio::{ChannelBuilder, EnvBuilder, Environment};
+use futures::executor::block_on;
+use grpcio::{Channel, ChannelBuilder, EnvBuilder, Environment};
 use kvproto::{
     kvrpcpb::{Context, Mutation, Op},
     tikvpb::TikvClient,
@@ -12,7 +13,7 @@ use pd_client::PdClient;
 use security::SecurityManager;
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
-use tikv::config::TiKvConfig;
+use tikv::{config::TiKvConfig, storage::mvcc::TimeStamp};
 
 #[allow(dead_code)]
 pub struct ServerCluster {
@@ -21,29 +22,32 @@ pub struct ServerCluster {
     tmp_dir: TempDir,
     env: Arc<Environment>,
     pd_client: Arc<TestPdClient>,
-    kv_clients: HashMap<u64, TikvClient>,
+    channels: HashMap<u64, Channel>,
 }
 
 impl ServerCluster {
     // The node id is statically assigned, the temp dir and server address are calculated by
     // the node id.
-    pub fn new(nodes: Vec<u8>) -> ServerCluster {
+    pub fn new<F>(nodes: Vec<u8>, update_conf: F) -> ServerCluster
+    where
+        F: Fn(u8, &mut TiKvConfig),
+    {
         let tmp_dir = TempDir::new().unwrap();
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let env = Arc::new(EnvBuilder::new().cq_count(2).build());
         let pd_client = Arc::new(TestPdClient::new(1, true));
         let mut servers = HashMap::new();
-        let mut kv_clients = HashMap::new();
+        let mut channels = HashMap::new();
         for node_id in nodes {
-            let config = new_test_config(tmp_dir.path(), node_id);
+            let mut config = new_test_config(tmp_dir.path(), node_id);
+            update_conf(node_id, &mut config);
             let mut server =
                 TiKVServer::setup(config, security_mgr.clone(), env.clone(), pd_client.clone());
             server.run();
             let store_id = server.get_store_id();
             let addr = node_addr(node_id);
             let channel = ChannelBuilder::new(env.clone()).connect(&addr);
-            let kv_client = TikvClient::new(channel);
-            kv_clients.insert(store_id, kv_client);
+            channels.insert(store_id, channel);
             servers.insert(node_id, server);
         }
         Self {
@@ -51,12 +55,12 @@ impl ServerCluster {
             tmp_dir,
             env,
             pd_client,
-            kv_clients,
+            channels,
         }
     }
 
     pub fn get_stores(&self) -> Vec<u64> {
-        self.kv_clients.keys().copied().collect()
+        self.channels.keys().copied().collect()
     }
 
     pub fn get_pd_client(&self) -> Arc<TestPdClient> {
@@ -64,7 +68,11 @@ impl ServerCluster {
     }
 
     pub fn get_kv_client(&self, store_id: u64) -> TikvClient {
-        self.kv_clients.get(&store_id).unwrap().clone()
+        TikvClient::new(self.get_client_channel(store_id))
+    }
+
+    pub fn get_client_channel(&self, store_id: u64) -> Channel {
+        self.channels.get(&store_id).unwrap().clone()
     }
 
     pub fn new_rpc_context(&self, key: &[u8]) -> Context {
@@ -80,6 +88,10 @@ impl ServerCluster {
         for (_, server) in self.servers.drain() {
             server.stop();
         }
+    }
+
+    pub fn get_ts(&self) -> TimeStamp {
+        block_on(self.pd_client.get_tso()).unwrap()
     }
 }
 

@@ -7,7 +7,7 @@ use kvengine::Item;
 use kvproto::kvrpcpb::IsolationLevel;
 use rfstore::UserMeta;
 use tikv_kv::{Snapshot, Statistics};
-use txn_types::{Key, Lock, OldValue, TimeStamp, TsSet, Value, Write, WriteType};
+use txn_types::{is_short_value, Key, Lock, OldValue, TimeStamp, TsSet, Value, Write, WriteType};
 
 use crate::storage::{
     mvcc,
@@ -340,16 +340,33 @@ impl super::Scanner for CloudStoreScanner {
 impl super::TxnEntryScanner for CloudStoreScanner {
     fn next_entry(&mut self) -> Result<Option<TxnEntry>> {
         Ok(self.next_inner()?.map(|(key, user_meta, val)| {
-            let key = key.append_ts(TimeStamp::new(user_meta.commit_ts));
+            let write_key = key.append_ts(TimeStamp::new(user_meta.commit_ts));
             let write_type = if val.is_empty() {
                 WriteType::Delete
             } else {
                 WriteType::Put
             };
-            let write = Write::new(write_type, user_meta.start_ts.into(), Some(val));
+            let (write, default_key, default_val) = if is_short_value(&val) {
+                (
+                    Write::new(write_type, user_meta.start_ts.into(), Some(val)),
+                    vec![],
+                    vec![],
+                )
+            } else {
+                let default_key = write_key
+                    .clone()
+                    .truncate_ts()
+                    .unwrap()
+                    .append_ts(user_meta.start_ts.into());
+                (
+                    Write::new(write_type, user_meta.start_ts.into(), None),
+                    default_key.into_encoded(),
+                    val,
+                )
+            };
             TxnEntry::Commit {
-                default: (vec![], vec![]),
-                write: (key.into_encoded(), write.as_ref().to_bytes()),
+                default: (default_key, default_val),
+                write: (write_key.into_encoded(), write.as_ref().to_bytes()),
                 old_value: OldValue::None,
             }
         }))
