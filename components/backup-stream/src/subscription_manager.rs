@@ -1,5 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 
 use crossbeam::channel::{Receiver as SyncReceiver, Sender as SyncSender};
 use engine_traits::KvEngine;
@@ -25,7 +25,7 @@ use crate::{
     event_loader::InitialDataLoader,
     metadata::{store::MetaStore, MetadataClient},
     metrics,
-    observer::BackupStreamObserver,
+    observer::{BackupStreamObserver, IN_FLIGHT_START_OBSERVE_MESSAGE},
     router::Router,
     subscription_track::SubscriptionTracer,
     try_send, utils, Task,
@@ -218,7 +218,9 @@ where
             info!("backup stream: on_modify_observe"; "op" => ?op);
             match op {
                 ObserveOp::Start { region } => {
+                    fail::fail_point!("delay_on_start_observe");
                     self.start_observe(region).await;
+                    IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_sub(1, Ordering::SeqCst);
                     metrics::INITIAL_SCAN_REASON
                         .with_label_values(&["leader-changed"])
                         .inc();
