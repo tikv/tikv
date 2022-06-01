@@ -360,8 +360,8 @@ impl<'a> PrewriteMutation<'a> {
                                 "key" => %self.key, 
                                 "start_ts" => self.txn_props.start_ts, 
                                 "for_update_ts" => for_update_ts,
-                                "conflcting start_ts" => write.start_ts,
-                                "conflcting commit_ts" => commit_ts);
+                                "conflicting start_ts" => write.start_ts,
+                                "conflicting commit_ts" => commit_ts);
                             return Err(ErrorInner::PessimisticLockNotFound {
                                 start_ts: self.txn_props.start_ts,
                                 key: self.key.clone().into_raw()?,
