@@ -74,6 +74,13 @@ pub fn get_metrics_level() -> MetricsLevel {
     METRICS_LEVEL.load(Ordering::Relaxed).into()
 }
 
+pub fn should_return_normal_metrics() -> bool {
+    let metrics_level = get_metrics_level();
+    metrics_level == MetricsLevel::All
+        || (metrics_level == MetricsLevel::ReduceFrequency
+            && (METRICS_REQUEST_COUNTER.load(Ordering::Relaxed) % NORMAL_METRICS_REDUCE_FACTOR == 0))
+}
+
 pub fn dump() -> String {
     let mut buffer = vec![];
 
@@ -82,13 +89,10 @@ pub fn dump() -> String {
 }
 
 pub fn dump_to(w: &mut impl Write) {
-    let metrics_level = get_metrics_level();
+    METRICS_REQUEST_COUNTER.fetch_add(1, Ordering::Release);
+    
     dump_metrics_to(w, HIGH_PRIORITY_REGISTRY.gather());
-    let counter = METRICS_REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-    if metrics_level == MetricsLevel::All
-        || (metrics_level == MetricsLevel::ReduceFrequency
-            && (counter % NORMAL_METRICS_REDUCE_FACTOR == 0))
-    {
+    if should_return_normal_metrics() {
         dump_metrics_to(w, prometheus::gather());
     }
 }

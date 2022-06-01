@@ -203,18 +203,16 @@ impl Collector for ThreadsCollector {
                 }
             }
         }
-        let metrics_level = get_metrics_level();
-        let simplify_level = get_simplify_metrics_level();
-
+        let simplify_level = get_metrics_compact_level();
         let simplify_metrics = |mut mfs: Vec<proto::MetricFamily>| {
-            if simplify_level == 0 {
+            if simplify_level == MetricsCompactLevel::NoCompact {
                 return mfs;
             }
             for mf in &mut mfs {
                 let mut metrics = mf.take_metric().into_vec();
                 // there are more than 100 threads and most of them are inactive,
                 // so only retain the sample which value >= 0.01 * max_sample_value
-                let threshold = if simplify_level == 1 {
+                let threshold = if simplify_level == MetricsCompactLevel::LoseLess {
                     0.
                 } else {
                     metrics
@@ -232,7 +230,7 @@ impl Collector for ThreadsCollector {
 
         let mut mfs = simplify_metrics(metrics.cpu_totals.collect());
         mfs.extend(simplify_metrics(metrics.io_totals.collect()));
-        if metrics_level == 0 {
+        if should_return_normal_metrics() {
             mfs.extend(simplify_metrics(metrics.threads_state.collect()));
             mfs.extend(simplify_metrics(metrics.voluntary_ctxt_switches.collect()));
             mfs.extend(simplify_metrics(
