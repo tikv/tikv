@@ -194,7 +194,7 @@ where
             range_router: initial_loader.sink.clone(),
             scheduler: initial_loader.scheduler.clone(),
             observer,
-            subs: initial_loader.tracing.clone(),
+            subs: initial_loader.tracing,
             messenger: tx,
             scan_pool_handle,
         };
@@ -242,7 +242,7 @@ where
                         .is_ok()
                     });
                 }
-                ObserveOp::RefreshResolver { ref region } => self.refresh_resolver(&region).await,
+                ObserveOp::RefreshResolver { ref region } => self.refresh_resolver(region).await,
                 ObserveOp::NotifyFailToStartObserve {
                     region,
                     handle,
@@ -288,11 +288,12 @@ where
                     .with_label_values(&["region-changed"])
                     .inc();
                 let r = async {
-                    Result::Ok(self.observe_over_with_initial_data_from_checkpoint(
+                    self.observe_over_with_initial_data_from_checkpoint(
                         region,
                         self.get_last_checkpoint_of(&for_task).await?,
                         handle.clone(),
-                    ))
+                    );
+                    Result::Ok(())
                 }
                 .await;
                 if let Err(e) = r {
@@ -310,7 +311,7 @@ where
     }
 
     async fn try_start_observe(&self, region: &Region, handle: ObserveHandle) -> Result<()> {
-        match self.find_task_by_region(&region) {
+        match self.find_task_by_region(region) {
             None => {
                 warn!(
                     "the region {:?} is register to no task but being observed (start_key = {}; end_key = {}; task_stat = {:?}): maybe stale, aborting",
@@ -330,7 +331,7 @@ where
                 self.get_meta_client()
                     .set_local_task_checkpoint(&for_task, tso.into_inner())
                     .await?;
-                self.observe_over_with_initial_data_from_checkpoint(&region, tso, handle.clone());
+                self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone());
             }
         }
         Ok(())
