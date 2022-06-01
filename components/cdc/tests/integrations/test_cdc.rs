@@ -778,7 +778,7 @@ fn test_cdc_batch_size_limit() {
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 2);
+            assert_eq!(es.entries.len(), 2);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
             assert_eq!(e.key, b"k4", "{:?}", e.key);
@@ -2082,3 +2082,70 @@ fn test_resolved_ts_cluster_upgrading() {
     event_feed_wrap.replace(None);
     suite.stop();
 }
+<<<<<<< HEAD
+=======
+
+#[test]
+fn test_resolved_ts_with_learners() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new()
+        .cluster(cluster)
+        .build_with_cluster_runner(|cluster| {
+            let r = cluster.run_conf_change();
+            cluster.pd_client.must_add_peer(r, new_learner_peer(2, 2));
+        });
+
+    let rid = suite.cluster.get_region(&[]).id;
+    let req = suite.new_changedata_request(rid);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    for _ in 0..10 {
+        let event = receive_event(true);
+        if event.has_resolved_ts() {
+            assert!(event.get_resolved_ts().regions == vec![rid]);
+            drop(receive_event);
+            suite.stop();
+            return;
+        }
+    }
+    panic!("resolved timestamp should be advanced correctly");
+}
+
+#[test]
+fn test_prewrite_without_value() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let rid = suite.cluster.get_region(&[]).id;
+    let ctx = suite.get_context(rid);
+    let client = suite.get_tikv_client(rid).clone();
+    let large_value = vec![b'x'; 2 * txn_types::SHORT_VALUE_MAX_LEN];
+
+    // Perform a pessimistic prewrite with a large value.
+    let mut muts = vec![Mutation::default()];
+    muts[0].set_op(Op::Put);
+    muts[0].key = b"key".to_vec();
+    muts[0].value = large_value.clone();
+    try_kv_prewrite_pessimistic(&client, ctx.clone(), muts, b"key".to_vec(), 10);
+
+    let req = suite.new_changedata_request(rid);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // The prewrite can be retrieved from incremental scan.
+    let event = receive_event(false);
+    assert_eq!(
+        event.get_events()[0].get_entries().entries[0].value,
+        large_value
+    );
+
+    // check_txn_status will put the lock again, but without value.
+    must_check_txn_status(&client, ctx.clone(), b"key", 10, 12, 12);
+    must_kv_commit(&client, ctx, vec![b"key".to_vec()], 10, 14, 14);
+    // The lock without value shouldn't be retrieved.
+    let event = receive_event(false);
+    assert_eq!(event.get_events()[0].get_entries().entries[0].commit_ts, 14);
+}
+>>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
