@@ -10,7 +10,7 @@ use std::{
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use collections::HashMap;
+use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
 use kvproto::{
     cdcpb::{
@@ -481,83 +481,63 @@ impl Delegate {
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
         for entry in entries {
+            let (mut row, mut _has_value) = (EventRow::default(), false);
+            let row_size: usize;
             match entry {
                 Some(KvEntry::RawKvEntry(kv_pair)) => {
-                    let mut row = EventRow::default();
                     decode_rawkv(kv_pair.0, kv_pair.1, &mut row)?;
-                    let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                        rows.push(Vec::with_capacity(entries_len));
-                        current_rows_size = 0;
-                    }
-                    current_rows_size += row_size;
-                    rows.last_mut().unwrap().push(row);
+                    row_size = row.key.len() + row.value.len();
                 }
-                Some(KvEntry::TxnEntry(txn_entry)) => {
-                    match txn_entry {
-                        TxnEntry::Prewrite {
-                            default,
-                            lock,
-                            old_value,
-                        } => {
-                            let mut row = EventRow::default();
-                            let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
-                            if skip {
-                                continue;
-                            }
-                            decode_default(default.1, &mut row);
-                            let row_size = row.key.len() + row.value.len();
-                            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                                rows.push(Vec::with_capacity(entries_len));
-                                current_rows_size = 0;
-                            }
-                            current_rows_size += row_size;
-                            row.old_value = old_value.finalized().unwrap_or_default();
-                            rows.last_mut().unwrap().push(row);
-                        }
-                        TxnEntry::Commit {
-                            default,
-                            write,
-                            old_value,
-                        } => {
-                            let mut row = EventRow::default();
-                            let skip = decode_write(write.0, &write.1, &mut row, false);
-                            if skip {
-                                continue;
-                            }
-                            decode_default(default.1, &mut row);
-
-                            // This type means the row is self-contained, it has,
-                            //   1. start_ts
-                            //   2. commit_ts
-                            //   3. key
-                            //   4. value
-                            if row.get_type() == EventLogType::Rollback {
-                                // We dont need to send rollbacks to downstream,
-                                // because downstream does not needs rollback to clean
-                                // prewrite as it drops all previous stashed data.
-                                continue;
-                            }
-                            set_event_row_type(&mut row, EventLogType::Committed);
-                            row.old_value = old_value.finalized().unwrap_or_default();
-                            let row_size = row.key.len() + row.value.len();
-                            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                                rows.push(Vec::with_capacity(entries_len));
-                                current_rows_size = 0;
-                            }
-                            current_rows_size += row_size;
-                            rows.last_mut().unwrap().push(row);
-                        }
+                Some(KvEntry::TxnEntry(TxnEntry::Prewrite {
+                    default,
+                    lock,
+                    old_value,
+                })) => {
+                    let l = Lock::parse(&lock.1).unwrap();
+                    if decode_lock(lock.0, l, &mut row, &mut _has_value) {
+                        continue;
                     }
+                    decode_default(default.1, &mut row, &mut _has_value);
+                    row.old_value = old_value.finalized().unwrap_or_default();
+                    row_size = row.key.len() + row.value.len();
+                }
+                Some(KvEntry::TxnEntry(TxnEntry::Commit {
+                    default,
+                    write,
+                    old_value,
+                })) => {
+                    if decode_write(write.0, &write.1, &mut row, &mut _has_value, false) {
+                        continue;
+                    }
+                    decode_default(default.1, &mut row, &mut _has_value);
+
+                    // This type means the row is self-contained, it has,
+                    //   1. start_ts
+                    //   2. commit_ts
+                    //   3. key
+                    //   4. value
+                    if row.get_type() == EventLogType::Rollback {
+                        // We dont need to send rollbacks to downstream,
+                        // because downstream does not needs rollback to clean
+                        // prewrite as it drops all previous stashed data.
+                        continue;
+                    }
+                    set_event_row_type(&mut row, EventLogType::Committed);
+                    row.old_value = old_value.finalized().unwrap_or_default();
+                    row_size = row.key.len() + row.value.len();
                 }
                 None => {
-                    let mut row = EventRow::default();
-
                     // This type means scan has finished.
                     set_event_row_type(&mut row, EventLogType::Initialized);
-                    rows.last_mut().unwrap().push(row);
+                    row_size = 0;
                 }
             }
+            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
+                rows.push(Vec::with_capacity(entries_len));
+                current_rows_size = 0;
+            }
+            current_rows_size += row_size;
+            rows.last_mut().unwrap().push(row);
         }
 
         let rows = rows
@@ -596,7 +576,8 @@ impl Delegate {
             Ok(())
         };
 
-        let mut txn_rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
+        // map[key] -> (event, has_value).
+        let mut txn_rows: HashMap<Vec<u8>, (EventRow, bool)> = HashMap::default();
         let mut raw_rows: Vec<EventRow> = Vec::new();
         for mut req in requests {
             match req.get_cmd_type() {
@@ -620,17 +601,20 @@ impl Delegate {
             }
         }
 
-        if !txn_rows.is_empty() {
-            let mut rows = Vec::with_capacity(txn_rows.len());
-            for (_, v) in txn_rows {
-                rows.push(v);
+        let mut rows = Vec::with_capacity(txn_rows.len());
+        for (_, (v, has_value)) in txn_rows {
+            if v.r_type == EventLogType::Prewrite && v.op_type == EventRowOpType::Put && !has_value
+            {
+                // It's possible that a prewrite command only contains lock but without
+                // default. It's not documented by classic Percolator but introduced with
+                // Large-Transaction. Those prewrites are not complete, we must skip them.
+                continue;
             }
-            self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
+            rows.push(v);
         }
+        self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
 
-        if !raw_rows.is_empty() {
-            self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
-        }
+        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
 
         Ok(())
     }
@@ -641,6 +625,9 @@ impl Delegate {
         index: u64,
         kv_api: ChangeDataRequestKvApi,
     ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
         let event_entries = EventEntries {
             entries: entries.into(),
             ..Default::default()
@@ -676,7 +663,7 @@ impl Delegate {
         &mut self,
         put: PutRequest,
         is_one_pc: bool,
-        txn_rows: &mut HashMap<Vec<u8>, EventRow>,
+        txn_rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
         raw_rows: &mut Vec<EventRow>,
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
@@ -699,13 +686,13 @@ impl Delegate {
         &mut self,
         mut put: PutRequest,
         is_one_pc: bool,
-        rows: &mut HashMap<Vec<u8>, EventRow>,
+        rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
         mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
         match put.cf.as_str() {
             "write" => {
-                let mut row = EventRow::default();
-                if decode_write(put.take_key(), put.get_value(), &mut row, true) {
+                let (mut row, mut has_value) = (EventRow::default(), false);
+                if decode_write(put.take_key(), &put.value, &mut row, &mut has_value, true) {
                     return Ok(());
                 }
 
@@ -734,36 +721,29 @@ impl Delegate {
                     );
                 }
 
-                match rows.get_mut(&row.key) {
-                    Some(row_with_value) => {
-                        row.value = mem::take(&mut row_with_value.value);
-                        *row_with_value = row;
+                match rows.entry(row.key.clone()) {
+                    HashMapEntry::Occupied(o) => {
+                        let o = o.into_mut();
+                        mem::swap(&mut o.0.value, &mut row.value);
+                        o.0 = row;
                     }
-                    None => {
-                        rows.insert(row.key.clone(), row);
+                    HashMapEntry::Vacant(v) => {
+                        v.insert((row, has_value));
                     }
                 }
             }
             "lock" => {
-                let mut row = EventRow::default();
+                let (mut row, mut has_value) = (EventRow::default(), false);
                 let lock = Lock::parse(put.get_value()).unwrap();
                 let for_update_ts = lock.for_update_ts;
-                if decode_lock(put.take_key(), lock, &mut row) {
+                if decode_lock(put.take_key(), lock, &mut row, &mut has_value) {
                     return Ok(());
                 }
 
                 let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
                 read_old_value(&mut row, read_old_ts)?;
-                let occupied = rows.entry(row.key.clone()).or_default();
-                if !occupied.value.is_empty() {
-                    assert!(row.value.is_empty());
-                    let mut value = vec![];
-                    mem::swap(&mut occupied.value, &mut value);
-                    row.value = value;
-                }
 
-                // In order to compute resolved ts,
-                // we must track inflight txns.
+                // In order to compute resolved ts, we must track inflight txns.
                 match self.resolver {
                     Some(ref mut resolver) => {
                         resolver.track_lock(row.start_ts.into(), row.key.clone(), None)
@@ -780,16 +760,20 @@ impl Delegate {
                     }
                 }
 
-                *occupied = row;
+                let occupied = rows.entry(row.key.clone()).or_default();
+                if occupied.1 {
+                    assert!(!has_value);
+                    has_value = true;
+                    mem::swap(&mut occupied.0.value, &mut row.value);
+                }
+                *occupied = (row, has_value);
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
                 let row = rows.entry(key.into_raw().unwrap()).or_default();
-                decode_default(put.take_value(), row);
+                decode_default(put.take_value(), &mut row.0, &mut row.1);
             }
-            other => {
-                panic!("invalid cf {}", other);
-            }
+            other => panic!("invalid cf {}", other),
         }
         Ok(())
     }
@@ -909,7 +893,13 @@ fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
 /// Decodes the write record and store its information in `row`. This may be called both when
 /// doing incremental scan of observing apply events. There's different behavior for the two
 /// case, distinguished by the `is_apply` parameter.
-fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow, is_apply: bool) -> bool {
+fn decode_write(
+    key: Vec<u8>,
+    value: &[u8],
+    row: &mut EventRow,
+    has_value: &mut bool,
+    is_apply: bool,
+) -> bool {
     let key = Key::from_encoded(key);
     let write = WriteRef::parse(value).unwrap().to_owned();
 
@@ -946,12 +936,13 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow, is_apply: bool) 
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
         row.value = value;
+        *has_value = true;
     }
 
     false
 }
 
-fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
+fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut bool) -> bool {
     let op_type = match lock.lock_type {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
@@ -971,6 +962,7 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
         row.value = value;
+        *has_value = true;
     }
 
     false
@@ -998,10 +990,12 @@ fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) -> Result<()> 
     Ok(())
 }
 
-fn decode_default(value: Vec<u8>, row: &mut EventRow) {
+fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
     if !value.is_empty() {
         row.value = value.to_vec();
     }
+    // If default CF is given in a command it means the command always has a value.
+    *has_value = true;
 }
 
 #[cfg(test)]
