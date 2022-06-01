@@ -4,7 +4,12 @@ use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+<<<<<<< HEAD
 use collections::HashMap;
+=======
+use api_version::{ApiV2, KeyMode, KvFormat};
+use collections::{HashMap, HashMapEntry};
+>>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
 use crossbeam::atomic::AtomicCell;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
@@ -483,7 +488,10 @@ impl Delegate {
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
         for entry in entries {
+            let (mut row, mut _has_value) = (EventRow::default(), false);
+            let row_size: usize;
             match entry {
+<<<<<<< HEAD
                 Some(TxnEntry::Prewrite {
                     default,
                     lock,
@@ -536,15 +544,62 @@ impl Delegate {
                     }
                     current_rows_size += row_size;
                     rows.last_mut().unwrap().push(row);
+=======
+                Some(KvEntry::RawKvEntry(kv_pair)) => {
+                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row)?;
+                    row_size = row.key.len() + row.value.len();
+                }
+                Some(KvEntry::TxnEntry(TxnEntry::Prewrite {
+                    default,
+                    lock,
+                    old_value,
+                })) => {
+                    let l = Lock::parse(&lock.1).unwrap();
+                    if decode_lock(lock.0, l, &mut row, &mut _has_value) {
+                        continue;
+                    }
+                    decode_default(default.1, &mut row, &mut _has_value);
+                    row.old_value = old_value.finalized().unwrap_or_default();
+                    row_size = row.key.len() + row.value.len();
+                }
+                Some(KvEntry::TxnEntry(TxnEntry::Commit {
+                    default,
+                    write,
+                    old_value,
+                })) => {
+                    if decode_write(write.0, &write.1, &mut row, &mut _has_value, false) {
+                        continue;
+                    }
+                    decode_default(default.1, &mut row, &mut _has_value);
+
+                    // This type means the row is self-contained, it has,
+                    //   1. start_ts
+                    //   2. commit_ts
+                    //   3. key
+                    //   4. value
+                    if row.get_type() == EventLogType::Rollback {
+                        // We dont need to send rollbacks to downstream,
+                        // because downstream does not needs rollback to clean
+                        // prewrite as it drops all previous stashed data.
+                        continue;
+                    }
+                    set_event_row_type(&mut row, EventLogType::Committed);
+                    row.old_value = old_value.finalized().unwrap_or_default();
+                    row_size = row.key.len() + row.value.len();
+>>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
                 }
                 None => {
-                    let mut row = EventRow::default();
-
                     // This type means scan has finished.
                     set_event_row_type(&mut row, EventLogType::Initialized);
-                    rows.last_mut().unwrap().push(row);
+                    row_size = 0;
                 }
             }
+            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
+                rows.push(Vec::with_capacity(entries_len));
+                current_rows_size = 0;
+            }
+            current_rows_size += row_size;
+            rows.last_mut().unwrap().push(row);
         }
 
         rows.into_iter()
@@ -594,7 +649,13 @@ impl Delegate {
             }
         };
 
+<<<<<<< HEAD
         let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
+=======
+        // map[key] -> (event, has_value).
+        let mut txn_rows: HashMap<Vec<u8>, (EventRow, bool)> = HashMap::default();
+        let mut raw_rows: Vec<EventRow> = Vec::new();
+>>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => {
@@ -610,6 +671,7 @@ impl Delegate {
                 }
             }
         }
+<<<<<<< HEAD
         // Skip broadcast if there is no Put or Delete.
         if rows.is_empty() {
             return Ok(());
@@ -617,6 +679,35 @@ impl Delegate {
         let mut entries = Vec::with_capacity(rows.len());
         for (_, v) in rows {
             entries.push(v);
+=======
+
+        let mut rows = Vec::with_capacity(txn_rows.len());
+        for (_, (v, has_value)) in txn_rows {
+            if v.r_type == EventLogType::Prewrite && v.op_type == EventRowOpType::Put && !has_value
+            {
+                // It's possible that a prewrite command only contains lock but without
+                // default. It's not documented by classic Percolator but introduced with
+                // Large-Transaction. Those prewrites are not complete, we must skip them.
+                continue;
+            }
+            rows.push(v);
+        }
+        self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
+
+        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
+
+        Ok(())
+    }
+
+    fn sink_downstream(
+        &mut self,
+        entries: Vec<EventRow>,
+        index: u64,
+        kv_api: ChangeDataRequestKvApi,
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+>>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
         }
         let event_entries = EventEntries {
             entries: entries.into(),
@@ -656,6 +747,7 @@ impl Delegate {
 
     fn sink_put(
         &mut self,
+<<<<<<< HEAD
         mut put: PutRequest,
         is_one_pc: bool,
         rows: &mut HashMap<Vec<u8>, EventRow>,
@@ -667,6 +759,41 @@ impl Delegate {
                 let skip = decode_write(put.take_key(), put.get_value(), &mut row, true);
                 if skip {
                     return;
+=======
+        put: PutRequest,
+        is_one_pc: bool,
+        txn_rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
+        raw_rows: &mut Vec<EventRow>,
+        read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+    ) -> Result<()> {
+        let key_mode = ApiV2::parse_key_mode(put.get_key());
+        if key_mode == KeyMode::Raw {
+            self.sink_raw_put(put, raw_rows)
+        } else {
+            self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
+        }
+    }
+
+    fn sink_raw_put(&mut self, mut put: PutRequest, rows: &mut Vec<EventRow>) -> Result<()> {
+        let mut row = EventRow::default();
+        decode_rawkv(put.take_key(), put.take_value(), &mut row)?;
+        rows.push(row);
+        Ok(())
+    }
+
+    fn sink_txn_put(
+        &mut self,
+        mut put: PutRequest,
+        is_one_pc: bool,
+        rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
+        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+    ) -> Result<()> {
+        match put.cf.as_str() {
+            "write" => {
+                let (mut row, mut has_value) = (EventRow::default(), false);
+                if decode_write(put.take_key(), &put.value, &mut row, &mut has_value, true) {
+                    return Ok(());
+>>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
                 }
 
                 let commit_ts = if is_one_pc {
@@ -693,20 +820,22 @@ impl Delegate {
                     );
                 }
 
-                match rows.get_mut(&row.key) {
-                    Some(row_with_value) => {
-                        row.value = mem::take(&mut row_with_value.value);
-                        *row_with_value = row;
+                match rows.entry(row.key.clone()) {
+                    HashMapEntry::Occupied(o) => {
+                        let o = o.into_mut();
+                        mem::swap(&mut o.0.value, &mut row.value);
+                        o.0 = row;
                     }
-                    None => {
-                        rows.insert(row.key.clone(), row);
+                    HashMapEntry::Vacant(v) => {
+                        v.insert((row, has_value));
                     }
                 }
             }
             "lock" => {
-                let mut row = EventRow::default();
+                let (mut row, mut has_value) = (EventRow::default(), false);
                 let lock = Lock::parse(put.get_value()).unwrap();
                 let for_update_ts = lock.for_update_ts;
+<<<<<<< HEAD
                 let skip = decode_lock(put.take_key(), lock, &mut row);
                 if skip {
                     return;
@@ -721,9 +850,16 @@ impl Delegate {
                     mem::swap(&mut occupied.value, &mut value);
                     row.value = value;
                 }
+=======
+                if decode_lock(put.take_key(), lock, &mut row, &mut has_value) {
+                    return Ok(());
+                }
 
-                // In order to compute resolved ts,
-                // we must track inflight txns.
+                let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
+                read_old_value(&mut row, read_old_ts)?;
+>>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
+
+                // In order to compute resolved ts, we must track inflight txns.
                 match self.resolver {
                     Some(ref mut resolver) => {
                         resolver.track_lock(row.start_ts.into(), row.key.clone(), None)
@@ -740,16 +876,20 @@ impl Delegate {
                     }
                 }
 
-                *occupied = row;
+                let occupied = rows.entry(row.key.clone()).or_default();
+                if occupied.1 {
+                    assert!(!has_value);
+                    has_value = true;
+                    mem::swap(&mut occupied.0.value, &mut row.value);
+                }
+                *occupied = (row, has_value);
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
                 let row = rows.entry(key.into_raw().unwrap()).or_default();
-                decode_default(put.take_value(), row);
+                decode_default(put.take_value(), &mut row.0, &mut row.1);
             }
-            other => {
-                panic!("invalid cf {}", other);
-            }
+            other => panic!("invalid cf {}", other),
         }
     }
 
@@ -824,7 +964,13 @@ fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
 /// Decodes the write record and store its information in `row`. This may be called both when
 /// doing incremental scan of observing apply events. There's different behavior for the two
 /// case, distinguished by the `is_apply` parameter.
-fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow, is_apply: bool) -> bool {
+fn decode_write(
+    key: Vec<u8>,
+    value: &[u8],
+    row: &mut EventRow,
+    has_value: &mut bool,
+    is_apply: bool,
+) -> bool {
     let key = Key::from_encoded(key);
     let write = WriteRef::parse(value).unwrap().to_owned();
 
@@ -861,12 +1007,13 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow, is_apply: bool) 
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
         row.value = value;
+        *has_value = true;
     }
 
     false
 }
 
-fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
+fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut bool) -> bool {
     let op_type = match lock.lock_type {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
@@ -886,15 +1033,44 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
         row.value = value;
+        *has_value = true;
     }
 
     false
 }
 
+<<<<<<< HEAD
 fn decode_default(value: Vec<u8>, row: &mut EventRow) {
+=======
+fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) -> Result<()> {
+    let (decoded_key, ts) = ApiV2::decode_raw_key_owned(Key::from_encoded(key), true)?;
+    let decoded_value = ApiV2::decode_raw_value_owned(value)?;
+
+    row.start_ts = ts.unwrap().into_inner();
+    row.commit_ts = row.start_ts;
+    row.key = decoded_key;
+    row.value = decoded_value.user_value;
+
+    if let Some(expire_ts) = decoded_value.expire_ts {
+        row.expire_ts_unix_secs = expire_ts;
+    }
+
+    if decoded_value.is_delete {
+        row.op_type = EventRowOpType::Delete;
+    } else {
+        row.op_type = EventRowOpType::Put;
+    }
+    set_event_row_type(row, EventLogType::Committed);
+    Ok(())
+}
+
+fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
+>>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
     if !value.is_empty() {
         row.value = value.to_vec();
     }
+    // If default CF is given in a command it means the command always has a value.
+    *has_value = true;
 }
 
 #[cfg(test)]
