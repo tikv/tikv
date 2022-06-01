@@ -18,6 +18,11 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
     ServerCredentialsFetcher,
 };
+<<<<<<< HEAD
+=======
+#[cfg(feature = "tonic")]
+use tonic::transport::{channel::ClientTlsConfig, Certificate, Identity};
+>>>>>>> 761d59182... security, server: fix running local test (#12712)
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -121,6 +126,26 @@ impl SecurityManager {
         })
     }
 
+<<<<<<< HEAD
+=======
+    #[cfg(feature = "tonic")]
+    /// Make a tonic tls config via the config.
+    pub fn tonic_tls_config(&self) -> Option<ClientTlsConfig> {
+        let (ca, cert, key) = self.cfg.load_certs().unwrap_or_default();
+        if ca.is_empty() && cert.is_empty() && key.is_empty() {
+            return None;
+        }
+        let mut cfg = ClientTlsConfig::new();
+        if !ca.is_empty() {
+            cfg = cfg.ca_certificate(Certificate::from_pem(ca));
+        }
+        if !cert.is_empty() && !key.is_empty() {
+            cfg = cfg.identity(Identity::from_pem(cert, key));
+        }
+        Some(cfg)
+    }
+
+>>>>>>> 761d59182... security, server: fix running local test (#12712)
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
         if self.cfg.ca_path.is_empty() {
             cb.connect(addr)
