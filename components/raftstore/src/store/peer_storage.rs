@@ -471,6 +471,10 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
     // (snapshot_raft_state), and set snapshot_raft_state.last_index = snapshot_index.
     // after restart, we need check last_index.
     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
+        // There is a gap between existing raft logs and snapshot. Clean them up.
+        engines
+            .raft
+            .clean(region_id, 0 /*first_index*/, &raft_state, raft_wb)?;
         raft_wb.put_raft_state(region_id, &snapshot_raft_state)?;
     }
     Ok(())
@@ -1098,6 +1102,11 @@ where
     #[inline]
     pub fn last_term(&self) -> u64 {
         self.last_term
+    }
+
+    #[inline]
+    pub fn raft_state(&self) -> &RaftLocalState {
+        &self.raft_state
     }
 
     #[inline]
@@ -2937,7 +2946,7 @@ mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mut mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         mgr.set_enable_multi_snapshot_files(true);
-        mgr.set_max_per_file_size_for_test(500);
+        mgr.set_max_per_file_size(500);
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();

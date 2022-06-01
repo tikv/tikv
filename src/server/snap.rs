@@ -383,8 +383,6 @@ where
             };
             self.snap_mgr.set_speed_limit(limit);
             self.snap_mgr.set_max_total_snap_size(max_total_size);
-            self.snap_mgr
-                .set_max_per_file_size(incoming.max_snapshot_file_raw_size.0);
             info!("refresh snapshot manager config";
             "speed_limit"=> limit,
             "max_total_snap_size"=> max_total_size);

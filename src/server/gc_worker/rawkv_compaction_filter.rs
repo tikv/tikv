@@ -196,6 +196,8 @@ impl RawCompactionFilter {
             if commit_ts.into_inner() >= self.safe_point {
                 return Ok(CompactionFilterDecision::Keep);
             }
+
+            self.versions += 1;
             let raw_value = ApiV2::decode_raw_value(value)?;
             // If it's the latest version, and it's deleted or expired, it needs to be sent to GCWorker to be processed asynchronously.
             if !raw_value.is_valid(self.current_ts) {
@@ -212,6 +214,7 @@ impl RawCompactionFilter {
                 return Ok(CompactionFilterDecision::Keep);
             }
 
+            self.versions += 1;
             self.filtered += 1;
             // If it's ts < safepoint, and it's not the latest version, it's need to be removed.
             Ok(CompactionFilterDecision::Remove)

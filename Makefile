@@ -34,6 +34,26 @@
 SHELL := bash
 ENABLE_FEATURES ?=
 
+# Frame pointer is enabled by default. The purpose is to provide stable and
+# reliable stack backtraces (for CPU Profiling).
+#
+# If you want to disable frame-pointer, please manually set the environment
+# variable `TIKV_FRAME_POINTER=0 make` (This will fallback to `libunwind`
+# based stack backtrace.).
+#
+# Note that enabling frame-pointer means that the Rust standard library will
+# be recompiled.
+ifndef TIKV_FRAME_POINTER
+export TIKV_FRAME_POINTER=1
+endif
+
+ifeq ($(TIKV_FRAME_POINTER),1)
+export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
+export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+ENABLE_FEATURES += pprof-fp
+endif
+
 # Pick an allocator
 ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
@@ -110,6 +130,7 @@ BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export TIKV_BUILD_RUSTC_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }')
 export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
@@ -122,6 +143,16 @@ export DOCKER_IMAGE_TAG ?= "latest"
 #
 # https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199/68
 export CARGO_BUILD_PIPELINING=true
+
+# Compiler gave us the following error message when using a specific version of gcc on
+# aarch64 architecture and TIKV_FRAME_POINTER=1:
+#     .../atomic.rs: undefined reference to __aarch64_xxx
+# This is a temporary workaround.
+# See: https://github.com/rust-lang/rust/issues/93166
+#      https://bugzilla.redhat.com/show_bug.cgi?id=1830472
+ifeq ($(TIKV_BUILD_RUSTC_TARGET),aarch64-unknown-linux-gnu)
+export RUSTFLAGS := $(RUSTFLAGS) -Ctarget-feature=-outline-atomics
+endif
 
 # Almost all the rules in this Makefile are PHONY
 # Declaring a rule as PHONY could improve correctness
@@ -150,8 +181,18 @@ dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build: export TIKV_PROFILE=debug
+ifeq ($(TIKV_FRAME_POINTER),1)
+build:
+	rustup component add rust-src
+	cargo build --no-default-features --features "${ENABLE_FEATURES}" \
+		-Z build-std=core,std,alloc,proc_macro,test \
+		-Z unstable-options \
+		--target "${TIKV_BUILD_RUSTC_TARGET}" \
+		--out-dir "${CARGO_TARGET_DIR}/debug"
+else
 build:
 	cargo build --no-default-features --features "${ENABLE_FEATURES}"
+endif
 
 ## Release builds (optimized dev builds)
 ## ----------------------------
@@ -164,8 +205,18 @@ build:
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release: export TIKV_PROFILE=release
+ifeq ($(TIKV_FRAME_POINTER),1)
+release:
+	rustup component add rust-src
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" \
+		-Z build-std=core,std,alloc,proc_macro,test \
+		-Z unstable-options \
+		--target "${TIKV_BUILD_RUSTC_TARGET}" \
+		--out-dir "${CARGO_TARGET_DIR}/release"
+else
 release:
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
+endif
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
@@ -360,6 +411,7 @@ x-build-dist: export X_CARGO_CMD=build
 x-build-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-dist: export X_CARGO_RELEASE=1
 x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
+x-build-dist: export X_CARGO_TARGET_DIR=${CARGO_TARGET_DIR}
 x-build-dist: export X_PACKAGE=tikv-server tikv-ctl
 x-build-dist:
 	bash scripts/run-cargo.sh
