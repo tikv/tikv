@@ -447,7 +447,7 @@ impl ConfigManager for ServerConfigManager {
                     .clone()
                     .resize_memory(mem_quota.0 as usize);
             }
-            if let Some(value) = c.get("simplify_metrics_level") {
+            if let Some(value) = c.get("metrics_compact_level") {
                 tikv_util::metrics::set_metrics_compact_level(value.into());
             }
             if let Some(value) = c.get("metrics_level") {

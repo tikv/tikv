@@ -78,7 +78,8 @@ pub fn should_return_normal_metrics() -> bool {
     let metrics_level = get_metrics_level();
     metrics_level == MetricsLevel::All
         || (metrics_level == MetricsLevel::ReduceFrequency
-            && (METRICS_REQUEST_COUNTER.load(Ordering::Relaxed) % NORMAL_METRICS_REDUCE_FACTOR == 0))
+            && (METRICS_REQUEST_COUNTER.load(Ordering::Relaxed) % NORMAL_METRICS_REDUCE_FACTOR
+                == 0))
 }
 
 pub fn dump() -> String {
@@ -90,7 +91,7 @@ pub fn dump() -> String {
 
 pub fn dump_to(w: &mut impl Write) {
     METRICS_REQUEST_COUNTER.fetch_add(1, Ordering::Release);
-    
+
     dump_metrics_to(w, HIGH_PRIORITY_REGISTRY.gather());
     if should_return_normal_metrics() {
         dump_metrics_to(w, prometheus::gather());

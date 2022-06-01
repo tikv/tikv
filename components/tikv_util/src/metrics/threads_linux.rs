@@ -208,7 +208,7 @@ impl Collector for ThreadsCollector {
             if simplify_level == MetricsCompactLevel::NoCompact {
                 return mfs;
             }
-            for mf in &mut mfs {
+            mfs.retain_mut(|mf| {
                 let mut metrics = mf.take_metric().into_vec();
                 // there are more than 100 threads and most of them are inactive,
                 // so only retain the sample which value >= 0.01 * max_sample_value
@@ -223,8 +223,10 @@ impl Collector for ThreadsCollector {
                         / 100.0
                 };
                 metrics.retain(|m| m.get_gauge().get_value() > threshold);
+                let should_retain = !metrics.is_empty();
                 mf.set_metric(metrics.into());
-            }
+                should_retain
+            });
             mfs
         };
 
