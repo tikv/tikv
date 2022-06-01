@@ -134,10 +134,6 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Client drivers
 
-Currently, the interfaces to TiKV are the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
-
-These are the clients for TiKV:
-
 - [Go](https://github.com/tikv/client-go) (The most stable and widely used)
 - [Java](https://github.com/tikv/client-java)
 - [Rust](https://github.com/tikv/client-rust)
