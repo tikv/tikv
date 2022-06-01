@@ -6809,6 +6809,43 @@ mod tests {
         test_pessimistic_lock_impl(true);
     }
 
+    fn must_have_locks<E: Engine, L: LockManager>(
+        storage: &Storage<E, L>,
+        ts: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        expected_locks: &[(
+            /* key */ &[u8],
+            Op,
+            /* start_ts */ u64,
+            /* for_update_ts */ u64,
+        )],
+    ) {
+        let locks = block_on(storage.scan_lock(
+            Context::default(),
+            ts.into(),
+            Some(Key::from_raw(start_key)),
+            Some(Key::from_raw(end_key)),
+            100,
+        ))
+        .unwrap();
+        assert_eq!(
+            locks.len(),
+            expected_locks.len(),
+            "lock count not match, expected: {:?}; got: {:?}",
+            expected_locks,
+            locks
+        );
+        for (lock_info, (expected_key, expected_op, expected_start_ts, expected_for_update_ts)) in
+            locks.into_iter().zip(expected_locks.iter())
+        {
+            assert_eq!(lock_info.get_key(), *expected_key);
+            assert_eq!(lock_info.get_lock_type(), *expected_op);
+            assert_eq!(lock_info.get_lock_version(), *expected_start_ts);
+            assert_eq!(lock_info.get_lock_for_update_ts(), *expected_for_update_ts);
+        }
+    }
+
     fn test_pessimistic_lock_new_impl(pipelined_pessimistic_lock: bool) {
         type Res = PessimisticLockKeyResult;
         let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
@@ -7018,64 +7055,25 @@ mod tests {
         rx.recv().unwrap();
 
         // Lock successfully, nothing to wait.
-        for &(return_values, check_existence) in &[
-            /*(false, false), */ (false, true), /* (true, false), (true, true) */
-        ] {
-            let pessimistic_lock_res = if return_values {
-                PessimisticLockResults(vec![
-                    Res::Value(Some(b"v1".to_vec())),
-                    Res::LockedWithConflict {
-                        value: Some(b"v2".to_vec()),
-                        conflict_ts: 40.into(),
-                    },
-                    Res::Value(None),
-                    Res::LockedWithConflict {
-                        value: Some(b"v4".to_vec()),
-                        conflict_ts: 40.into(),
-                    },
-                    Res::LockedWithConflict {
-                        value: None,
-                        conflict_ts: 30.into(),
-                    },
-                    Res::Value(None),
-                ])
-            } else if check_existence {
-                PessimisticLockResults(vec![
-                    Res::Existence(true),
-                    Res::LockedWithConflict {
-                        value: Some(b"v2".to_vec()),
-                        conflict_ts: 40.into(),
-                    },
-                    Res::Existence(false),
-                    Res::LockedWithConflict {
-                        value: Some(b"v4".to_vec()),
-                        conflict_ts: 40.into(),
-                    },
-                    Res::LockedWithConflict {
-                        value: None,
-                        conflict_ts: 30.into(),
-                    },
-                    Res::Existence(false),
-                ])
-            } else {
-                PessimisticLockResults(vec![
-                    Res::Empty,
-                    Res::LockedWithConflict {
-                        value: Some(b"v2".to_vec()),
-                        conflict_ts: 40.into(),
-                    },
-                    Res::Empty,
-                    Res::LockedWithConflict {
-                        value: Some(b"v4".to_vec()),
-                        conflict_ts: 40.into(),
-                    },
-                    Res::LockedWithConflict {
-                        value: None,
-                        conflict_ts: 30.into(),
-                    },
-                    Res::Empty,
-                ])
-            };
+        {
+            let (return_values, check_existence) = (false, true);
+            let pessimistic_lock_res = PessimisticLockResults(vec![
+                Res::Existence(true),
+                Res::LockedWithConflict {
+                    value: Some(b"v2".to_vec()),
+                    conflict_ts: 40.into(),
+                },
+                Res::Existence(false),
+                Res::LockedWithConflict {
+                    value: Some(b"v4".to_vec()),
+                    conflict_ts: 40.into(),
+                },
+                Res::LockedWithConflict {
+                    value: None,
+                    conflict_ts: 30.into(),
+                },
+                Res::Existence(false),
+            ]);
 
             let keys = &[b"k1", b"k2", b"k3", b"k4", b"k5", b"k6"];
 
@@ -7166,12 +7164,173 @@ mod tests {
                 .unwrap();
             rx2.recv().unwrap();
 
+            // Check the locks are successfully written
+            must_have_locks(
+                &storage,
+                50,
+                b"k1",
+                b"k6\x00",
+                &[
+                    (b"k1", Op::PessimisticLock, 25, 25),
+                    (b"k2", Op::PessimisticLock, 25, 40),
+                    (b"k3", Op::PessimisticLock, 25, 25),
+                    (b"k4", Op::PessimisticLock, 25, 40),
+                    (b"k5", Op::PessimisticLock, 25, 30),
+                    (b"k6", Op::PessimisticLock, 25, 25),
+                ],
+            );
+
             delete_pessimistic_lock(&storage, Key::from_raw(b"k1"), 25, 25);
             delete_pessimistic_lock(&storage, Key::from_raw(b"k2"), 25, 40);
             delete_pessimistic_lock(&storage, Key::from_raw(b"k3"), 25, 25);
             delete_pessimistic_lock(&storage, Key::from_raw(b"k4"), 25, 40);
             delete_pessimistic_lock(&storage, Key::from_raw(b"k5"), 25, 30);
             delete_pessimistic_lock(&storage, Key::from_raw(b"k6"), 25, 25);
+        }
+
+        // Single command waking up keys from multiple requests
+        {
+            let (return_values, check_existence) = (false, true);
+            let pessimistic_lock_res = PessimisticLockResults(vec![
+                Res::Existence(true),
+                Res::LockedWithConflict {
+                    value: Some(b"v2".to_vec()),
+                    conflict_ts: 40.into(),
+                },
+                Res::Existence(false),
+                Res::LockedWithConflict {
+                    value: Some(b"v4".to_vec()),
+                    conflict_ts: 40.into(),
+                },
+                Res::LockedWithConflict {
+                    value: None,
+                    conflict_ts: 30.into(),
+                },
+                Res::Existence(false),
+            ]);
+
+            // Lock k1, k3, k5
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![
+                            (Key::from_raw(b"k1"), false),
+                            (Key::from_raw(b"k3"), false),
+                            (Key::from_raw(b"k5"), false),
+                        ],
+                        25,
+                        25,
+                        return_values,
+                        check_existence,
+                    ),
+                    expect_pessimistic_lock_res_callback(
+                        tx.clone(),
+                        PessimisticLockResults(vec![
+                            pessimistic_lock_res.0[0].clone(),
+                            pessimistic_lock_res.0[2].clone(),
+                            pessimistic_lock_res.0[4].clone(),
+                        ]),
+                    ),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            let (tx2, rx2) = channel();
+            let (tx3, rx3) = channel();
+
+            // The two requests are blocked.
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![
+                            (Key::from_raw(b"k1"), false),
+                            (Key::from_raw(b"k2"), false),
+                            (Key::from_raw(b"k3"), false),
+                        ],
+                        26,
+                        26,
+                        return_values,
+                        check_existence,
+                    ),
+                    expect_pessimistic_lock_res_callback(
+                        tx2.clone(),
+                        PessimisticLockResults(pessimistic_lock_res.0[0..3].to_vec()),
+                    ),
+                )
+                .unwrap();
+            rx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![
+                            (Key::from_raw(b"k4"), false),
+                            (Key::from_raw(b"k5"), false),
+                            (Key::from_raw(b"k6"), false),
+                        ],
+                        27,
+                        27,
+                        return_values,
+                        check_existence,
+                    ),
+                    expect_pessimistic_lock_res_callback(
+                        tx3.clone(),
+                        PessimisticLockResults(pessimistic_lock_res.0[3..6].to_vec()),
+                    ),
+                )
+                .unwrap();
+            rx3.recv_timeout(Duration::from_millis(100)).unwrap_err();
+
+            storage
+                .sched_txn_command(
+                    commands::PessimisticRollback::new(
+                        vec![Key::from_raw(b"k3"), Key::from_raw(b"k5")],
+                        25.into(),
+                        30.into(),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            rx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
+            rx3.recv().unwrap();
+
+            storage
+                .sched_txn_command(
+                    commands::PessimisticRollback::new(
+                        vec![Key::from_raw(b"k1")],
+                        25.into(),
+                        25.into(),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            rx2.recv().unwrap();
+
+            // Check the locks are successfully written
+            must_have_locks(
+                &storage,
+                50,
+                b"k1",
+                b"k6\x00",
+                &[
+                    (b"k1", Op::PessimisticLock, 26, 26),
+                    (b"k2", Op::PessimisticLock, 26, 40),
+                    (b"k3", Op::PessimisticLock, 26, 26),
+                    (b"k4", Op::PessimisticLock, 27, 40),
+                    (b"k5", Op::PessimisticLock, 27, 30),
+                    (b"k6", Op::PessimisticLock, 27, 27),
+                ],
+            );
+
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k1"), 26, 26);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k2"), 26, 40);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k3"), 26, 26);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k4"), 27, 40);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k5"), 27, 30);
+            delete_pessimistic_lock(&storage, Key::from_raw(b"k6"), 27, 27);
         }
     }
 
