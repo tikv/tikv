@@ -629,25 +629,15 @@ mod test {
                 .global_progress_of_task("test_fatal_error"),
         )
         .unwrap();
-        assert_eq!(safepoints.len(), 4, "{:?}", safepoints);
+
         assert!(
-            safepoints
-                .iter()
-                .take(3)
-                // They are choosing the lock safepoint, it must greater than the global checkpoint.
-                .all(|sp| { sp.safepoint.into_inner() >= checkpoint }),
+            safepoints.iter().any(|sp| {
+                sp.serivce.contains(&format!("{}", victim))
+                    && sp.ttl >= Duration::from_secs(60 * 60 * 24)
+                    && sp.safepoint.into_inner() == checkpoint
+            }),
             "{:?}",
             safepoints
-        );
-
-        let sp = &safepoints[3];
-        assert!(sp.serivce.contains(&format!("{}", victim)), "{:?}", sp);
-        assert!(sp.ttl >= Duration::from_secs(60 * 60 * 24), "{:?}", sp);
-        assert!(
-            sp.safepoint.into_inner() == checkpoint,
-            "{:?} vs {}",
-            sp,
-            checkpoint
         );
     }
 

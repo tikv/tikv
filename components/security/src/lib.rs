@@ -18,6 +18,7 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
     ServerCredentialsFetcher,
 };
+#[cfg(feature = "tonic")]
 use tonic::transport::{channel::ClientTlsConfig, Certificate, Identity};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -122,6 +123,7 @@ impl SecurityManager {
         })
     }
 
+    #[cfg(feature = "tonic")]
     /// Make a tonic tls config via the config.
     pub fn tonic_tls_config(&self) -> Option<ClientTlsConfig> {
         let (ca, cert, key) = self.cfg.load_certs().unwrap_or_default();
