@@ -116,7 +116,9 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
             self.schedule_wait_duration
                 .observe(schedule_time.elapsed().as_secs_f64());
         }
-        self.inner.handle(local, task_cell)
+        let finished = self.inner.handle(local, task_cell);
+        self.ticker.try_tick();
+        finished
     }
 
     fn pause(&mut self, local: &mut Local<Self::TaskCell>) -> bool {
