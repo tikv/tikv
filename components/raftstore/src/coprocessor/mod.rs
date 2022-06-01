@@ -148,6 +148,8 @@ pub struct RoleChange {
     pub prev_lead_transferee: u64,
     /// Which peer is voted by itself.
     pub vote: u64,
+    /// The current term.
+    pub term: u64,
 }
 
 impl RoleChange {
@@ -157,6 +159,7 @@ impl RoleChange {
             leader_id: raft::INVALID_ID,
             prev_lead_transferee: raft::INVALID_ID,
             vote: raft::INVALID_ID,
+            term: 0,
         }
     }
 }

@@ -26,6 +26,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
+use std::thread::current;
 use std::time::Instant;
 
 use futures::compat::Compat01As03;
@@ -134,11 +135,12 @@ pub enum Task {
     },
     RegionLeaderRetired {
         region_id: u64,
-        expired_term: u64,
+        current_term: u64,
     },
-    RegionEpochChanged {
+    RegionChanged {
         region_id: u64,
         region_epoch: RegionEpoch,
+        event: RegionChangeEvent,
     },
     ChangeConfig {
         timeout: Option<ReadableDuration>,
@@ -182,16 +184,21 @@ impl Display for Task {
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
             Task::RegionLeaderRetired {
                 region_id,
-                expired_term,
+                current_term,
             } => write!(
                 f,
-                "region {} leader at term {} retired",
-                region_id, expired_term
+                "region {} leader become follower at term {}",
+                region_id, current_term
             ),
-            Task::RegionEpochChanged {
+            Task::RegionChanged {
                 region_id,
                 region_epoch,
-            } => write!(f, "region {} epoch changed: {:?}", region_id, region_epoch),
+                event,
+            } => write!(
+                f,
+                "region {} epoch changed to {:?}: {:?}",
+                region_id, region_epoch, event
+            ),
             Task::ChangeConfig { timeout, delay } => write!(
                 f,
                 "change config to default_wait_for_lock_timeout: {:?}, wake_up_delay_duration: {:?}",
@@ -533,6 +540,29 @@ impl WaitTable {
         self.waiter_count.fetch_sub(count, Ordering::SeqCst);
     }
 
+    fn cancel_region_if_term_expired(&mut self, region_id: u64, term: u64) {
+        if let Some((region_state, _)) = self.region_waiters.get(&region_id) {
+            if region_state.term < term {
+                self.cancel_region(region_id);
+            }
+        }
+    }
+
+    fn cancel_region_if_epoch_expired(
+        &mut self,
+        region_id: u64,
+        epoch: RegionEpoch,
+        _event: RegionChangeEvent,
+    ) {
+        if let Some((region_state, _)) = self.region_waiters.get(&region_id) {
+            if region_state.region_epoch.get_version() < epoch.get_verison()
+                || region_state.region_epoch.get_conf_ver() < epoch.get_conf_ver()
+            {
+                self.cancel_region(region_id);
+            }
+        }
+    }
+
     // /// Removes all waiters waiting for the lock.
     // fn remove(&mut self, lock: LockDigest) {
     //     self.wait_table.remove(&lock.hash);
@@ -826,12 +856,21 @@ impl WaiterManager {
         }
     }
 
-    fn handle_region_leader_retire(&mut self, region_id: u64, _term: u64) {
-        self.wait_table.borrow_mut().cancel_region(region_id);
+    fn handle_region_leader_retire(&mut self, region_id: u64, term: u64) {
+        self.wait_table
+            .borrow_mut()
+            .cancel_region_if_term_expired(region_id, term);
     }
 
-    fn handle_region_epoch_change(&mut self, region_id: u64, _epoch: RegionEpoch) {
-        self.wait_table.borrow_mut().cancel_region(region_id);
+    fn handle_region_epoch_change(
+        &mut self,
+        region_id: u64,
+        epoch: RegionEpoch,
+        event: RegionChangeEvent,
+    ) {
+        self.wait_table
+            .borrow_mut()
+            .cancel_region_if_epoch_expired(region_id, epoch, event);
     }
 
     fn handle_config_change(
@@ -900,15 +939,16 @@ impl FutureRunnable<Task> for WaiterManager {
             }
             Task::RegionLeaderRetired {
                 region_id,
-                expired_term,
+                current_term,
             } => {
-                self.handle_region_leader_retire(region_id, expired_term);
+                self.handle_region_leader_retire(region_id, current_term);
             }
-            Task::RegionEpochChanged {
+            Task::RegionChanged {
                 region_id,
                 region_epoch,
+                event,
             } => {
-                self.handle_region_epoch_change(region_id, region_epoch);
+                self.handle_region_epoch_change(region_id, region_epoch, event);
             }
             Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
             #[cfg(any(test, feature = "testexport"))]
@@ -943,11 +983,13 @@ impl RegionLockWaitCancellationObserver {
 impl Coprocessor for RegionLockWaitCancellationObserver {}
 
 impl RoleObserver for RegionLockWaitCancellationObserver {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _role_change: &RoleChange) {
-        self.scheduler.notify_scheduler(Task::RegionLeaderRetired {
-            region_id: ctx.region().get_id(),
-            expired_term: 0, // TODO: Pass term here.
-        });
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
+        if role_change.state == StateRole::Follower {
+            self.scheduler.notify_scheduler(Task::RegionLeaderRetired {
+                region_id: ctx.region().get_id(),
+                current_term: role_change.term,
+            });
+        }
     }
 }
 
@@ -955,13 +997,16 @@ impl RegionChangeObserver for RegionLockWaitCancellationObserver {
     fn on_region_changed(
         &self,
         ctx: &mut ObserverContext<'_>,
-        _event: RegionChangeEvent,
-        _role: StateRole,
+        event: RegionChangeEvent,
+        role: StateRole,
     ) {
-        // TODO: Filter out non-leader events.
-        self.scheduler.notify_scheduler(Task::RegionEpochChanged {
+        if role != StateRole::Leader {
+            return;
+        }
+        self.scheduler.notify_scheduler(Task::RegionChanged {
             region_id: ctx.region().get_id(),
             region_epoch: ctx.region().get_region_epoch().clone(),
+            event,
         });
     }
 }

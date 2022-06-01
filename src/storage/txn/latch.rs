@@ -27,7 +27,7 @@ struct Latch {
     // store hash value of the key and command ID which requires this key.
     pub waiting: VecDeque<Option<(u64, u64)>>,
     // TODO: Filter by the known hash to make it perhaps faster.
-    pub lock_waiting: HashMap<Key, Vec<WriteResultLockInfo>, RandomState>,
+    pub lock_waiting: HashMap<Key, VecDeque<WriteResultLockInfo>, RandomState>,
 }
 
 impl Latch {
@@ -120,7 +120,7 @@ impl Latch {
                 // let lock_info = &v[i];
                 // TODO: Early cancel entries with mismatching term; cleanup already cancelled items.
                 // TODO: Pop by order instead of swapping remove.
-                result = Some(v.swap_remove(0));
+                result = Some(v.pop_front().unwrap());
                 // break;
             }
             (result, v.is_empty())
@@ -291,6 +291,7 @@ impl Latches {
                 }
             } else {
                 latch_keep_list.push(key_hash);
+                // TODO: This is incorrect if there are two different hashes that have the same modulus so that they are in the same slot. Fix it.
                 latch.push_preemptive(key_hash, new_cid_for_holding_latches.unwrap());
             }
         }
