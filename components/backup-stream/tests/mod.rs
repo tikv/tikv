@@ -134,9 +134,9 @@ impl Suite {
         cfg.enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let ob = self.obs.get(&id).unwrap().clone();
-        let endpoint = Endpoint::with_client(
+        let endpoint = Endpoint::new(
             id,
-            MetadataClient::new(self.meta_store.clone(), id),
+            self.meta_store.clone(),
             cfg,
             worker.scheduler(),
             ob,
@@ -507,7 +507,6 @@ mod test {
 
     #[test]
     fn basic() {
-        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("basic", 4);
 
         run_async_test(async {
@@ -528,7 +527,6 @@ mod test {
 
     #[test]
     fn with_split() {
-        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("with_split", 4);
         run_async_test(async {
             let round1 = suite.write_records(0, 128, 1).await;
@@ -548,7 +546,6 @@ mod test {
     #[test]
     /// This case tests whether the backup can continue when the leader failes.
     fn leader_down() {
-        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("leader_down", 4);
         suite.must_register_task(1, "test_leader_down");
         suite.sync();
@@ -569,7 +566,6 @@ mod test {
     /// This case tests whehter the checkpoint ts (next backup ts) can be advanced correctly
     /// when async commit is enabled.
     fn async_commit() {
-        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("async_commit", 3);
         run_async_test(async {
             suite.must_register_task(1, "test_async_commit");
@@ -600,7 +596,6 @@ mod test {
 
     #[test]
     fn fatal_error() {
-        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("fatal_error", 3);
         suite.must_register_task(1, "test_fatal_error");
         suite.sync();
@@ -657,7 +652,6 @@ mod test {
 
     #[test]
     fn inflight_messages() {
-        test_util::init_log_for_test();
         // We should remove the failpoints when paniked or we may get stucked.
         defer! {{
             fail::remove("delay_on_start_observe");
