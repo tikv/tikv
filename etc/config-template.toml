@@ -666,7 +666,7 @@
 ## Maximum number of level-0 files.
 ## When the number of SST files of level-0 reaches the limit of `level0-stop-writes-trigger`,
 ## RocksDB stalls the new write operation.
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 
 ## Amount of data to build up in memory (backed by an unsorted log on disk) before converting to a
 ## sorted on-disk file. It is the RocksDB MemTable size.
@@ -717,6 +717,12 @@
 ## 2 : OldestSmallestSeqFirst
 ## 3 : MinOverlappingRatio
 # compaction-pri = 3
+
+## Refer to storage.flow-control.soft-pending-compaction-bytes-limit.
+# soft-pending-compaction-bytes-limit = "192GB"
+
+## Refer to storage.flow-control.hard-pending-compaction-bytes-limit.
+# hard-pending-compaction-bytes-limit = "1000GB"
 
 ## Indicating if we'd put index/filter blocks to the block cache.
 ## If not specified, each "table reader" object will pre-load index/filter block during table
@@ -832,10 +838,16 @@
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
+<<<<<<< HEAD
 # compaction-pri = 3
+=======
+# compaction-pri = "min-overlapping-ratio"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
+>>>>>>> 2a508a583... engine: only override write stall configurations if unspecified (#12127)
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -853,10 +865,16 @@
 # target-file-size-base = "8MB"
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
+<<<<<<< HEAD
 # compaction-pri = 0
+=======
+# compaction-pri = "by-compensated-size"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
+>>>>>>> 2a508a583... engine: only override write stall configurations if unspecified (#12127)
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -910,10 +928,16 @@
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
+<<<<<<< HEAD
 # compaction-pri = 0
+=======
+# compaction-pri = "by-compensated-size"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
+>>>>>>> 2a508a583... engine: only override write stall configurations if unspecified (#12127)
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
