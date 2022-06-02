@@ -4733,70 +4733,6 @@ mod tests {
                 .contains("rate-limiter-mode = 1")
         );
     }
-<<<<<<< HEAD
-=======
-
-    #[test]
-    fn test_serde_to_online_config() {
-        let cases = vec![
-            (
-                "raftstore.store_pool_size",
-                "raft_store.store_batch_system.pool_size",
-            ),
-            (
-                "raftstore.store-pool-size",
-                "raft_store.store_batch_system.pool_size",
-            ),
-            (
-                "raftstore.store_max_batch_size",
-                "raft_store.store_batch_system.max_batch_size",
-            ),
-            (
-                "raftstore.store-max-batch-size",
-                "raft_store.store_batch_system.max_batch_size",
-            ),
-            (
-                "raftstore.apply_pool_size",
-                "raft_store.apply_batch_system.pool_size",
-            ),
-            (
-                "raftstore.apply-pool-size",
-                "raft_store.apply_batch_system.pool_size",
-            ),
-            (
-                "raftstore.apply_max_batch_size",
-                "raft_store.apply_batch_system.max_batch_size",
-            ),
-            (
-                "raftstore.apply-max-batch-size",
-                "raft_store.apply_batch_system.max_batch_size",
-            ),
-            (
-                "raftstore.store_io_pool_size",
-                "raft_store.store_io_pool_size",
-            ),
-            (
-                "raftstore.store-io-pool-size",
-                "raft_store.store_io_pool_size",
-            ),
-            (
-                "raftstore.apply_yield_duration",
-                "raft_store.apply_yield_duration",
-            ),
-            (
-                "raftstore.apply-yield-duration",
-                "raft_store.apply_yield_duration",
-            ),
-            (
-                "raftstore.raft_store_max_leader_lease",
-                "raft_store.raft_store_max_leader_lease",
-            ),
-        ];
-
-        for (name, res) in cases {
-            assert_eq!(serde_to_online_config(name.into()).as_str(), res);
-        }
-    }
 
     #[test]
     fn test_flow_control_override() {
@@ -4883,5 +4819,4 @@ mod tests {
             Some(ReadableSize::gb(1))
         );
     }
->>>>>>> 2a508a583... engine: only override write stall configurations if unspecified (#12127)
 }
