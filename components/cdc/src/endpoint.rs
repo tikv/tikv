@@ -377,7 +377,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             .unwrap();
         let tso_worker = Builder::new_multi_thread()
             .thread_name("tso")
-            .worker_threads(1)
+            .worker_threads(config.tso_worker_threads)
             .enable_time()
             .build()
             .unwrap();
