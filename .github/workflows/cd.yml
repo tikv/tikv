@@ -1,0 +1,62 @@
+name: CD
+
+on:
+  push:
+    branches:
+      - cloud-engine
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Image & Push To ECR
+    runs-on: large-quota
+    timeout-minutes: 120
+    outputs:
+      image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ github.sha }}
+    env:
+      ECR_REPO: dbaas/dev/cloud-storage-engine
+      IMAGE_NAME: cloud-storage-engine
+      AWS_ROLE_ARN: ${{ secrets.DBAAS_DEV_AWS_ROLE }}
+      AWS_REGION: us-west-2
+    steps:
+      - name: Check out Code
+        uses: actions/checkout@v2
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+        with:
+          platforms: "linux/amd64,linux/arm64"
+
+      - name: Setup Docker Context
+        run: |
+          docker --context tls-env info || docker context create tls-env
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          endpoint: tls-env
+
+      - name: Install AWS CLI
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Make Sure the Image Repos Exist
+        run: |
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPO }} || aws ecr create-repository --repository-name ${{ env.ECR_REPO }} || exit 1
+      
+      - name: Build and Push Latest Images
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          platforms: "linux/amd64,linux/arm64"
+          push: true
+          build-args: |
+            GITHUB_TOKEN=${{ secrets.GIT_ACTION_BOT }}
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ github.sha }}
