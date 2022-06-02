@@ -2954,15 +2954,9 @@ impl TiKvConfig {
         // block cache sizes. Otherwise use the sum of block cache size of all column families
         // as the shared cache size.
         let cache_cfg = &mut self.storage.block_cache;
-<<<<<<< HEAD
-        if cache_cfg.shared && cache_cfg.capacity.0.is_none() {
-            cache_cfg.capacity.0 = Some(ReadableSize {
-                0: self.rocksdb.defaultcf.block_cache_size.0
-=======
         if cache_cfg.shared && cache_cfg.capacity.is_none() {
             cache_cfg.capacity = Some(ReadableSize(
                 self.rocksdb.defaultcf.block_cache_size.0
->>>>>>> 8954a76e2... config: simplify handling of nullable configurations (#12133)
                     + self.rocksdb.writecf.block_cache_size.0
                     + self.rocksdb.lockcf.block_cache_size.0
                     + self.raftdb.defaultcf.block_cache_size.0,
