@@ -670,7 +670,7 @@ where
                 Error::from(err).report("failed to update service safe point!");
                 // don't give up?
             }
-            if let Err(err) = meta_cli.step_task(&task, rts).await {
+            if let Err(err) = meta_cli.set_local_task_checkpoint(&task, rts).await {
                 err.report(format!("on flushing task {}", task));
                 // we can advance the progress at next time.
                 // return early so we won't be mislead by the metrics.
