@@ -39,15 +39,20 @@ impl EngineCore {
         if cs.has_initial_flush() {
             self.collect_snap_ids(cs.get_initial_flush(), &mut ids);
         }
+        if cs.has_ingest_files() {
+            let ingest_files = cs.get_ingest_files();
+            for l0 in ingest_files.get_l0_creates() {
+                ids.insert(l0.id, true);
+            }
+            for tbl in ingest_files.get_table_creates() {
+                ids.insert(tbl.id, false);
+            }
+        }
         self.load_tables_by_ids(cs.shard_id, cs.shard_ver, ids, &mut cs, use_direct_io)?;
         Ok(cs)
     }
 
-    pub(crate) fn collect_snap_ids(
-        &self,
-        snap: &kvenginepb::Snapshot,
-        ids: &mut HashMap<u64, bool>,
-    ) {
+    fn collect_snap_ids(&self, snap: &kvenginepb::Snapshot, ids: &mut HashMap<u64, bool>) {
         for l0 in snap.get_l0_creates() {
             ids.insert(l0.id, true);
         }
@@ -56,7 +61,7 @@ impl EngineCore {
         }
     }
 
-    pub(crate) fn load_tables_by_ids(
+    fn load_tables_by_ids(
         &self,
         shard_id: u64,
         shard_ver: u64,

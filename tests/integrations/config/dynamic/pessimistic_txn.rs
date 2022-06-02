@@ -19,7 +19,7 @@ use tikv_util::config::ReadableDuration;
 
 #[test]
 fn test_config_validate() {
-    let cfg = Config::default();
+    let mut cfg = Config::default();
     cfg.validate().unwrap();
 
     let mut invalid_cfg = Config::default();

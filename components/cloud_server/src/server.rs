@@ -86,7 +86,7 @@ pub enum Error {
     AddrParse(#[from] AddrParseError),
 
     #[error("{0:?}")]
-    RaftServer(#[from] RaftServerError),
+    RaftServer(Box<RaftServerError>),
 
     #[error("{0:?}")]
     Engine(#[from] EngineError),
@@ -111,6 +111,12 @@ pub enum Error {
 
     #[error("{0:?}")]
     OpenSSL(#[from] OpenSSLError),
+}
+
+impl From<RaftServerError> for Error {
+    fn from(e: RaftServerError) -> Self {
+        Error::RaftServer(Box::new(e))
+    }
 }
 
 pub type Result<T> = result::Result<T, Error>;

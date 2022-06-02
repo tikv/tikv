@@ -28,6 +28,7 @@ use txn_types::{Key, WriteBatchFlags};
 use crate::{
     store::{
         cmd_resp::{bind_term, new_error},
+        ingest::convert_sst,
         msg::Callback,
         notify_req_region_removed,
         peer::Peer,
@@ -35,7 +36,7 @@ use crate::{
         MsgApplyResult, PdTask, PeerMsg, PersistReady, RaftContext, SignificantMsg, SnapState,
         StoreMsg, Ticker, PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_SPLIT_CHECK,
     },
-    Error, Result,
+    Error, RaftStoreRouter, Result,
 };
 
 /// Limits the maximum number of regions returned by error.
@@ -678,6 +679,10 @@ impl<'a> PeerMsgHandler<'a> {
             notify_req_region_removed(self.region_id(), cb);
             return;
         }
+        if !msg.get_requests().is_empty() && msg.get_requests()[0].has_ingest_sst() {
+            self.propose_ingest_sst(msg, cb);
+            return;
+        }
 
         // Note:
         // The peer that is being checked is a leader. It might step down to be a follower later. It
@@ -691,6 +696,30 @@ impl<'a> PeerMsgHandler<'a> {
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
+    }
+
+    fn propose_ingest_sst(&mut self, msg: RaftCmdRequest, cb: Callback) {
+        // This is a ingest sst request, we need to redirect to worker thread and convert
+        // it to cloud engine format.
+        let importer = self.ctx.global.importer.clone();
+        let router = self.ctx.global.router.clone();
+        let kv = self.ctx.global.engines.kv.clone();
+        std::thread::spawn(move || {
+            match convert_sst(kv, importer, &msg) {
+                Ok(cs) => {
+                    // Make ingest command.
+                    let mut cmd = RaftCmdRequest::default();
+                    cmd.set_header(msg.get_header().clone());
+                    let mut custom_builder = CustomBuilder::new();
+                    custom_builder.set_change_set(cs);
+                    cmd.set_custom_request(custom_builder.build());
+                    router.send_command(cmd, cb);
+                }
+                Err(e) => {
+                    cb.invoke_with_response(new_error(e));
+                }
+            }
+        });
     }
 
     fn on_split_region_check_tick(&mut self) {

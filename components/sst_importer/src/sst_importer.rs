@@ -127,6 +127,10 @@ impl SstImporter {
         self.dir.validate(meta, self.key_manager.clone())
     }
 
+    pub fn get_reader(&self, meta: &SstMeta) -> Result<RocksSstReader> {
+        self.dir.get_reader(meta, self.key_manager.clone())
+    }
+
     /// check if api version of sst files are compatible
     pub fn check_api_version(&self, metas: &[SstMeta]) -> Result<bool> {
         self.dir

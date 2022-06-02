@@ -101,8 +101,7 @@ impl Value {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn encode_buf(meta: u8, user_meta: &[u8], version: u64, val: &[u8]) -> Vec<u8> {
+    pub fn encode_buf(meta: u8, user_meta: &[u8], version: u64, val: &[u8]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(VALUE_PTR_OFF + user_meta.len() + val.len());
         buf.resize(buf.capacity(), 0);
         let m_buf = buf.as_mut_slice();
@@ -116,7 +115,7 @@ impl Value {
         buf
     }
 
-    pub(crate) fn decode(bin: &[u8]) -> Self {
+    pub fn decode(bin: &[u8]) -> Self {
         let meta = bin[0];
         let user_meta_len = bin[1];
         let version = LittleEndian::read_u64(&bin[2..10]);

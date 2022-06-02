@@ -90,11 +90,11 @@ pub enum Error {
     #[error("Raft {0}")]
     Raft(#[from] raft::Error),
 
-    #[error("RfEngine {0}")]
-    RfEngineError(rfengine::Error),
+    #[error("RFEngine {0}")]
+    RFEngineError(#[from] rfengine::Error),
 
     #[error("KVEngine {0}")]
-    KVEngineError(kvengine::Error),
+    KVEngineError(#[from] kvengine::Error),
 
     #[error("Timeout {0}")]
     Timeout(String),
@@ -119,18 +119,12 @@ pub enum Error {
 
     #[error("send msg error")]
     SendPeerMsgError(PeerMsg),
-}
 
-impl From<rfengine::Error> for Error {
-    fn from(e: rfengine::Error) -> Self {
-        Error::RfEngineError(e)
-    }
-}
+    #[error("SstImporter {0}")]
+    SstImporter(#[from] sst_importer::Error),
 
-impl From<kvengine::Error> for Error {
-    fn from(e: kvengine::Error) -> Self {
-        Error::KVEngineError(e)
-    }
+    #[error("txn types {0}")]
+    TxnTypes(#[from] txn_types::Error),
 }
 
 impl From<Error> for errorpb::Error {
@@ -252,7 +246,7 @@ impl ErrorCodeExt for Error {
             Error::Codec(e) => e.error_code(),
             Error::AddrParse(_) => error_code::raftstore::ADDR_PARSE,
             Error::Pd(e) => e.error_code(),
-            Error::RfEngineError(_) => error_code::engine::ENGINE,
+            Error::RFEngineError(_) => error_code::engine::ENGINE,
             Error::KVEngineError(_) => error_code::engine::ENGINE,
             Error::Raft(e) => e.error_code(),
             Error::Timeout(_) => error_code::raftstore::TIMEOUT,
@@ -269,6 +263,8 @@ impl ErrorCodeExt for Error {
 
             Error::Other(_) => error_code::raftstore::UNKNOWN,
             Error::SendPeerMsgError(_) => error_code::raftstore::UNKNOWN,
+            Error::SstImporter(e) => e.error_code(),
+            Error::TxnTypes(e) => e.error_code(),
         }
     }
 }

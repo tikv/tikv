@@ -22,7 +22,6 @@ pub mod write;
 extern crate serde_derive;
 #[macro_use]
 extern crate slog_global;
-extern crate core;
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;

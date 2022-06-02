@@ -2300,13 +2300,12 @@ impl BackupConfig {
 
 impl Default for BackupConfig {
     fn default() -> Self {
-        let default_coprocessor = CopConfig::default();
         let cpu_num = SysQuota::cpu_cores_quota();
         Self {
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             batch_size: 8,
-            sst_max_size: default_coprocessor.region_max_size,
+            sst_max_size: ReadableSize::mb(16),
             enable_auto_tune: true,
             auto_tune_remain_threads: (cpu_num * 0.2).round() as usize,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
@@ -3145,18 +3144,18 @@ impl TiKvConfig {
                     + self.raftdb.defaultcf.block_cache_size.0,
             ));
         }
-        if self.backup.sst_max_size.0 < default_coprocessor.region_max_size.0 / 10 {
+        if self.backup.sst_max_size.0 < ReadableSize::kb(64).0 {
             warn!(
                 "override backup.sst-max-size with min sst-max-size, {:?}",
-                default_coprocessor.region_max_size / 10
+                ReadableSize::kb(64)
             );
-            self.backup.sst_max_size = default_coprocessor.region_max_size / 10;
-        } else if self.backup.sst_max_size.0 > default_coprocessor.region_max_size.0 * 2 {
+            self.backup.sst_max_size = ReadableSize::kb(64);
+        } else if self.backup.sst_max_size.0 > ReadableSize::mb(64).0 {
             warn!(
                 "override backup.sst-max-size with max sst-max-size, {:?}",
-                default_coprocessor.region_max_size * 2
+                ReadableSize::mb(64)
             );
-            self.backup.sst_max_size = default_coprocessor.region_max_size * 2;
+            self.backup.sst_max_size = ReadableSize::mb(64);
         }
 
         self.readpool.adjust_use_unified_pool();

@@ -28,6 +28,8 @@ pub enum Error {
     RemoteCompaction(String),
     #[error("apply change set {0}")]
     ApplyChangeSet(String),
+    #[error("ingest files {0}")]
+    IngestFiles(String),
 }
 
 impl From<table::Error> for Error {

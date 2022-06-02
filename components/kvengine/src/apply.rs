@@ -6,6 +6,8 @@ use std::{
     ops::Deref,
 };
 
+use bytes::Buf;
+
 use crate::{
     meta::is_move_down,
     table::sstable::{L0Table, SSTable},
@@ -73,6 +75,8 @@ impl EngineCore {
             store_bool(&shard.compacting, false);
         } else if cs.has_initial_flush() {
             self.apply_initial_flush(&shard, &cs);
+        } else if cs.has_ingest_files() {
+            self.apply_ingest_files(&shard, &cs)?;
         }
         shard.refresh_states();
         if shard.is_active() && (cs.has_flush() || cs.has_initial_flush()) {
@@ -270,5 +274,68 @@ impl EngineCore {
             scfs[cf] = scf.build();
         }
         (l0_tbls, scfs)
+    }
+
+    fn apply_ingest_files(&self, shard: &Shard, cs: &ChangeSet) -> Result<()> {
+        let ingest_files = cs.get_ingest_files();
+        let ingest_id = get_shard_property(INGEST_ID_KEY, ingest_files.get_properties()).unwrap();
+        if let Some(old_ingest_id) = shard.get_property(INGEST_ID_KEY) {
+            if old_ingest_id.chunk() == ingest_id.as_slice() {
+                // skip duplicated ingest files.
+                return Ok(());
+            }
+        }
+        let has_ln_table = !ingest_files.get_table_creates().is_empty();
+        let old_data = shard.get_data();
+        if !has_ln_table {
+            let mut new_l0s = vec![];
+            for l0_create in ingest_files.get_l0_creates() {
+                let l0 = cs.l0_tables.get(&l0_create.get_id()).unwrap().clone();
+                new_l0s.push(l0);
+            }
+            new_l0s.extend_from_slice(&old_data.l0_tbls);
+            let new_data = ShardData::new(
+                shard.start.clone(),
+                shard.end.clone(),
+                old_data.mem_tbls.clone(),
+                new_l0s,
+                old_data.cfs.clone(),
+            );
+            shard.set_data(new_data);
+            return Ok(());
+        }
+        let mut ingest_level = 0;
+        if old_data.l0_tbls.is_empty() {
+            for level in &old_data.cfs[0].levels {
+                if level.tables.is_empty() {
+                    ingest_level = level.level;
+                } else {
+                    break;
+                }
+            }
+        }
+        if ingest_level == 0 && has_ln_table {
+            return Err(Error::IngestFiles(
+                "no spare level to ingest files".to_string(),
+            ));
+        }
+        let mut tables = vec![];
+        for tbl_create in ingest_files.get_table_creates() {
+            let table = cs.ln_tables.get(&tbl_create.get_id()).unwrap().clone();
+            tables.push(table);
+        }
+        tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
+        let new_level = LevelHandler::new(ingest_level, tables);
+        let mut new_cfs = old_data.cfs.clone();
+        new_cfs[0].set_level(new_level);
+        let new_data = ShardData::new(
+            shard.start.clone(),
+            shard.end.clone(),
+            old_data.mem_tbls.clone(),
+            old_data.l0_tbls.clone(),
+            new_cfs,
+        );
+        shard.set_data(new_data);
+        Ok(())
     }
 }
