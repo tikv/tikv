@@ -1,16 +1,17 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet},
     pin::Pin,
     sync::Arc,
-    time::Duration, cmp::Ordering,
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use etcd_client::{
-    Client, DeleteOptions, EventType, GetOptions, PutOptions, SortOrder, SortTarget, Txn, TxnOp,
-    WatchOptions, Compare, CompareOp,
+    Client, Compare, CompareOp, DeleteOptions, EventType, GetOptions, PutOptions, SortOrder,
+    SortTarget, Txn, TxnOp, WatchOptions,
 };
 use futures::StreamExt;
 use tikv_util::warn;
@@ -25,7 +26,8 @@ use crate::{
     errors::Result,
     metadata::{
         keys::{KeyValue, MetaKey},
-        store::{KvEvent, Subscription}, metrics::METADATA_KEY_OPERATION,
+        metrics::METADATA_KEY_OPERATION,
+        store::{KvEvent, Subscription},
     },
 };
 // Can we get rid of the mutex? (which means, we must use a singleton client.)
@@ -186,7 +188,8 @@ impl EtcdStore {
     }
 
     fn partition_txns(mut txn: super::Transaction, leases: HashMap<Duration, i64>) -> Vec<Txn> {
-        txn.ops.chunks_mut(128)
+        txn.ops
+            .chunks_mut(128)
             .map(|txn| Txn::default().and_then(Self::to_txn(txn, &leases)))
             .collect()
     }
@@ -198,11 +201,11 @@ impl EtcdStore {
             Ordering::Greater => CompareOp::Greater,
         };
         Compare::value(cond.over_key, op, cond.arg)
-    }    
+    }
 
     /// Convert the transcation operations to etcd transcation ops.
     fn to_txn(ops: &mut [super::TransactionOp], leases: &HashMap<Duration, i64>) -> Vec<TxnOp> {
-            ops.iter_mut().map(|op| match op {
+        ops.iter_mut().map(|op| match op {
                 TransactionOp::Put(key, opt) => {
                     let opts = if opt.ttl.as_secs() > 0 {
                         let lease = leases.get(&opt.ttl);
@@ -210,7 +213,7 @@ impl EtcdStore {
                             None => {
                                 warn!("lease not found, the request key may not have a ttl"; "dur" => ?opt.ttl);
                                 None
-                            } 
+                            }
                             Some(lease_id) => {
                                 Some(PutOptions::new().with_lease(*lease_id))
                             }
@@ -232,9 +235,12 @@ impl EtcdStore {
     /// Make a conditional txn.
     /// For now, this wouldn't split huge transaction into smaller ones,
     /// so when playing with etcd in PD, conditional transaction should be small.
-    async fn make_conditional_txn(cli: &mut Client, mut txn: super::CondTransaction) -> Result<Txn> {
+    async fn make_conditional_txn(
+        cli: &mut Client,
+        mut txn: super::CondTransaction,
+    ) -> Result<Txn> {
         let cond = Self::to_compare(txn.cond);
-        
+
         let mut leases_needed = Self::collect_leases_needed(&txn.success);
         leases_needed.extend(Self::collect_leases_needed(&txn.failure).into_iter());
         let leases = Self::make_leases(cli, leases_needed).await?;
@@ -244,14 +250,16 @@ impl EtcdStore {
     }
 
     async fn make_txn(cli: &mut Client, etcd_txn: super::Transaction) -> Result<Vec<Txn>> {
-        let (put_cnt, delete_cnt) = etcd_txn.ops.iter().fold((0, 0), |(p, d), item| {
-            match item {
-                TransactionOp::Put(_, _) => (p+1, d),
-                TransactionOp::Delete(_) => (p, d+1),
-            }
+        let (put_cnt, delete_cnt) = etcd_txn.ops.iter().fold((0, 0), |(p, d), item| match item {
+            TransactionOp::Put(..) => (p + 1, d),
+            TransactionOp::Delete(_) => (p, d + 1),
         });
-        METADATA_KEY_OPERATION.with_label_values(&["put"]).inc_by(put_cnt);
-        METADATA_KEY_OPERATION.with_label_values(&["del"]).inc_by(delete_cnt);
+        METADATA_KEY_OPERATION
+            .with_label_values(&["put"])
+            .inc_by(put_cnt);
+        METADATA_KEY_OPERATION
+            .with_label_values(&["del"])
+            .inc_by(delete_cnt);
         let needed_leases = Self::collect_leases_needed(&etcd_txn);
         let leases = Self::make_leases(cli, needed_leases).await?;
         let txns = Self::partition_txns(etcd_txn, leases);
