@@ -73,6 +73,8 @@ pub struct EventLoader<S: Snapshot> {
     entry_batch: EntryBatch,
 }
 
+/// The batch size of scanning.
+/// The value is inherited from backup.
 const ENTRY_BATCH_SIZE: usize = 1024;
 
 impl<S: Snapshot> EventLoader<S> {

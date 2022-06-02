@@ -13,7 +13,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::fsm::ChangeObserver,
 };
-use tikv_util::{info, time::Instant, warn, worker::Scheduler};
+use tikv_util::{debug, info, time::Instant, warn, worker::Scheduler};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use txn_types::TimeStamp;
 use yatp::task::callback::Handle as YatpHandle;
@@ -114,6 +114,7 @@ where
 }
 
 /// The default channel size.
+/// It should be large enough so won't block the main task handler.
 const MESSAGE_BUFFER_SIZE: usize = 4096;
 
 /// The operator for region subscription.
@@ -278,12 +279,16 @@ where
             let canceled = self.subs.deregister_region(region, |_, _| true);
             let handle = ObserveHandle::new();
             if canceled {
-                let for_task = self.find_task_by_region(region).unwrap_or_else(|| {
-                    panic!(
-                        "BUG: the region {:?} is register to no task but being observed",
-                        region
-                    )
-                });
+                let for_task = match self.find_task_by_region(region) {
+                    None => {
+                        debug!(
+                            "the region {:?} is register to no task but being observed, maybe stale",
+                            region
+                        );
+                        return;
+                    }
+                    Some(t) => t,
+                };
                 metrics::INITIAL_SCAN_REASON
                     .with_label_values(&["region-changed"])
                     .inc();
@@ -438,6 +443,8 @@ where
         }
     }
 
+    /// Find a task bound to the region.
+    /// Note: make it returns a `Vec` once we support multi task.
     fn find_task_by_region(&self, r: &Region) -> Option<String> {
         self.range_router
             .find_task_by_range(&r.start_key, &r.end_key)
