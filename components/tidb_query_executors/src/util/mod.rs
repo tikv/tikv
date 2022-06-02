@@ -6,13 +6,10 @@ pub mod hash_aggr_helper;
 pub mod mock_executor;
 pub mod scan_executor;
 
-use tipb::FieldType;
-
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_expr::RpnExpression;
-use tidb_query_expr::RpnStackNode;
+use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
+use tidb_query_expr::{RpnExpression, RpnStackNode};
+use tipb::FieldType;
 
 /// Decodes all columns that are not decoded.
 pub fn ensure_columns_decoded(

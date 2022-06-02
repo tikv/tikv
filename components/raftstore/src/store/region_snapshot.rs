@@ -1,29 +1,31 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use engine_traits::{
-    IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
+use std::{
+    num::NonZeroU64,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::Region;
-use kvproto::raft_serverpb::RaftApplyState;
-use pd_client::BucketMeta;
-use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
-use crate::store::{util, PeerStorage, TxnExt};
-use crate::{Error, Result};
-use engine_traits::util::check_key_in_range;
-use engine_traits::RaftEngine;
-use engine_traits::CF_RAFT;
-use engine_traits::{Error as EngineError, Iterable, Iterator};
+use engine_traits::{
+    util::check_key_in_range, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
+    Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
+};
 use fail::fail_point;
 use keys::DATA_PREFIX_KEY;
-use tikv_util::keybuilder::KeyBuilder;
-use tikv_util::metrics::CRITICAL_ERROR;
-use tikv_util::{box_err, error};
-use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_serverpb::RaftApplyState};
+use pd_client::BucketMeta;
+use tikv_util::{
+    box_err, error, keybuilder::KeyBuilder, metrics::CRITICAL_ERROR,
+    panic_when_unexpected_key_or_data, set_panic_mark,
+};
+
+use crate::{
+    store::{util, PeerStorage, TxnExt},
+    Error, Result,
+};
 
 /// Snapshot of a region.
 ///
@@ -286,10 +288,10 @@ fn update_upper_bound(iter_opt: &mut IterOptions, region: &Region) {
     if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
         if region_end_key.as_slice() < *iter_opt.upper_bound().as_ref().unwrap() {
-            iter_opt.set_vec_upper_bound(region_end_key);
+            iter_opt.set_vec_upper_bound(region_end_key, 0);
         }
     } else {
-        iter_opt.set_vec_upper_bound(region_end_key);
+        iter_opt.set_vec_upper_bound(region_end_key, 0);
     }
 }
 
@@ -394,11 +396,7 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::store::PeerStorage;
-    use crate::Result;
-
-    use engine_test::kv::KvTestSnapshot;
-    use engine_test::new_temp_engine;
+    use engine_test::{kv::KvTestSnapshot, new_temp_engine};
     use engine_traits::{Engines, KvEngine, Peekable, RaftEngine, SyncMutable};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
@@ -406,6 +404,7 @@ mod tests {
     use tikv_util::worker;
 
     use super::*;
+    use crate::{store::PeerStorage, Result};
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 

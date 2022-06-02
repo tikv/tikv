@@ -1,12 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::errors::Result;
-use crate::iterable::Iterable;
-use kvproto::import_sstpb::SstMeta;
 use std::path::PathBuf;
 
+use kvproto::import_sstpb::SstMeta;
+
+use crate::{errors::Result, iterable::Iterable};
+
 #[derive(Clone, Debug)]
-pub struct SSTMetaInfo {
+pub struct SstMetaInfo {
     pub total_bytes: u64,
     pub total_kvs: u64,
     pub meta: SstMeta,

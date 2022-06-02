@@ -6,36 +6,42 @@ pub mod deadlock;
 mod metrics;
 pub mod waiter_manager;
 
-pub use self::config::{Config, LockManagerConfigManager};
-pub use self::deadlock::{Scheduler as DetectorScheduler, Service as DeadlockService};
-pub use self::waiter_manager::Scheduler as WaiterMgrScheduler;
-
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::thread::JoinHandle;
-
-use self::deadlock::{Detector, RoleChangeNotifier};
-use self::waiter_manager::WaiterManager;
-use crate::server::resolve::StoreAddrResolver;
-use crate::server::{Error, Result};
-use crate::storage::DynamicConfigs as StorageDynamicConfigs;
-use crate::storage::{
-    lock_manager::{Lock, LockManager as LockManagerTrait, WaitTimeout},
-    ProcessResult, StorageCallback,
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
 };
-use raftstore::coprocessor::CoprocessorHost;
 
-use crate::storage::lock_manager::DiagnosticContext;
 use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_traits::KvEngine;
 use parking_lot::Mutex;
 use pd_client::PdClient;
+use raftstore::coprocessor::CoprocessorHost;
 use security::SecurityManager;
 use tikv_util::worker::FutureWorker;
 use txn_types::TimeStamp;
+
+pub use self::{
+    config::{Config, LockManagerConfigManager},
+    deadlock::{Scheduler as DetectorScheduler, Service as DeadlockService},
+    waiter_manager::Scheduler as WaiterMgrScheduler,
+};
+use self::{
+    deadlock::{Detector, RoleChangeNotifier},
+    waiter_manager::WaiterManager,
+};
+use crate::{
+    server::{resolve::StoreAddrResolver, Error, Result},
+    storage::{
+        lock_manager::{DiagnosticContext, Lock, LockManager as LockManagerTrait, WaitTimeout},
+        DynamicConfigs as StorageDynamicConfigs, ProcessResult, StorageCallback,
+    },
+};
 
 const DETECTED_SLOTS_NUM: usize = 128;
 
@@ -300,21 +306,18 @@ impl LockManagerTrait for LockManager {
 
 #[cfg(test)]
 mod tests {
-    use self::deadlock::tests::*;
-    use self::metrics::*;
-    use self::waiter_manager::tests::*;
-    use super::*;
+    use std::{thread, time::Duration};
+
     use engine_test::kv::KvTestEngine;
+    use futures::executor::block_on;
+    use kvproto::metapb::{Peer, Region};
+    use raft::StateRole;
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
 
-    use std::thread;
-    use std::time::Duration;
-
-    use futures::executor::block_on;
-    use kvproto::metapb::{Peer, Region};
-    use raft::StateRole;
+    use self::{deadlock::tests::*, metrics::*, waiter_manager::tests::*};
+    use super::*;
 
     fn start_lock_manager() -> LockManager {
         let mut coprocessor_host = CoprocessorHost::<KvTestEngine>::default();

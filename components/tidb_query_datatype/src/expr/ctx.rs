@@ -1,12 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{i64, mem, sync::Arc, u64};
+
 use bitflags::bitflags;
-use std::sync::Arc;
-use std::{i64, mem, u64};
+use tipb::DagRequest;
 
 use super::{Error, Result};
 use crate::codec::mysql::Tz;
-use tipb::DagRequest;
 
 bitflags! {
     /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.
@@ -324,9 +324,9 @@ impl EvalContext {
 
 #[cfg(test)]
 mod tests {
-    use super::super::Error;
-    use super::*;
     use std::sync::Arc;
+
+    use super::{super::Error, *};
 
     #[test]
     fn test_handle_truncate() {

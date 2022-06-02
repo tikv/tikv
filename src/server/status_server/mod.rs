@@ -2,50 +2,69 @@
 
 mod profile;
 pub mod region_meta;
-use self::profile::{
-    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
-    read_file, start_one_cpu_profile, start_one_heap_profile,
+use std::{
+    error::Error as StdError,
+    marker::PhantomData,
+    net::SocketAddr,
+    path::PathBuf,
+    pin::Pin,
+    str::{self, FromStr},
+    sync::Arc,
+    task::{Context, Poll},
+    time::{Duration, Instant},
 };
-
-use std::error::Error as StdError;
-use std::marker::PhantomData;
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::pin::Pin;
-use std::str::{self, FromStr};
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
 
 use async_stream::stream;
 use collections::HashMap;
 use engine_traits::KvEngine;
-use futures::compat::{Compat01As03, Stream01CompatExt};
-use futures::future::{ok, poll_fn};
-use futures::prelude::*;
-use hyper::server::accept::Accept;
-use hyper::server::conn::{AddrIncoming, AddrStream};
-use hyper::server::Builder as HyperBuilder;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
+use flate2::{write::GzEncoder, Compression};
+use futures::{
+    compat::{Compat01As03, Stream01CompatExt},
+    future::{ok, poll_fn},
+    prelude::*,
+};
+use http::header::{HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE};
+use hyper::{
+    self, header,
+    server::{
+        accept::Accept,
+        conn::{AddrIncoming, AddrStream},
+        Builder as HyperBuilder,
+    },
+    service::{make_service_fn, service_fn},
+    Body, Method, Request, Response, Server, StatusCode,
+};
 use online_config::OnlineConfig;
-use openssl::ssl::{Ssl, SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use openssl::x509::X509;
+use openssl::{
+    ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
+    x509::X509,
+};
 use pin_project::pin_project;
+use prometheus::TEXT_FORMAT;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
 use security::{self, SecurityConfig};
 use serde_json::Value;
-use tikv_util::logger::set_log_level;
-use tikv_util::metrics::dump;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::runtime::{Builder, Handle, Runtime};
-use tokio::sync::oneshot::{self, Receiver, Sender};
+use tikv_util::{
+    logger::set_log_level,
+    metrics::{dump, dump_to},
+    timer::GLOBAL_TIMER_HANDLE,
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    runtime::{Builder, Handle, Runtime},
+    sync::oneshot::{self, Receiver, Sender},
+};
 use tokio_openssl::SslStream;
 
-use crate::config::{log_level_serde, ConfigController};
-use crate::server::Result;
+use self::profile::{
+    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
+    read_file, start_one_cpu_profile, start_one_heap_profile,
+};
+use crate::{
+    config::{log_level_serde, ConfigController},
+    server::Result,
+};
 
 static TIMER_CANCELED: &str = "tokio timer canceled";
 
@@ -483,6 +502,31 @@ where
         }
     }
 
+    fn handle_get_metrics(
+        req: Request<Body>,
+        mgr: &ConfigController,
+    ) -> hyper::Result<Response<Body>> {
+        let should_simplify = mgr.get_current().server.simplify_metrics;
+        let gz_encoding = client_accept_gzip(&req);
+        let metrics = if gz_encoding {
+            // gzip can reduce the body size to less than 1/10.
+            let mut encoder = GzEncoder::new(vec![], Compression::default());
+            dump_to(&mut encoder, should_simplify);
+            encoder.finish().unwrap()
+        } else {
+            dump(should_simplify).into_bytes()
+        };
+        let mut resp = Response::new(metrics.into());
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
+        if gz_encoding {
+            resp.headers_mut()
+                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+
+        Ok(resp)
+    }
+
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
         I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
@@ -539,7 +583,9 @@ where
                         }
 
                         match (method, path.as_ref()) {
-                            (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
+                            (Method::GET, "/metrics") => {
+                                Self::handle_get_metrics(req, &cfg_controller)
+                            }
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
                             (Method::GET, "/debug/pprof/heap_activate") => {
@@ -608,15 +654,7 @@ where
             && !self.security_config.key_path.is_empty()
             && !self.security_config.ca_path.is_empty()
         {
-            let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
-            acceptor.set_ca_file(&self.security_config.ca_path)?;
-            acceptor.set_certificate_chain_file(&self.security_config.cert_path)?;
-            acceptor.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)?;
-            if !self.security_config.cert_allowed_cn.is_empty() {
-                acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
-            }
-            let acceptor = acceptor.build();
-            let tls_incoming = tls_incoming(acceptor, incoming);
+            let tls_incoming = tls_incoming(self.security_config.clone(), incoming)?;
             let server = Server::builder(tls_incoming);
             self.start_serve(server);
         } else {
@@ -671,11 +709,41 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
     }
 }
 
+fn tls_acceptor(security_config: &SecurityConfig) -> Result<SslAcceptor> {
+    let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
+    acceptor.set_ca_file(&security_config.ca_path)?;
+    acceptor.set_certificate_chain_file(&security_config.cert_path)?;
+    acceptor.set_private_key_file(&security_config.key_path, SslFiletype::PEM)?;
+    if !security_config.cert_allowed_cn.is_empty() {
+        acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+    }
+    Ok(acceptor.build())
+}
+
 fn tls_incoming(
-    acceptor: SslAcceptor,
+    security_config: Arc<SecurityConfig>,
     mut incoming: AddrIncoming,
-) -> impl Accept<Conn = SslStream<AddrStream>, Error = std::io::Error> {
-    let context = acceptor.into_context();
+) -> Result<impl Accept<Conn = SslStream<AddrStream>, Error = std::io::Error>> {
+    let mut context = tls_acceptor(&security_config)?.into_context();
+    let mut cert_last_modified_time = None;
+    let mut handle_ssl_error = move |context: &mut SslContext| {
+        match security_config.is_modified(&mut cert_last_modified_time) {
+            Ok(true) => match tls_acceptor(&security_config) {
+                Ok(acceptor) => {
+                    *context = acceptor.into_context();
+                }
+                Err(e) => {
+                    error!("Failed to reload TLS certificate: {}", e);
+                }
+            },
+            Ok(false) => {
+                // TLS certificate is not changed, do nothing
+            }
+            Err(e) => {
+                error!("Failed to load certificate file metadata: {}", e);
+            }
+        }
+    };
     let s = stream! {
         loop {
             let stream = match poll_fn(|cx| Pin::new(&mut incoming).poll_accept(cx)).await {
@@ -690,6 +758,7 @@ fn tls_incoming(
                 Ok(ssl) => ssl,
                 Err(err) => {
                     error!("Status server error: {}", err);
+                    handle_ssl_error(&mut context);
                     continue;
                 }
             };
@@ -697,6 +766,7 @@ fn tls_incoming(
                 Ok(mut ssl_stream) => match Pin::new(&mut ssl_stream).accept().await {
                     Err(_) => {
                         error!("Status server error: TLS handshake error");
+                        handle_ssl_error(&mut context);
                         continue;
                     },
                     Ok(()) => {
@@ -705,12 +775,13 @@ fn tls_incoming(
                 }
                 Err(err) => {
                     error!("Status server error: {}", err);
+                    handle_ssl_error(&mut context);
                     continue;
                 }
             };
         }
     };
-    TlsIncoming(s)
+    Ok(TlsIncoming(s))
 }
 
 #[pin_project]
@@ -811,6 +882,21 @@ async fn handle_fail_points_request(req: Request<Body>) -> hyper::Result<Respons
     }
 }
 
+// check if the client allow return response with gzip compression
+// the following logic is port from prometheus's golang:
+// https://github.com/prometheus/client_golang/blob/24172847e35ba46025c49d90b8846b59eb5d9ead/prometheus/promhttp/http.go#L155-L176
+fn client_accept_gzip(req: &Request<Body>) -> bool {
+    let encoding = req
+        .headers()
+        .get(ACCEPT_ENCODING)
+        .map(|enc| enc.to_str().unwrap_or_default())
+        .unwrap_or_default();
+    encoding
+        .split(',')
+        .map(|s| s.trim())
+        .any(|s| s == "gzip" || s.starts_with("gzip;"))
+}
+
 // Decode different type of json value to string value
 fn decode_json(
     data: &[u8],
@@ -846,30 +932,26 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
-    use futures::future::ok;
-    use futures::prelude::*;
-    use hyper::client::HttpConnector;
-    use hyper::{Body, Client, Method, Request, StatusCode, Uri};
-    use hyper_openssl::HttpsConnector;
-    use openssl::ssl::SslFiletype;
-    use openssl::ssl::{SslConnector, SslMethod};
+    use std::{env, io::Read, path::PathBuf, sync::Arc};
 
-    use std::env;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    use crate::config::{ConfigController, TiKvConfig};
-    use crate::server::status_server::profile::TEST_PROFILE_MUTEX;
-    use crate::server::status_server::{LogLevelRequest, StatusServer};
     use collections::HashSet;
     use engine_test::kv::KvTestEngine;
+    use flate2::read::GzDecoder;
+    use futures::{executor::block_on, future::ok, prelude::*};
+    use http::header::{HeaderValue, ACCEPT_ENCODING};
+    use hyper::{body::Buf, client::HttpConnector, Body, Client, Method, Request, StatusCode, Uri};
+    use hyper_openssl::HttpsConnector;
     use online_config::OnlineConfig;
-    use raftstore::store::transport::CasualRouter;
-    use raftstore::store::CasualMessage;
+    use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
+    use raftstore::store::{transport::CasualRouter, CasualMessage};
     use security::SecurityConfig;
     use test_util::new_security_cfg;
     use tikv_util::logger::get_log_level;
+
+    use crate::{
+        config::{ConfigController, TiKvConfig},
+        server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
+    };
 
     #[derive(Clone)]
     struct MockRouter;
@@ -882,12 +964,13 @@ mod tests {
 
     #[test]
     fn test_status_service() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -929,12 +1012,13 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -973,12 +1057,13 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1088,12 +1173,13 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1131,12 +1217,13 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1166,12 +1253,13 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1238,12 +1326,13 @@ mod tests {
     #[test]
     #[ignore]
     fn test_pprof_heap_service() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1267,12 +1356,13 @@ mod tests {
     #[test]
     fn test_pprof_profile_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1297,13 +1387,70 @@ mod tests {
     }
 
     #[test]
-    fn test_change_log_level() {
+    fn test_metrics() {
+        let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            std::env::temp_dir(),
+            temp_dir.path().to_path_buf(),
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+
+        // test plain test
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/metrics")
+            .build()
+            .unwrap();
+
+        let client = Client::new();
+        let url_cloned = uri.clone();
+        let handle = status_server
+            .thread_pool
+            .spawn(async move { client.get(url_cloned).await.unwrap() });
+        let resp = block_on(handle).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        assert!(String::from_utf8(body_bytes.as_ref().to_owned()).is_ok());
+
+        // test gzip
+        let handle = status_server.thread_pool.spawn(async move {
+            let body = Body::default();
+            let mut req = Request::new(body);
+            req.headers_mut()
+                .insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+            *req.uri_mut() = uri;
+            let client = Client::new();
+            client.request(req).await.unwrap()
+        });
+        let resp = block_on(handle).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get("Content-Encoding").unwrap(), "gzip");
+        let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        let mut decoded_bytes = vec![];
+        GzDecoder::new(body_bytes.reader())
+            .read_to_end(&mut decoded_bytes)
+            .unwrap();
+        assert!(String::from_utf8(decoded_bytes).is_ok());
+
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_change_log_level() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            temp_dir.path().to_path_buf(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();

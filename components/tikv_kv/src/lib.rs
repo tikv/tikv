@@ -5,15 +5,10 @@
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
 #![feature(min_specialization)]
-#![feature(negative_impls)]
 #![feature(generic_associated_types)]
 
-#[macro_use]
-extern crate derive_more;
 #[macro_use(fail_point)]
 extern crate fail;
-#[macro_use]
-extern crate slog_derive;
 #[macro_use]
 extern crate tikv_util;
 
@@ -21,42 +16,40 @@ mod btree_engine;
 mod cursor;
 pub mod metrics;
 mod mock_engine;
-mod perf_context;
 mod raftstore_impls;
 mod rocksdb_engine;
 mod stats;
 
-use std::cell::UnsafeCell;
-use std::num::NonZeroU64;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{error, ptr, result};
+use std::{cell::UnsafeCell, error, num::NonZeroU64, ptr, result, sync::Arc, time::Duration};
 
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK};
 use engine_traits::{
-    IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
+    CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
+    CF_DEFAULT, CF_LOCK,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::prelude::*;
-use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
+use into_other::IntoOther;
+use kvproto::{
+    errorpb::Error as ErrorHeader,
+    kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange},
+    raft_cmdpb,
+};
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
-use tikv_util::{deadline::Deadline, escape};
+use tikv_util::{deadline::Deadline, escape, time::ThreadReadId};
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 
-pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
-pub use self::cursor::{Cursor, CursorBuilder};
-pub use self::mock_engine::{ExpectedWrite, MockEngineBuilder};
-pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot};
-pub use self::stats::{
-    CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
-    StatisticsSummary, TTL_TOMBSTONE,
+pub use self::{
+    btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot},
+    cursor::{Cursor, CursorBuilder},
+    mock_engine::{ExpectedWrite, MockEngineBuilder},
+    rocksdb_engine::{RocksEngine, RocksSnapshot},
+    stats::{
+        CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
+        StatisticsSummary, RAW_VALUE_TOMBSTONE,
+    },
 };
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use into_other::IntoOther;
-use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -89,6 +82,108 @@ impl Modify {
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
             Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
+
+    pub fn key(&self) -> &Key {
+        match self {
+            Modify::Delete(_, ref k) => k,
+            Modify::Put(_, ref k, _) => k,
+            Modify::PessimisticLock(ref k, _) => k,
+            Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
+}
+
+impl From<Modify> for raft_cmdpb::Request {
+    fn from(m: Modify) -> raft_cmdpb::Request {
+        let mut req = raft_cmdpb::Request::default();
+        match m {
+            Modify::Delete(cf, k) => {
+                let mut delete = raft_cmdpb::DeleteRequest::default();
+                delete.set_key(k.into_encoded());
+                if cf != CF_DEFAULT {
+                    delete.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(raft_cmdpb::CmdType::Delete);
+                req.set_delete(delete);
+            }
+            Modify::Put(cf, k, v) => {
+                let mut put = raft_cmdpb::PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                if cf != CF_DEFAULT {
+                    put.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(raft_cmdpb::CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::PessimisticLock(k, lock) => {
+                let v = lock.into_lock().to_bytes();
+                let mut put = raft_cmdpb::PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                put.set_cf(CF_LOCK.to_string());
+                req.set_cmd_type(raft_cmdpb::CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                let mut delete_range = raft_cmdpb::DeleteRangeRequest::default();
+                delete_range.set_cf(cf.to_string());
+                delete_range.set_start_key(start_key.into_encoded());
+                delete_range.set_end_key(end_key.into_encoded());
+                delete_range.set_notify_only(notify_only);
+                req.set_cmd_type(raft_cmdpb::CmdType::DeleteRange);
+                req.set_delete_range(delete_range);
+            }
+        };
+        req
+    }
+}
+
+// For test purpose only.
+// It's used to simulate observer actions in `rocksdb_engine`. See `RocksEngine::async_write_ext()`.
+impl From<raft_cmdpb::Request> for Modify {
+    fn from(mut req: raft_cmdpb::Request) -> Modify {
+        let name_to_cf = |name: &str| -> Option<CfName> {
+            engine_traits::name_to_cf(name).or_else(|| {
+                for c in TEST_ENGINE_CFS {
+                    if name == *c {
+                        return Some(c);
+                    }
+                }
+                None
+            })
+        };
+
+        match req.get_cmd_type() {
+            raft_cmdpb::CmdType::Delete => {
+                let delete = req.mut_delete();
+                Modify::Delete(
+                    name_to_cf(delete.get_cf()).unwrap(),
+                    Key::from_encoded(delete.take_key()),
+                )
+            }
+            raft_cmdpb::CmdType::Put => {
+                let put = req.mut_put();
+                Modify::Put(
+                    name_to_cf(put.get_cf()).unwrap(),
+                    Key::from_encoded(put.take_key()),
+                    put.take_value(),
+                )
+            }
+            raft_cmdpb::CmdType::DeleteRange => {
+                let delete_range = req.mut_delete_range();
+                Modify::DeleteRange(
+                    name_to_cf(delete_range.get_cf()).unwrap(),
+                    Key::from_encoded(delete_range.take_start_key()),
+                    Key::from_encoded(delete_range.take_end_key()),
+                    delete_range.get_notify_only(),
+                )
+            }
+            _ => {
+                unimplemented!()
+            }
         }
     }
 }
@@ -232,6 +327,10 @@ pub trait Engine: Send + Clone + 'static {
     ) -> Option<MvccProperties> {
         None
     }
+
+    // Some engines have a `TxnExtraScheduler`. This method is to send the extra
+    // to the scheduler.
+    fn schedule_txn_extra(&self, _txn_extra: TxnExtra) {}
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in time.
@@ -538,11 +637,12 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
     Ok(())
 }
 
+pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
+
 pub mod tests {
-    use super::*;
     use tikv_util::codec::bytes;
 
-    pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
+    use super::*;
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
         engine
@@ -1018,5 +1118,123 @@ pub mod tests {
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo"));
         assert_eq!(iter.value(&mut statistics), b"bar1");
         assert_eq!(statistics.prev, 3);
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use engine_traits::CF_WRITE;
+
+    use super::*;
+    use crate::raft_cmdpb;
+
+    #[test]
+    fn test_modifies_to_requests() {
+        let modifies = vec![
+            Modify::Delete(CF_DEFAULT, Key::from_encoded_slice(b"k-del")),
+            Modify::Put(
+                CF_WRITE,
+                Key::from_encoded_slice(b"k-put"),
+                b"v-put".to_vec(),
+            ),
+            Modify::PessimisticLock(
+                Key::from_encoded_slice(b"k-lock"),
+                PessimisticLock {
+                    primary: b"primary".to_vec().into_boxed_slice(),
+                    start_ts: 100.into(),
+                    ttl: 200,
+                    for_update_ts: 101.into(),
+                    min_commit_ts: 102.into(),
+                },
+            ),
+            Modify::DeleteRange(
+                CF_DEFAULT,
+                Key::from_encoded_slice(b"kd-start"),
+                Key::from_encoded_slice(b"kd-end"),
+                false,
+            ),
+        ];
+
+        let requests = vec![
+            {
+                let mut delete = raft_cmdpb::DeleteRequest::default();
+                delete.set_key(b"k-del".to_vec());
+
+                let mut req = raft_cmdpb::Request::default();
+                req.set_cmd_type(raft_cmdpb::CmdType::Delete);
+                req.set_delete(delete);
+                req
+            },
+            {
+                let mut put = raft_cmdpb::PutRequest::default();
+                put.set_cf("write".to_string());
+                put.set_key(b"k-put".to_vec());
+                put.set_value(b"v-put".to_vec());
+
+                let mut req = raft_cmdpb::Request::default();
+                req.set_cmd_type(raft_cmdpb::CmdType::Put);
+                req.set_put(put);
+                req
+            },
+            {
+                let mut put = raft_cmdpb::PutRequest::default();
+                put.set_cf("lock".to_string());
+                put.set_key(b"k-lock".to_vec());
+                put.set_value(
+                    PessimisticLock {
+                        primary: b"primary".to_vec().into_boxed_slice(),
+                        start_ts: 100.into(),
+                        ttl: 200,
+                        for_update_ts: 101.into(),
+                        min_commit_ts: 102.into(),
+                    }
+                    .into_lock()
+                    .to_bytes(),
+                );
+
+                let mut req = raft_cmdpb::Request::default();
+                req.set_cmd_type(raft_cmdpb::CmdType::Put);
+                req.set_put(put);
+                req
+            },
+            {
+                let mut delete_range = raft_cmdpb::DeleteRangeRequest::default();
+                delete_range.set_cf("default".to_string());
+                delete_range.set_start_key(b"kd-start".to_vec());
+                delete_range.set_end_key(b"kd-end".to_vec());
+                delete_range.set_notify_only(false);
+
+                let mut req = raft_cmdpb::Request::default();
+                req.set_cmd_type(raft_cmdpb::CmdType::DeleteRange);
+                req.set_delete_range(delete_range);
+                req
+            },
+        ];
+
+        assert_eq!(
+            modifies
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<raft_cmdpb::Request>>(),
+            requests
+        );
+
+        let expect_requests: Vec<_> = modifies
+            .into_iter()
+            .map(|m| match m {
+                Modify::PessimisticLock(k, lock) => {
+                    Modify::Put(CF_LOCK, k, lock.into_lock().to_bytes())
+                }
+                _ => m,
+            })
+            .collect();
+        assert_eq!(
+            requests
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<Modify>>(),
+            expect_requests
+        )
     }
 }

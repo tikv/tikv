@@ -1,11 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
-use std::string::ToString;
+use std::{
+    cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd},
+    string::ToString,
+};
 
-use crate::codec::error::Error;
-use crate::codec::Result;
-use crate::expr::EvalContext;
+use crate::{
+    codec::{error::Error, Result},
+    expr::EvalContext,
+};
 
 /// BinaryLiteral is the internal type for storing bit / hex literal type.
 #[derive(Debug)]

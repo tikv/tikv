@@ -1,48 +1,57 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
-
-use std::borrow::Cow;
-use std::cmp::{self, Ordering as CmpOrdering, Reverse};
-use std::fmt::{self, Display, Formatter};
-use std::io::{self, ErrorKind, Read, Write};
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
-use std::{error::Error as StdError, result, str, thread, time, u64};
-
-use fail::fail_point;
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::metapb::Region;
-use kvproto::raft_serverpb::RaftSnapshotData;
-use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
-use openssl::symm::{Cipher, Crypter, Mode};
-use protobuf::Message;
-use raft::eraftpb::Snapshot as RaftSnapshot;
-use thiserror::Error;
+use std::{
+    borrow::Cow,
+    cmp::{self, Ordering as CmpOrdering, Reverse},
+    error::Error as StdError,
+    fmt::{self, Display, Formatter},
+    io::{self, ErrorKind, Read, Write},
+    path::{Path, PathBuf},
+    result, str,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock,
+    },
+    thread, time, u64,
+};
 
 use collections::{HashMap, HashMapEntry as Entry};
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
-use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{EncryptionKeyManager, KvEngine};
+use engine_traits::{CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use fail::fail_point;
 use file_system::{
     calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
     File, Metadata, OpenOptions,
 };
 use keys::{enc_end_key, enc_start_key};
-use tikv_util::time::{duration_to_sec, Instant, Limiter};
-use tikv_util::HandyRwLock;
-use tikv_util::{box_err, box_try, debug, error, info, warn};
-
-use crate::coprocessor::CoprocessorHost;
-use crate::store::metrics::{
-    CfNames, INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
-    SNAPSHOT_CF_SIZE,
+use kvproto::{
+    encryptionpb::EncryptionMethod,
+    metapb::Region,
+    raft_serverpb::{RaftSnapshotData, SnapshotCfFile, SnapshotMeta},
 };
-use crate::store::peer_storage::JOB_STATUS_CANCELLING;
-use crate::{Error as RaftStoreError, Result as RaftStoreResult};
+use openssl::symm::{Cipher, Crypter, Mode};
+use protobuf::Message;
+use raft::eraftpb::Snapshot as RaftSnapshot;
+use thiserror::Error;
+use tikv_util::{
+    box_err, box_try, debug, error, info,
+    time::{duration_to_sec, Instant, Limiter},
+    warn, HandyRwLock,
+};
+
+use crate::{
+    coprocessor::CoprocessorHost,
+    store::{
+        metrics::{
+            CfNames, INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM,
+            SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
+        },
+        peer_storage::JOB_STATUS_CANCELLING,
+    },
+    Error as RaftStoreError, Result as RaftStoreResult,
+};
 
 #[path = "snap/io.rs"]
 pub mod snap_io;
@@ -213,12 +222,22 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
                 cf_file.cf
             ));
         }
-
-        let mut cf_file_meta = SnapshotCfFile::new();
-        cf_file_meta.set_cf(cf_file.cf.to_owned());
-        cf_file_meta.set_size(cf_file.size);
-        cf_file_meta.set_checksum(cf_file.checksum);
-        meta.push(cf_file_meta);
+        let size_vec = &cf_file.size;
+        if !size_vec.is_empty() {
+            for (i, size) in size_vec.iter().enumerate() {
+                let mut cf_file_meta = SnapshotCfFile::new();
+                cf_file_meta.set_cf(cf_file.cf.to_string());
+                cf_file_meta.set_size(*size);
+                cf_file_meta.set_checksum(cf_file.checksum[i]);
+                meta.push(cf_file_meta);
+            }
+        } else {
+            let mut cf_file_meta = SnapshotCfFile::new();
+            cf_file_meta.set_cf(cf_file.cf.to_string());
+            cf_file_meta.set_size(0);
+            cf_file_meta.set_checksum(0);
+            meta.push(cf_file_meta);
+        }
     }
     let mut snapshot_meta = SnapshotMeta::default();
     snapshot_meta.set_cf_files(meta.into());
@@ -291,13 +310,117 @@ struct CfFileForRecving {
 pub struct CfFile {
     pub cf: CfName,
     pub path: PathBuf,
-    pub tmp_path: PathBuf,
-    pub clone_path: PathBuf,
-    file_for_sending: Option<Box<dyn Read + Send>>,
-    file_for_recving: Option<CfFileForRecving>,
+    pub file_prefix: String,
+    pub file_suffix: String,
+    file_for_sending: Vec<Box<dyn Read + Send>>,
+    file_for_recving: Vec<CfFileForRecving>,
+    file_names: Vec<String>,
     pub kv_count: u64,
-    pub size: u64,
-    pub checksum: u32,
+    pub size: Vec<u64>,
+    pub checksum: Vec<u32>,
+}
+
+impl CfFile {
+    pub fn new(cf: CfName, path: PathBuf, file_prefix: String, file_suffix: String) -> Self {
+        CfFile {
+            cf,
+            path,
+            file_prefix,
+            file_suffix,
+            ..Default::default()
+        }
+    }
+    pub fn tmp_file_paths(&self) -> Vec<String> {
+        self.file_names
+            .iter()
+            .map(|file_name| {
+                self.path
+                    .join(format!("{}{}", file_name, TMP_FILE_SUFFIX))
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<Vec<String>>()
+    }
+
+    pub fn clone_file_paths(&self) -> Vec<String> {
+        self.file_names
+            .iter()
+            .map(|file_name| {
+                self.path
+                    .join(format!("{}{}", file_name, CLONE_FILE_SUFFIX))
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<Vec<String>>()
+    }
+
+    pub fn file_paths(&self) -> Vec<String> {
+        self.file_names
+            .iter()
+            .map(|file_name| self.path.join(file_name).to_str().unwrap().to_string())
+            .collect::<Vec<String>>()
+    }
+
+    pub fn add_file(&mut self, idx: usize) -> String {
+        self.add_file_with_size_checksum(idx, 0, 0)
+    }
+
+    pub fn add_file_with_size_checksum(&mut self, idx: usize, size: u64, checksum: u32) -> String {
+        assert!(self.size.len() >= idx);
+        let file_name = self.gen_file_name(idx);
+        if self.size.len() > idx {
+            // Any logic similar to test_snap_corruption_on_size_or_checksum will trigger this branch
+            self.size[idx] = size;
+            self.checksum[idx] = checksum;
+            self.file_names[idx] = file_name.clone();
+        } else {
+            self.size.push(size);
+            self.checksum.push(checksum);
+            self.file_names.push(file_name.clone());
+        }
+        self.path.join(file_name).to_str().unwrap().to_string()
+    }
+
+    pub fn gen_file_name(&self, file_id: usize) -> String {
+        if file_id == 0 {
+            // for backward compatibility
+            format!("{}{}", self.file_prefix, self.file_suffix)
+        } else {
+            format!("{}_{:04}{}", self.file_prefix, file_id, self.file_suffix)
+        }
+    }
+
+    pub fn gen_clone_file_name(&self, file_id: usize) -> String {
+        if file_id == 0 {
+            // for backward compatibility
+            format!(
+                "{}{}{}",
+                self.file_prefix, self.file_suffix, CLONE_FILE_SUFFIX
+            )
+        } else {
+            format!(
+                "{}_{:04}{}{}",
+                self.file_prefix, file_id, self.file_suffix, CLONE_FILE_SUFFIX
+            )
+        }
+    }
+
+    pub fn gen_tmp_file_name(&self, file_id: usize) -> String {
+        if file_id == 0 {
+            // for backward compatibility
+            format!(
+                "{}{}{}",
+                self.file_prefix, self.file_suffix, TMP_FILE_SUFFIX
+            )
+        } else {
+            format!(
+                "{}_{:04}{}{}",
+                self.file_prefix, file_id, self.file_suffix, TMP_FILE_SUFFIX
+            )
+        }
+    }
 }
 
 #[derive(Default)]
@@ -316,6 +439,7 @@ pub struct Snapshot {
     dir_path: PathBuf,
     cf_files: Vec<CfFile>,
     cf_index: usize,
+    cf_file_index: usize,
     meta_file: MetaFile,
     hold_tmp_files: bool,
 
@@ -351,15 +475,12 @@ impl Snapshot {
 
         let mut cf_files = Vec::with_capacity(SNAPSHOT_CFS.len());
         for cf in SNAPSHOT_CFS {
-            let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
-            let path = dir_path.join(&filename);
-            let tmp_path = dir_path.join(format!("{}{}", filename, TMP_FILE_SUFFIX));
-            let clone_path = dir_path.join(format!("{}{}", filename, CLONE_FILE_SUFFIX));
+            let file_prefix = format!("{}_{}", prefix, cf);
             let cf_file = CfFile {
                 cf,
-                path,
-                tmp_path,
-                clone_path,
+                path: dir_path.clone(),
+                file_prefix,
+                file_suffix: SST_FILE_SUFFIX.to_string(),
                 ..Default::default()
             };
             cf_files.push(cf_file);
@@ -380,6 +501,7 @@ impl Snapshot {
             dir_path,
             cf_files,
             cf_index: 0,
+            cf_file_index: 0,
             meta_file,
             hold_tmp_files: false,
             mgr: mgr.clone(),
@@ -437,9 +559,15 @@ impl Snapshot {
         }
         for cf_file in &mut s.cf_files {
             // initialize cf file size and reader
-            if cf_file.size > 0 {
-                let file = File::open(&cf_file.path)?;
-                cf_file.file_for_sending = Some(Box::new(file) as Box<dyn Read + Send>);
+            let file_paths = cf_file.file_paths();
+            for (i, file_path) in file_paths.iter().enumerate() {
+                if cf_file.size[i] > 0 {
+                    let path = Path::new(file_path);
+                    let file = File::open(&path)?;
+                    cf_file
+                        .file_for_sending
+                        .push(Box::new(file) as Box<dyn Read + Send>);
+                }
             }
         }
         Ok(s)
@@ -465,35 +593,42 @@ impl Snapshot {
         s.hold_tmp_files = true;
 
         for cf_file in &mut s.cf_files {
-            if cf_file.size == 0 {
+            if cf_file.size.is_empty() {
                 continue;
             }
-            let f = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&cf_file.tmp_path)?;
-            cf_file.file_for_recving = Some(CfFileForRecving {
-                file: f,
-                encrypter: None,
-                written_size: 0,
-                write_digest: crc32fast::Hasher::new(),
-            });
+            let tmp_file_paths = cf_file.tmp_file_paths();
+            let file_paths = cf_file.file_paths();
+            for (idx, _) in tmp_file_paths.iter().enumerate() {
+                if cf_file.size[idx] == 0 {
+                    continue;
+                }
+                let file_path = Path::new(&tmp_file_paths[idx]);
+                let f = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&file_path)?;
+                cf_file.file_for_recving.push(CfFileForRecving {
+                    file: f,
+                    encrypter: None,
+                    written_size: 0,
+                    write_digest: crc32fast::Hasher::new(),
+                });
 
-            if let Some(mgr) = &s.mgr.encryption_key_manager {
-                let path = cf_file.path.to_str().unwrap();
-                let enc_info = mgr.new_file(path)?;
-                let mthd = encryption_method_from_db_encryption_method(enc_info.method);
-                if mthd != EncryptionMethod::Plaintext {
-                    let file_for_recving = cf_file.file_for_recving.as_mut().unwrap();
-                    file_for_recving.encrypter = Some(
-                        create_aes_ctr_crypter(
-                            mthd,
-                            &enc_info.key,
-                            Mode::Encrypt,
-                            Iv::from_slice(&enc_info.iv)?,
-                        )
-                        .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
-                    );
+                if let Some(mgr) = &s.mgr.encryption_key_manager {
+                    let enc_info = mgr.new_file(&file_paths[idx])?;
+                    let mthd = encryption_method_from_db_encryption_method(enc_info.method);
+                    if mthd != EncryptionMethod::Plaintext {
+                        let file_for_recving = cf_file.file_for_recving.last_mut().unwrap();
+                        file_for_recving.encrypter = Some(
+                            create_aes_ctr_crypter(
+                                mthd,
+                                &enc_info.key,
+                                Mode::Encrypt,
+                                Iv::from_slice(&enc_info.iv)?,
+                            )
+                            .map_err(|e| RaftStoreError::Snapshot(box_err!(e)))?,
+                        );
+                    }
                 }
             }
         }
@@ -533,29 +668,72 @@ impl Snapshot {
     }
 
     fn set_snapshot_meta(&mut self, snapshot_meta: SnapshotMeta) -> RaftStoreResult<()> {
-        if snapshot_meta.get_cf_files().len() != self.cf_files.len() {
+        let mut cf_file_count_from_meta: Vec<usize> = vec![];
+        let mut file_count = 0;
+        let mut current_cf = "";
+        info!(
+            "set_snapshot_meta total cf files count: {}",
+            snapshot_meta.get_cf_files().len()
+        );
+        for cf_file in snapshot_meta.get_cf_files() {
+            if current_cf.is_empty() {
+                current_cf = cf_file.get_cf();
+                file_count = 1;
+                continue;
+            }
+
+            if current_cf != cf_file.get_cf() {
+                cf_file_count_from_meta.push(file_count);
+                current_cf = cf_file.get_cf();
+                file_count = 1;
+            } else {
+                file_count += 1;
+            }
+        }
+        cf_file_count_from_meta.push(file_count);
+
+        if cf_file_count_from_meta.len() != self.cf_files.len() {
             return Err(box_err!(
                 "invalid cf number of snapshot meta, expect {}, got {}",
                 SNAPSHOT_CFS.len(),
-                snapshot_meta.get_cf_files().len()
+                cf_file_count_from_meta.len()
             ));
         }
-        for (i, cf_file) in self.cf_files.iter_mut().enumerate() {
-            let meta = snapshot_meta.get_cf_files().get(i).unwrap();
-            if meta.get_cf() != cf_file.cf {
-                return Err(box_err!(
-                    "invalid {} cf in snapshot meta, expect {}, got {}",
-                    i,
-                    cf_file.cf,
-                    meta.get_cf()
-                ));
-            }
-            cf_file.size = meta.get_size();
-            cf_file.checksum = meta.get_checksum();
-            if file_exists(&cf_file.path) {
-                let mgr = self.mgr.encryption_key_manager.as_ref();
-                let (_, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
-                check_file_size(size, cf_file.size, &cf_file.path)?;
+        let mut file_idx = 0;
+        let mut cf_idx = 0;
+        for meta in snapshot_meta.get_cf_files() {
+            if cf_idx < cf_file_count_from_meta.len() && file_idx < cf_file_count_from_meta[cf_idx]
+            {
+                if meta.get_cf() != self.cf_files[cf_idx].cf {
+                    return Err(box_err!(
+                        "invalid {} cf in snapshot meta, expect {}, got {}",
+                        cf_idx,
+                        self.cf_files[cf_idx].cf,
+                        meta.get_cf()
+                    ));
+                }
+                if meta.get_size() != 0 {
+                    let file_path = self.cf_files[cf_idx].add_file_with_size_checksum(
+                        file_idx,
+                        meta.get_size(),
+                        meta.get_checksum(),
+                    );
+                    if file_exists(&file_path) {
+                        let mgr = self.mgr.encryption_key_manager.as_ref();
+                        let file_path = Path::new(&file_path);
+                        let (_, size) = calc_checksum_and_size(file_path, mgr)?;
+                        check_file_size(
+                            size,
+                            *(self.cf_files[cf_idx].size.last().unwrap()),
+                            file_path,
+                        )?;
+                    }
+                }
+                file_idx += 1;
+                if file_idx >= cf_file_count_from_meta[cf_idx] {
+                    cf_idx += 1;
+                    file_idx = 0;
+                }
             }
         }
         self.meta_file.meta = snapshot_meta;
@@ -576,8 +754,15 @@ impl Snapshot {
         Ok(())
     }
 
+    pub fn load_snapshot_meta_if_necessary(&mut self) -> RaftStoreResult<()> {
+        if self.meta_file.meta.get_cf_files().is_empty() && file_exists(&self.meta_file.path) {
+            return self.load_snapshot_meta();
+        }
+        Ok(())
+    }
+
     fn get_display_path(dir_path: impl AsRef<Path>, prefix: &str) -> String {
-        let cf_names = "(".to_owned() + &SNAPSHOT_CFS.join("|") + ")";
+        let cf_names = "(".to_owned() + SNAPSHOT_CFS.join("|").as_str() + ")";
         format!(
             "{}/{}_{}{}",
             dir_path.as_ref().display(),
@@ -589,25 +774,30 @@ impl Snapshot {
 
     fn validate(&self, for_send: bool) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
-            if cf_file.size == 0 {
-                // Skip empty file. The checksum of this cf file should be 0 and
-                // this is checked when loading the snapshot meta.
-                continue;
-            }
+            let file_paths = cf_file.file_paths();
+            let clone_file_paths = cf_file.clone_file_paths();
+            for (i, file_path) in file_paths.iter().enumerate() {
+                if cf_file.size[i] == 0 {
+                    // Skip empty file. The checksum of this cf file should be 0 and
+                    // this is checked when loading the snapshot meta.
+                    continue;
+                }
 
-            check_file_size_and_checksum(
-                &cf_file.path,
-                cf_file.size,
-                cf_file.checksum,
-                self.mgr.encryption_key_manager.as_ref(),
-            )?;
-
-            if !for_send && !plain_file_used(cf_file.cf) {
-                sst_importer::prepare_sst_for_ingestion(
-                    &cf_file.path,
-                    &cf_file.clone_path,
-                    self.mgr.encryption_key_manager.as_deref(),
+                let file_path = Path::new(file_path);
+                check_file_size_and_checksum(
+                    file_path,
+                    cf_file.size[i],
+                    cf_file.checksum[i],
+                    self.mgr.encryption_key_manager.as_ref(),
                 )?;
+
+                if !for_send && !plain_file_used(cf_file.cf) {
+                    sst_importer::prepare_sst_for_ingestion(
+                        file_path,
+                        &Path::new(&clone_file_paths[i]),
+                        self.mgr.encryption_key_manager.as_deref(),
+                    )?;
+                }
             }
         }
         Ok(())
@@ -655,6 +845,7 @@ impl Snapshot {
         kv_snap: &EK::Snapshot,
         region: &Region,
         stat: &mut SnapshotStatistics,
+        allow_multi_files_snapshot: bool,
     ) -> RaftStoreResult<()>
     where
         EK: KvEngine,
@@ -687,20 +878,18 @@ impl Snapshot {
         for (cf_enum, cf) in SNAPSHOT_CFS_ENUM_PAIR {
             self.switch_to_cf_file(cf)?;
             let cf_file = &mut self.cf_files[self.cf_index];
-            let path = cf_file.tmp_path.to_str().unwrap();
             let cf_stat = if plain_file_used(cf_file.cf) {
                 let key_mgr = self.mgr.encryption_key_manager.as_ref();
-                snap_io::build_plain_cf_file::<EK>(
-                    path, key_mgr, kv_snap, cf_file.cf, &begin_key, &end_key,
-                )?
+                snap_io::build_plain_cf_file::<EK>(cf_file, key_mgr, kv_snap, &begin_key, &end_key)?
             } else {
-                snap_io::build_sst_cf_file::<EK>(
-                    path,
+                snap_io::build_sst_cf_file_list::<EK>(
+                    cf_file,
                     engine,
                     kv_snap,
-                    cf_file.cf,
                     &begin_key,
                     &end_key,
+                    self.mgr
+                        .get_actual_max_per_file_size(allow_multi_files_snapshot),
                     &self.mgr.limiter,
                 )?
             };
@@ -710,10 +899,14 @@ impl Snapshot {
                 // contain some metadata so their sizes will never be 0.
                 self.mgr.rename_tmp_cf_file_for_send(cf_file)?;
             } else {
-                delete_file_if_exist(&cf_file.tmp_path).unwrap();
+                for tmp_file_path in cf_file.tmp_file_paths() {
+                    let tmp_file_path = Path::new(&tmp_file_path);
+                    delete_file_if_exist(tmp_file_path)?;
+                }
                 if let Some(ref mgr) = self.mgr.encryption_key_manager {
-                    let src = cf_file.tmp_path.to_str().unwrap();
-                    mgr.delete_file(src)?;
+                    for tmp_file_path in cf_file.tmp_file_paths() {
+                        mgr.delete_file(&tmp_file_path)?;
+                    }
                 }
             }
 
@@ -742,24 +935,78 @@ impl Snapshot {
     }
 
     fn delete(&self) {
+        macro_rules! try_delete_snapshot_files {
+            ($cf_file: ident, $file_name_func: ident) => {
+                let mut file_id = 0;
+                loop {
+                    let file_path = $cf_file.path.join($cf_file.$file_name_func(file_id));
+                    if file_exists(&file_path) {
+                        delete_file_if_exist(&file_path).unwrap();
+                        file_id += 1;
+                    } else {
+                        break;
+                    }
+                }
+            };
+            ($cf_file: ident) => {
+                let mut file_id = 0;
+                loop {
+                    let file_path = $cf_file.path.join($cf_file.gen_file_name(file_id));
+                    if file_exists(&file_path) {
+                        delete_file_if_exist(&file_path).unwrap();
+                        if let Some(ref mgr) = self.mgr.encryption_key_manager {
+                            mgr.delete_file(file_path.to_str().unwrap()).unwrap();
+                        }
+                        file_id += 1;
+                    } else {
+                        break;
+                    }
+                }
+            };
+        }
+
         debug!(
             "deleting snapshot file";
             "snapshot" => %self.path(),
         );
         for cf_file in &self.cf_files {
             // Delete cloned files.
-            delete_file_if_exist(&cf_file.clone_path).unwrap();
+            let clone_file_paths = cf_file.clone_file_paths();
+            // in case the meta file is corrupted or deleted, delete snapshot files with best effort
+            if clone_file_paths.is_empty() {
+                try_delete_snapshot_files!(cf_file, gen_clone_file_name);
+            } else {
+                // delete snapshot files according to meta file
+                for clone_file_path in clone_file_paths {
+                    delete_file_if_exist(&clone_file_path).unwrap();
+                }
+            }
 
             // Delete temp files.
             if self.hold_tmp_files {
-                delete_file_if_exist(&cf_file.tmp_path).unwrap();
+                let tmp_file_paths = cf_file.tmp_file_paths();
+                if tmp_file_paths.is_empty() {
+                    try_delete_snapshot_files!(cf_file, gen_tmp_file_name);
+                } else {
+                    for tmp_file_path in tmp_file_paths {
+                        delete_file_if_exist(&tmp_file_path).unwrap();
+                    }
+                }
             }
 
             // Delete cf files.
-            delete_file_if_exist(&cf_file.path).unwrap();
-            if let Some(ref mgr) = self.mgr.encryption_key_manager {
-                let path = cf_file.path.to_str().unwrap();
-                mgr.delete_file(path).unwrap();
+            let file_paths = cf_file.file_paths();
+            if file_paths.is_empty() {
+                try_delete_snapshot_files!(cf_file);
+            } else {
+                for file_path in &file_paths {
+                    delete_file_if_exist(&file_path).unwrap();
+                }
+                if let Some(ref mgr) = self.mgr.encryption_key_manager {
+                    for file_path in &file_paths {
+                        mgr.delete_file(file_path).unwrap();
+                    }
+                }
             }
         }
         delete_file_if_exist(&self.meta_file.path).unwrap();
@@ -786,9 +1033,10 @@ impl Snapshot {
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
+        allow_multi_files_snapshot: bool,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build::<EK>(engine, kv_snap, region, stat)?;
+        self.do_build::<EK>(engine, kv_snap, region, stat, allow_multi_files_snapshot)?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;
@@ -818,13 +1066,13 @@ impl Snapshot {
         let region = options.region;
         let key_mgr = self.mgr.encryption_key_manager.as_ref();
         for cf_file in &mut self.cf_files {
-            if cf_file.size == 0 {
+            if cf_file.size.is_empty() {
                 // Skip empty cf file.
                 continue;
             }
             let cf = cf_file.cf;
             if plain_file_used(cf_file.cf) {
-                let path = cf_file.path.to_str().unwrap();
+                let path = &cf_file.file_paths()[0];
                 let batch_size = options.write_batch_size;
                 let cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
                     coprocessor_host.post_apply_plain_kvs_from_snapshot(&region, cf, kv)
@@ -840,8 +1088,13 @@ impl Snapshot {
                 )?;
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
-                let path = cf_file.clone_path.to_str().unwrap();
-                snap_io::apply_sst_cf_file(path, &options.db, cf)?;
+                let path = cf_file.path.to_str().unwrap(); // path is not used at all
+                let clone_file_paths = cf_file.clone_file_paths();
+                let clone_files = clone_file_paths
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<&str>>();
+                snap_io::apply_sst_cf_file(clone_files.as_slice(), &options.db, cf)?;
                 coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
             }
         }
@@ -853,10 +1106,13 @@ impl Snapshot {
     }
 
     pub fn exists(&self) -> bool {
-        self.cf_files
-            .iter()
-            .all(|cf_file| cf_file.size == 0 || file_exists(&cf_file.path))
-            && file_exists(&self.meta_file.path)
+        self.cf_files.iter().all(|cf_file| {
+            cf_file.size.is_empty()
+                || (cf_file
+                    .file_paths()
+                    .iter()
+                    .all(|file_path| file_exists(&Path::new(file_path))))
+        }) && file_exists(&self.meta_file.path)
     }
 
     pub fn meta(&self) -> io::Result<Metadata> {
@@ -864,7 +1120,10 @@ impl Snapshot {
     }
 
     pub fn total_size(&self) -> io::Result<u64> {
-        Ok(self.cf_files.iter().fold(0, |acc, x| acc + x.size))
+        Ok(self
+            .cf_files
+            .iter()
+            .fold(0, |acc, x| acc + x.size.iter().sum::<u64>()))
     }
 
     pub fn save(&mut self) -> io::Result<()> {
@@ -873,47 +1132,52 @@ impl Snapshot {
             "snapshot" => %self.path(),
         );
         for cf_file in &mut self.cf_files {
-            if cf_file.size == 0 {
+            if cf_file.size.is_empty() {
                 // Skip empty cf file.
                 continue;
             }
 
             // Check each cf file has been fully written, and the checksum matches.
-            let mut file_for_recving = cf_file.file_for_recving.take().unwrap();
-            file_for_recving.file.flush()?;
-            file_for_recving.file.sync_all()?;
+            for (i, mut file_for_recving) in cf_file.file_for_recving.drain(..).enumerate() {
+                file_for_recving.file.flush()?;
+                file_for_recving.file.sync_all()?;
 
-            if file_for_recving.written_size != cf_file.size {
-                return Err(io::Error::new(
-                    ErrorKind::Other,
-                    format!(
-                        "snapshot file {} for cf {} size mismatches, \
-                         real size {}, expected size {}",
-                        cf_file.path.display(),
-                        cf_file.cf,
-                        file_for_recving.written_size,
-                        cf_file.size
-                    ),
-                ));
+                if file_for_recving.written_size != cf_file.size[i] {
+                    return Err(io::Error::new(
+                        ErrorKind::Other,
+                        format!(
+                            "snapshot file {} for cf {} size mismatches, \
+                            real size {}, expected size {}",
+                            cf_file.path.display(),
+                            cf_file.cf,
+                            file_for_recving.written_size,
+                            cf_file.size[i]
+                        ),
+                    ));
+                }
+
+                let checksum = file_for_recving.write_digest.finalize();
+                if checksum != cf_file.checksum[i] {
+                    return Err(io::Error::new(
+                        ErrorKind::Other,
+                        format!(
+                            "snapshot file {} for cf {} checksum \
+                            mismatches, real checksum {}, expected \
+                            checksum {}",
+                            cf_file.path.display(),
+                            cf_file.cf,
+                            checksum,
+                            cf_file.checksum[i]
+                        ),
+                    ));
+                }
             }
 
-            let checksum = file_for_recving.write_digest.finalize();
-            if checksum != cf_file.checksum {
-                return Err(io::Error::new(
-                    ErrorKind::Other,
-                    format!(
-                        "snapshot file {} for cf {} checksum \
-                         mismatches, real checksum {}, expected \
-                         checksum {}",
-                        cf_file.path.display(),
-                        cf_file.cf,
-                        checksum,
-                        cf_file.checksum
-                    ),
-                ));
+            let tmp_paths = cf_file.tmp_file_paths();
+            let paths = cf_file.file_paths();
+            for (i, tmp_path) in tmp_paths.iter().enumerate() {
+                file_system::rename(&tmp_path, &paths[i])?;
             }
-
-            file_system::rename(&cf_file.tmp_path, &cf_file.path)?;
         }
         sync_dir(&self.dir_path)?;
 
@@ -946,15 +1210,23 @@ impl Read for Snapshot {
         }
         while self.cf_index < self.cf_files.len() {
             let cf_file = &mut self.cf_files[self.cf_index];
-            if cf_file.size == 0 {
+            if self.cf_file_index >= cf_file.size.len() || cf_file.size[self.cf_file_index] == 0 {
                 self.cf_index += 1;
+                self.cf_file_index = 0;
                 continue;
             }
-            let reader = cf_file.file_for_sending.as_mut().unwrap();
+            let reader = cf_file
+                .file_for_sending
+                .get_mut(self.cf_file_index)
+                .unwrap();
             match reader.read(buf) {
                 Ok(0) => {
                     // EOF. Switch to next file.
-                    self.cf_index += 1;
+                    self.cf_file_index += 1;
+                    if self.cf_file_index == cf_file.size.len() {
+                        self.cf_index += 1;
+                        self.cf_file_index = 0;
+                    }
                 }
                 Ok(n) => return Ok(n),
                 e => return e,
@@ -973,14 +1245,18 @@ impl Write for Snapshot {
         let (mut next_buf, mut written_bytes) = (buf, 0);
         while self.cf_index < self.cf_files.len() {
             let cf_file = &mut self.cf_files[self.cf_index];
-            if cf_file.size == 0 {
+            if cf_file.size.is_empty() {
                 self.cf_index += 1;
                 continue;
             }
 
-            let mut file_for_recving = cf_file.file_for_recving.as_mut().unwrap();
-
-            let left = (cf_file.size - file_for_recving.written_size) as usize;
+            assert!(cf_file.size[self.cf_file_index] != 0);
+            let mut file_for_recving = cf_file
+                .file_for_recving
+                .get_mut(self.cf_file_index)
+                .unwrap();
+            let left = (cf_file.size.get(self.cf_file_index).unwrap()
+                - file_for_recving.written_size) as usize;
             assert!(left > 0 && !next_buf.is_empty());
             let (write_len, switch, finished) = match next_buf.len().cmp(&left) {
                 CmpOrdering::Greater => (left, true, false),
@@ -1019,10 +1295,13 @@ impl Write for Snapshot {
                 }
                 start += acquire;
             }
-
             if switch {
-                self.cf_index += 1;
-                next_buf = &next_buf[write_len..]
+                next_buf = &next_buf[write_len..];
+                self.cf_file_index += 1;
+                if self.cf_file_index >= cf_file.size.len() {
+                    self.cf_file_index = 0;
+                    self.cf_index += 1;
+                }
             }
             if finished {
                 break;
@@ -1033,8 +1312,9 @@ impl Write for Snapshot {
 
     fn flush(&mut self) -> io::Result<()> {
         if let Some(cf_file) = self.cf_files.get_mut(self.cf_index) {
-            let file_for_recving = cf_file.file_for_recving.as_mut().unwrap();
-            file_for_recving.file.flush()?;
+            for file_for_recving in &mut cf_file.file_for_recving {
+                file_for_recving.file.flush()?;
+            }
         }
         Ok(())
     }
@@ -1072,19 +1352,21 @@ struct SnapManagerCore {
     limiter: Limiter,
     temp_sst_id: Arc<AtomicU64>,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
+    max_per_file_size: Arc<AtomicU64>,
+    enable_multi_snapshot_files: Arc<AtomicBool>,
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManager {
     core: SnapManagerCore,
-    max_total_size: AtomicU64,
+    max_total_size: Arc<AtomicU64>,
 }
 
 impl Clone for SnapManager {
     fn clone(&self) -> Self {
         SnapManager {
             core: self.core.clone(),
-            max_total_size: AtomicU64::new(self.max_total_size.load(Ordering::Acquire)),
+            max_total_size: self.max_total_size.clone(),
         }
     }
 }
@@ -1168,7 +1450,7 @@ impl SnapManager {
                         .filter_map(|s| s.parse().ok())
                         .collect()
                 });
-                if numbers.len() != 3 {
+                if numbers.len() < 3 {
                     error!(
                         "failed to parse snapkey";
                         "snap_key" => %name,
@@ -1265,12 +1547,14 @@ impl SnapManager {
             None => return Ok(Box::new(s)),
         };
         for cf_file in &mut s.cf_files {
-            if cf_file.size == 0 {
-                continue;
+            let file_paths = cf_file.file_paths();
+            for (i, file_path) in file_paths.iter().enumerate() {
+                if cf_file.size[i] == 0 {
+                    continue;
+                }
+                let reader = snap_io::get_decrypter_reader(file_path, key_manager)?;
+                cf_file.file_for_sending[i] = reader;
             }
-            let p = cf_file.path.to_str().unwrap();
-            let reader = snap_io::get_decrypter_reader(p, key_manager)?;
-            cf_file.file_for_sending = Some(reader);
         }
         Ok(Box::new(s))
     }
@@ -1318,6 +1602,29 @@ impl SnapManager {
 
     pub fn set_max_total_snap_size(&self, max_total_size: u64) {
         self.max_total_size.store(max_total_size, Ordering::Release);
+    }
+
+    pub fn set_max_per_file_size(&mut self, max_per_file_size: u64) {
+        if max_per_file_size == 0 {
+            self.core
+                .max_per_file_size
+                .store(u64::MAX, Ordering::Release);
+        } else {
+            self.core
+                .max_per_file_size
+                .store(max_per_file_size, Ordering::Release);
+        }
+    }
+
+    pub fn get_actual_max_per_file_size(&self, allow_multi_files_snapshot: bool) -> u64 {
+        self.core
+            .get_actual_max_per_file_size(allow_multi_files_snapshot)
+    }
+
+    pub fn set_enable_multi_snapshot_files(&mut self, enable_multi_snapshot_files: bool) {
+        self.core
+            .enable_multi_snapshot_files
+            .store(enable_multi_snapshot_files, Ordering::Release);
     }
 
     pub fn set_speed_limit(&self, bytes_per_sec: f64) {
@@ -1459,26 +1766,42 @@ impl SnapManagerCore {
     }
 
     fn rename_tmp_cf_file_for_send(&self, cf_file: &mut CfFile) -> RaftStoreResult<()> {
-        file_system::rename(&cf_file.tmp_path, &cf_file.path)?;
-        let mgr = self.encryption_key_manager.as_ref();
-        if let Some(mgr) = &mgr {
-            let src = cf_file.tmp_path.to_str().unwrap();
-            let dst = cf_file.path.to_str().unwrap();
-            // It's ok that the cf file is moved but machine fails before `mgr.rename_file`
-            // because without metadata file, saved cf files are nothing.
-            while let Err(e) = mgr.link_file(src, dst) {
-                if e.kind() == ErrorKind::AlreadyExists {
-                    mgr.delete_file(dst)?;
-                    continue;
+        let tmp_file_paths = cf_file.tmp_file_paths();
+        let file_paths = cf_file.file_paths();
+        for (i, tmp_file_path) in tmp_file_paths.iter().enumerate() {
+            file_system::rename(&tmp_file_path, &file_paths[i])?;
+
+            let mgr = self.encryption_key_manager.as_ref();
+            if let Some(mgr) = &mgr {
+                let src = &tmp_file_path;
+                let dst = &file_paths[i];
+                // It's ok that the cf file is moved but machine fails before `mgr.rename_file`
+                // because without metadata file, saved cf files are nothing.
+                while let Err(e) = mgr.link_file(src, dst) {
+                    if e.kind() == ErrorKind::AlreadyExists {
+                        mgr.delete_file(dst)?;
+                        continue;
+                    }
+                    return Err(e.into());
                 }
-                return Err(e.into());
+                mgr.delete_file(src)?;
             }
-            mgr.delete_file(src)?;
+            let file = Path::new(&file_paths[i]);
+            let (checksum, size) = calc_checksum_and_size(file, mgr)?;
+            cf_file.add_file_with_size_checksum(i, size, checksum);
         }
-        let (checksum, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
-        cf_file.checksum = checksum;
-        cf_file.size = size;
         Ok(())
+    }
+
+    pub fn get_actual_max_per_file_size(&self, allow_multi_files_snapshot: bool) -> u64 {
+        if !allow_multi_files_snapshot {
+            return u64::MAX;
+        }
+
+        if self.enable_multi_snapshot_files.load(Ordering::Relaxed) {
+            return self.max_per_file_size.load(Ordering::Relaxed);
+        }
+        u64::MAX
     }
 }
 
@@ -1486,6 +1809,8 @@ impl SnapManagerCore {
 pub struct SnapManagerBuilder {
     max_write_bytes_per_sec: i64,
     max_total_size: u64,
+    max_per_file_size: u64,
+    enable_multi_snapshot_files: bool,
     key_manager: Option<Arc<DataKeyManager>>,
 }
 
@@ -1498,6 +1823,14 @@ impl SnapManagerBuilder {
     #[must_use]
     pub fn max_total_size(mut self, bytes: u64) -> SnapManagerBuilder {
         self.max_total_size = bytes;
+        self
+    }
+    pub fn max_per_file_size(mut self, bytes: u64) -> SnapManagerBuilder {
+        self.max_per_file_size = bytes;
+        self
+    }
+    pub fn enable_multi_snapshot_files(mut self, enabled: bool) -> SnapManagerBuilder {
+        self.enable_multi_snapshot_files = enabled;
         self
     }
     #[must_use]
@@ -1516,58 +1849,67 @@ impl SnapManagerBuilder {
         } else {
             u64::MAX
         };
-        SnapManager {
+        let mut snapshot = SnapManager {
             core: SnapManagerCore {
                 base: path.into(),
                 registry: Default::default(),
                 limiter,
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
+                max_per_file_size: Arc::new(AtomicU64::new(u64::MAX)),
+                enable_multi_snapshot_files: Arc::new(AtomicBool::new(
+                    self.enable_multi_snapshot_files,
+                )),
             },
-            max_total_size: AtomicU64::new(max_total_size),
-        }
+            max_total_size: Arc::new(AtomicU64::new(max_total_size)),
+        };
+        snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
+        snapshot
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use file_system::{self, File, OpenOptions};
-    use std::cmp;
-    use std::io::{self, Read, Seek, SeekFrom, Write};
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, AtomicUsize};
-    use std::sync::Arc;
-
-    use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-    use encryption_export::data_key_manager_from_config;
-    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt};
-    use engine_test::kv::KvTestEngine;
-    use engine_test::raft::RaftTestEngine;
-    use engine_traits::Engines;
-    use engine_traits::SyncMutable;
-    use engine_traits::{ExternalSstFileInfo, SstExt, SstWriter, SstWriterBuilder};
-    use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
-    use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use kvproto::encryptionpb::EncryptionMethod;
-    use kvproto::metapb::{Peer, Region};
-    use kvproto::raft_serverpb::{
-        RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
+    use std::{
+        cmp,
+        io::{self, Read, Seek, SeekFrom, Write},
+        path::{Path, PathBuf},
+        sync::{
+            atomic::{AtomicBool, AtomicU64, AtomicUsize},
+            Arc,
+        },
     };
-    use raft::eraftpb::Entry;
 
+    use encryption::{DataKeyManager, EncryptionConfig, FileConfig, MasterKeyConfig};
+    use encryption_export::data_key_manager_from_config;
+    use engine_test::{
+        ctor::{CFOptions, ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftDBOptions},
+        kv::KvTestEngine,
+        raft::RaftTestEngine,
+    };
+    use engine_traits::{
+        Engines, ExternalSstFileInfo, KvEngine, RaftEngine, Snapshot as EngineSnapshot, SstExt,
+        SstWriter, SstWriterBuilder, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    };
+    use kvproto::{
+        encryptionpb::EncryptionMethod,
+        metapb::{Peer, Region},
+        raft_serverpb::{RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta},
+    };
     use protobuf::Message;
+    use raft::eraftpb::Entry;
     use tempfile::{Builder, TempDir};
     use tikv_util::time::Limiter;
 
-    use super::{
-        ApplyOptions, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, SnapManagerCore,
-        Snapshot, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
+    use super::*;
+    // ApplyOptions, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, SnapManagerCore,
+    // Snapshot, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
+    // };
+    use crate::{
+        coprocessor::CoprocessorHost,
+        store::{peer_storage::JOB_STATUS_RUNNING, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER},
+        Result,
     };
-
-    use crate::coprocessor::CoprocessorHost;
-    use crate::store::peer_storage::JOB_STATUS_RUNNING;
-    use crate::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
-    use crate::Result;
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";
@@ -1584,10 +1926,10 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<E>
     where
-        E: KvEngine + EngineConstructorExt,
+        E: KvEngine + KvEngineConstructorExt,
     {
         let p = path.to_str().unwrap();
-        let db = E::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
+        let db = E::new_kv_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         Ok(db)
     }
 
@@ -1597,10 +1939,10 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<E>
     where
-        E: KvEngine + EngineConstructorExt,
+        E: KvEngine + KvEngineConstructorExt,
     {
         let p = path.to_str().unwrap();
-        let db = E::new_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
+        let db = E::new_kv_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
         for (i, cf) in db.cf_names().into_iter().enumerate() {
@@ -1612,21 +1954,40 @@ pub mod tests {
         Ok(db)
     }
 
+    pub fn open_test_db_with_100keys<E>(
+        path: &Path,
+        db_opt: Option<DBOptions>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
+    ) -> Result<E>
+    where
+        E: KvEngine + KvEngineConstructorExt,
+    {
+        let p = path.to_str().unwrap();
+        let db = E::new_kv_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
+        // write some data into each cf
+        for (i, cf) in db.cf_names().into_iter().enumerate() {
+            let mut p = Peer::default();
+            p.set_store_id(TEST_STORE_ID);
+            p.set_id((i + 1) as u64);
+            for k in 0..100 {
+                let key = keys::data_key(format!("akey{}", k).as_bytes());
+                db.put_msg_cf(cf, &key[..], &p)?;
+            }
+        }
+        Ok(db)
+    }
+
     pub fn get_test_db_for_regions(
         path: &TempDir,
-        raft_db_opt: Option<DBOptions>,
-        raft_cf_opt: Option<CFOptions<'_>>,
+        raft_db_opt: Option<RaftDBOptions>,
         kv_db_opt: Option<DBOptions>,
         kv_cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
     ) -> Result<Engines<KvTestEngine, RaftTestEngine>> {
         let p = path.path();
         let kv: KvTestEngine = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
-        let raft: RaftTestEngine = open_test_db(
-            p.join("raft").as_path(),
-            raft_db_opt,
-            raft_cf_opt.map(|opt| vec![opt]),
-        )?;
+        let raft: RaftTestEngine =
+            engine_test::raft::new_engine(p.join("raft").to_str().unwrap(), raft_db_opt)?;
         for &region_id in regions {
             // Put apply state into kv engine.
             let mut apply_state = RaftApplyState::default();
@@ -1636,7 +1997,7 @@ pub mod tests {
             apply_entry.set_term(0);
             apply_state.mut_truncated_state().set_index(10);
             kv.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
-            raft.put_msg(&keys::raft_log_key(region_id, 10), &apply_entry)?;
+            raft.append(region_id, vec![apply_entry])?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
@@ -1699,23 +2060,19 @@ pub mod tests {
         }
     }
 
-    fn create_manager_core(path: &str) -> SnapManagerCore {
+    fn create_manager_core(path: &str, max_per_file_size: u64) -> SnapManagerCore {
         SnapManagerCore {
             base: path.to_owned(),
             registry: Default::default(),
             limiter: Limiter::new(f64::INFINITY),
             temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,
+            max_per_file_size: Arc::new(AtomicU64::new(max_per_file_size)),
+            enable_multi_snapshot_files: Arc::new(AtomicBool::new(true)),
         }
     }
 
-    pub fn gen_db_options_with_encryption() -> DBOptions {
-        let mut db_opt = DBOptions::new();
-        db_opt.with_default_ctr_encrypted_env(b"abcd".to_vec());
-        db_opt
-    }
-
-    fn create_enc_dir(prefix: &str) -> (TempDir, String, String) {
+    fn create_encryption_key_manager(prefix: &str) -> (TempDir, Arc<DataKeyManager>) {
         let dir = Builder::new().prefix(prefix).tempdir().unwrap();
         let master_path = dir.path().join("master_key");
 
@@ -1733,7 +2090,25 @@ pub mod tests {
 
         let key_path = master_path.to_str().unwrap().to_owned();
         let dict_path = dict_path.to_str().unwrap().to_owned();
-        (dir, key_path, dict_path)
+
+        let enc_cfg = EncryptionConfig {
+            data_encryption_method: EncryptionMethod::Aes128Ctr,
+            master_key: MasterKeyConfig::File {
+                config: FileConfig { path: key_path },
+            },
+            ..Default::default()
+        };
+        let key_manager = data_key_manager_from_config(&enc_cfg, &dict_path)
+            .unwrap()
+            .map(|x| Arc::new(x));
+        (dir, key_manager.unwrap())
+    }
+
+    pub fn gen_db_options_with_encryption(prefix: &str) -> (TempDir, DBOptions) {
+        let (_enc_dir, key_manager) = create_encryption_key_manager(prefix);
+        let mut db_opts = DBOptions::default();
+        db_opts.set_key_manager(Some(key_manager));
+        (_enc_dir, db_opts)
     }
 
     #[test]
@@ -1742,35 +2117,39 @@ pub mod tests {
         for (i, cf) in super::SNAPSHOT_CFS.iter().enumerate() {
             let f = super::CfFile {
                 cf,
-                size: 100 * (i + 1) as u64,
-                checksum: 1000 * (i + 1) as u32,
+                size: vec![100 * (i + 1) as u64, 100 * (i + 2) as u64],
+                checksum: vec![1000 * (i + 1) as u32, 1000 * (i + 2) as u32],
                 ..Default::default()
             };
             cf_file.push(f);
         }
         let meta = super::gen_snapshot_meta(&cf_file).unwrap();
+        let cf_files = meta.get_cf_files();
+        assert_eq!(cf_files.len(), super::SNAPSHOT_CFS.len() * 2); // each CF has two snapshot files;
         for (i, cf_file_meta) in meta.get_cf_files().iter().enumerate() {
-            if cf_file_meta.get_cf() != cf_file[i].cf {
+            let cf_file_idx = i / 2;
+            let size_idx = i % 2;
+            if cf_file_meta.get_cf() != cf_file[cf_file_idx].cf {
                 panic!(
                     "{}: expect cf {}, got {}",
                     i,
-                    cf_file[i].cf,
+                    cf_file[cf_file_idx].cf,
                     cf_file_meta.get_cf()
                 );
             }
-            if cf_file_meta.get_size() != cf_file[i].size {
+            if cf_file_meta.get_size() != cf_file[cf_file_idx].size[size_idx] {
                 panic!(
                     "{}: expect cf size {}, got {}",
                     i,
-                    cf_file[i].size,
+                    cf_file[cf_file_idx].size[size_idx],
                     cf_file_meta.get_size()
                 );
             }
-            if cf_file_meta.get_checksum() != cf_file[i].checksum {
+            if cf_file_meta.get_checksum() != cf_file[cf_file_idx].checksum[size_idx] {
                 panic!(
                     "{}: expect cf checksum {}, got {}",
                     i,
-                    cf_file[i].checksum,
+                    cf_file[cf_file_idx].checksum[size_idx],
                     cf_file_meta.get_checksum()
                 );
             }
@@ -1791,24 +2170,25 @@ pub mod tests {
 
     #[test]
     fn test_empty_snap_file() {
-        test_snap_file(open_test_empty_db, None);
-        test_snap_file(open_test_empty_db, Some(gen_db_options_with_encryption()));
+        test_snap_file(open_test_empty_db, u64::MAX);
+        test_snap_file(open_test_empty_db, 100);
     }
 
     #[test]
     fn test_non_empty_snap_file() {
-        test_snap_file(open_test_db, None);
-        test_snap_file(open_test_db, Some(gen_db_options_with_encryption()));
+        test_snap_file(open_test_db, u64::MAX);
+        test_snap_file(open_test_db_with_100keys, 100);
+        test_snap_file(open_test_db_with_100keys, 500);
     }
 
-    fn test_snap_file(get_db: DBBuilder<KvTestEngine>, db_opt: Option<DBOptions>) {
+    fn test_snap_file(get_db: DBBuilder<KvTestEngine>, max_file_size: u64) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let src_db_dir = Builder::new()
             .prefix("test-snap-file-db-src")
             .tempdir()
             .unwrap();
-        let db = get_db(src_db_dir.path(), db_opt.clone(), None).unwrap();
+        let db = get_db(src_db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
 
         let src_dir = Builder::new()
@@ -1818,8 +2198,7 @@ pub mod tests {
 
         let key = SnapKey::new(region_id, 1, 1);
 
-        let mgr_core = create_manager_core(src_dir.path().to_str().unwrap());
-
+        let mgr_core = create_manager_core(src_dir.path().to_str().unwrap(), max_file_size);
         let mut s1 = Snapshot::new_for_building(src_dir.path(), &key, &mgr_core).unwrap();
 
         // Ensure that this snapshot file doesn't exist before being built.
@@ -1836,6 +2215,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
 
@@ -1887,7 +2267,7 @@ pub mod tests {
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-        let dst_db = engine_test::kv::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap();
+        let dst_db = engine_test::kv::new_engine(dst_db_path, None, &dst_cfs, None).unwrap();
         let options = ApplyOptions {
             db: dst_db.clone(),
             region,
@@ -1895,8 +2275,8 @@ pub mod tests {
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
         };
-        // Verify thte snapshot applying is ok.
-        assert!(s4.apply(options).is_ok());
+        // Verify the snapshot applying is ok.
+        s4.apply(options).unwrap();
 
         // Ensure `delete()` works to delete the dest snapshot.
         s4.delete();
@@ -1910,15 +2290,17 @@ pub mod tests {
 
     #[test]
     fn test_empty_snap_validation() {
-        test_snap_validation(open_test_empty_db);
+        test_snap_validation(open_test_empty_db, u64::MAX);
+        test_snap_validation(open_test_empty_db, 100);
     }
 
     #[test]
     fn test_non_empty_snap_validation() {
-        test_snap_validation(open_test_db);
+        test_snap_validation(open_test_db, u64::MAX);
+        test_snap_validation(open_test_db_with_100keys, 500);
     }
 
-    fn test_snap_validation(get_db: DBBuilder<KvTestEngine>) {
+    fn test_snap_validation(get_db: DBBuilder<KvTestEngine>, max_file_size: u64) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let db_dir = Builder::new()
@@ -1933,8 +2315,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let mgr_core = create_manager_core(dir.path().to_str().unwrap());
-
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap(), max_file_size);
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
@@ -1948,6 +2329,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s1.exists());
@@ -1962,6 +2344,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s2.exists());
@@ -2100,7 +2483,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let mgr_core = create_manager_core(dir.path().to_str().unwrap());
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap(), u64::MAX);
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
@@ -2114,6 +2497,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s1.exists());
@@ -2131,6 +2515,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s2.exists());
@@ -2181,7 +2566,7 @@ pub mod tests {
             .prefix("test-snapshot-corruption-meta-db")
             .tempdir()
             .unwrap();
-        let db: KvTestEngine = open_test_db(db_dir.path(), None, None).unwrap();
+        let db: KvTestEngine = open_test_db_with_100keys(db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
 
         let dir = Builder::new()
@@ -2189,7 +2574,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
-        let mgr_core = create_manager_core(dir.path().to_str().unwrap());
+        let mgr_core = create_manager_core(dir.path().to_str().unwrap(), 500);
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
@@ -2203,6 +2588,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s1.exists());
@@ -2220,6 +2606,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         assert!(s2.exists());
@@ -2282,7 +2669,7 @@ pub mod tests {
         let db: KvTestEngine = open_test_db(db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
         let key1 = SnapKey::new(1, 1, 1);
-        let mgr_core = create_manager_core(&path);
+        let mgr_core = create_manager_core(&path, u64::MAX);
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
         let mut region = gen_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::default();
@@ -2295,6 +2682,7 @@ pub mod tests {
             &region,
             &mut snap_data,
             &mut stat,
+            true,
         )
         .unwrap();
         let mut s = Snapshot::new_for_sending(&path, &key1, &mgr_core).unwrap();
@@ -2371,7 +2759,7 @@ pub mod tests {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat)
+        s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat, true)
             .unwrap();
         let v = snap_data.write_to_bytes().unwrap();
 
@@ -2432,8 +2820,7 @@ pub mod tests {
             })
             .collect();
         let engine =
-            get_test_db_for_regions(&kv_path, None, None, None, Some(kv_cf_opts), &regions)
-                .unwrap();
+            get_test_db_for_regions(&kv_path, None, None, Some(kv_cf_opts), &regions).unwrap();
 
         let snapfiles_path = Builder::new()
             .prefix("test-snapshot-max-total-size-snapshots")
@@ -2457,6 +2844,7 @@ pub mod tests {
                 &gen_test_region(100, 1, 1),
                 &mut snap_data,
                 &mut stat,
+                true,
             )
             .unwrap();
             snap_data.write_to_bytes().unwrap()
@@ -2480,8 +2868,15 @@ pub mod tests {
             let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let mut snap_data = RaftSnapshotData::default();
             let mut stat = SnapshotStatistics::new();
-            s.build(&engine.kv, &snapshot, &region, &mut snap_data, &mut stat)
-                .unwrap();
+            s.build(
+                &engine.kv,
+                &snapshot,
+                &region,
+                &mut snap_data,
+                &mut stat,
+                true,
+            )
+            .unwrap();
 
             // TODO: this size may change in different RocksDB version.
             let snap_size = 1660;
@@ -2527,18 +2922,8 @@ pub mod tests {
 
     #[test]
     fn test_build_with_encryption() {
-        let (_enc_dir, key_path, dict_path) = create_enc_dir("test_build_with_encryption_enc");
-        let enc_cfg = EncryptionConfig {
-            data_encryption_method: EncryptionMethod::Aes128Ctr,
-            master_key: MasterKeyConfig::File {
-                config: FileConfig { path: key_path },
-            },
-            ..Default::default()
-        };
-        let enc_mgr = data_key_manager_from_config(&enc_cfg, &dict_path)
-            .unwrap()
-            .map(|x| Arc::new(x));
-        assert!(enc_mgr.is_some());
+        let (_enc_dir, key_manager) =
+            create_encryption_key_manager("test_build_with_encryption_enc");
 
         let snap_dir = Builder::new()
             .prefix("test_build_with_encryption_snap")
@@ -2546,7 +2931,7 @@ pub mod tests {
             .unwrap();
         let _mgr_path = snap_dir.path().to_str().unwrap();
         let snap_mgr = SnapManagerBuilder::default()
-            .encryption_key_manager(enc_mgr)
+            .encryption_key_manager(Some(key_manager))
             .build(snap_dir.path().to_str().unwrap());
         snap_mgr.init().unwrap();
 
@@ -2565,7 +2950,7 @@ pub mod tests {
             let mut snap_data = RaftSnapshotData::default();
             snap_data.set_region(region.clone());
             let mut stat = SnapshotStatistics::new();
-            s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat)
+            s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat, true)
                 .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }

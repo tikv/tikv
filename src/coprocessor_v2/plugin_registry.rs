@@ -1,18 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    collections::{HashMap, HashSet},
+    ffi::{OsStr, OsString},
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::{mpsc, Arc, RwLock},
+    thread,
+    time::Duration,
+};
+
 use coprocessor_plugin_api::{allocator::HostAllocatorPtr, util::*, *};
 use libloading::{Error as DylibError, Library, Symbol};
 use notify::{DebouncedEvent, RecursiveMode, Watcher};
 use semver::Version;
-use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, RwLock};
-use std::thread;
-use std::time::Duration;
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Range,
-};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -105,7 +106,7 @@ impl PluginRegistry {
     /// system.
     ///
     /// A file will only be loaded if it has the proper file ending of dynamic link libraries for
-    /// the current platform (`.so` for Linux, `.dylib` for MacOS, `.dll` for Windows).
+    /// the current platform (`.so` for Linux, `.dylib` for macOS, `.dll` for Windows).
     pub fn start_hot_reloading(
         &mut self,
         plugin_directory: impl Into<PathBuf>,
@@ -225,7 +226,7 @@ impl PluginRegistry {
     /// If a file could not be successfully loaded as a plugin, it will be discarded.
     ///
     /// The plugins have to follow the system's naming convention in order to be loaded, e.g. `.so`
-    /// for Linux, `.dylib` for MacOS and `.dll` for Windows.
+    /// for Linux, `.dylib` for macOS and `.dll` for Windows.
     pub fn load_plugins_from_dir(
         &self,
         dir_name: impl Into<PathBuf>,
@@ -462,16 +463,14 @@ fn is_library_file<P: AsRef<Path>>(path: P) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use coprocessor_plugin_api::util::pkgname_to_libname;
 
+    use super::*;
+
     fn initialize_library() -> PathBuf {
-        Path::new(if cfg!(debug_assertions) {
-            "target/debug/deps"
-        } else {
-            "target/release/deps"
-        })
-        .join(pkgname_to_libname("example-plugin"))
+        let mut path = std::env::current_exe().unwrap();
+        path.set_file_name(pkgname_to_libname("example-plugin"));
+        path
     }
 
     #[test]
