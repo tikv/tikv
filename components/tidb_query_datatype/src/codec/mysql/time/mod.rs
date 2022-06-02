@@ -489,7 +489,7 @@ mod parser {
         }
         // the following statement checks fsp
         ((components.len() != 7 && components.len() != 2)
-            || input.as_bytes()[input.len() - components.last().unwrap().len() - 1] == b'.')
+            || (separators.len() >= components.len() - 1 /* should always true */ && separators[components.len() - 2] == b"."))
             .as_option()?;
 
         Some((components, if has_tz { Some(tz_offset) } else { None }))
@@ -2237,6 +2237,25 @@ mod tests {
             ("2020-12-23 07:59:23", "2020-12-23 15:59:23+0800", 0, false),
             ("2020-12-23 23:59:23", "2020-12-23 15:59:23-08", 0, false),
             ("2020-12-23 07:59:23", "2020-12-23 15:59:23+08:00", 0, false),
+            ("2022-06-02 11:59:30", "2022-06-02 11:59:30.123Z", 0, false),
+            (
+                "2022-06-02 03:59:30",
+                "2022-06-02 11:59:30.123+0800",
+                0,
+                false,
+            ),
+            (
+                "2022-06-02 19:59:30",
+                "2022-06-02 11:59:30.123-08",
+                0,
+                false,
+            ),
+            (
+                "2022-06-02 03:29:30",
+                "2022-06-02 11:59:30.123+08:30",
+                0,
+                false,
+            ),
         ];
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
@@ -2399,6 +2418,43 @@ mod tests {
                 t: "2020-10-10T10:10:10+08:00",
                 r: Some("2020-10-10 10:10:10.000000"),
                 tp: TimeType::Timestamp,
+            },
+            Case {
+                tz: "+08:00",
+                t: "2022-06-02T10:10:10Z",
+                r: Some("2022-06-02 18:10:10.000000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "-08:00",
+                t: "2022-06-02T10:10:10Z",
+                r: Some("2022-06-02 02:10:10.000000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "+06:30",
+                t: "2022-06-02T10:10:10-05:00",
+                r: Some("2022-06-02 21:40:10.000000"),
+                tp: TimeType::DateTime,
+            },
+            // Time with fraction
+            Case {
+                tz: "+08:00",
+                t: "2022-06-02T10:10:10.123Z",
+                r: Some("2022-06-02 18:10:10.123000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "-08:00",
+                t: "2022-06-02T10:10:10.123Z",
+                r: Some("2022-06-02 02:10:10.123000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "+06:30",
+                t: "2022-06-02T10:10:10.654321-05:00",
+                r: Some("2022-06-02 21:40:10.654321"),
+                tp: TimeType::DateTime,
             },
         ];
         let mut result: Vec<Option<String>> = vec![];
