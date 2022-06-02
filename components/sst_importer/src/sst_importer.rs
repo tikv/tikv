@@ -4,7 +4,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     fs::File,
-    io::{prelude::*, BufReader},
+    io::{self, prelude::*, BufReader},
     ops::Bound,
     path::{Path, PathBuf},
     sync::Arc,
@@ -304,6 +304,16 @@ impl SstImporter {
 
         if path.save.exists() {
             return Ok(path.save);
+        }
+
+        if let Some(p) = path.temp.parent() {
+            file_system::create_dir_all(p).or_else(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })?;
         }
 
         self.download_file_from_external_storage(

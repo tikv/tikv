@@ -9,7 +9,6 @@ extern crate slog_global;
 extern crate tikv_alloc;
 
 use std::{
-    fs,
     io::{self, Write},
     marker::Unpin,
     sync::Arc,
@@ -87,16 +86,6 @@ pub trait ExternalStorage: 'static + Send + Sync {
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
         let reader = self.read(storage_name);
-        if let Some(p) = restore_name.parent() {
-            // try create all parent dirs from the path (optional).
-            fs::create_dir_all(p).or_else(|e| {
-                if e.kind() == io::ErrorKind::AlreadyExists {
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            })?;
-        }
         let output: &mut dyn Write = &mut File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.
         // if reading speed is slower than this rate, we will stop with
