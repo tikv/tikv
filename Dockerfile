@@ -18,7 +18,7 @@
 
 
 # The prepare image avoid ruining the cache of the builder
-FROM centos:7.6.1810 as prepare
+FROM centos:7.9.2009 as prepare
 WORKDIR /tikv
 
 # This step will always ruin the cache
@@ -32,7 +32,7 @@ RUN for component in $(find . -type f -name 'Cargo.toml' -exec dirname {} \; | s
   ; done
 
 
-FROM centos:7.6.1810 as builder
+FROM centos:7.9.2009 as builder
 
 RUN yum install -y epel-release && \
     yum clean all && \
@@ -101,7 +101,7 @@ ENV TIKV_BUILD_GIT_BRANCH=${GIT_BRANCH}
 RUN source /opt/rh/devtoolset-8/enable && make build_dist_release
 
 # Export to a clean image
-FROM pingcap/alpine-glibc
+FROM pingcap/alpine-glibc:alpine-3.14.6-gcompat
 COPY --from=builder /tikv/target/release/tikv-server /tikv-server
 COPY --from=builder /tikv/target/release/tikv-ctl /tikv-ctl
 
