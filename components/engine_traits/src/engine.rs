@@ -73,11 +73,11 @@ pub trait TabletFactory<EK> {
     fn open_tablet(&self, id: u64, suffix: u64) -> Result<EK> {
         self.open_tablet_raw(&self.tablet_path(id, suffix), false)
     }
-    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK> {
-        Some(self.open_tablet_raw(&self.tablet_path(id, suffix), false))
+    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Result<EK> {
+        self.open_tablet_raw(&self.tablet_path(id, suffix), false)
     }
-    fn open_tablet_cache_any(&self, id: u64) -> Option<EK> {
-        Some(self.open_tablet_raw(&self.tablet_path(id, 0), false))
+    fn open_tablet_cache_any(&self, id: u64) -> Result<EK> {
+        self.open_tablet_raw(&self.tablet_path(id, 0), false)
     }
     fn open_tablet_raw(&self, path: &Path, readonly: bool) -> Result<EK>;
     fn create_root_db(&self) -> Result<EK>;
@@ -89,7 +89,7 @@ pub trait TabletFactory<EK> {
     fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf;
     fn tablets_path(&self) -> PathBuf;
     fn clone(&self) -> Box<dyn TabletFactory<EK> + Send>;
-    fn load_tablet(&self, _path: &Path, id: u64, suffix: u64) -> EK {
+    fn load_tablet(&self, _path: &Path, id: u64, suffix: u64) -> Result<EK> {
         self.open_tablet(id, suffix)
     }
     fn mark_tombstone(&self, _region_id: u64, _suffix: u64) {}

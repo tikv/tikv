@@ -6,7 +6,7 @@ use crate::{
     errors::Result,
     options::WriteOptions,
     raft_engine::RaftEngine,
-    tablet_factory::{DummyFactory, TabletFactory},
+    engine::TabletFactory,
     write_batch::WriteBatch,
 };
 
@@ -19,7 +19,6 @@ pub struct Engines<K, R> {
 
 impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
     pub fn new(kv_engine: K, raft_engine: R) -> Self {
-        let path = kv_engine.path().to_string();
         Engines {
             kv: kv_engine.clone(),
             raft: raft_engine,
@@ -38,7 +37,7 @@ impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
             kv: kv_engine.clone(),
             raft: raft_engine,
             tablets: Some(tablets),
-            tablet_kv: tablet,
+            tablet_kv: Some(tablet),
         }
     }
 
@@ -55,7 +54,7 @@ impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
     }
 
     pub fn tablet(&self) -> &K {
-        if let Some(tablet) = self.tablet_kv {
+        if let Some(tablet) = &self.tablet_kv {
             &tablet
         } else {
             &self.kv
@@ -63,9 +62,9 @@ impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
     }
 
     pub fn load_tablet(&mut self, id: u64, suffix: u64) -> Result<()> {
-        let tablet = self.tablets.unwrap().open_tablet(id, suffix)?;
+        let tablet = self.tablets.as_ref().unwrap().open_tablet(id, suffix)?;
         self.tablet_kv = Some(tablet);
-        return Ok();
+        return Ok(());
     }
 }
 
@@ -75,8 +74,16 @@ impl<K: Clone, R: Clone> Clone for Engines<K, R> {
         Engines {
             kv: self.kv.clone(),
             raft: self.raft.clone(),
-            tablets: self.tablets.clone(),
-            tablet_kv: self.tablet_kv.clone(),
+            tablets: if let Some(tablets) = &self.tablets {
+                Some((*tablets).clone()) 
+            } else {
+                None
+            },
+            tablet_kv: if let Some(tablet) = &self.tablet_kv {
+                Some(tablet.clone())
+            } else {
+                None
+            },
         }
     }
 }
@@ -85,16 +92,7 @@ impl<K: Debug, R: Debug> Debug for Engines<K, R> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("Engines")
             .field("kv", &self.kv)
-            .field("raft", &self.raft)
-            .field("tablet", &self.tablet_kv)
-            .field(
-                "tablets",
-                if let Some(tablets) = self.tablets {
-                    &tablets.tablets_path().display()
-                } else {
-                    ""
-                },
-            )
+            .field("raft", &self.raft) 
             .finish()
     }
 }
