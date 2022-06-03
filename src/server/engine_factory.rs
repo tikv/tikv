@@ -171,7 +171,7 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
 
 impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     #[inline]
-    fn create_tablet(&self) -> Result<RocksEngine> {
+    fn create_root_db(&self) -> Result<RocksEngine> {
         let root_path = self.kv_engine_path();
         self.create_tablet(&root_path)
     }
