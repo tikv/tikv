@@ -92,7 +92,7 @@ Please follow this style to make TiKV easy to review, maintain, and develop.
 
 ### Build issues
 
-To reduce compilation time, TiKV builds do not include full debugging information by default &mdash; `release` and `bench` builds include no debuginfo; `dev` and `test` builds include full debug. To decrease compilation time with another ~5% (around 10 seconds for a 4 min build time), change the `debug = true` to `debug = 1` in the Cargo.toml file to only include line numbers for `dev` and `test`. Another way to change debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,
+To reduce compilation time and disk usage, TiKV builds do not include full debugging information by default &mdash; only tests package will have line debug info enabled. To change debuginfo, just precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,
 
 ```bash
 RUSTFLAGS=-Cdebuginfo=1 make dev

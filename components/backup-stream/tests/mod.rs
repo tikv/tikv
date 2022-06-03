@@ -25,6 +25,7 @@ use kvproto::{
 use pd_client::PdClient;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
+use test_util::retry;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
     codec::{
@@ -133,9 +134,9 @@ impl Suite {
         cfg.enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let ob = self.obs.get(&id).unwrap().clone();
-        let endpoint = Endpoint::with_client(
+        let endpoint = Endpoint::new(
             id,
-            MetadataClient::new(self.meta_store.clone(), id),
+            self.meta_store.clone(),
             cfg,
             worker.scheduler(),
             ob,
@@ -238,11 +239,12 @@ impl Suite {
     }
 
     fn force_flush_files(&self, task: &str) {
+        self.run(|| Task::ForceFlush(task.to_owned()))
+    }
+
+    fn run(&self, mut t: impl FnMut() -> Task) {
         for worker in self.endpoints.values() {
-            worker
-                .scheduler()
-                .schedule(Task::ForceFlush(task.to_owned()))
-                .unwrap();
+            worker.scheduler().schedule(t()).unwrap();
         }
     }
 
@@ -450,7 +452,7 @@ impl Suite {
 
     pub fn wait_for_flush(&self) {
         use std::ffi::OsString;
-        for _ in 0..10 {
+        for _ in 0..100 {
             if !walkdir::WalkDir::new(&self.temp_files)
                 .into_iter()
                 .any(|x| x.unwrap().path().extension() == Some(&OsString::from("log")))
@@ -466,6 +468,23 @@ impl Suite {
             panic!("the temp isn't empty after the deadline ({:?})", v)
         }
     }
+
+    pub fn must_shuffle_leader(&mut self, region_id: u64) {
+        let region = retry!(run_async_test(
+            self.cluster.pd_client.get_region_by_id(region_id)
+        ))
+        .unwrap()
+        .unwrap();
+        let leader = self.cluster.leader_of_region(region_id);
+        for peer in region.get_peers() {
+            if leader.as_ref().map(|p| p.id != peer.id).unwrap_or(true) {
+                self.cluster.transfer_leader(region_id, peer.clone());
+                self.cluster.reset_leader_of_region(region_id);
+                return;
+            }
+        }
+        panic!("must_shuffle_leader: region has no peer")
+    }
 }
 
 fn run_async_test<T>(test: impl Future<Output = T>) -> T {
@@ -476,18 +495,18 @@ fn run_async_test<T>(test: impl Future<Output = T>) -> T {
         .block_on(test)
 }
 
+#[cfg(test)]
 mod test {
     use std::time::Duration;
 
     use backup_stream::{errors::Error, metadata::MetadataClient, Task};
-    use tikv_util::{box_err, info};
+    use tikv_util::{box_err, defer, info, HandyRwLock};
     use txn_types::TimeStamp;
 
     use crate::{make_record_key, make_split_key_at_record, run_async_test};
 
     #[test]
     fn basic() {
-        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("basic", 4);
 
         run_async_test(async {
@@ -508,7 +527,6 @@ mod test {
 
     #[test]
     fn with_split() {
-        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("with_split", 4);
         run_async_test(async {
             let round1 = suite.write_records(0, 128, 1).await;
@@ -528,7 +546,6 @@ mod test {
     #[test]
     /// This case tests whether the backup can continue when the leader failes.
     fn leader_down() {
-        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("leader_down", 4);
         suite.must_register_task(1, "test_leader_down");
         suite.sync();
@@ -549,7 +566,6 @@ mod test {
     /// This case tests whehter the checkpoint ts (next backup ts) can be advanced correctly
     /// when async commit is enabled.
     fn async_commit() {
-        // test_util::init_log_for_test();
         let mut suite = super::Suite::new("async_commit", 3);
         run_async_test(async {
             suite.must_register_task(1, "test_async_commit");
@@ -580,10 +596,12 @@ mod test {
 
     #[test]
     fn fatal_error() {
-        // test_util::init_log_for_test();
-        let suite = super::Suite::new("fatal_error", 3);
+        let mut suite = super::Suite::new("fatal_error", 3);
         suite.must_register_task(1, "test_fatal_error");
         suite.sync();
+        run_async_test(suite.write_records(0, 1, 1));
+        suite.force_flush_files("test_fatal_error");
+        suite.wait_for_flush();
         let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
         endpoint
             .scheduler()
@@ -602,6 +620,63 @@ mod test {
         assert!(err.error_message.contains("everything is alright"));
         assert_eq!(err.store_id, *victim);
         let paused = run_async_test(meta_cli.check_task_paused("test_fatal_error")).unwrap();
-        assert!(paused)
+        assert!(paused);
+        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        let checkpoint = run_async_test(
+            suite
+                .get_meta_cli()
+                .global_progress_of_task("test_fatal_error"),
+        )
+        .unwrap();
+
+        assert!(
+            safepoints.iter().any(|sp| {
+                sp.serivce.contains(&format!("{}", victim))
+                    && sp.ttl >= Duration::from_secs(60 * 60 * 24)
+                    && sp.safepoint.into_inner() == checkpoint
+            }),
+            "{:?}",
+            safepoints
+        );
+    }
+
+    #[test]
+    fn inflight_messages() {
+        // We should remove the failpoints when paniked or we may get stucked.
+        defer! {{
+            fail::remove("delay_on_start_observe");
+            fail::remove("delay_on_flush");
+        }}
+        let mut suite = super::Suite::new("inflight_message", 3);
+        suite.must_register_task(1, "inflight_message");
+        run_async_test(suite.write_records(0, 128, 1));
+        fail::cfg("delay_on_flush", "pause").unwrap();
+        suite.force_flush_files("inflight_message");
+        fail::cfg("delay_on_start_observe", "pause").unwrap();
+        suite.must_shuffle_leader(1);
+        // Handling the `StartObserve` message and doing flush are executed asynchronously.
+        // Make a delay of unblocking flush thread for make sure we have handled the `StartObserve`.
+        std::thread::sleep(Duration::from_secs(1));
+        fail::cfg("delay_on_flush", "off").unwrap();
+        suite.wait_for_flush();
+        let checkpoint = run_async_test(
+            suite
+                .get_meta_cli()
+                .global_progress_of_task("inflight_message"),
+        );
+        fail::cfg("delay_on_start_observe", "off").unwrap();
+        // The checkpoint should not advance if there are inflight messages.
+        assert_eq!(checkpoint.unwrap(), 0);
+        run_async_test(suite.write_records(256, 128, 1));
+        suite.force_flush_files("inflight_message");
+        suite.wait_for_flush();
+        let checkpoint = run_async_test(
+            suite
+                .get_meta_cli()
+                .global_progress_of_task("inflight_message"),
+        )
+        .unwrap();
+        // The checkpoint should be advanced as expection when the inflight message has been consumed.
+        assert!(checkpoint > 512, "checkpoint = {}", checkpoint);
     }
 }

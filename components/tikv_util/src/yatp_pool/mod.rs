@@ -2,13 +2,15 @@
 
 mod future_pool;
 mod metrics;
+
 use std::sync::Arc;
 
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
+use prometheus::Histogram;
 use yatp::{
     pool::{CloneRunnerBuilder, Local, Runner},
-    queue::{multilevel, QueueType},
+    queue::{multilevel, QueueType, TaskCell as _},
     task::future::{Runner as FutureRunner, TaskCell},
     ThreadPool,
 };
@@ -89,6 +91,9 @@ pub struct YatpPoolRunner<T: PoolTicker> {
     after_start: Option<Arc<dyn Fn() + Send + Sync>>,
     before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+
+    // Statistics about the schedule wait duration.
+    schedule_wait_duration: Histogram,
 }
 
 impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
@@ -105,7 +110,12 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
         tikv_alloc::add_thread_memory_accessor()
     }
 
-    fn handle(&mut self, local: &mut Local<Self::TaskCell>, task_cell: Self::TaskCell) -> bool {
+    fn handle(&mut self, local: &mut Local<Self::TaskCell>, mut task_cell: Self::TaskCell) -> bool {
+        let extras = task_cell.mut_extras();
+        if let Some(schedule_time) = extras.schedule_time() {
+            self.schedule_wait_duration
+                .observe(schedule_time.elapsed().as_secs_f64());
+        }
         let finished = self.inner.handle(local, task_cell);
         self.ticker.try_tick();
         finished
@@ -139,6 +149,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
         after_start: Option<Arc<dyn Fn() + Send + Sync>>,
         before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
         before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+        schedule_wait_duration: Histogram,
     ) -> Self {
         YatpPoolRunner {
             inner,
@@ -147,6 +158,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
             after_start,
             before_stop,
             before_pause,
+            schedule_wait_duration,
         }
     }
 }
@@ -265,9 +277,8 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     }
 
     fn create_builder(&mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
-        let mut builder = yatp::Builder::new(thd_name!(
-            self.name_prefix.clone().unwrap_or_else(|| "".to_string())
-        ));
+        let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
+        let mut builder = yatp::Builder::new(thd_name!(name));
         builder
             .stack_size(self.stack_size)
             .min_thread_count(self.min_thread_count)
@@ -277,13 +288,51 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         let after_start = self.after_start.take();
         let before_stop = self.before_stop.take();
         let before_pause = self.before_pause.take();
+        let schedule_wait_duration =
+            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name]);
         let read_pool_runner = YatpPoolRunner::new(
             Default::default(),
             self.ticker.clone(),
             after_start,
             before_stop,
             before_pause,
+            schedule_wait_duration,
         );
         (builder, read_pool_runner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use futures::compat::Future01CompatExt;
+
+    use super::*;
+    use crate::timer::GLOBAL_TIMER_HANDLE;
+
+    #[test]
+    fn test_record_schedule_wait_duration() {
+        let name = "test_record_schedule_wait_duration";
+        let pool = YatpPoolBuilder::new(DefaultTicker::default())
+            .name_prefix(name)
+            .build_single_level_pool();
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..3 {
+            let tx = tx.clone();
+            pool.spawn(async move {
+                GLOBAL_TIMER_HANDLE
+                    .delay(std::time::Instant::now() + Duration::from_millis(100))
+                    .compat()
+                    .await
+                    .unwrap();
+                tx.send(()).unwrap();
+            });
+        }
+        for _ in 0..3 {
+            rx.recv().unwrap();
+        }
+        let histogram = metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name]);
+        assert_eq!(histogram.get_sample_count() as u32, 6, "{:?}", histogram);
     }
 }

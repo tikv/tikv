@@ -485,6 +485,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util 0.7.2",
+ "tonic",
  "txn_types",
  "url",
  "uuid",
@@ -714,9 +715,11 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
+ "fail",
  "futures 0.3.15",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "parking_lot 0.12.0",
  "pd_client",
  "prometheus",
@@ -3785,8 +3788,8 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.9.0"
-source = "git+https://github.com/tikv/pprof-rs.git?rev=a5a993a33a23557b27e633f18723366281d3b1c0#a5a993a33a23557b27e633f18723366281d3b1c0"
+version = "0.9.1"
+source = "git+https://github.com/tikv/pprof-rs.git?rev=3fed55af8fc6cf69dbd954a0321c799c5a111e4e#3fed55af8fc6cf69dbd954a0321c799c5a111e4e"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
@@ -4749,6 +4752,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls"
+version = "0.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35edb675feee39aec9c99fa5ff985081995a06d594114ae14cbe797ad7b7a6d7"
+dependencies = [
+ "base64",
+ "log",
+ "ring",
+ "sct",
+ "webpki",
+]
+
+[[package]]
 name = "rustversion"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4792,6 +4808,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
 
 [[package]]
+name = "sct"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3042af939fca8c3453b7af0f1c66e533a15a86169e39de2657310ade8f98d3c"
+dependencies = [
+ "ring",
+ "untrusted",
+]
+
+[[package]]
 name = "seahash"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4809,6 +4835,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tikv_util",
+ "tonic",
 ]
 
 [[package]]
@@ -5973,6 +6000,7 @@ dependencies = [
  "example_plugin",
  "fail",
  "file_system",
+ "flate2",
  "futures 0.3.15",
  "futures-executor",
  "futures-timer",
@@ -6382,6 +6410,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-rustls"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc6844de72e57df1980054b38be3a9f4702aba4858be64dd700181a8a6d0e1b6"
+dependencies = [
+ "rustls",
+ "tokio",
+ "webpki",
+]
+
+[[package]]
 name = "tokio-stream"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6462,6 +6501,7 @@ dependencies = [
  "prost",
  "prost-derive",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util 0.6.6",
  "tower",
@@ -6852,6 +6892,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki"
+version = "0.21.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab146130f5f790d45f82aeeb09e55a256573373ec64409fc19a6fb82fb1032ae"
+dependencies = [
+ "ring",
+ "untrusted",
+]
+
+[[package]]
 name = "which"
 version = "4.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6997,7 +7047,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#5f3d58002b383bfd0014e271ae58261ecc072de3"
+source = "git+https://github.com/tikv/yatp.git?branch=master#2f5f6e47ba6fce8d55e7a57b7ee39a93bc0e8194"
 dependencies = [
  "crossbeam-deque",
  "dashmap",

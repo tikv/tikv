@@ -515,10 +515,7 @@ where
 
         let mut write_raft_time = 0f64;
         if !self.batch.raft_wb.is_empty() {
-            let raft_before_save_on_store_1 = || {
-                fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
-            };
-            raft_before_save_on_store_1();
+            fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
 
             let now = Instant::now();
             self.perf_context.start_observe();

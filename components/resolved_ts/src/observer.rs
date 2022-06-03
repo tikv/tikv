@@ -110,7 +110,7 @@ impl<E: KvEngine> RegionChangeObserver for Observer<E> {
         }
         match event {
             RegionChangeEvent::Create => {}
-            RegionChangeEvent::Update => {
+            RegionChangeEvent::Update(_) => {
                 if let Err(e) = self
                     .scheduler
                     .schedule(Task::RegionUpdated(ctx.region().clone()))
