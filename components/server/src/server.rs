@@ -1302,7 +1302,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                         }
 
                         if old_quota != quota_limiter.background_cputime_limiter() {
-                            info!("cpu_time_limiter tuned for backend request";
+                            debug!("cpu_time_limiter tuned for backend request";
                             "cpu_util" => ?cpu_util,
                             "new quota" => ?quota_limiter.background_cputime_limiter() / 1_000.0);
                             INSTANCE_CPU_USAGE.set((cpu_util * 100.0) as i64);
