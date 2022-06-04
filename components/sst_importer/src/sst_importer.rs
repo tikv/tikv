@@ -230,6 +230,7 @@ impl SstImporter {
         dst_file: std::path::PathBuf,
         backend: &StorageBackend,
         expect_sha256: Option<Vec<u8>>,
+        use_kms: bool,
         file_crypter: Option<FileEncryptionInfo>,
         speed_limiter: &Limiter,
     ) -> Result<()> {
@@ -239,7 +240,7 @@ impl SstImporter {
         let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
         let url = ext_storage.url()?.to_string();
 
-        let ext_storage: Box<dyn external_storage_export::ExternalStorage> =
+        let ext_storage: Box<dyn external_storage_export::ExternalStorage> = if use_kms {
             if let Some(key_manager) = &self.key_manager {
                 Box::new(external_storage_export::EncryptedExternalStorage {
                     key_manager: (*key_manager).clone(),
@@ -247,7 +248,10 @@ impl SstImporter {
                 }) as _
             } else {
                 ext_storage as _
-            };
+            }
+        } else {
+            ext_storage as _
+        };
 
         let result = ext_storage.restore(
             src_file_name,
@@ -323,6 +327,7 @@ impl SstImporter {
             path.temp.clone(),
             backend,
             expected_sha256,
+            false,
             // don't support encrypt for now.
             None,
             speed_limiter,
@@ -484,6 +489,7 @@ impl SstImporter {
             path.temp.clone(),
             backend,
             None,
+            true,
             file_crypter,
             speed_limiter,
         )?;
