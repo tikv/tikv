@@ -547,7 +547,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
-        let stage_begin_ts = Instant::now_coarse();
+        let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -563,7 +563,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                let stage_scheduled_ts = Instant::now_coarse();
+                let stage_scheduled_ts = Instant::now();
                 tls_collect_query(
                     ctx.get_region_id(),
                     ctx.get_peer(),
@@ -580,7 +580,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [key.as_encoded()])?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
 
                 // The bypass_locks and access_locks set will be checked at most once.
                 // `TsSet::vec` is more efficient here.
@@ -598,7 +598,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
                     let stage_snap_recv_ts = begin_instant;
                     let buckets = snapshot.ext().get_buckets();
                     let mut statistics = Statistics::default();
@@ -656,7 +656,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .inc_by(quota_delay.as_micros() as u64);
                     }
 
-                    let stage_finished_ts = Instant::now_coarse();
+                    let stage_finished_ts = Instant::now();
                     let schedule_wait_time =
                         stage_scheduled_ts.saturating_duration_since(stage_begin_ts);
                     let snapshot_wait_time =
@@ -724,7 +724,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(requests.len() as f64);
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let read_id = Some(ThreadReadId::new());
                 let mut statistics = Statistics::default();
                 let mut req_snaps = vec![];
@@ -871,7 +871,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
-        let stage_begin_ts = Instant::now_coarse();
+        let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -888,7 +888,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let mut sample = quota_limiter.new_sample();
         let res = self.read_pool.spawn_handle(
             async move {
-                let stage_scheduled_ts = Instant::now_coarse();
+                let stage_scheduled_ts = Instant::now();
                 let mut key_ranges = vec![];
                 for key in &keys {
                     key_ranges.push(build_key_range(key.as_encoded(), key.as_encoded(), false));
@@ -912,7 +912,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     keys.iter().map(Key::as_encoded),
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
@@ -928,7 +928,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
 
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
@@ -999,7 +999,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .inc_by(quota_delay.as_micros() as u64);
                     }
 
-                    let stage_finished_ts = Instant::now_coarse();
+                    let stage_finished_ts = Instant::now();
                     let schedule_wait_time =
                         stage_scheduled_ts.saturating_duration_since(stage_begin_ts);
                     let snapshot_wait_time =
@@ -1102,7 +1102,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 if reverse_scan {
                     std::mem::swap(&mut start_key, &mut end_key);
                 }
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
@@ -1155,7 +1155,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
                     let perf_statistics = ReadPerfInstant::new();
                     let buckets = snapshot.ext().get_buckets();
 
@@ -1266,7 +1266,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 // Do not check_api_version in scan_lock, to be compatible with TiDB gc-worker,
                 // which resolves locks on regions, and boundary of regions will be out of range of TiDB keys.
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
 
                 concurrency_manager.update_max_ts(max_ts);
                 let begin_instant = Instant::now();
@@ -1305,7 +1305,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
                     let mut statistics = Statistics::default();
                     let perf_statistics = ReadPerfInstant::new();
                     let buckets = snapshot.ext().get_buckets();
@@ -1481,7 +1481,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -1492,7 +1492,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
                     let mut stats = Statistics::default();
                     let key = F::encode_raw_key_owned(key, None);
                     // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
@@ -1577,7 +1577,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .map_err(Error::from)?;
                 }
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let read_id = Some(ThreadReadId::new());
                 let mut snaps = vec![];
                 for (mut req, id) in gets.into_iter().zip(ids) {
@@ -1604,7 +1604,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     snaps.push((id, key, ctx, req, snap));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
-                let begin_instant = Instant::now_coarse();
+                let begin_instant = Instant::now();
                 for (id, key, ctx, mut req, snap) in snaps {
                     let cf = req.take_cf();
                     match snap.await {
@@ -1684,7 +1684,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -1694,7 +1694,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
 
                     let cf = Self::rawkv_cf(&cf, api_version)?;
                     // no scan_count for this kind of op.
@@ -2020,7 +2020,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     [(Some(&start_key), end_key.as_ref())],
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2031,7 +2031,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
                     let store = RawStore::new(snapshot, api_version);
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
 
                     let start_key = F::encode_raw_key_owned(start_key, None);
                     let end_key = end_key.map(|k| F::encode_raw_key_owned(k, None));
@@ -2155,7 +2155,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2297,7 +2297,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2308,7 +2308,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
                     let mut stats = Statistics::default();
                     let key = F::encode_raw_key_owned(key, None);
                     // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
@@ -2462,7 +2462,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2473,7 +2473,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf("", api_version)?;
 
-                let begin_instant = tikv_util::time::Instant::now_coarse();
+                let begin_instant = tikv_util::time::Instant::now();
                 let mut stats = Vec::with_capacity(ranges.len());
                 let ret = store
                     .raw_checksum_ranges(cf, &ranges, &mut stats)

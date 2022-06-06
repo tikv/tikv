@@ -13,7 +13,6 @@ use prometheus::local::*;
 use raftstore::store::WriteStats;
 use tikv_util::{
     sys::SysQuota,
-    time::Duration,
     yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder},
 };
 
@@ -24,8 +23,6 @@ use crate::storage::{
 
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
-    processing_read_duration: LocalHistogramVec,
-    processing_write_duration: LocalHistogramVec,
     command_keyread_histogram_vec: LocalHistogramVec,
     local_write_stats: WriteStats,
 }
@@ -34,8 +31,6 @@ thread_local! {
      static TLS_SCHED_METRICS: RefCell<SchedLocalMetrics> = RefCell::new(
         SchedLocalMetrics {
             local_scan_details: HashMap::default(),
-            processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
-            processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
             command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_write_stats:WriteStats::default(),
         }
@@ -112,8 +107,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                 }
             }
         }
-        m.processing_read_duration.flush();
-        m.processing_write_duration.flush();
         m.command_keyread_histogram_vec.flush();
 
         // Report PD metrics
@@ -129,15 +122,6 @@ pub fn tls_collect_query(region_id: u64, kind: QueryKind) {
     TLS_SCHED_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         m.local_write_stats.add_query_num(region_id, kind);
-    });
-}
-
-pub fn tls_collect_read_duration(cmd: &str, duration: Duration) {
-    TLS_SCHED_METRICS.with(|m| {
-        m.borrow_mut()
-            .processing_read_duration
-            .with_label_values(&[cmd])
-            .observe(tikv_util::time::duration_to_sec(duration))
     });
 }
 
