@@ -63,13 +63,13 @@ lazy_static! {
         "The total kv size skipped by the streaming",
     )
     .unwrap();
-    pub static ref STREAM_ERROR: CounterVec = register_counter_vec!(
+    pub static ref STREAM_ERROR: IntCounterVec = register_int_counter_vec!(
         "tikv_stream_errors",
         "The errors during stream backup.",
         &["type"]
     )
     .unwrap();
-    pub static ref STREAM_FATAL_ERROR: CounterVec = register_counter_vec!(
+    pub static ref STREAM_FATAL_ERROR: IntCounterVec = register_int_counter_vec!(
         "tikv_log_backup_fatal_errors",
         "The errors during stream backup.",
         &["type"]
@@ -139,6 +139,12 @@ lazy_static! {
         "tikv_log_backup_task_status",
         "The status of tasks",
         &["task"]
+    )
+    .unwrap();
+    pub static ref PENDING_INITIAL_SCAN_LEN: IntGaugeVec = register_int_gauge_vec!(
+        "pending_initial_scan",
+        "The pending initial scan",
+        &["stage"]
     )
     .unwrap();
 }
