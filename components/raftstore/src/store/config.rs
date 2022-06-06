@@ -219,9 +219,9 @@ pub struct Config {
     /// Set it to 0 can disable cache evict. By default it's 0.15. The recommended
     /// configuration values for different memory specifications are as follows:
     /// total memory    suggested value
-    ///     (0, 30]           0.1
-    ///     [30, 100]        0.15
-    ///     [100, )          0.20
+    ///     (0,  32]         0.15
+    ///     (32, 128]        0.20
+    ///     (128, )          0.25
     /// Too huge value will not always get a better performance.
     pub evict_cache_on_memory_ratio: f64,
 
@@ -618,12 +618,21 @@ impl Config {
             );
         }
 
-        if self.evict_cache_on_memory_ratio < 0.0 || self.evict_cache_on_memory_ratio > 0.3 {
-            return Err(box_err!(
-                "evict_cache_on_memory_ratio must be limited into [0, 0.3]. \
-                For total memory < 30G, 0.1 suggested; For total memory > 30G, 0.15 suggested.\
-                More huge is not suggested."
-            ));
+        let memory_notice = "evict_cache_on_memory_ratio may be better to be limited into [0, 0.3].\
+                For total memory <= 32G, 0.15 suggested.\
+                For total memory > 32G and <= 128G, 0.20 suggested.\
+                For more huge memory, 0.25 suggested.\
+                More huge value is not always suggested.";
+
+        if self.evict_cache_on_memory_ratio < 0.0 {
+            return Err(box_err!(memory_notice));
+        } else if self.evict_cache_on_memory_ratio > 0.3 {
+            warn!(
+                "Will reset the evict_cache_on_memory_ratio config from bigger value {} to 0.30 \
+            {}",
+                self.evict_cache_on_memory_ratio, memory_notice
+            );
+            self.evict_cache_on_memory_ratio = 0.30;
         }
 
         if self.snap_generator_pool_size == 0 {
