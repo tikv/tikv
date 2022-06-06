@@ -633,9 +633,8 @@ mod tests {
             .clone()
             .into_iter()
             .map(|key| {
-                let mut v2_key = key;
-                v2_key.insert(0, RAW_KEY_PREFIX);
-                v2_key.insert(1, 0); // 0 is var u64 encoded key space id
+                let mut v2_key = vec![RAW_KEY_PREFIX, 0, 0, 0];
+                v2_key.extend(key);
                 ApiV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
             })
             .collect();
@@ -730,16 +729,14 @@ mod tests {
             .clone()
             .into_iter()
             .map(|(start_key, end_key)| {
-                let mut v2_start_key = start_key;
-                let mut v2_end_key = end_key;
-                v2_start_key.insert(0, RAW_KEY_PREFIX);
-                v2_start_key.insert(1, 0); // 0 is var u64 encoded key space id
-                if v2_end_key.is_empty() {
-                    v2_end_key.insert(0, RAW_KEY_PREFIX_END);
+                let mut v2_start_key = vec![RAW_KEY_PREFIX, 0, 0, 0]; // key space takes 3 bytes.
+                let mut v2_end_key = if end_key.is_empty() {
+                    vec![RAW_KEY_PREFIX_END]
                 } else {
-                    v2_end_key.insert(0, RAW_KEY_PREFIX);
-                    v2_end_key.insert(1, 0); // 0 is var u64 encoded key space id
-                }
+                    vec![RAW_KEY_PREFIX, 0, 0, 0] // key space takes 3 bytes.
+                };
+                v2_start_key.extend(start_key);
+                v2_end_key.extend(end_key);
                 (v2_start_key, v2_end_key)
             })
             .collect();

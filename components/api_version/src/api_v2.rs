@@ -16,6 +16,7 @@ pub const RAW_KEY_PREFIX_END: u8 = RAW_KEY_PREFIX + 1;
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
+pub const DEFAULT_KEY_SPACE_ID: [u8; 3] = [0, 0, 0]; // reserve 3 bytes for key space id.
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -234,9 +235,11 @@ impl ApiV2 {
     }
 
     pub fn add_prefix(key: &[u8]) -> Vec<u8> {
-        let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(key.len() + 2));
+        let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(
+            key.len() + DEFAULT_KEY_SPACE_ID.len() + 1,
+        ));
         apiv2_key.push(RAW_KEY_PREFIX);
-        apiv2_key.push(0); // 0 is var u64 encoded key space id. Reserved for future use.
+        apiv2_key.extend(DEFAULT_KEY_SPACE_ID); // Reserved 3 bytes for key space id.
         apiv2_key.extend(key);
         apiv2_key
     }
