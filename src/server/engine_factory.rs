@@ -175,4 +175,24 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
         let root_path = self.kv_engine_path();
         self.create_tablet(&root_path)
     }
+
+    // followings are dummy implementation for now
+    fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<RocksEngine> {
+        self.create_root_db()
+    }
+    fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
+        self.create_root_db()
+    }
+    fn exists_raw(&self, _path: &Path) -> bool {
+        false
+    }
+    fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
+        self.kv_engine_path()
+    }
+    fn tablets_path(&self) -> PathBuf {
+        self.kv_engine_path()
+    }
+    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
+        Box::new(std::clone::Clone::clone(self))
+    }
 }

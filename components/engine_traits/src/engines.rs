@@ -2,11 +2,10 @@
 use std::fmt::{self, Debug};
 
 use crate::{
-    engine::KvEngine,
+    engine::{KvEngine, TabletFactory},
     errors::Result,
     options::WriteOptions,
     raft_engine::RaftEngine,
-    engine::TabletFactory,
     write_batch::WriteBatch,
 };
 
@@ -20,7 +19,7 @@ pub struct Engines<K, R> {
 impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
     pub fn new(kv_engine: K, raft_engine: R) -> Self {
         Engines {
-            kv: kv_engine.clone(),
+            kv: kv_engine,
             raft: raft_engine,
             tablet_kv: None,
             tablets: None,
@@ -34,7 +33,7 @@ impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
         tablets: Box<dyn TabletFactory<K> + Send>,
     ) -> Self {
         Engines {
-            kv: kv_engine.clone(),
+            kv: kv_engine,
             raft: raft_engine,
             tablets: Some(tablets),
             tablet_kv: Some(tablet),
@@ -54,17 +53,13 @@ impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
     }
 
     pub fn tablet(&self) -> &K {
-        if let Some(tablet) = &self.tablet_kv {
-            &tablet
-        } else {
-            &self.kv
-        }
+        self.tablet_kv.as_ref().map_or(&self.kv, |x| x)
     }
 
     pub fn load_tablet(&mut self, id: u64, suffix: u64) -> Result<()> {
         let tablet = self.tablets.as_ref().unwrap().open_tablet(id, suffix)?;
         self.tablet_kv = Some(tablet);
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -74,25 +69,17 @@ impl<K: Clone, R: Clone> Clone for Engines<K, R> {
         Engines {
             kv: self.kv.clone(),
             raft: self.raft.clone(),
-            tablets: if let Some(tablets) = &self.tablets {
-                Some((*tablets).clone()) 
-            } else {
-                None
-            },
-            tablet_kv: if let Some(tablet) = &self.tablet_kv {
-                Some(tablet.clone())
-            } else {
-                None
-            },
+            tablets: self.tablets.as_ref().map(|x| (*x).clone()),
+            tablet_kv: self.tablet_kv.as_ref().cloned(),
         }
     }
 }
 
 impl<K: Debug, R: Debug> Debug for Engines<K, R> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("Engines")
             .field("kv", &self.kv)
-            .field("raft", &self.raft) 
+            .field("raft", &self.raft)
             .finish()
     }
 }

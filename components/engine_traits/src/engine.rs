@@ -4,6 +4,7 @@ use std::{
     fmt::Debug,
     path::{Path, PathBuf},
 };
+
 use crate::*;
 
 // FIXME: Revisit the remaining types and methods on KvEngine. Some of these are
@@ -111,22 +112,22 @@ where
     EK: KvEngine,
 {
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
-        return Ok(self.engine.as_ref().unwrap().clone());
+        Ok(self.engine.as_ref().unwrap().clone())
     }
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<EK> {
-        return Ok(self.engine.as_ref().unwrap().clone());
+        Ok(self.engine.as_ref().unwrap().clone())
     }
     fn create_root_db(&self) -> Result<EK> {
-        return Ok(self.engine.as_ref().unwrap().clone());
+        Ok(self.engine.as_ref().unwrap().clone())
     }
     fn exists_raw(&self, _path: &Path) -> bool {
-        return true;
+        true
     }
     fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
-        return PathBuf::from(&self.root_path);
+        PathBuf::from(&self.root_path)
     }
     fn tablets_path(&self) -> PathBuf {
-        return PathBuf::from(&self.root_path);
+        PathBuf::from(&self.root_path)
     }
 
     fn clone(&self) -> Box<dyn TabletFactory<EK> + Send> {
@@ -152,5 +153,11 @@ where
             engine: None,
             root_path: "/dummy_root".to_string(),
         }
+    }
+}
+
+impl<EK: KvEngine> Default for DummyFactory<EK> {
+    fn default() -> Self {
+        Self::new()
     }
 }
