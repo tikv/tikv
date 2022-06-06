@@ -1524,8 +1524,10 @@ pub mod tests {
             format!("k{:0>10}", idx)
         };
         if api_ver == ApiVersion::V2 {
-            key.insert(0, RAW_KEY_PREFIX as char);
-            key.insert_str(1, "000"); // key space id takes 3 bytes.
+            // [0, 0, 0] is the default key space id.
+            let mut apiv2_key = [RAW_KEY_PREFIX, 0, 0, 0].to_vec();
+            apiv2_key.extend(key.as_bytes());
+            key = String::from_utf8(apiv2_key).unwrap();
         }
         key
     }
@@ -1562,8 +1564,10 @@ pub mod tests {
     ) -> Key {
         if (cur_ver == ApiVersion::V1 || cur_ver == ApiVersion::V1ttl) && dst_ver == ApiVersion::V2
         {
-            raw_key.insert(0, RAW_KEY_PREFIX as char);
-            raw_key.insert_str(1, "000"); // key space id takes 3 bytes.
+            // [0, 0, 0] is the default key space id.
+            let mut apiv2_key = [RAW_KEY_PREFIX, 0, 0, 0].to_vec();
+            apiv2_key.extend(raw_key.as_bytes());
+            raw_key = String::from_utf8(apiv2_key).unwrap();
         }
         Key::from_encoded(raw_key.into_bytes())
     }
@@ -1617,7 +1621,7 @@ pub mod tests {
             vec![]
         };
         let backup_end = if cur_api_ver == ApiVersion::V2 {
-            vec![RAW_KEY_PREFIX + 1]
+            vec![RAW_KEY_PREFIX, 0, 0, 1] // [0, 0, 1] is the end of the file
         } else {
             vec![]
         };
@@ -1627,7 +1631,7 @@ pub mod tests {
             vec![]
         };
         let file_end = if dst_api_ver == ApiVersion::V2 {
-            vec![RAW_KEY_PREFIX + 1]
+            vec![RAW_KEY_PREFIX, 0, 0, 1] // [0, 0, 1] is the end of the file
         } else {
             vec![]
         };

@@ -731,7 +731,7 @@ mod tests {
             .map(|(start_key, end_key)| {
                 let mut v2_start_key = vec![RAW_KEY_PREFIX, 0, 0, 0]; // key space takes 3 bytes.
                 let mut v2_end_key = if end_key.is_empty() {
-                    vec![RAW_KEY_PREFIX_END]
+                    vec![RAW_KEY_PREFIX, 0, 0, 1]
                 } else {
                     vec![RAW_KEY_PREFIX, 0, 0, 0] // key space takes 3 bytes.
                 };

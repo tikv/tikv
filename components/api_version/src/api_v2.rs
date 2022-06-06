@@ -17,6 +17,7 @@ pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
 pub const DEFAULT_KEY_SPACE_ID: [u8; 3] = [0, 0, 0]; // reserve 3 bytes for key space id.
+pub const DEFAULT_KEY_SPACE_ID_END: [u8; 3] = [0, 0, 1];
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -183,7 +184,7 @@ impl KvFormat for ApiV2 {
     ) -> Result<Key> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
-                let apiv2_key = ApiV2::add_prefix(key);
+                let apiv2_key = ApiV2::add_prefix(key, &DEFAULT_KEY_SPACE_ID);
                 Ok(Self::encode_raw_key_owned(apiv2_key, ts))
             }
             ApiVersion::V2 => Ok(Key::from_encoded_slice(key)),
@@ -197,11 +198,11 @@ impl KvFormat for ApiV2 {
     ) -> (Vec<u8>, Vec<u8>) {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
-                start_key = ApiV2::add_prefix(&start_key);
+                start_key = ApiV2::add_prefix(&start_key, &DEFAULT_KEY_SPACE_ID);
                 if end_key.is_empty() {
-                    end_key.insert(0, RAW_KEY_PREFIX_END);
+                    end_key = ApiV2::add_prefix(&end_key, &DEFAULT_KEY_SPACE_ID_END);
                 } else {
-                    end_key = ApiV2::add_prefix(&end_key);
+                    end_key = ApiV2::add_prefix(&end_key, &DEFAULT_KEY_SPACE_ID);
                 }
                 (start_key, end_key)
             }
@@ -234,12 +235,11 @@ impl ApiV2 {
         Ok(Key::split_on_ts_for(key)?)
     }
 
-    pub fn add_prefix(key: &[u8]) -> Vec<u8> {
-        let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(
-            key.len() + DEFAULT_KEY_SPACE_ID.len() + 1,
-        ));
+    pub fn add_prefix(key: &[u8], key_space: &[u8]) -> Vec<u8> {
+        let mut apiv2_key =
+            Vec::with_capacity(ApiV2::get_encode_len(key.len() + key_space.len() + 1));
         apiv2_key.push(RAW_KEY_PREFIX);
-        apiv2_key.extend(DEFAULT_KEY_SPACE_ID); // Reserved 3 bytes for key space id.
+        apiv2_key.extend(key_space); // Reserved 3 bytes for key space id.
         apiv2_key.extend(key);
         apiv2_key
     }
