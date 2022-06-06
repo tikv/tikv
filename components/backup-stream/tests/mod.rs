@@ -149,6 +149,7 @@ impl Suite {
     }
 
     pub fn new(case: &str, n: usize) -> Self {
+        info!("start test"; "case" => %case, "nodes" => %n);
         let cluster = new_server_cluster(42, n);
         let mut suite = Self {
             endpoints: Default::default(),

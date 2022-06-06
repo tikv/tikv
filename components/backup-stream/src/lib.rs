@@ -9,9 +9,10 @@ mod endpoint;
 pub mod errors;
 mod event_loader;
 pub mod metadata;
-mod metrics;
+pub(crate) mod metrics;
 pub mod observer;
 pub mod router;
+mod subscription_manager;
 mod subscription_track;
 mod utils;
 
