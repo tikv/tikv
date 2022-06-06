@@ -235,6 +235,15 @@ impl SstImporter {
         speed_limiter: &Limiter,
     ) -> Result<()> {
         let start_read = Instant::now();
+        if let Some(p) = dst_file.parent() {
+            file_system::create_dir_all(p).or_else(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })?;
+        }
         // prepare to download the file from the external_storage
         // TODO: pass a config to support hdfs
         let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
@@ -310,16 +319,6 @@ impl SstImporter {
             return Ok(path.save);
         }
 
-        if let Some(p) = path.temp.parent() {
-            file_system::create_dir_all(p).or_else(|e| {
-                if e.kind() == io::ErrorKind::AlreadyExists {
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            })?;
-        }
-
         self.download_file_from_external_storage(
             // don't check file length after download file for now.
             meta.get_length(),
@@ -339,7 +338,13 @@ impl SstImporter {
 
         if let Some(p) = path.save.parent() {
             // we have v1 prefix in file name.
-            file_system::create_dir_all(p)?;
+            file_system::create_dir_all(p).or_else(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })?;
         }
         file_system::rename(path.temp, path.save.clone())?;
 
