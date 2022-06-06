@@ -327,6 +327,9 @@ impl SstImporter {
             path.temp.clone(),
             backend,
             expected_sha256,
+            // kv-files needn't are decrypted with KMS when download currently because these files are not encrypted when log-backup.
+            // It is different from sst-files because sst-files is encrypted when saved with rocksdb env with KMS.
+            // to do: support KMS when log-backup and restore point.
             false,
             // don't support encrypt for now.
             None,
