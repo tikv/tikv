@@ -522,7 +522,7 @@ impl<E: KvEngine> Initializer<E> {
         });
 
         let valid_count = total_count - filtered_count;
-        let use_ts_filter = valid_count as f64 / total_count as f64 <= self.ts_filter_ratio;
+        let use_ts_filter = valid_count as f64 <= total_count as f64 * self.ts_filter_ratio;
         info!("cdc incremental scan uses ts filter: {}", use_ts_filter;
             "region_id" => self.region_id,
             "hint_min_ts" => hint_min_ts,
