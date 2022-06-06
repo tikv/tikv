@@ -1,11 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use codec::byte::MemComparableByteCodec;
-use engine_traits::Result;
-use tikv_util::codec::{
-    bytes,
-    number::{self, NumberEncoder},
-    Error,
+use codec::{
+    byte::MemComparableByteCodec,
+    number::{NumberCodec, MAX_VARINT64_LENGTH},
+};
+use engine_traits::{Error as EngineError, Result};
+use tikv_util::{
+    box_err,
+    codec::{
+        bytes,
+        number::{self, NumberEncoder},
+        Error,
+    },
 };
 use txn_types::{Key, TimeStamp};
 
@@ -16,6 +22,7 @@ pub const RAW_KEY_PREFIX_END: u8 = RAW_KEY_PREFIX + 1;
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
+pub const DEFAULT_KEY_SPACE_ID: u64 = 0;
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -182,9 +189,7 @@ impl KvFormat for ApiV2 {
     ) -> Result<Key> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
-                let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(key.len() + 1));
-                apiv2_key.push(RAW_KEY_PREFIX);
-                apiv2_key.extend(key);
+                let apiv2_key = ApiV2::add_prefix(key);
                 Ok(Self::encode_raw_key_owned(apiv2_key, ts))
             }
             ApiVersion::V2 => Ok(Key::from_encoded_slice(key)),
@@ -195,18 +200,18 @@ impl KvFormat for ApiV2 {
         src_api: ApiVersion,
         mut start_key: Vec<u8>,
         mut end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>) {
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
-                start_key.insert(0, RAW_KEY_PREFIX);
+                start_key = ApiV2::add_prefix(&start_key);
                 if end_key.is_empty() {
                     end_key.insert(0, RAW_KEY_PREFIX_END);
                 } else {
-                    end_key.insert(0, RAW_KEY_PREFIX);
+                    end_key = ApiV2::add_prefix(&end_key);
                 }
-                (start_key, end_key)
+                Ok((start_key, end_key))
             }
-            ApiVersion::V2 => (start_key, end_key),
+            ApiVersion::V2 => Ok((start_key, end_key)),
         }
     }
 }
@@ -233,6 +238,32 @@ impl ApiV2 {
 
     pub fn split_ts(key: &[u8]) -> Result<(&[u8], TimeStamp)> {
         Ok(Key::split_on_ts_for(key)?)
+    }
+
+    pub fn add_prefix(key: &[u8]) -> Vec<u8> {
+        let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(key.len() + 2));
+        apiv2_key.push(RAW_KEY_PREFIX);
+        let mut tmp_buf = [0; MAX_VARINT64_LENGTH];
+        let written = NumberCodec::encode_var_u64(&mut tmp_buf, DEFAULT_KEY_SPACE_ID);
+        apiv2_key.extend(&tmp_buf[..written]);
+        apiv2_key.extend(key);
+        apiv2_key
+    }
+
+    pub fn remove_prefix(mut key: Vec<u8>) -> Result<Vec<u8>> {
+        if key.is_empty() {
+            return Err(EngineError::Other(box_err!("key is empty")));
+        }
+        let prefix = key.remove(0);
+        //if prefix is `RAW_KEY_PREFIX_END`, no key space id is encoded.
+        if prefix == RAW_KEY_PREFIX_END {
+            return Ok(key);
+        }
+        if let Ok((_id, len)) = NumberCodec::try_decode_var_u64(key.as_mut_slice()) {
+            Ok(key[len..].to_vec())
+        } else {
+            Err(EngineError::Other(box_err!("fail to decode var uint64")))
+        }
     }
 
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];

@@ -69,9 +69,9 @@ impl KvFormat for ApiV1Ttl {
             ApiVersion::V1 | ApiVersion::V1ttl => Ok(Key::from_encoded_slice(key)),
             ApiVersion::V2 => {
                 debug_assert_eq!(ApiV2::parse_key_mode(key), KeyMode::Raw);
-                let (mut user_key, _) = ApiV2::decode_raw_key(&Key::from_encoded_slice(key), true)?;
-                user_key.remove(0); // remove first byte `RAW_KEY_PREFIX`
-                Ok(Self::encode_raw_key_owned(user_key, None))
+                let (user_key, _) = ApiV2::decode_raw_key(&Key::from_encoded_slice(key), true)?;
+                let raw_key = ApiV2::remove_prefix(user_key)?;
+                Ok(Self::encode_raw_key_owned(raw_key, None))
             }
         }
     }
@@ -80,14 +80,14 @@ impl KvFormat for ApiV1Ttl {
         src_api: ApiVersion,
         mut start_key: Vec<u8>,
         mut end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>) {
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         match src_api {
-            ApiVersion::V1 | ApiVersion::V1ttl => (start_key, end_key),
+            ApiVersion::V1 | ApiVersion::V1ttl => Ok((start_key, end_key)),
             ApiVersion::V2 => {
                 // TODO: check raw key range after check_api_version_range is refactored.
-                start_key.remove(0);
-                end_key.remove(0);
-                (start_key, end_key)
+                start_key = ApiV2::remove_prefix(start_key)?;
+                end_key = ApiV2::remove_prefix(end_key)?;
+                Ok((start_key, end_key))
             }
         }
     }

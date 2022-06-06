@@ -80,7 +80,7 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
         src_api: ApiVersion,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>);
+    ) -> Result<(Vec<u8>, Vec<u8>)>;
 
     /// Convert the encoded value from src_api version to Self::TAG version
     fn convert_raw_encoded_value_version_from(
@@ -253,6 +253,8 @@ impl<T: AsRef<[u8]>> RawValue<T> {
 
 #[cfg(test)]
 mod tests {
+    use codec::number::{NumberCodec, MAX_VARINT64_LENGTH};
+
     use super::*;
     use crate::api_v2::*;
 
@@ -633,8 +635,12 @@ mod tests {
             .clone()
             .into_iter()
             .map(|key| {
-                let mut v2_key = key;
-                v2_key.insert(0, RAW_KEY_PREFIX);
+                let mut v2_key = vec![];
+                v2_key.push(RAW_KEY_PREFIX);
+                let mut tmp_buf = [0; MAX_VARINT64_LENGTH];
+                let written = NumberCodec::encode_var_u64(&mut tmp_buf, 0);
+                v2_key.extend(&tmp_buf[..written]);
+                v2_key.extend(key);
                 ApiV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
             })
             .collect();
@@ -731,14 +737,20 @@ mod tests {
             .clone()
             .into_iter()
             .map(|(start_key, end_key)| {
-                let mut v2_start_key = start_key;
-                let mut v2_end_key = end_key;
+                let mut tmp_buf = [0; MAX_VARINT64_LENGTH];
+                let written = NumberCodec::encode_var_u64(&mut tmp_buf, 0);
+                let mut v2_start_key = Vec::with_capacity(start_key.len() + 2);
+                let mut v2_end_key = Vec::with_capacity(end_key.len() + 2);
                 v2_start_key.insert(0, RAW_KEY_PREFIX);
-                if v2_end_key.is_empty() {
+                v2_start_key.extend(&tmp_buf[0..written]);
+                if end_key.is_empty() {
                     v2_end_key.insert(0, RAW_KEY_PREFIX_END);
                 } else {
                     v2_end_key.insert(0, RAW_KEY_PREFIX);
+                    v2_end_key.extend(&tmp_buf[0..written]);
                 }
+                v2_start_key.extend(start_key);
+                v2_end_key.extend(end_key);
                 (v2_start_key, v2_end_key)
             })
             .collect();
@@ -775,7 +787,7 @@ mod tests {
                     let (src_start, src_end) = src_data[i].clone();
                     API::convert_raw_user_key_range_version_from(src_api_ver, src_start, src_end)
                 });
-                assert_eq!(dst_key_range, dst_data[i]);
+                assert_eq!(dst_key_range.unwrap(), dst_data[i]);
             }
         }
     }

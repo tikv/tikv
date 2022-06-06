@@ -206,20 +206,31 @@ async fn save_backup_file_worker(
         let files = if msg.files.need_flush_keys() {
             match msg.files.save(&storage).await {
                 Ok(mut split_files) => {
+                    let mut has_err = false;
                     for file in split_files.iter_mut() {
                         // In the case that backup from v1 and restore to v2,
                         // the file range need be encoded as v2 format.
                         // And range in response keep in v1 format.
-                        let (start, end) = codec.convert_key_range_to_dst_version(
+                        let ret = codec.convert_key_range_to_dst_version(
                             msg.start_key.clone(),
                             msg.end_key.clone(),
                         );
+                        if ret.is_err() {
+                            error_unknown!(?ret; "fail to convert key range to dst version");
+                            has_err = true;
+                            break;
+                        }
+                        let (start, end) = ret.unwrap();
                         file.set_start_key(start);
                         file.set_end_key(end);
                         file.set_start_version(msg.start_version.into_inner());
                         file.set_end_version(msg.end_version.into_inner());
                     }
-                    Ok(split_files)
+                    if has_err {
+                        Err(Error::Other(box_err!("fail to save split files")))
+                    } else {
+                        Ok(split_files)
+                    }
                 }
                 Err(e) => {
                     error_unknown!(?e; "backup save file failed");
@@ -1525,6 +1536,7 @@ pub mod tests {
         };
         if api_ver == ApiVersion::V2 {
             key.insert(0, RAW_KEY_PREFIX as char);
+            key.insert(1, 0 as char); // insert 0 as var int encoded space id `0`.
         }
         key
     }
@@ -1562,6 +1574,7 @@ pub mod tests {
         if (cur_ver == ApiVersion::V1 || cur_ver == ApiVersion::V1ttl) && dst_ver == ApiVersion::V2
         {
             raw_key.insert(0, RAW_KEY_PREFIX as char);
+            raw_key.insert(0, 0 as char); // `0` is var int encoded key space id '0'
         }
         Key::from_encoded(raw_key.into_bytes())
     }
@@ -1610,7 +1623,7 @@ pub mod tests {
         stats.reset();
         let mut req = BackupRequest::default();
         let backup_start = if cur_api_ver == ApiVersion::V2 {
-            vec![RAW_KEY_PREFIX]
+            vec![RAW_KEY_PREFIX, 0] // 0 is var int encoded key space id `0`
         } else {
             vec![]
         };
@@ -1620,7 +1633,7 @@ pub mod tests {
             vec![]
         };
         let file_start = if dst_api_ver == ApiVersion::V2 {
-            vec![RAW_KEY_PREFIX]
+            vec![RAW_KEY_PREFIX, 0] // 0 is var int encoded key space id `0`
         } else {
             vec![]
         };
