@@ -7,7 +7,7 @@ use derive_more::Deref;
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::{
     box_err, error,
-    metrics::ThreadBuildWrapper,
+    sys::thread::ThreadBuildWrapper,
     stream::{retry, with_timeout},
 };
 use tokio::runtime::{Builder, Runtime};

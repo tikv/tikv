@@ -45,7 +45,7 @@ pub use proc::*;
 
 #[cfg(test)]
 mod tests {
-    use tikv_util::metrics::StdThreadBuildWrapper;
+    use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
     use crate::IOType;

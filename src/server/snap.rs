@@ -43,7 +43,7 @@ use tikv_util::{
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use super::{metrics::*, Config, Error, Result};
-use crate::tikv_util::metrics::ThreadBuildWrapper;
+use crate::tikv_util::sys::thread::ThreadBuildWrapper;
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 

@@ -115,7 +115,7 @@ fn calc_cpu_load(elapsed_millis: usize, start_usage: f64, end_usage: f64) -> usi
 mod tests {
     use std::{thread, time::Duration};
 
-    use tikv_util::metrics::StdThreadBuildWrapper;
+    use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
 

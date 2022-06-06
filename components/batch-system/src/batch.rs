@@ -18,7 +18,7 @@ use crossbeam::channel::{self, SendError};
 use fail::fail_point;
 use file_system::{set_io_type, IOType};
 use tikv_util::{
-    debug, error, info, metrics::StdThreadBuildWrapper, mpsc, safe_panic, thd_name, time::Instant,
+    debug, error, info, sys::thread::StdThreadBuildWrapper, mpsc, safe_panic, thd_name, time::Instant,
     warn,
 };
 

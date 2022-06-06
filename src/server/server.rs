@@ -44,7 +44,7 @@ use crate::{
     read_pool::ReadPool,
     server::{gc_worker::GcWorker, Proxy},
     storage::{lock_manager::LockManager, Engine, Storage},
-    tikv_util::metrics::ThreadBuildWrapper,
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 const LOAD_STATISTICS_SLOTS: usize = 4;

@@ -22,7 +22,7 @@ use super::{
     gc_worker::{sync_gc, GcSafePointProvider, GcTask},
     Result,
 };
-use crate::{server::metrics::*, tikv_util::metrics::StdThreadBuildWrapper};
+use crate::{server::metrics::*, tikv_util::sys::thread::StdThreadBuildWrapper};
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 10;
 
@@ -633,7 +633,7 @@ mod tests {
         store::util::new_peer,
     };
     use tikv_util::{
-        metrics::StdThreadBuildWrapper,
+        sys::thread::StdThreadBuildWrapper,
         worker::{Builder as WorkerBuilder, LazyWorker, Runnable},
     };
 

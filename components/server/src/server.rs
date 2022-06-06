@@ -111,7 +111,7 @@ use tokio::runtime::Builder;
 
 use crate::{
     memory::*, raft_engine_switch::*, setup::*, signal_handler,
-    tikv_util::metrics::ThreadBuildWrapper,
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 #[inline]

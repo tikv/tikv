@@ -950,7 +950,6 @@ mod tests {
         use std::sync::Mutex;
 
         use tikv_util::{
-            metrics::ThreadBuildWrapper,
             yatp_pool::{DefaultTicker, YatpPoolBuilder},
         };
 
@@ -971,9 +970,9 @@ mod tests {
                 YatpPoolBuilder::new(DefaultTicker::default())
                     .config(config)
                     .name_prefix("coprocessor_endpoint_test_full")
-                    .after_start_wrapper(move || set_tls_engine(engine.lock().unwrap().clone()))
+                    .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                     // Safety: we call `set_` and `destroy_` with the same engine type.
-                    .before_stop_wrapper(|| unsafe { destroy_tls_engine::<RocksEngine>() })
+                    .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
                     .build_future_pool()
             })
             .collect::<Vec<_>>(),

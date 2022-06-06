@@ -38,7 +38,8 @@ use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::{
     box_err, debug, error, info,
-    metrics::{StdThreadBuildWrapper, ThreadInfoStatistics},
+    metrics::ThreadInfoStatistics,
+    sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,

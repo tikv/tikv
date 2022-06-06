@@ -21,7 +21,7 @@ use engine_traits::{CFNamesExt, FlowControlFactorsExt};
 use num_traits::cast::{AsPrimitive, FromPrimitive};
 use rand::Rng;
 use tikv_util::{
-    metrics::StdThreadBuildWrapper,
+    sys::thread::StdThreadBuildWrapper,
     time::{Instant, Limiter},
 };
 

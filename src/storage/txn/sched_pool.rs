@@ -22,7 +22,6 @@ use crate::{
         kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics},
         metrics::*,
     },
-    tikv_util::metrics::ThreadBuildWrapper,
 };
 
 pub struct SchedLocalMetrics {
@@ -79,11 +78,11 @@ impl SchedPool {
             .name_prefix(name_prefix)
             // Safety: by setting `after_start_wrapper` and `before_stop_wrapper`,
             // `FuturePool` ensures the tls_engine invariants.
-            .after_start_wrapper(move || {
+            .after_start(move || {
                 set_tls_engine(engine.lock().unwrap().clone());
                 set_io_type(IOType::ForegroundWrite);
             })
-            .before_stop_wrapper(move || unsafe {
+            .before_stop(move || unsafe {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
                 destroy_tls_engine::<E>();
                 tls_flush(&reporter);

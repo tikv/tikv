@@ -20,7 +20,7 @@ use std::{
 };
 
 use rand::Rng;
-use tikv_util::metrics::StdThreadBuildWrapper;
+use tikv_util::sys::thread::StdThreadBuildWrapper;
 
 pub use crate::{
     encryption::*,

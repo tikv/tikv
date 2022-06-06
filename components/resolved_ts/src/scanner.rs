@@ -19,7 +19,7 @@ use tikv::storage::{
     mvcc::{DeltaScanner, MvccReader, ScannerBuilder},
     txn::{TxnEntry, TxnEntryScanner},
 };
-use tikv_util::{metrics::ThreadBuildWrapper, time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{sys::thread::ThreadBuildWrapper, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 

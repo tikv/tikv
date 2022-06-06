@@ -32,7 +32,7 @@ use nix::{
 };
 use rand::rngs::ThreadRng;
 
-use crate::metrics::StdThreadBuildWrapper;
+use crate::sys::thread::StdThreadBuildWrapper;
 
 #[macro_use]
 pub mod log;

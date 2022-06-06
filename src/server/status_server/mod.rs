@@ -64,7 +64,7 @@ use self::profile::{
 use crate::{
     config::{log_level_serde, ConfigController},
     server::Result,
-    tikv_util::metrics::ThreadBuildWrapper,
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 static TIMER_CANCELED: &str = "tokio timer canceled";

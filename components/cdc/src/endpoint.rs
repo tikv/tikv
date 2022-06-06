@@ -41,7 +41,7 @@ use security::SecurityManager;
 use tikv::{config::CdcConfig, storage::Statistics};
 use tikv_util::{
     debug, error, impl_display_as_debug, info,
-    metrics::ThreadBuildWrapper,
+    sys::thread::ThreadBuildWrapper,
     time::Limiter,
     timer::SteadyTimer,
     warn,

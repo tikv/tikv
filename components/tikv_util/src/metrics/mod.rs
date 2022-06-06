@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, io, io::Write, thread};
+use std::{collections::HashMap, io::Write};
 
 use kvproto::pdpb;
 use lazy_static::lazy_static;
@@ -112,22 +112,4 @@ pub fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
             pair
         })
         .collect()
-}
-
-pub trait StdThreadBuildWrapper {
-    fn spawn_wrapper<F, T>(self, f: F) -> io::Result<thread::JoinHandle<T>>
-    where
-        F: FnOnce() -> T,
-        F: Send + 'static,
-        T: Send + 'static;
-}
-
-pub trait ThreadBuildWrapper {
-    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
-    where
-        F: Fn() + Send + Sync + 'static;
-
-    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
-    where
-        F: Fn() + Send + Sync + 'static;
 }

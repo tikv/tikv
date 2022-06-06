@@ -19,7 +19,7 @@ use tokio_timer::{
 };
 
 use crate::{
-    metrics::StdThreadBuildWrapper,
+    sys::thread::StdThreadBuildWrapper,
     time::{monotonic_raw_now, Instant},
 };
 

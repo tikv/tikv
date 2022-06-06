@@ -2148,7 +2148,7 @@ mod tests {
     use std::thread;
 
     use futures::{channel::oneshot, executor::block_on};
-    use tikv_util::metrics::StdThreadBuildWrapper;
+    use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
 

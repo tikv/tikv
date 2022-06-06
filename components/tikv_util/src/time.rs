@@ -205,7 +205,7 @@ use self::inner::monotonic_coarse_now;
 pub use self::inner::monotonic_now;
 /// Returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
-use crate::metrics::StdThreadBuildWrapper;
+use crate::sys::thread::StdThreadBuildWrapper;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;

@@ -14,7 +14,6 @@ use yatp::{
 };
 
 use crate::{
-    metrics::ThreadBuildWrapper,
     thread_group::GroupProperties,
     time::{Duration, Instant},
 };
@@ -216,19 +215,25 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub(crate) fn before_stop<F>(&mut self, f: F) -> &mut Self
+    pub fn before_stop<F>(&mut self, f: F) -> &mut Self
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.before_stop = Some(Arc::new(f));
+        self.before_stop = Some(Arc::new(move || {
+            f();
+            crate::sys::thread::remove_thread_name_from_map();
+        }));
         self
     }
 
-    pub(crate) fn after_start<F>(&mut self, f: F) -> &mut Self
+    pub fn after_start<F>(&mut self, f: F) -> &mut Self
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.after_start = Some(Arc::new(f));
+        self.after_start = Some(Arc::new(move || {
+            crate::sys::thread::add_thread_name_to_map();
+            f();
+        }));
         self
     }
 
@@ -278,14 +283,14 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         let after_start = match self.after_start.take() {
             f @ Some(_) => f,
             None => {
-                self.after_start_wrapper(|| {});
+                self.after_start(|| {});
                 self.after_start.take()
             }
         };
         let before_stop = match self.before_stop.take() {
             f @ Some(_) => f,
             None => {
-                self.before_stop_wrapper(|| {});
+                self.before_stop(|| {});
                 self.before_stop.take()
             }
         };

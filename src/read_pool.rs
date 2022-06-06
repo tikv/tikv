@@ -21,7 +21,6 @@ use self::metrics::*;
 use crate::{
     config::{UnifiedReadPoolConfig, UNIFIED_READPOOL_MIN_CONCURRENCY},
     storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter},
-    tikv_util::metrics::ThreadBuildWrapper,
 };
 
 pub enum ReadPool {
@@ -258,12 +257,12 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
                 SysQuota::cpu_cores_quota() as usize,
             ),
         )
-        .after_start_wrapper(move || {
+        .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
             set_tls_engine(engine);
             set_io_type(IOType::ForegroundRead);
         })
-        .before_stop_wrapper(|| unsafe {
+        .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
         })
         .build_multi_level_pool();

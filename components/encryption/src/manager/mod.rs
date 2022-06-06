@@ -17,7 +17,7 @@ use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
-use tikv_util::{box_err, debug, error, info, metrics::StdThreadBuildWrapper, thd_name, warn};
+use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, thd_name, warn};
 
 use crate::{
     config::EncryptionConfig,

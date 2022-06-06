@@ -565,7 +565,7 @@ mod tests {
         TestEngineBuilder,
     };
     use tikv_util::{
-        metrics::ThreadBuildWrapper,
+        sys::thread::ThreadBuildWrapper,
         worker::{LazyWorker, Runnable},
     };
     use tokio::runtime::{Builder, Runtime};

@@ -16,7 +16,7 @@ use prometheus::IntGauge;
 use tokio::task::LocalSet;
 
 use super::metrics::*;
-use crate::metrics::StdThreadBuildWrapper;
+use crate::sys::thread::StdThreadBuildWrapper;
 
 pub struct Stopped<T>(pub T);
 

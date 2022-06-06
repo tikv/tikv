@@ -30,7 +30,7 @@ use tikv_util::{
     box_err,
     config::ReadableDuration,
     debug, defer, error, info,
-    metrics::ThreadBuildWrapper,
+    sys::thread::ThreadBuildWrapper,
     time::Instant,
     warn,
     worker::{Runnable, Scheduler},

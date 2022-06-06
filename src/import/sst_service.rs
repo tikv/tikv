@@ -36,7 +36,7 @@ use sst_importer::{error_inc, metrics::*, sst_meta_to_path, Config, Error, Resul
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    metrics::ThreadBuildWrapper,
+    sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
 };
 use txn_types::{Key, WriteRef, WriteType};

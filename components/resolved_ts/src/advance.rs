@@ -25,7 +25,7 @@ use protobuf::Message;
 use raftstore::store::{fsm::StoreMeta, util::RegionReadProgressRegistry};
 use security::SecurityManager;
 use tikv_util::{
-    info, metrics::ThreadBuildWrapper, time::Instant, timer::SteadyTimer, worker::Scheduler,
+    info, sys::thread::ThreadBuildWrapper, time::Instant, timer::SteadyTimer, worker::Scheduler,
 };
 use tokio::{
     runtime::{Builder, Runtime},
