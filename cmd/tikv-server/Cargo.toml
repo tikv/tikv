@@ -28,6 +28,8 @@ test-engines-panic = ["server/test-engines-panic"]
 
 nortcheck = ["server/nortcheck"]
 
+pprof-fp = ["tikv/pprof-fp"]
+
 [dependencies]
 clap = "2.32"
 server = { path = "../../components/server", default-features = false }

@@ -342,12 +342,33 @@ impl<'a> PrewriteMutation<'a> {
     ) -> Result<Option<(Write, TimeStamp)>> {
         match reader.seek_write(&self.key, TimeStamp::max())? {
             Some((commit_ts, write)) => {
-                // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger than current start
+                // Abort on writes after our start/for_update timestamp ...
+                // If exists a commit version whose commit timestamp is larger than current start/for_update
                 // timestamp, we should abort current prewrite.
-                if commit_ts > self.txn_props.start_ts {
-                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                    self.write_conflict_error(&write, commit_ts)?;
+                match self.txn_props.kind {
+                    TransactionKind::Optimistic(_) => {
+                        if commit_ts > self.txn_props.start_ts {
+                            MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                            self.write_conflict_error(&write, commit_ts)?;
+                        }
+                    }
+                    // Note: PessimisticLockNotFound can happen on a non-pessimistically locked key,
+                    // if it is a retrying prewrite request.
+                    TransactionKind::Pessimistic(for_update_ts) => {
+                        if commit_ts > for_update_ts {
+                            warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
+                                "key" => %self.key, 
+                                "start_ts" => self.txn_props.start_ts, 
+                                "for_update_ts" => for_update_ts,
+                                "conflicting start_ts" => write.start_ts,
+                                "conflicting commit_ts" => commit_ts);
+                            return Err(ErrorInner::PessimisticLockNotFound {
+                                start_ts: self.txn_props.start_ts,
+                                key: self.key.clone().into_raw()?,
+                            }
+                            .into());
+                        }
+                    }
                 }
                 // If there's a write record whose commit_ts equals to our start ts, the current
                 // transaction is ok to continue, unless the record means that the current
@@ -499,17 +520,25 @@ impl<'a> PrewriteMutation<'a> {
             MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC.write_loaded.inc();
         }
 
-        match (self.assertion, write) {
+        let assertion_err = match (self.assertion, write) {
             (Assertion::Exist, None) => {
-                self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())?
+                self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())
             }
             (Assertion::Exist, Some((w, commit_ts))) if w.write_type == WriteType::Delete => {
-                self.assertion_failed_error(w.start_ts, *commit_ts)?;
+                self.assertion_failed_error(w.start_ts, *commit_ts)
             }
             (Assertion::NotExist, Some((w, commit_ts))) if w.write_type == WriteType::Put => {
-                self.assertion_failed_error(w.start_ts, *commit_ts)?;
+                self.assertion_failed_error(w.start_ts, *commit_ts)
             }
-            _ => (),
+            _ => Ok(()),
+        };
+
+        // Assertion error can be caused by a rollback. So make up a constraint check if the check was skipped before.
+        if assertion_err.is_err() {
+            if self.skip_constraint_check() {
+                self.check_for_newer_version(reader)?;
+            }
+            assertion_err?;
         }
 
         Ok((reloaded_write, reloaded))
@@ -1344,7 +1373,7 @@ pub mod tests {
         must_commit(&engine, b"k1", 10, 20);
         must_commit(&engine, b"k2", 10, 20);
 
-        // This is a re-sent prewrite. It should report a WriteConflict. In production, the caller
+        // This is a re-sent prewrite. It should report a PessimisticLockNotFound. In production, the caller
         // will need to check if the current transaction is already committed before, in order to
         // provide the idempotency.
         let err = must_retry_pessimistic_prewrite_put_err(
@@ -1358,7 +1387,10 @@ pub mod tests {
             false,
             0,
         );
-        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::PessimisticLockNotFound { .. })
+        ));
         // Commit repeatedly, these operations should have no effect.
         must_commit(&engine, b"k1", 10, 25);
         must_commit(&engine, b"k2", 10, 25);
@@ -1374,7 +1406,7 @@ pub mod tests {
         must_commit(&engine, b"k2", 35, 40);
 
         // A retrying non-pessimistic-lock prewrite request should not skip constraint checks.
-        // It reports a WriteConflict.
+        // It reports a PessimisticLockNotFound.
         let err = must_retry_pessimistic_prewrite_put_err(
             &engine,
             b"k2",
@@ -1386,13 +1418,19 @@ pub mod tests {
             false,
             0,
         );
-        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::PessimisticLockNotFound { .. })
+        ));
         must_unlocked(&engine, b"k2");
 
         let err = must_retry_pessimistic_prewrite_put_err(
             &engine, b"k2", b"v2", b"k1", &None, 10, 10, false, 0,
         );
-        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::PessimisticLockNotFound { .. })
+        ));
         must_unlocked(&engine, b"k2");
         // Committing still does nothing.
         must_commit(&engine, b"k2", 10, 25);
@@ -1400,7 +1438,10 @@ pub mod tests {
         let err = must_retry_pessimistic_prewrite_put_err(
             &engine, b"k2", b"v2", b"k1", &None, 11, 11, false, 0,
         );
-        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::PessimisticLockNotFound { .. })
+        ));
         must_unlocked(&engine, b"k2");
         // However conflict still won't be checked if there's a non-retry request arriving.
         must_prewrite_put_impl(
@@ -1409,10 +1450,10 @@ pub mod tests {
             b"v2",
             b"k1",
             &None,
-            10.into(),
+            12.into(),
             false,
             100,
-            10.into(),
+            12.into(),
             1,
             15.into(),
             TimeStamp::default(),
@@ -1420,7 +1461,29 @@ pub mod tests {
             kvproto::kvrpcpb::Assertion::None,
             kvproto::kvrpcpb::AssertionLevel::Off,
         );
-        must_locked(&engine, b"k2", 10);
+        must_locked(&engine, b"k2", 12);
+        must_rollback(&engine, b"k2", 12, false);
+
+        // And conflict check is according to the for_update_ts for pessimistic prewrite.
+        // So, it will not report error if for_update_ts is large enough.
+        must_prewrite_put_impl(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &None,
+            13.into(),
+            false,
+            100,
+            55.into(),
+            1,
+            60.into(),
+            TimeStamp::default(),
+            true,
+            kvproto::kvrpcpb::Assertion::None,
+            kvproto::kvrpcpb::AssertionLevel::Off,
+        );
+        must_locked(&engine, b"k2", 13);
     }
 
     #[test]

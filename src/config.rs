@@ -278,8 +278,8 @@ macro_rules! cf_config {
             pub max_bytes_for_level_base: ReadableSize,
             pub target_file_size_base: ReadableSize,
             pub level0_file_num_compaction_trigger: i32,
-            pub level0_slowdown_writes_trigger: i32,
-            pub level0_stop_writes_trigger: i32,
+            pub level0_slowdown_writes_trigger: Option<i32>,
+            pub level0_stop_writes_trigger: Option<i32>,
             pub max_compaction_bytes: ReadableSize,
             #[serde(with = "rocks_config::compaction_pri_serde")]
             #[online_config(skip)]
@@ -294,8 +294,8 @@ macro_rules! cf_config {
             pub compaction_style: DBCompactionStyle,
             pub disable_auto_compactions: bool,
             pub disable_write_stall: bool,
-            pub soft_pending_compaction_bytes_limit: ReadableSize,
-            pub hard_pending_compaction_bytes_limit: ReadableSize,
+            pub soft_pending_compaction_bytes_limit: Option<ReadableSize>,
+            pub hard_pending_compaction_bytes_limit: Option<ReadableSize>,
             #[online_config(skip)]
             pub force_consistency_checks: bool,
             #[online_config(skip)]
@@ -396,10 +396,14 @@ macro_rules! write_into_metrics {
             .set($cf.level0_file_num_compaction_trigger.into());
         $metrics
             .with_label_values(&[$tag, "level0_slowdown_writes_trigger"])
-            .set($cf.level0_slowdown_writes_trigger.into());
+            .set(
+                $cf.level0_slowdown_writes_trigger
+                    .unwrap_or_default()
+                    .into(),
+            );
         $metrics
             .with_label_values(&[$tag, "level0_stop_writes_trigger"])
-            .set($cf.level0_stop_writes_trigger.into());
+            .set($cf.level0_stop_writes_trigger.unwrap_or_default().into());
         $metrics
             .with_label_values(&[$tag, "max_compaction_bytes"])
             .set($cf.max_compaction_bytes.0 as f64);
@@ -421,10 +425,18 @@ macro_rules! write_into_metrics {
             .set(($cf.disable_write_stall as i32).into());
         $metrics
             .with_label_values(&[$tag, "soft_pending_compaction_bytes_limit"])
-            .set($cf.soft_pending_compaction_bytes_limit.0 as f64);
+            .set(
+                $cf.soft_pending_compaction_bytes_limit
+                    .unwrap_or_default()
+                    .0 as f64,
+            );
         $metrics
             .with_label_values(&[$tag, "hard_pending_compaction_bytes_limit"])
-            .set($cf.hard_pending_compaction_bytes_limit.0 as f64);
+            .set(
+                $cf.hard_pending_compaction_bytes_limit
+                    .unwrap_or_default()
+                    .0 as f64,
+            );
         $metrics
             .with_label_values(&[$tag, "force_consistency_checks"])
             .set(($cf.force_consistency_checks as i32).into());
@@ -500,8 +512,12 @@ macro_rules! build_cf_opt {
         cf_opts.set_max_bytes_for_level_base($opt.max_bytes_for_level_base.0);
         cf_opts.set_target_file_size_base($opt.target_file_size_base.0);
         cf_opts.set_level_zero_file_num_compaction_trigger($opt.level0_file_num_compaction_trigger);
-        cf_opts.set_level_zero_slowdown_writes_trigger($opt.level0_slowdown_writes_trigger);
-        cf_opts.set_level_zero_stop_writes_trigger($opt.level0_stop_writes_trigger);
+        cf_opts.set_level_zero_slowdown_writes_trigger(
+            $opt.level0_slowdown_writes_trigger.unwrap_or_default(),
+        );
+        cf_opts.set_level_zero_stop_writes_trigger(
+            $opt.level0_stop_writes_trigger.unwrap_or_default(),
+        );
         cf_opts.set_max_compaction_bytes($opt.max_compaction_bytes.0);
         cf_opts.compaction_priority($opt.compaction_pri);
         cf_opts.set_level_compaction_dynamic_level_bytes($opt.dynamic_level_bytes);
@@ -509,8 +525,16 @@ macro_rules! build_cf_opt {
         cf_opts.set_compaction_style($opt.compaction_style);
         cf_opts.set_disable_auto_compactions($opt.disable_auto_compactions);
         cf_opts.set_disable_write_stall($opt.disable_write_stall);
-        cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
-        cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
+        cf_opts.set_soft_pending_compaction_bytes_limit(
+            $opt.soft_pending_compaction_bytes_limit
+                .unwrap_or_default()
+                .0,
+        );
+        cf_opts.set_hard_pending_compaction_bytes_limit(
+            $opt.hard_pending_compaction_bytes_limit
+                .unwrap_or_default()
+                .0,
+        );
         cf_opts.set_optimize_filters_for_hits($opt.optimize_filters_for_hits);
         cf_opts.set_force_consistency_checks($opt.force_consistency_checks);
         if $opt.enable_doubly_skiplist {
@@ -567,8 +591,8 @@ impl Default for DefaultCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
+            level0_slowdown_writes_trigger: None,
+            level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             dynamic_level_bytes: true,
@@ -577,8 +601,8 @@ impl Default for DefaultCfConfig {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             disable_write_stall: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            soft_pending_compaction_bytes_limit: None,
+            hard_pending_compaction_bytes_limit: None,
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -676,8 +700,8 @@ impl Default for WriteCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
+            level0_slowdown_writes_trigger: None,
+            level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             dynamic_level_bytes: true,
@@ -686,8 +710,8 @@ impl Default for WriteCfConfig {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             disable_write_stall: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            soft_pending_compaction_bytes_limit: None,
+            hard_pending_compaction_bytes_limit: None,
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -771,8 +795,8 @@ impl Default for LockCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(128),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 1,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
+            level0_slowdown_writes_trigger: None,
+            level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
             dynamic_level_bytes: true,
@@ -781,8 +805,8 @@ impl Default for LockCfConfig {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             disable_write_stall: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            soft_pending_compaction_bytes_limit: None,
+            hard_pending_compaction_bytes_limit: None,
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -844,8 +868,8 @@ impl Default for RaftCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(128),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 1,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
+            level0_slowdown_writes_trigger: None,
+            level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
             dynamic_level_bytes: true,
@@ -854,8 +878,8 @@ impl Default for RaftCfConfig {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             disable_write_stall: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            soft_pending_compaction_bytes_limit: None,
+            hard_pending_compaction_bytes_limit: None,
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -1207,8 +1231,8 @@ impl Default for RaftDefaultCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
+            level0_slowdown_writes_trigger: None,
+            level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
             dynamic_level_bytes: true,
@@ -1217,8 +1241,8 @@ impl Default for RaftDefaultCfConfig {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             disable_write_stall: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            soft_pending_compaction_bytes_limit: None,
+            hard_pending_compaction_bytes_limit: None,
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -2316,7 +2340,7 @@ impl Default for BackupConfig {
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             batch_size: 8,
-            sst_max_size: default_coprocessor.region_max_size,
+            sst_max_size: default_coprocessor.region_max_size(),
             enable_auto_tune: true,
             auto_tune_remain_threads: (cpu_num * 0.2).round() as usize,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
@@ -2332,11 +2356,20 @@ impl Default for BackupConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct BackupStreamConfig {
+    #[online_config(skip)]
+    pub max_flush_interval: ReadableDuration,
+    #[online_config(skip)]
     pub num_threads: usize,
     #[online_config(skip)]
+    pub io_threads: usize,
+    #[online_config(skip)]
     pub enable: bool,
+    #[online_config(skip)]
     pub temp_path: String,
+    #[online_config(skip)]
     pub temp_file_size_limit_per_task: ReadableSize,
+    #[online_config(skip)]
+    pub initial_scan_pending_memory_quota: ReadableSize,
 }
 
 impl BackupStreamConfig {
@@ -2351,13 +2384,18 @@ impl BackupStreamConfig {
 impl Default for BackupStreamConfig {
     fn default() -> Self {
         let cpu_num = SysQuota::cpu_cores_quota();
+        let total_mem = SysQuota::memory_limit_in_bytes();
+        let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
+            max_flush_interval: ReadableDuration::minutes(5),
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
+            io_threads: 2,
             enable: false,
             // TODO: may be use raft store directory
             temp_path: String::new(),
             temp_file_size_limit_per_task: ReadableSize::mb(128),
+            initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
         }
     }
 }
@@ -2380,6 +2418,13 @@ pub struct CdcConfig {
     /// `TsFilter` will be enabled if `incremental/total <= incremental_scan_ts_filter_ratio`.
     /// Set `incremental_scan_ts_filter_ratio` to 0 will disable it.
     pub incremental_scan_ts_filter_ratio: f64,
+
+    /// Count of threads to confirm Region leadership in TiKV instances, 1 by default.
+    /// Please consider to increase it if count of regions on one TiKV instance is
+    /// greater than 20k.
+    #[online_config(skip)]
+    pub tso_worker_threads: usize,
+
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
@@ -2402,6 +2447,7 @@ impl Default for CdcConfig {
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
             incremental_scan_ts_filter_ratio: 0.2,
+            tso_worker_threads: 1,
             // 512MB memory for CDC sink.
             sink_memory_quota: ReadableSize::mb(512),
             // 512MB memory for old value cache.
@@ -2660,8 +2706,8 @@ pub struct TiKvConfig {
     pub backup: BackupConfig,
 
     #[online_config(submodule)]
-    // The term "log-backup" and "backup-stream" points to the same object.
-    // But the product name is `log-backup`.
+    // The term "log backup" and "backup stream" are identity.
+    // The "log backup" should be the only product name exposed to the user.
     #[serde(rename = "log-backup")]
     pub backup_stream: BackupStreamConfig,
 
@@ -2755,7 +2801,6 @@ impl TiKvConfig {
         config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
     }
 
-    // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.log.validate()?;
         self.readpool.validate()?;
@@ -2849,9 +2894,13 @@ impl TiKvConfig {
         self.raftdb.validate()?;
         self.raft_engine.validate()?;
         self.server.validate()?;
-        self.raft_store.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
+        self.raft_store.validate(
+            self.coprocessor.region_split_size,
+            self.coprocessor.enable_region_bucket,
+            self.coprocessor.region_bucket_size,
+        )?;
         self.security.validate()?;
         self.import.validate()?;
         self.backup.validate()?;
@@ -2865,58 +2914,81 @@ impl TiKvConfig {
         self.causal_ts.validate()?;
 
         if self.storage.flow_control.enable {
-            // using raftdb write stall to control memtables as a safety net
-            self.raftdb.defaultcf.level0_slowdown_writes_trigger = 10000;
-            self.raftdb.defaultcf.level0_stop_writes_trigger = 10000;
-            self.raftdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(0);
-            self.raftdb.defaultcf.hard_pending_compaction_bytes_limit = ReadableSize(0);
-
-            // disable kvdb write stall, and override related configs
             self.rocksdb.defaultcf.disable_write_stall = true;
-            self.rocksdb.defaultcf.level0_slowdown_writes_trigger =
-                self.storage.flow_control.l0_files_threshold as i32;
-            self.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .soft_pending_compaction_bytes_limit;
-            self.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .hard_pending_compaction_bytes_limit;
             self.rocksdb.writecf.disable_write_stall = true;
-            self.rocksdb.writecf.level0_slowdown_writes_trigger =
-                self.storage.flow_control.l0_files_threshold as i32;
-            self.rocksdb.writecf.soft_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .soft_pending_compaction_bytes_limit;
-            self.rocksdb.writecf.hard_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .hard_pending_compaction_bytes_limit;
             self.rocksdb.lockcf.disable_write_stall = true;
-            self.rocksdb.lockcf.level0_slowdown_writes_trigger =
-                self.storage.flow_control.l0_files_threshold as i32;
-            self.rocksdb.lockcf.soft_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .soft_pending_compaction_bytes_limit;
-            self.rocksdb.lockcf.hard_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .hard_pending_compaction_bytes_limit;
             self.rocksdb.raftcf.disable_write_stall = true;
-            self.rocksdb.raftcf.level0_slowdown_writes_trigger =
-                self.storage.flow_control.l0_files_threshold as i32;
-            self.rocksdb.raftcf.soft_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .soft_pending_compaction_bytes_limit;
-            self.rocksdb.raftcf.hard_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .hard_pending_compaction_bytes_limit;
         }
+        // Fill in values for unspecified write stall configurations.
+        macro_rules! fill_cf_opts {
+            ($cf_opts:expr, $cfg:expr) => {
+                if let Some(v) = &mut $cf_opts.level0_slowdown_writes_trigger {
+                    if $cfg.enable && *v > $cfg.l0_files_threshold as i32 {
+                        warn!(
+                            "{}.level0-slowdown-writes-trigger is too large. Setting it to \
+                            storage.flow-control.l0-files-threshold ({})",
+                            stringify!($cf_opts), $cfg.l0_files_threshold
+                        );
+                        *v = $cfg.l0_files_threshold as i32;
+                    }
+                } else {
+                    $cf_opts.level0_slowdown_writes_trigger =
+                        Some($cfg.l0_files_threshold as i32);
+                }
+                if let Some(v) = &mut $cf_opts.level0_stop_writes_trigger {
+                    if $cfg.enable && *v > $cfg.l0_files_threshold as i32 {
+                        warn!(
+                            "{}.level0-stop-writes-trigger is too large. Setting it to \
+                            storage.flow-control.l0-files-threshold ({})",
+                            stringify!($cf_opts), $cfg.l0_files_threshold
+                        );
+                        *v = $cfg.l0_files_threshold as i32;
+                    }
+                } else {
+                    $cf_opts.level0_stop_writes_trigger =
+                        Some($cfg.l0_files_threshold as i32);
+                }
+                if let Some(v) = &mut $cf_opts.soft_pending_compaction_bytes_limit {
+                    if $cfg.enable && v.0 > $cfg.soft_pending_compaction_bytes_limit.0 {
+                        warn!(
+                            "{}.soft-pending-compaction-bytes-limit is too large. Setting it to \
+                            storage.flow-control.soft-pending-compaction-bytes-limit ({})",
+                            stringify!($cf_opts), $cfg.soft_pending_compaction_bytes_limit.0
+                        );
+                        *v = $cfg.soft_pending_compaction_bytes_limit;
+                    }
+                } else {
+                    $cf_opts.soft_pending_compaction_bytes_limit =
+                        Some($cfg.soft_pending_compaction_bytes_limit);
+                }
+                if let Some(v) = &mut $cf_opts.hard_pending_compaction_bytes_limit {
+                    if $cfg.enable && v.0 > $cfg.hard_pending_compaction_bytes_limit.0 {
+                        warn!(
+                            "{}.hard-pending-compaction-bytes-limit is too large. Setting it to \
+                            storage.flow-control.hard-pending-compaction-bytes-limit ({})",
+                            stringify!($cf_opts), $cfg.hard_pending_compaction_bytes_limit.0
+                        );
+                        *v = $cfg.hard_pending_compaction_bytes_limit;
+                    }
+                } else {
+                    $cf_opts.hard_pending_compaction_bytes_limit =
+                        Some($cfg.hard_pending_compaction_bytes_limit);
+                }
+            };
+        }
+        let flow_control_cfg = if self.storage.flow_control.enable {
+            self.storage.flow_control.clone()
+        } else {
+            crate::storage::config::FlowControlConfig {
+                enable: false,
+                ..Default::default()
+            }
+        };
+        fill_cf_opts!(self.raftdb.defaultcf, flow_control_cfg);
+        fill_cf_opts!(self.rocksdb.defaultcf, flow_control_cfg);
+        fill_cf_opts!(self.rocksdb.writecf, flow_control_cfg);
+        fill_cf_opts!(self.rocksdb.lockcf, flow_control_cfg);
+        fill_cf_opts!(self.rocksdb.raftcf, flow_control_cfg);
 
         if let Some(memory_usage_limit) = self.memory_usage_limit {
             let total = SysQuota::memory_limit_in_bytes();
@@ -3035,7 +3107,7 @@ impl TiKvConfig {
                     "override coprocessor.region-max-size with raftstore.region-max-size, {:?}",
                     self.raft_store.region_max_size
                 );
-                self.coprocessor.region_max_size = self.raft_store.region_max_size;
+                self.coprocessor.region_max_size = Some(self.raft_store.region_max_size);
             }
             self.raft_store.region_max_size = default_raft_store.region_max_size;
         }
@@ -3117,18 +3189,18 @@ impl TiKvConfig {
                     + self.raftdb.defaultcf.block_cache_size.0,
             ));
         }
-        if self.backup.sst_max_size.0 < default_coprocessor.region_max_size.0 / 10 {
+        if self.backup.sst_max_size.0 < default_coprocessor.region_max_size().0 / 10 {
             warn!(
                 "override backup.sst-max-size with min sst-max-size, {:?}",
-                default_coprocessor.region_max_size / 10
+                default_coprocessor.region_max_size() / 10
             );
-            self.backup.sst_max_size = default_coprocessor.region_max_size / 10;
-        } else if self.backup.sst_max_size.0 > default_coprocessor.region_max_size.0 * 2 {
+            self.backup.sst_max_size = default_coprocessor.region_max_size() / 10;
+        } else if self.backup.sst_max_size.0 > default_coprocessor.region_max_size().0 * 2 {
             warn!(
                 "override backup.sst-max-size with max sst-max-size, {:?}",
-                default_coprocessor.region_max_size * 2
+                default_coprocessor.region_max_size() * 2
             );
-            self.backup.sst_max_size = default_coprocessor.region_max_size * 2;
+            self.backup.sst_max_size = default_coprocessor.region_max_size() * 2;
         }
 
         self.readpool.adjust_use_unified_pool();
@@ -3193,10 +3265,14 @@ impl TiKvConfig {
             ));
         }
 
-        if last_cfg.storage.enable_ttl && !self.storage.enable_ttl {
-            return Err("can't disable ttl on a ttl instance".to_owned());
-        } else if !last_cfg.storage.enable_ttl && self.storage.enable_ttl {
-            return Err("can't enable ttl on a non-ttl instance".to_owned());
+        // Check validation of api version change between API V1 and V1ttl only.
+        // Validation between V1/V1ttl and V2 is checked in `Node::check_api_version`.
+        if last_cfg.storage.api_version == 1 && self.storage.api_version == 1 {
+            if last_cfg.storage.enable_ttl && !self.storage.enable_ttl {
+                return Err("can't disable ttl on a ttl instance".to_owned());
+            } else if !last_cfg.storage.enable_ttl && self.storage.enable_ttl {
+                return Err("can't enable ttl on a non-ttl instance".to_owned());
+            }
         }
 
         Ok(())
@@ -3685,6 +3761,7 @@ mod tests {
     use case_macros::*;
     use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
     use futures::executor::block_on;
+    use grpcio::ResourceQuota;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
@@ -3692,6 +3769,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_kv::RocksEngine as RocksDBEngine;
     use tikv_util::{
+        config::VersionTrack,
         quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
         sys::SysQuota,
         worker::{dummy_scheduler, ReceiverWrapper},
@@ -3699,7 +3777,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        server::ttl::TtlCheckerTask,
+        server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
             config_manager::StorageConfigManger, lock_manager::DummyLockManager,
             txn::flow_controller::FlowController, Storage, TestStorageBuilder,
@@ -3783,6 +3861,30 @@ mod tests {
         last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
         tikv_cfg.validate().unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+
+        // Check api version.
+        {
+            let cases = [
+                (ApiVersion::V1, ApiVersion::V1, true),
+                (ApiVersion::V1, ApiVersion::V1ttl, false),
+                (ApiVersion::V1, ApiVersion::V2, true),
+                (ApiVersion::V1ttl, ApiVersion::V1, false),
+                (ApiVersion::V1ttl, ApiVersion::V1ttl, true),
+                (ApiVersion::V1ttl, ApiVersion::V2, true),
+                (ApiVersion::V2, ApiVersion::V1, true),
+                (ApiVersion::V2, ApiVersion::V1ttl, true),
+                (ApiVersion::V2, ApiVersion::V2, true),
+            ];
+            for (from_api, to_api, expected) in cases {
+                last_cfg.storage.set_api_version(from_api);
+                tikv_cfg.storage.set_api_version(to_api);
+                tikv_cfg.validate().unwrap();
+                assert_eq!(
+                    tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok(),
+                    expected
+                );
+            }
+        }
     }
 
     #[test]
@@ -3943,7 +4045,7 @@ mod tests {
 
         let old = TiKvConfig::default();
         let mut incoming = TiKvConfig::default();
-        incoming.coprocessor.region_split_keys = 10000;
+        incoming.coprocessor.region_split_keys = Some(10000);
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
         incoming.storage.io_rate_limit.import_priority = file_system::IOPriority::High;
@@ -4497,6 +4599,41 @@ mod tests {
     }
 
     #[test]
+    fn test_change_server_config() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.validate().unwrap();
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let (scheduler, _receiver) = dummy_scheduler();
+        let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
+        cfg_controller.register(
+            Module::Server,
+            Box::new(ServerConfigManager::new(
+                scheduler,
+                version_tracker.clone(),
+                ResourceQuota::new(None),
+            )),
+        );
+
+        let check_cfg = |cfg: &TiKvConfig| {
+            assert_eq!(&cfg_controller.get_current(), cfg);
+            assert_eq!(&*version_tracker.value(), &cfg.server);
+        };
+
+        cfg_controller
+            .update_config("server.max-grpc-send-msg-len", "10000")
+            .unwrap();
+        cfg.server.max_grpc_send_msg_len = 10000;
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("server.raft-msg-max-batch-size", "32")
+            .unwrap();
+        cfg.server.raft_msg_max_batch_size = 32;
+        assert_eq!(cfg_controller.get_current(), cfg);
+        check_cfg(&cfg);
+    }
+
+    #[test]
     fn test_compatible_adjust_validate_equal() {
         // After calling many time of `compatible_adjust` and `validate` should has
         // the same effect as calling `compatible_adjust` and `validate` one time
@@ -4638,11 +4775,13 @@ mod tests {
     #[test]
     fn test_validate_tikv_config() {
         let mut cfg = TiKvConfig::default();
-        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff.0;
-        cfg.raft_store.region_split_check_diff.0 += 1;
+        assert!(cfg.validate().is_ok());
+        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff().0;
+        cfg.raft_store.region_split_check_diff =
+            Some(ReadableSize(cfg.raft_store.region_split_check_diff().0 + 1));
         assert!(cfg.validate().is_ok());
         assert_eq!(
-            cfg.raft_store.region_split_check_diff.0,
+            cfg.raft_store.region_split_check_diff().0,
             default_region_split_check_diff + 1
         );
 
@@ -4898,6 +5037,16 @@ mod tests {
         default_cfg.readpool.storage.adjust_use_unified_pool();
         default_cfg.readpool.coprocessor.adjust_use_unified_pool();
         default_cfg.security.redact_info_log = Some(false);
+        default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
+        default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
+        default_cfg.coprocessor.region_split_keys =
+            Some(default_cfg.coprocessor.region_split_keys());
+        default_cfg.raft_store.raft_log_gc_size_limit =
+            Some(default_cfg.coprocessor.region_split_size * 3 / 4);
+        default_cfg.raft_store.raft_log_gc_count_limit =
+            Some(default_cfg.coprocessor.region_split_size * 3 / 4 / ReadableSize::kb(1));
+        default_cfg.raft_store.region_split_check_diff =
+            Some(default_cfg.coprocessor.region_split_size / 16);
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
@@ -4905,6 +5054,26 @@ mod tests {
         cfg.memory_usage_limit = None;
         cfg.raft_engine.mut_config().memory_limit = None;
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
+        cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = None;
+        cfg.rocksdb.defaultcf.level0_stop_writes_trigger = None;
+        cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.writecf.level0_slowdown_writes_trigger = None;
+        cfg.rocksdb.writecf.level0_stop_writes_trigger = None;
+        cfg.rocksdb.writecf.soft_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.writecf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.lockcf.level0_slowdown_writes_trigger = None;
+        cfg.rocksdb.lockcf.level0_stop_writes_trigger = None;
+        cfg.rocksdb.lockcf.soft_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.lockcf.hard_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.raftcf.level0_slowdown_writes_trigger = None;
+        cfg.rocksdb.raftcf.level0_stop_writes_trigger = None;
+        cfg.rocksdb.raftcf.soft_pending_compaction_bytes_limit = None;
+        cfg.rocksdb.raftcf.hard_pending_compaction_bytes_limit = None;
+        cfg.raftdb.defaultcf.level0_slowdown_writes_trigger = None;
+        cfg.raftdb.defaultcf.level0_stop_writes_trigger = None;
+        cfg.raftdb.defaultcf.soft_pending_compaction_bytes_limit = None;
+        cfg.raftdb.defaultcf.hard_pending_compaction_bytes_limit = None;
 
         assert_eq!(cfg, default_cfg);
     }
@@ -5121,5 +5290,91 @@ mod tests {
         for (name, res) in cases {
             assert_eq!(serde_to_online_config(name.into()).as_str(), res);
         }
+    }
+
+    #[test]
+    fn test_flow_control_override() {
+        let content = r#"
+            [storage.flow-control]
+            enable = true
+            l0-files-threshold = 77
+            soft-pending-compaction-bytes-limit = "777GB"
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
+            Some(77)
+        );
+        assert_eq!(
+            cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
+            Some(ReadableSize::gb(777))
+        );
+
+        // Override with default values if flow control is disabled.
+        let content = r#"
+            [storage.flow-control]
+            enable = false
+            l0-files-threshold = 77
+            soft-pending-compaction-bytes-limit = "777GB"
+            [rocksdb.defaultcf]
+            level0-slowdown-writes-trigger = 888
+            soft-pending-compaction-bytes-limit = "888GB"
+            [rocksdb.writecf]
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
+            Some(888)
+        );
+        assert_eq!(
+            cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
+            Some(ReadableSize::gb(888))
+        );
+        matches!(cfg.rocksdb.writecf.level0_slowdown_writes_trigger, Some(v) if v != 77);
+        matches!(cfg.rocksdb.writecf.soft_pending_compaction_bytes_limit, Some(v) if v != ReadableSize::gb(777));
+
+        // Do not override when RocksDB configurations are specified.
+        let content = r#"
+            [storage.flow-control]
+            enable = true
+            l0-files-threshold = 77
+            soft-pending-compaction-bytes-limit = "777GB"
+            [rocksdb.defaultcf]
+            level0-slowdown-writes-trigger = 66
+            soft-pending-compaction-bytes-limit = "666GB"
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
+            Some(66)
+        );
+        assert_eq!(
+            cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
+            Some(ReadableSize::gb(666))
+        );
+
+        // Cannot specify larger configurations for RocksDB.
+        let content = r#"
+            [storage.flow-control]
+            enable = true
+            l0-files-threshold = 1
+            soft-pending-compaction-bytes-limit = "1GB"
+            [rocksdb.defaultcf]
+            level0-slowdown-writes-trigger = 88
+            soft-pending-compaction-bytes-limit = "888GB"
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
+            Some(1)
+        );
+        assert_eq!(
+            cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
+            Some(ReadableSize::gb(1))
+        );
     }
 }

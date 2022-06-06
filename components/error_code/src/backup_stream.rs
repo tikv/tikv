@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 define_error_codes! {
-    "KV:StreamBackup:",
+    "KV:LogBackup:",
 
     ETCD => ("ETCD",
         "Error during requesting the meta store(etcd)",
@@ -13,6 +13,11 @@ define_error_codes! {
     NO_SUCH_TASK => ("NoSuchTask",
         "A task not found.",
         "Please check the spell of your task name."
+    ),
+    OBSERVE_CANCELED => (
+        "ObserveCancel",
+        "When doing initial scanning, the observe of that region has been canceled",
+        "No need to handle this, this is retryable."
     ),
     MALFORMED_META => ("MalformedMetadata",
         "Malformed metadata found.",

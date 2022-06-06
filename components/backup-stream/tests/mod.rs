@@ -6,11 +6,13 @@ use std::{
     collections::{HashMap, HashSet},
     path::Path,
     sync::Arc,
+    time::Duration,
 };
 
 use backup_stream::{
     metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
     observer::BackupStreamObserver,
+    router::Router,
     Endpoint, Task,
 };
 use futures::{executor::block_on, Future};
@@ -23,6 +25,7 @@ use kvproto::{
 use pd_client::PdClient;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
+use test_util::retry;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
     codec::{
@@ -131,9 +134,9 @@ impl Suite {
         cfg.enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let ob = self.obs.get(&id).unwrap().clone();
-        let endpoint = Endpoint::with_client(
+        let endpoint = Endpoint::new(
             id,
-            MetadataClient::new(self.meta_store.clone(), id),
+            self.meta_store.clone(),
             cfg,
             worker.scheduler(),
             ob,
@@ -167,6 +170,11 @@ impl Suite {
         for id in 1..=(n as u64) {
             suite.start_endpoint(id);
         }
+        // TODO: The current mock metastore (slash_etc) doesn't supports multi-version.
+        //       We must wait until the endpoints get ready to watching the metastore, or some modifies may be lost.
+        //       Either make Endpoint::with_client wait until watch did start or make slash_etc support multi-version,
+        //       then we can get rid of this sleep.
+        std::thread::sleep(Duration::from_secs(1));
         suite
     }
 
@@ -189,6 +197,8 @@ impl Suite {
             )],
         ))
         .unwrap();
+        let name = name.to_owned();
+        self.wait_with(move |r| block_on(r.get_task_info(&name)).is_ok())
     }
 
     async fn write_records(&mut self, from: usize, n: usize, for_table: i64) -> HashSet<Vec<u8>> {
@@ -229,11 +239,12 @@ impl Suite {
     }
 
     fn force_flush_files(&self, task: &str) {
+        self.run(|| Task::ForceFlush(task.to_owned()))
+    }
+
+    fn run(&self, mut t: impl FnMut() -> Task) {
         for worker in self.endpoints.values() {
-            worker
-                .scheduler()
-                .schedule(Task::ForceFlush(task.to_owned()))
-                .unwrap();
+            worker.scheduler().schedule(t()).unwrap();
         }
     }
 
@@ -416,6 +427,64 @@ impl Suite {
                 TikvClient::new(channel)
             })
     }
+
+    pub fn sync(&self) {
+        self.wait_with(|_| true)
+    }
+
+    pub fn wait_with(&self, cond: impl FnMut(&Router) -> bool + Send + 'static + Clone) {
+        self.endpoints
+            .iter()
+            .map({
+                move |(_, wkr)| {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    wkr.scheduler()
+                        .schedule(Task::Sync(
+                            Box::new(move || tx.send(()).unwrap()),
+                            Box::new(cond.clone()),
+                        ))
+                        .unwrap();
+                    rx
+                }
+            })
+            .for_each(|rx| rx.recv().unwrap())
+    }
+
+    pub fn wait_for_flush(&self) {
+        use std::ffi::OsString;
+        for _ in 0..100 {
+            if !walkdir::WalkDir::new(&self.temp_files)
+                .into_iter()
+                .any(|x| x.unwrap().path().extension() == Some(&OsString::from("log")))
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        let v = walkdir::WalkDir::new(&self.temp_files)
+            .into_iter()
+            .collect::<Vec<_>>();
+        if !v.is_empty() {
+            panic!("the temp isn't empty after the deadline ({:?})", v)
+        }
+    }
+
+    pub fn must_shuffle_leader(&mut self, region_id: u64) {
+        let region = retry!(run_async_test(
+            self.cluster.pd_client.get_region_by_id(region_id)
+        ))
+        .unwrap()
+        .unwrap();
+        let leader = self.cluster.leader_of_region(region_id);
+        for peer in region.get_peers() {
+            if leader.as_ref().map(|p| p.id != peer.id).unwrap_or(true) {
+                self.cluster.transfer_leader(region_id, peer.clone());
+                self.cluster.reset_leader_of_region(region_id);
+                return;
+            }
+        }
+        panic!("must_shuffle_leader: region has no peer")
+    }
 }
 
 fn run_async_test<T>(test: impl Future<Output = T>) -> T {
@@ -426,27 +495,28 @@ fn run_async_test<T>(test: impl Future<Output = T>) -> T {
         .block_on(test)
 }
 
+#[cfg(test)]
 mod test {
     use std::time::Duration;
 
     use backup_stream::{errors::Error, metadata::MetadataClient, Task};
-    use tikv_util::{box_err, info};
+    use tikv_util::{box_err, defer, info, HandyRwLock};
     use txn_types::TimeStamp;
 
     use crate::{make_record_key, make_split_key_at_record, run_async_test};
 
     #[test]
     fn basic() {
-        test_util::init_log_for_test();
         let mut suite = super::Suite::new("basic", 4);
 
         run_async_test(async {
             // write data before the task starting, for testing incremental scanning.
             let round1 = suite.write_records(0, 128, 1).await;
             suite.must_register_task(1, "test_basic");
+            suite.sync();
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_basic");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.wait_for_flush();
             suite.check_for_write_records(
                 suite.flushed_files.path(),
                 round1.union(&round2).map(Vec::as_slice),
@@ -457,7 +527,6 @@ mod test {
 
     #[test]
     fn with_split() {
-        test_util::init_log_for_test();
         let mut suite = super::Suite::new("with_split", 4);
         run_async_test(async {
             let round1 = suite.write_records(0, 128, 1).await;
@@ -465,7 +534,7 @@ mod test {
             suite.must_register_task(1, "test_with_split");
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_with_split");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.wait_for_flush();
             suite.check_for_write_records(
                 suite.flushed_files.path(),
                 round1.union(&round2).map(Vec::as_slice),
@@ -477,15 +546,15 @@ mod test {
     #[test]
     /// This case tests whether the backup can continue when the leader failes.
     fn leader_down() {
-        test_util::init_log_for_test();
         let mut suite = super::Suite::new("leader_down", 4);
         suite.must_register_task(1, "test_leader_down");
+        suite.sync();
         let round1 = run_async_test(suite.write_records(0, 128, 1));
         let leader = suite.cluster.leader_of_region(1).unwrap().get_store_id();
         suite.cluster.stop_node(leader);
         let round2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("test_leader_down");
-        std::thread::sleep(Duration::from_secs(4));
+        suite.wait_for_flush();
         suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(Vec::as_slice),
@@ -497,10 +566,10 @@ mod test {
     /// This case tests whehter the checkpoint ts (next backup ts) can be advanced correctly
     /// when async commit is enabled.
     fn async_commit() {
-        test_util::init_log_for_test();
         let mut suite = super::Suite::new("async_commit", 3);
         run_async_test(async {
             suite.must_register_task(1, "test_async_commit");
+            suite.sync();
             suite.write_records(0, 128, 1).await;
             let ts = suite.just_async_commit_prewrite(256, 1);
             suite.write_records(258, 128, 1).await;
@@ -515,22 +584,24 @@ mod test {
             );
             suite.just_commit_a_key(make_record_key(1, 256), TimeStamp::new(256), ts);
             suite.force_flush_files("test_async_commit");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.wait_for_flush();
             let cp = cli
                 .global_progress_of_task("test_async_commit")
                 .await
                 .unwrap();
-            assert!(cp > 514, "it is {:?}", cp);
+            assert!(cp > 256, "it is {:?}", cp);
         });
         suite.cluster.shutdown();
     }
 
     #[test]
     fn fatal_error() {
-        test_util::init_log_for_test();
-        let suite = super::Suite::new("fatal_error", 3);
+        let mut suite = super::Suite::new("fatal_error", 3);
         suite.must_register_task(1, "test_fatal_error");
-        std::thread::sleep(Duration::from_secs(2));
+        suite.sync();
+        run_async_test(suite.write_records(0, 1, 1));
+        suite.force_flush_files("test_fatal_error");
+        suite.wait_for_flush();
         let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
         endpoint
             .scheduler()
@@ -540,8 +611,7 @@ mod test {
             ))
             .unwrap();
         let meta_cli = suite.get_meta_cli();
-        // NOTE: maybe implement some message like `Sync` for get rid of those magic wait?
-        std::thread::sleep(Duration::from_secs(2));
+        suite.sync();
         let err = run_async_test(meta_cli.get_last_error("test_fatal_error", *victim))
             .unwrap()
             .unwrap();
@@ -550,6 +620,63 @@ mod test {
         assert!(err.error_message.contains("everything is alright"));
         assert_eq!(err.store_id, *victim);
         let paused = run_async_test(meta_cli.check_task_paused("test_fatal_error")).unwrap();
-        assert!(paused)
+        assert!(paused);
+        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        let checkpoint = run_async_test(
+            suite
+                .get_meta_cli()
+                .global_progress_of_task("test_fatal_error"),
+        )
+        .unwrap();
+
+        assert!(
+            safepoints.iter().any(|sp| {
+                sp.serivce.contains(&format!("{}", victim))
+                    && sp.ttl >= Duration::from_secs(60 * 60 * 24)
+                    && sp.safepoint.into_inner() == checkpoint
+            }),
+            "{:?}",
+            safepoints
+        );
+    }
+
+    #[test]
+    fn inflight_messages() {
+        // We should remove the failpoints when paniked or we may get stucked.
+        defer! {{
+            fail::remove("delay_on_start_observe");
+            fail::remove("delay_on_flush");
+        }}
+        let mut suite = super::Suite::new("inflight_message", 3);
+        suite.must_register_task(1, "inflight_message");
+        run_async_test(suite.write_records(0, 128, 1));
+        fail::cfg("delay_on_flush", "pause").unwrap();
+        suite.force_flush_files("inflight_message");
+        fail::cfg("delay_on_start_observe", "pause").unwrap();
+        suite.must_shuffle_leader(1);
+        // Handling the `StartObserve` message and doing flush are executed asynchronously.
+        // Make a delay of unblocking flush thread for make sure we have handled the `StartObserve`.
+        std::thread::sleep(Duration::from_secs(1));
+        fail::cfg("delay_on_flush", "off").unwrap();
+        suite.wait_for_flush();
+        let checkpoint = run_async_test(
+            suite
+                .get_meta_cli()
+                .global_progress_of_task("inflight_message"),
+        );
+        fail::cfg("delay_on_start_observe", "off").unwrap();
+        // The checkpoint should not advance if there are inflight messages.
+        assert_eq!(checkpoint.unwrap(), 0);
+        run_async_test(suite.write_records(256, 128, 1));
+        suite.force_flush_files("inflight_message");
+        suite.wait_for_flush();
+        let checkpoint = run_async_test(
+            suite
+                .get_meta_cli()
+                .global_progress_of_task("inflight_message"),
+        )
+        .unwrap();
+        // The checkpoint should be advanced as expection when the inflight message has been consumed.
+        assert!(checkpoint > 512, "checkpoint = {}", checkpoint);
     }
 }
