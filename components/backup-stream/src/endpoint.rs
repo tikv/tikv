@@ -517,50 +517,44 @@ where
                 }),
         );
         self.pool.block_on(async move {
-            let task_name = task.info.get_name();
-            match cli.ranges_of_task(task_name).await {
-                Ok(ranges) => {
-                    info!(
-                        "register backup stream ranges";
-                        "task" => ?task,
-                        "ranges-count" => ranges.inner.len(),
-                    );
-                    let ranges = ranges
-                        .inner
-                        .into_iter()
-                        .map(|(start_key, end_key)| {
-                            (utils::wrap_key(start_key), utils::wrap_key(end_key))
-                        })
-                        .collect::<Vec<_>>();
-                    if let Err(err) = range_router
-                        .register_task(task.clone(), ranges.clone())
-                        .await
-                    {
-                        err.report(format!(
-                            "failed to register backup stream task {}",
-                            task.info.name
-                        ));
-                        return;
-                    }
+            let task_clone = task.clone();
+            let run = async move {
+                let task_name = task.info.get_name();
+                cli.init_task(&task.info).await?;
+                let ranges = cli.ranges_of_task(task_name).await?;
+                info!(
+                    "register backup stream ranges";
+                    "task" => ?task,
+                    "ranges-count" => ranges.inner.len(),
+                );
+                let ranges = ranges
+                    .inner
+                    .into_iter()
+                    .map(|(start_key, end_key)| {
+                        (utils::wrap_key(start_key), utils::wrap_key(end_key))
+                    })
+                    .collect::<Vec<_>>();
+                range_router
+                    .register_task(task.clone(), ranges.clone())
+                    .await?;
 
-                    for (start_key, end_key) in ranges {
-                        let init = init.clone();
+                for (start_key, end_key) in ranges {
+                    let init = init.clone();
 
-                        self.observe_and_scan_region(init, &task, start_key, end_key)
-                            .await
-                            .unwrap();
-                    }
-                    info!(
-                        "finish register backup stream ranges";
-                        "task" => ?task,
-                    );
+                    self.observe_and_scan_region(init, &task, start_key, end_key)
+                        .await?
                 }
-                Err(e) => {
-                    e.report(format!(
-                        "failed to register backup stream task {} to router: ranges not found",
-                        task.info.get_name()
-                    ));
-                }
+                info!(
+                    "finish register backup stream ranges";
+                    "task" => ?task,
+                );
+                Result::Ok(())
+            };
+            if let Err(e) = run.await {
+                e.report(format!(
+                    "failed to register backup stream task {} to router: ranges not found",
+                    task_clone.info.get_name()
+                ));
             }
         });
         metrics::update_task_status(TaskStatus::Running, &task_name);
@@ -649,8 +643,7 @@ where
                 .map_err(|err| Error::from(err).report("failed to get tso from pd"))
                 .unwrap_or_default();
             let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
-            let tso = Ord::min(pd_tso, min_ts);
-            tso
+            Ord::min(pd_tso, min_ts)
         }
     }
 
@@ -684,8 +677,8 @@ where
             let fresh_regions = resolvers.collect_fresh_subs();
             let removal = resolvers.collect_removal_subs();
             let checkpoints = removal
-                .iter()
-                .map(|sub| (&sub.meta, sub.resolver.resolved_ts()))
+                .into_iter()
+                .map(|sub| (sub.meta, sub.resolver.resolved_ts()))
                 .collect::<Vec<_>>();
             if let Some(rts) = router.do_flush(&task, store_id, new_rts).await {
                 info!("flushing and refreshing checkpoint ts.";

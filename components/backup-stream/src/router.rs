@@ -1340,15 +1340,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_basic_file() -> Result<()> {
-        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&tmp).await?;
-        let (tx, rx) = dummy_scheduler();
-        let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
-        let (stream_task, storage_path) = task("dummy".to_owned()).await?;
-        must_register_table(&router, stream_task, 1).await;
-
+    async fn write_simple_data(router: &RouterInner) -> u64 {
         let now = TimeStamp::physical_now();
         let mut region1 = KvEventsBuilder::new(1, now);
         let start_ts = TimeStamp::physical_now();
