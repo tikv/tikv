@@ -238,10 +238,10 @@ impl ApiV2 {
     }
 
     pub fn add_prefix(key: &[u8]) -> Vec<u8> {
-        let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(key.len() + 2));
-        apiv2_key.push(RAW_KEY_PREFIX);
         let mut tmp_buf = [0; MAX_VARINT64_LENGTH];
         let written = NumberCodec::encode_var_u64(&mut tmp_buf, DEFAULT_KEY_SPACE_ID);
+        let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(key.len() + written + 1));
+        apiv2_key.push(RAW_KEY_PREFIX);
         apiv2_key.extend(&tmp_buf[..written]);
         apiv2_key.extend(key);
         apiv2_key
