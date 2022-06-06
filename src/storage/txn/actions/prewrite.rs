@@ -345,9 +345,36 @@ impl<'a> PrewriteMutation<'a> {
                 // Abort on writes after our start timestamp ...
                 // If exists a commit version whose commit timestamp is larger than current start
                 // timestamp, we should abort current prewrite.
+<<<<<<< HEAD
                 if commit_ts > self.txn_props.start_ts {
                     MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
                     self.write_conflict_error(&write, commit_ts)?;
+=======
+                match self.txn_props.kind {
+                    TransactionKind::Optimistic(_) => {
+                        if commit_ts > self.txn_props.start_ts {
+                            MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                            self.write_conflict_error(&write, commit_ts)?;
+                        }
+                    }
+                    // Note: PessimisticLockNotFound can happen on a non-pessimistically locked key,
+                    // if it is a retrying prewrite request.
+                    TransactionKind::Pessimistic(for_update_ts) => {
+                        if commit_ts > for_update_ts {
+                            warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
+                                "key" => %self.key, 
+                                "start_ts" => self.txn_props.start_ts, 
+                                "for_update_ts" => for_update_ts,
+                                "conflicting start_ts" => write.start_ts,
+                                "conflicting commit_ts" => commit_ts);
+                            return Err(ErrorInner::PessimisticLockNotFound {
+                                start_ts: self.txn_props.start_ts,
+                                key: self.key.clone().into_raw()?,
+                            }
+                            .into());
+                        }
+                    }
+>>>>>>> 033d62d7f... log details for PessimisitcLockNotFound in check_for_newer_version (#12713)
                 }
                 // If there's a write record whose commit_ts equals to our start ts, the current
                 // transaction is ok to continue, unless the record means that the current
