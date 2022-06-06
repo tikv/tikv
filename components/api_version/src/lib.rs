@@ -635,7 +635,7 @@ mod tests {
             .map(|key| {
                 let mut v2_key = key;
                 v2_key.insert(0, RAW_KEY_PREFIX);
-                v2_key.insert(1, 0); // 0 is var int encoded key space id
+                v2_key.insert(1, 0); // 0 is var u64 encoded key space id
                 ApiV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
             })
             .collect();
@@ -733,12 +733,12 @@ mod tests {
                 let mut v2_start_key = start_key;
                 let mut v2_end_key = end_key;
                 v2_start_key.insert(0, RAW_KEY_PREFIX);
-                v2_start_key.insert(1, 0); // 0 is var int encoded key space id
+                v2_start_key.insert(1, 0); // 0 is var u64 encoded key space id
                 if v2_end_key.is_empty() {
                     v2_end_key.insert(0, RAW_KEY_PREFIX_END);
                 } else {
                     v2_end_key.insert(0, RAW_KEY_PREFIX);
-                    v2_end_key.insert(1, 0); // 0 is var int encoded key space id
+                    v2_end_key.insert(1, 0); // 0 is var u64 encoded key space id
                 }
                 (v2_start_key, v2_end_key)
             })

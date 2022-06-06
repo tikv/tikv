@@ -1525,7 +1525,7 @@ pub mod tests {
         };
         if api_ver == ApiVersion::V2 {
             key.insert(0, RAW_KEY_PREFIX as char);
-            key.insert(1, 0 as char); // insert 0 as var int encoded space id `0`.
+            key.insert(1, 0 as char); // insert 0 as var u64 encoded space id.
         }
         key
     }
@@ -1563,7 +1563,7 @@ pub mod tests {
         if (cur_ver == ApiVersion::V1 || cur_ver == ApiVersion::V1ttl) && dst_ver == ApiVersion::V2
         {
             raw_key.insert(0, RAW_KEY_PREFIX as char);
-            raw_key.insert(0, 0 as char); // `0` is var int encoded key space id '0'
+            raw_key.insert(0, 0 as char); // `0` is var u64 encoded key space id
         }
         Key::from_encoded(raw_key.into_bytes())
     }
@@ -1612,7 +1612,7 @@ pub mod tests {
         stats.reset();
         let mut req = BackupRequest::default();
         let backup_start = if cur_api_ver == ApiVersion::V2 {
-            vec![RAW_KEY_PREFIX, 0] // 0 is var int encoded key space id `0`
+            vec![RAW_KEY_PREFIX, 0] // 0 is var u64 encoded key space id
         } else {
             vec![]
         };
@@ -1622,7 +1622,7 @@ pub mod tests {
             vec![]
         };
         let file_start = if dst_api_ver == ApiVersion::V2 {
-            vec![RAW_KEY_PREFIX, 0] // 0 is var int encoded key space id `0`
+            vec![RAW_KEY_PREFIX, 0] // 0 is var u64 encoded key space id
         } else {
             vec![]
         };

@@ -1,9 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use codec::{
-    byte::MemComparableByteCodec,
-    number::{NumberCodec, MAX_VARINT64_LENGTH},
-};
+use codec::byte::MemComparableByteCodec;
 use engine_traits::Result;
 use tikv_util::codec::{
     bytes,
@@ -19,7 +16,6 @@ pub const RAW_KEY_PREFIX_END: u8 = RAW_KEY_PREFIX + 1;
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
-pub const DEFAULT_KEY_SPACE_ID: u64 = 0;
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -238,11 +234,9 @@ impl ApiV2 {
     }
 
     pub fn add_prefix(key: &[u8]) -> Vec<u8> {
-        let mut tmp_buf = [0; MAX_VARINT64_LENGTH];
-        let written = NumberCodec::encode_var_u64(&mut tmp_buf, DEFAULT_KEY_SPACE_ID);
-        let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(key.len() + written + 1));
+        let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(key.len() + 2));
         apiv2_key.push(RAW_KEY_PREFIX);
-        apiv2_key.extend(&tmp_buf[..written]);
+        apiv2_key.push(0); // 0 is var u64 encoded key space id. Reserved for future use.
         apiv2_key.extend(key);
         apiv2_key
     }
