@@ -63,7 +63,7 @@ use self::memtrace::*;
 #[cfg(any(test, feature = "testexport"))]
 use crate::store::PeerInternalStat;
 use crate::{
-    coprocessor::RegionChangeEvent,
+    coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
         cmd_resp::{bind_term, new_error},
         fsm::{
@@ -3364,6 +3364,7 @@ where
                 &self.ctx.coprocessor_host,
                 region.clone(),
                 &mut self.fsm.peer,
+                RegionChangeReason::ChangePeer,
             );
         }
         for peer in region.take_peers().into_iter() {
@@ -3570,7 +3571,12 @@ where
         let estimated_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
         let estimated_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
+        meta.set_region(
+            &self.ctx.coprocessor_host,
+            derived,
+            &mut self.fsm.peer,
+            RegionChangeReason::Split,
+        );
         self.fsm.peer.post_split();
 
         // It's not correct anymore, so set it to false to schedule a split check task.
@@ -4052,7 +4058,12 @@ where
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
+            meta.set_region(
+                &self.ctx.coprocessor_host,
+                region,
+                &mut self.fsm.peer,
+                RegionChangeReason::PrepareMerge,
+            );
         }
 
         self.fsm.peer.pending_merge_state = Some(state);
@@ -4163,7 +4174,12 @@ where
         meta.region_ranges
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
-        meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
+        meta.set_region(
+            &self.ctx.coprocessor_host,
+            region,
+            &mut self.fsm.peer,
+            RegionChangeReason::CommitMerge,
+        );
         if let Some(d) = meta.readers.get_mut(&source.get_id()) {
             d.mark_pending_remove();
         }
@@ -4245,7 +4261,12 @@ where
 
         if let Some(r) = region {
             let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.set_region(&self.ctx.coprocessor_host, r, &mut self.fsm.peer);
+            meta.set_region(
+                &self.ctx.coprocessor_host,
+                r,
+                &mut self.fsm.peer,
+                RegionChangeReason::RollbackMerge,
+            );
         }
         if self.fsm.peer.is_leader() {
             info!(
