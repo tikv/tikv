@@ -1,3 +1,5 @@
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     sync::{atomic::Ordering, Arc},
     time::Duration,
@@ -214,7 +216,7 @@ where
             range_router: initial_loader.sink.clone(),
             scheduler: initial_loader.scheduler.clone(),
             observer,
-            subs: initial_loader.tracing.clone(),
+            subs: initial_loader.tracing,
             messenger: tx,
             scan_pool_handle,
             scans: CallbackWaitGroup::new(),
@@ -271,7 +273,7 @@ where
                         self.subs.destroy_stopped_region(region.get_id());
                     }
                 }
-                ObserveOp::RefreshResolver { ref region } => self.refresh_resolver(&region).await,
+                ObserveOp::RefreshResolver { ref region } => self.refresh_resolver(region).await,
                 ObserveOp::NotifyFailToStartObserve {
                     region,
                     handle,
@@ -363,7 +365,7 @@ where
 
             Some(for_task) => {
                 let tso = self.get_last_checkpoint_of(&for_task, region).await?;
-                self.observe_over_with_initial_data_from_checkpoint(&region, tso, handle.clone());
+                self.observe_over_with_initial_data_from_checkpoint(region, tso, handle.clone());
             }
         }
         Ok(())
