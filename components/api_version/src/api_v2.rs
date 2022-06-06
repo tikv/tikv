@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use codec::byte::MemComparableByteCodec;
+use codec::{
+    byte::MemComparableByteCodec,
+    number::{NumberCodec, MAX_VARINT64_LENGTH},
+};
 use engine_traits::Result;
 use tikv_util::codec::{
     bytes,
@@ -8,7 +11,6 @@ use tikv_util::codec::{
     Error,
 };
 use txn_types::{Key, TimeStamp};
-use codec::number::{NumberCodec, MAX_VARINT64_LENGTH};
 
 use super::*;
 
@@ -195,7 +197,7 @@ impl KvFormat for ApiV2 {
         src_api: ApiVersion,
         mut start_key: Vec<u8>,
         mut end_key: Vec<u8>,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
+    ) -> (Vec<u8>, Vec<u8>) {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
                 start_key = ApiV2::add_prefix(&start_key);
@@ -204,9 +206,9 @@ impl KvFormat for ApiV2 {
                 } else {
                     end_key = ApiV2::add_prefix(&end_key);
                 }
-                Ok((start_key, end_key))
+                (start_key, end_key)
             }
-            ApiVersion::V2 => Ok((start_key, end_key)),
+            ApiVersion::V2 => (start_key, end_key),
         }
     }
 }

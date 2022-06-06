@@ -240,14 +240,12 @@ impl KeyValueCodec {
         &self,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
+    ) -> (Vec<u8>, Vec<u8>) {
         if !self.is_raw_kv {
-            return Ok((start_key, end_key));
+            return (start_key, end_key);
         }
         dispatch_api_version!(self.dst_api_ver, {
-            let (start, end) =
-                API::convert_raw_user_key_range_version_from(self.cur_api_ver, start_key, end_key)?;
-            Ok((start, end))
+            API::convert_raw_user_key_range_version_from(self.cur_api_ver, start_key, end_key)
         })
     }
 }

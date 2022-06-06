@@ -7,8 +7,6 @@ use tikv_util::codec::{
 };
 
 use super::*;
-use tikv_util::box_err;
-use engine_traits::Error as EngineError;
 
 impl KvFormat for ApiV1Ttl {
     const TAG: ApiVersion = ApiVersion::V1ttl;
@@ -69,9 +67,7 @@ impl KvFormat for ApiV1Ttl {
     ) -> Result<Key> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => Ok(Key::from_encoded_slice(key)),
-            ApiVersion::V2 => {
-                Err(EngineError::Other(box_err!("unsupported conversion")))
-            }
+            ApiVersion::V2 => unreachable!(), // reject apiv2 -> apiv1ttl conversion
         }
     }
 
@@ -79,12 +75,10 @@ impl KvFormat for ApiV1Ttl {
         src_api: ApiVersion,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
+    ) -> (Vec<u8>, Vec<u8>) {
         match src_api {
-            ApiVersion::V1 | ApiVersion::V1ttl => Ok((start_key, end_key)),
-            ApiVersion::V2 => {
-                Err(EngineError::Other(box_err!("unsupported conversion")))
-            }
+            ApiVersion::V1 | ApiVersion::V1ttl => (start_key, end_key),
+            ApiVersion::V2 => unreachable!(), // reject apiv2 -> apiv1ttl conversion
         }
     }
 }

@@ -1,8 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::*;
-use tikv_util::box_err;
-use engine_traits::Error as EngineError;
 
 impl KvFormat for ApiV1 {
     const TAG: ApiVersion = ApiVersion::V1;
@@ -45,9 +43,7 @@ impl KvFormat for ApiV1 {
     ) -> Result<Key> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => Ok(Key::from_encoded_slice(key)),
-            ApiVersion::V2 => {
-                Err(EngineError::Other(box_err!("unsupported conversion")))
-            }
+            ApiVersion::V2 => unreachable!(), // reject apiv2 -> apiv1 conversion
         }
     }
 
@@ -55,12 +51,10 @@ impl KvFormat for ApiV1 {
         src_api: ApiVersion,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
+    ) -> (Vec<u8>, Vec<u8>) {
         match src_api {
-            ApiVersion::V1 | ApiVersion::V1ttl => Ok((start_key, end_key)),
-            ApiVersion::V2 => {
-                Err(EngineError::Other(box_err!("unsupported conversion")))
-            }
+            ApiVersion::V1 | ApiVersion::V1ttl => (start_key, end_key),
+            ApiVersion::V2 => unreachable!(), // reject apiv2 -> apiv1 conversion
         }
     }
 }
