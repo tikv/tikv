@@ -500,14 +500,14 @@ pub mod tests {
             (
                 ApiVersion::V1,
                 ApiVersion::V2,
-                b"abc".to_vec(),
-                ApiV2::encode_raw_key_owned(b"rabc".to_vec(), ts),
+                [61, 62, 63].to_vec(),
+                ApiV2::encode_raw_key_owned([114, 0, 0, 0, 61, 62, 63].to_vec(), ts),
             ),
             (
                 ApiVersion::V1ttl,
                 ApiVersion::V2,
                 b"".to_vec(),
-                ApiV2::encode_raw_key_owned(b"r".to_vec(), ts),
+                ApiV2::encode_raw_key_owned([114, 0, 0, 0].to_vec(), ts),
             ),
         ];
 
