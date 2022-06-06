@@ -285,8 +285,8 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
     let tmp = Builder::new().tempdir().unwrap();
     let storage_path = make_unique_dir(tmp.path());
     let rx = suite.backup_raw(
-        vec![b'r', b'a'], // start
-        vec![b'r', b'z'], // end
+        vec![b'r'], // start
+        vec![b's'], // end
         cf,
         &storage_path,
         dst_api_ver,
@@ -354,7 +354,9 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
         let key = {
             let mut key = k.into_bytes();
             if cur_api_ver != ApiVersion::V2 && dst_api_ver == ApiVersion::V2 {
-                key.insert(0, b'r')
+                let mut apiv2_key = [b'r', 0, 0, 0].to_vec();
+                apiv2_key.extend(key);
+                key = apiv2_key;
             }
             key
         };
@@ -365,8 +367,8 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
     // Backup file should have same contents.
     // Set non-empty range to check if it's incorrectly encoded.
     let rx = target_suite.backup_raw(
-        vec![b'r', b'a'], // start
-        vec![b'r', b'z'], // end
+        vec![b'r'], // start
+        vec![b's'], // end
         cf,
         &make_unique_dir(tmp.path()),
         dst_api_ver,
@@ -431,8 +433,8 @@ fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dst_api_version: ApiVe
     let tmp = Builder::new().tempdir().unwrap();
     let storage_path = make_unique_dir(tmp.path());
     let rx = suite.backup_raw(
-        "ra".to_owned().into_bytes(), // start
-        "rz".to_owned().into_bytes(), // end
+        "r".to_owned().into_bytes(), // start
+        "s".to_owned().into_bytes(), // end
         cf,
         &storage_path,
         dst_api_version,
