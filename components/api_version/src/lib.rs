@@ -635,8 +635,7 @@ mod tests {
             .clone()
             .into_iter()
             .map(|key| {
-                let mut v2_key = vec![];
-                v2_key.push(RAW_KEY_PREFIX);
+                let mut v2_key = vec![RAW_KEY_PREFIX];
                 let mut tmp_buf = [0; MAX_VARINT64_LENGTH];
                 let written = NumberCodec::encode_var_u64(&mut tmp_buf, 0);
                 v2_key.extend(&tmp_buf[..written]);
@@ -648,8 +647,6 @@ mod tests {
         let test_cases = vec![
             (ApiVersion::V1, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
             (ApiVersion::V1ttl, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
-            (ApiVersion::V2, ApiVersion::V1, &apiv2_keys, &apiv1_keys),
-            (ApiVersion::V2, ApiVersion::V1ttl, &apiv2_keys, &apiv1_keys),
         ];
         for i in 0..apiv1_keys.len() {
             for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
@@ -767,18 +764,6 @@ mod tests {
                 ApiVersion::V2,
                 &apiv1_key_ranges,
                 &apiv2_key_ranges,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V1,
-                &apiv2_key_ranges,
-                &apiv1_key_ranges,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V1ttl,
-                &apiv2_key_ranges,
-                &apiv1_key_ranges,
             ),
         ];
         for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases {

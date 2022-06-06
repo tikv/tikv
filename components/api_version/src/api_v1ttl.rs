@@ -7,6 +7,8 @@ use tikv_util::codec::{
 };
 
 use super::*;
+use tikv_util::box_err;
+use engine_traits::Error as EngineError;
 
 impl KvFormat for ApiV1Ttl {
     const TAG: ApiVersion = ApiVersion::V1ttl;
@@ -68,26 +70,20 @@ impl KvFormat for ApiV1Ttl {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => Ok(Key::from_encoded_slice(key)),
             ApiVersion::V2 => {
-                debug_assert_eq!(ApiV2::parse_key_mode(key), KeyMode::Raw);
-                let (user_key, _) = ApiV2::decode_raw_key(&Key::from_encoded_slice(key), true)?;
-                let raw_key = ApiV2::remove_prefix(user_key)?;
-                Ok(Self::encode_raw_key_owned(raw_key, None))
+                Err(EngineError::Other(box_err!("unsupported conversion")))
             }
         }
     }
 
     fn convert_raw_user_key_range_version_from(
         src_api: ApiVersion,
-        mut start_key: Vec<u8>,
-        mut end_key: Vec<u8>,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
     ) -> Result<(Vec<u8>, Vec<u8>)> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => Ok((start_key, end_key)),
             ApiVersion::V2 => {
-                // TODO: check raw key range after check_api_version_range is refactored.
-                start_key = ApiV2::remove_prefix(start_key)?;
-                end_key = ApiV2::remove_prefix(end_key)?;
-                Ok((start_key, end_key))
+                Err(EngineError::Other(box_err!("unsupported conversion")))
             }
         }
     }

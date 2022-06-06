@@ -1,19 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use codec::{
-    byte::MemComparableByteCodec,
-    number::{NumberCodec, MAX_VARINT64_LENGTH},
-};
-use engine_traits::{Error as EngineError, Result};
-use tikv_util::{
-    box_err,
-    codec::{
-        bytes,
-        number::{self, NumberEncoder},
-        Error,
-    },
+use codec::byte::MemComparableByteCodec;
+use engine_traits::Result;
+use tikv_util::codec::{
+    bytes,
+    number::{self, NumberEncoder},
+    Error,
 };
 use txn_types::{Key, TimeStamp};
+use codec::number::{NumberCodec, MAX_VARINT64_LENGTH};
 
 use super::*;
 
@@ -248,22 +243,6 @@ impl ApiV2 {
         apiv2_key.extend(&tmp_buf[..written]);
         apiv2_key.extend(key);
         apiv2_key
-    }
-
-    pub fn remove_prefix(mut key: Vec<u8>) -> Result<Vec<u8>> {
-        if key.is_empty() {
-            return Err(EngineError::Other(box_err!("key is empty")));
-        }
-        let prefix = key.remove(0);
-        //if prefix is `RAW_KEY_PREFIX_END`, no key space id is encoded.
-        if prefix == RAW_KEY_PREFIX_END {
-            return Ok(key);
-        }
-        if let Ok((_id, len)) = NumberCodec::try_decode_var_u64(key.as_mut_slice()) {
-            Ok(key[len..].to_vec())
-        } else {
-            Err(EngineError::Other(box_err!("fail to decode var uint64")))
-        }
     }
 
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
