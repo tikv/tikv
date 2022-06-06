@@ -1444,6 +1444,7 @@ dependencies = [
  "raft",
  "tikv_alloc",
  "tikv_util",
+ "tracker",
  "txn_types",
 ]
 
@@ -1482,6 +1483,7 @@ dependencies = [
  "tikv_util",
  "time",
  "toml",
+ "tracker",
  "txn_types",
 ]
 
@@ -1541,6 +1543,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "toml",
+ "tracker",
  "txn_types",
 ]
 
@@ -5666,6 +5669,7 @@ dependencies = [
  "test_raftstore",
  "tikv",
  "tikv_util",
+ "tracker",
  "txn_types",
 ]
 
@@ -6081,6 +6085,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-timer",
  "toml",
+ "tracker",
  "txn_types",
  "url",
  "uuid",
@@ -6229,6 +6234,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tikv_util",
+ "tracker",
  "txn_types",
 ]
 
@@ -6290,6 +6296,7 @@ dependencies = [
  "tokio-executor",
  "tokio-timer",
  "toml",
+ "tracker",
  "url",
  "utime",
  "yatp",
@@ -6596,6 +6603,18 @@ checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
 dependencies = [
  "pin-project",
  "tracing",
+]
+
+[[package]]
+name = "tracker"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "kvproto",
+ "lazy_static",
+ "parking_lot 0.12.0",
+ "pin-project",
+ "slab",
 ]
 
 [[package]]
