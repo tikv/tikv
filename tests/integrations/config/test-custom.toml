@@ -232,6 +232,7 @@ enable-region-bucket = true
 region-bucket-size = "1MB"
 region-size-threshold-for-approximate = "3MB"
 region-bucket-merge-size-ratio = 0.4
+prefer-approximate-bucket = false
 
 [rocksdb]
 wal-recovery-mode = "absolute-consistency"
@@ -638,6 +639,7 @@ incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
 incremental-scan-ts-filter-ratio = 0.7
+tso-worker-threads = 2
 old-value-cache-memory-quota = "14MB"
 sink-memory-quota = "7MB"
 
