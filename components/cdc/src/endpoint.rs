@@ -442,12 +442,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     fn on_change_cfg(&mut self, change: ConfigChange) {
         // Validate first.
         let mut validate_cfg = self.config.clone();
-        validate_cfg.update(change.clone());
+        validate_cfg.update(change);
         if let Err(e) = validate_cfg.validate() {
             warn!("cdc config update failed"; "error" => ?e);
             return;
         }
-
+        let change = self.config.diff(&validate_cfg);
         info!(
             "cdc config updated";
             "current config" => ?self.config,

@@ -27,12 +27,15 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        let default_cfg = Config::default();
         if self.num_threads == 0 {
-            return Err("import.num_threads can not be 0".into());
+            warn!("import.num_threads can not be 0");
+            self.num_threads = default_cfg.num_threads;
         }
         if self.stream_channel_window == 0 {
-            return Err("import.stream_channel_window can not be 0".into());
+            warn!("import.stream_channel_window can not be 0");
+            self.stream_channel_window = default_cfg.stream_channel_window;
         }
         Ok(())
     }
