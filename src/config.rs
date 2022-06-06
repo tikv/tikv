@@ -2320,15 +2320,24 @@ impl BackupConfig {
         let limit = SysQuota::cpu_cores_quota() as usize;
         let default_cfg = BackupConfig::default();
         if self.num_threads == 0 || self.num_threads > limit {
-            warn!("backup.num_threads cannot be 0 or larger than {}", limit);
+            warn!(
+                "backup.num_threads cannot be 0 or larger than {}, change it to {}",
+                limit, default_cfg.num_threads
+            );
             self.num_threads = default_cfg.num_threads;
         }
         if self.batch_size == 0 {
-            warn!("backup.batch_size cannot be 0");
+            warn!(
+                "backup.batch_size cannot be 0, change it to {}",
+                default_cfg.batch_size
+            );
             self.batch_size = default_cfg.batch_size;
         }
         if self.s3_multi_part_size.0 > ReadableSize::gb(5).0 {
-            warn!("backup.s3_multi_part_size cannot larger than 5GB");
+            warn!(
+                "backup.s3_multi_part_size cannot larger than 5GB, change it to {:?}",
+                default_cfg.s3_multi_part_size
+            );
             self.s3_multi_part_size = default_cfg.s3_multi_part_size;
         }
 
@@ -2379,12 +2388,13 @@ pub struct BackupStreamConfig {
 impl BackupStreamConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         let limit = SysQuota::cpu_cores_quota() as usize;
+        let default_cfg = BackupStreamConfig::default();
         if self.num_threads == 0 || self.num_threads > limit {
             warn!(
-                "log_backup.num_threads cannot be 0 or larger than {}",
-                limit
+                "log_backup.num_threads cannot be 0 or larger than {}, change it to {}",
+                limit, default_cfg.num_threads
             );
-            self.num_threads = BackupStreamConfig::default().num_threads;
+            self.num_threads = default_cfg.num_threads;
         }
         Ok(())
     }
@@ -2471,23 +2481,35 @@ impl CdcConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         let default_cfg = CdcConfig::default();
         if self.min_ts_interval.is_zero() {
-            warn!("cdc.min-ts-interval can't be 0");
+            warn!(
+                "cdc.min-ts-interval can't be 0, change it to {}",
+                default_cfg.min_ts_interval
+            );
             self.min_ts_interval = default_cfg.min_ts_interval;
         }
         if self.incremental_scan_threads == 0 {
-            warn!("cdc.incremental-scan-threads can't be 0");
+            warn!(
+                "cdc.incremental-scan-threads can't be 0, change it to {}",
+                default_cfg.incremental_scan_threads
+            );
             self.incremental_scan_threads = default_cfg.incremental_scan_threads;
         }
         if self.incremental_scan_concurrency < self.incremental_scan_threads {
             warn!(
-                "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads"
+                "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads,
+                change it to {}",
+                self.incremental_scan_threads
             );
-            self.incremental_scan_concurrency = self.incremental_scan_threads 
+            self.incremental_scan_concurrency = self.incremental_scan_threads
         }
         if self.incremental_scan_ts_filter_ratio < 0.0
             || self.incremental_scan_ts_filter_ratio > 1.0
         {
-            warn!("cdc.incremental-scan-ts-filter-ratio should be larger than 0 and less than 1");
+            warn!(
+                "cdc.incremental-scan-ts-filter-ratio should be larger than 0 and less than 1,
+                change it to {}",
+                default_cfg.incremental_scan_ts_filter_ratio
+            );
             self.incremental_scan_ts_filter_ratio = default_cfg.incremental_scan_ts_filter_ratio;
         }
         Ok(())
