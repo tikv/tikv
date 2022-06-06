@@ -1330,8 +1330,6 @@ pub mod tests {
             60.into(),
             TimeStamp::default(),
             true,
-            kvproto::kvrpcpb::Assertion::None,
-            kvproto::kvrpcpb::AssertionLevel::Off,
         );
         must_locked(&engine, b"k2", 13);
     }
