@@ -1426,10 +1426,10 @@ where
     }
 
     /// Evict applied entries to save more memory.
-    pub fn evict_cache(&mut self) {
+    pub fn evict_cache(&mut self, index: u64) {
         if !self.cache.cache.is_empty() {
             let cache = &mut self.cache;
-            let mem_size_change = cache.compact_to(self.apply_state.applied_index + 1);
+            let mem_size_change = cache.compact_to(index);
             RAFT_ENTRIES_EVICT_BYTES.inc_by(mem_size_change);
         }
     }

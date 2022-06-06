@@ -4949,12 +4949,6 @@ where
             .peer
             .mut_store()
             .maybe_gc_cache(alive_cache_idx, applied_idx);
-        if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
-            self.fsm.peer.mut_store().evict_cache();
-            if !self.fsm.peer.get_store().cache_is_empty() {
-                self.register_entry_cache_evict_tick();
-            }
-        }
 
         let mut total_gc_logs = 0;
 
@@ -5022,7 +5016,7 @@ where
     fn on_entry_cache_evict_tick(&mut self) {
         fail_point!("on_entry_cache_evict_tick", |_| {});
         // call evict directly here, no need to recheck the memory usage condition.
-        self.fsm.peer.mut_store().evict_cache();
+        self.fsm.peer.evict_cache(self.ctx);
 
         let mut _usage = 0;
         if memory_usage_reaches_high_water(&mut _usage)

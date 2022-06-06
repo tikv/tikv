@@ -2747,12 +2747,37 @@ where
             self.mut_store()
                 .trace_cached_entries(apply.entries[0].clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
-                self.mut_store().evict_cache();
+                self.evict_cache(ctx);
             }
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
+    }
+
+    // Evict the alively replicated log entries.
+    // In most scenarios, just eliminating alively replicated log entries is somewhat effective.
+    // But OOM cannot be completely avoided. If needed, it is better to use the two-level memory
+    // control algo to solve completely.
+
+    pub fn evict_cache<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        let drop_cache_duration =
+            ctx.cfg.raft_heartbeat_interval() + ctx.cfg.raft_entry_cache_life_time.0;
+        let cache_alive_limit = Instant::now() - drop_cache_duration;
+        let last_idx = self.get_store().last_index();
+        let truncated_idx = self.get_store().truncated_index();
+        let mut alive_cache_idx = last_idx;
+        for (peer_id, p) in self.raft_group.raft.prs().iter() {
+            if let Some(last_heartbeat) = self.peer_heartbeats.get(peer_id) {
+                if alive_cache_idx > p.matched
+                    && p.matched >= truncated_idx
+                    && *last_heartbeat > cache_alive_limit
+                {
+                    alive_cache_idx = p.matched;
+                }
+            }
+        }
+        self.mut_store().evict_cache(alive_cache_idx);
     }
 
     fn on_persist_snapshot<T>(
