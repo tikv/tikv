@@ -110,6 +110,7 @@ impl Engine {
         let new_data = ShardData::new(
             shard.start.clone(),
             shard.end.clone(),
+            data.del_prefixes.clone(),
             new_mem_tbls,
             data.l0_tbls.clone(),
             data.cfs.clone(),
@@ -131,7 +132,8 @@ impl Engine {
             let next_mem_tbl_size =
                 shard.next_mem_table_size(mem_table.size() as u64, last_switch_instant);
             let mut change_size = new_change_set(shard.id, shard.ver);
-            change_size.set_next_mem_table_size(next_mem_tbl_size);
+            change_size.set_property_key(MEM_TABLE_SIZE_KEY.to_string());
+            change_size.set_property_value(next_mem_tbl_size.to_le_bytes().to_vec());
             self.meta_change_listener.on_change_set(change_size);
         }
     }
@@ -155,6 +157,8 @@ impl Engine {
                     "shard {}:{}, mem size changed to {}",
                     shard.id, shard.ver, max_mem_tbl_size
                 );
+            } else if k == DEL_PREFIXES_KEY {
+                shard.set_del_prefix(v.chunk());
             }
         }
         store_u64(&shard.write_sequence, wb.sequence);

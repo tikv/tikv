@@ -24,9 +24,7 @@ pub const TYPE_ROLLBACK: CustomRaftlogType = 3;
 pub const TYPE_PESSIMISTIC_LOCK: CustomRaftlogType = 4;
 pub const TYPE_PESSIMISTIC_ROLLBACK: CustomRaftlogType = 5;
 pub const TYPE_ONE_PC: CustomRaftlogType = 6;
-pub const TYPE_ENGINE_META: CustomRaftlogType = 10;
-pub const TYPE_NEX_MEM_TABLE_SIZE: CustomRaftlogType = 11;
-pub const TYPE_DELETE_RANGE: CustomRaftlogType = 12;
+pub const TYPE_ENGINE_META: CustomRaftlogType = 7;
 
 const HEADER_SIZE: usize = 2;
 
@@ -149,16 +147,6 @@ impl CustomRaftLog<'a> {
         cs.merge_from_bytes(&self.data[HEADER_SIZE..])?;
         Ok(cs)
     }
-
-    #[allow(unused)]
-    pub(crate) fn get_delete_range(&'a self) -> (&'a [u8], &'a [u8]) {
-        let mut i = HEADER_SIZE;
-        let start_key_len = LittleEndian::read_u16(&self.data[i..]) as usize;
-        i += 2;
-        let start_key = &self.data[i..i + start_key_len];
-        let end_key = &self.data[i + start_key_len..];
-        (start_key, end_key)
-    }
 }
 
 pub struct CustomBuilder {
@@ -231,14 +219,9 @@ impl CustomBuilder {
 
     pub fn set_change_set(&mut self, cs: kvenginepb::ChangeSet) {
         assert_eq!(self.buf.len(), HEADER_SIZE);
-        let tp = if cs.get_next_mem_table_size() > 0 {
-            TYPE_NEX_MEM_TABLE_SIZE
-        } else {
-            TYPE_ENGINE_META
-        };
         let data = cs.write_to_bytes().unwrap();
         self.buf.extend_from_slice(&data);
-        self.set_type(tp);
+        self.set_type(TYPE_ENGINE_META);
     }
 
     pub fn set_type(&mut self, tp: CustomRaftlogType) {

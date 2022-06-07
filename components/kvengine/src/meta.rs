@@ -128,6 +128,11 @@ impl ShardMeta {
             self.apply_ingest_files(cs.get_ingest_files());
             return;
         }
+        if !cs.get_property_key().is_empty() {
+            self.properties
+                .set(cs.get_property_key(), cs.get_property_value());
+            return;
+        }
         panic!("unexpected change set {:?}", cs)
     }
 

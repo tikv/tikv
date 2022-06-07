@@ -38,9 +38,10 @@ pub struct ChangeSet {
     pub split: ::protobuf::SingularPtrField<Split>,
     pub shard_delete: bool,
     pub sequence: u64,
-    pub next_mem_table_size: u64,
     pub parent: ::protobuf::SingularPtrField<ChangeSet>,
     pub ingest_files: ::protobuf::SingularPtrField<IngestFiles>,
+    pub property_key: ::std::string::String,
+    pub property_value: ::std::vec::Vec<u8>,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -282,22 +283,7 @@ impl ChangeSet {
         self.sequence = v;
     }
 
-    // uint64 nextMemTableSize = 13;
-
-
-    pub fn get_next_mem_table_size(&self) -> u64 {
-        self.next_mem_table_size
-    }
-    pub fn clear_next_mem_table_size(&mut self) {
-        self.next_mem_table_size = 0;
-    }
-
-    // Param is passed by value, moved
-    pub fn set_next_mem_table_size(&mut self, v: u64) {
-        self.next_mem_table_size = v;
-    }
-
-    // .enginepb.ChangeSet parent = 14;
+    // .enginepb.ChangeSet parent = 13;
 
 
     pub fn get_parent(&self) -> &ChangeSet {
@@ -330,7 +316,7 @@ impl ChangeSet {
         self.parent.take().unwrap_or_else(|| ChangeSet::new())
     }
 
-    // .enginepb.IngestFiles ingest_files = 15;
+    // .enginepb.IngestFiles ingest_files = 14;
 
 
     pub fn get_ingest_files(&self) -> &IngestFiles {
@@ -361,6 +347,58 @@ impl ChangeSet {
     // Take field
     pub fn take_ingest_files(&mut self) -> IngestFiles {
         self.ingest_files.take().unwrap_or_else(|| IngestFiles::new())
+    }
+
+    // string property_key = 15;
+
+
+    pub fn get_property_key(&self) -> &str {
+        &self.property_key
+    }
+    pub fn clear_property_key(&mut self) {
+        self.property_key.clear();
+    }
+
+    // Param is passed by value, moved
+    pub fn set_property_key(&mut self, v: ::std::string::String) {
+        self.property_key = v;
+    }
+
+    // Mutable pointer to the field.
+    // If field is not initialized, it is initialized with default value first.
+    pub fn mut_property_key(&mut self) -> &mut ::std::string::String {
+        &mut self.property_key
+    }
+
+    // Take field
+    pub fn take_property_key(&mut self) -> ::std::string::String {
+        ::std::mem::replace(&mut self.property_key, ::std::string::String::new())
+    }
+
+    // bytes property_value = 16;
+
+
+    pub fn get_property_value(&self) -> &[u8] {
+        &self.property_value
+    }
+    pub fn clear_property_value(&mut self) {
+        self.property_value.clear();
+    }
+
+    // Param is passed by value, moved
+    pub fn set_property_value(&mut self, v: ::std::vec::Vec<u8>) {
+        self.property_value = v;
+    }
+
+    // Mutable pointer to the field.
+    // If field is not initialized, it is initialized with default value first.
+    pub fn mut_property_value(&mut self) -> &mut ::std::vec::Vec<u8> {
+        &mut self.property_value
+    }
+
+    // Take field
+    pub fn take_property_value(&mut self) -> ::std::vec::Vec<u8> {
+        ::std::mem::replace(&mut self.property_value, ::std::vec::Vec::new())
     }
 }
 
@@ -452,17 +490,16 @@ impl ::protobuf::Message for ChangeSet {
                     self.sequence = tmp;
                 },
                 13 => {
-                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
-                    }
-                    let tmp = is.read_uint64()?;
-                    self.next_mem_table_size = tmp;
-                },
-                14 => {
                     ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.parent)?;
                 },
-                15 => {
+                14 => {
                     ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.ingest_files)?;
+                },
+                15 => {
+                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.property_key)?;
+                },
+                16 => {
+                    ::protobuf::rt::read_singular_proto3_bytes_into(wire_type, is, &mut self.property_value)?;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -508,9 +545,6 @@ impl ::protobuf::Message for ChangeSet {
         if self.sequence != 0 {
             my_size += ::protobuf::rt::value_size(12, self.sequence, ::protobuf::wire_format::WireTypeVarint);
         }
-        if self.next_mem_table_size != 0 {
-            my_size += ::protobuf::rt::value_size(13, self.next_mem_table_size, ::protobuf::wire_format::WireTypeVarint);
-        }
         if let Some(ref v) = self.parent.as_ref() {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
@@ -518,6 +552,12 @@ impl ::protobuf::Message for ChangeSet {
         if let Some(ref v) = self.ingest_files.as_ref() {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        }
+        if !self.property_key.is_empty() {
+            my_size += ::protobuf::rt::string_size(15, &self.property_key);
+        }
+        if !self.property_value.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(16, &self.property_value);
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
@@ -562,18 +602,21 @@ impl ::protobuf::Message for ChangeSet {
         if self.sequence != 0 {
             os.write_uint64(12, self.sequence)?;
         }
-        if self.next_mem_table_size != 0 {
-            os.write_uint64(13, self.next_mem_table_size)?;
-        }
         if let Some(ref v) = self.parent.as_ref() {
-            os.write_tag(14, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_tag(13, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         }
         if let Some(ref v) = self.ingest_files.as_ref() {
-            os.write_tag(15, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_tag(14, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
+        }
+        if !self.property_key.is_empty() {
+            os.write_string(15, &self.property_key)?;
+        }
+        if !self.property_value.is_empty() {
+            os.write_bytes(16, &self.property_value)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -662,11 +705,6 @@ impl ::protobuf::Message for ChangeSet {
                     |m: &ChangeSet| { &m.sequence },
                     |m: &mut ChangeSet| { &mut m.sequence },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
-                    "nextMemTableSize",
-                    |m: &ChangeSet| { &m.next_mem_table_size },
-                    |m: &mut ChangeSet| { &mut m.next_mem_table_size },
-                ));
                 fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<ChangeSet>>(
                     "parent",
                     |m: &ChangeSet| { &m.parent },
@@ -676,6 +714,16 @@ impl ::protobuf::Message for ChangeSet {
                     "ingest_files",
                     |m: &ChangeSet| { &m.ingest_files },
                     |m: &mut ChangeSet| { &mut m.ingest_files },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                    "property_key",
+                    |m: &ChangeSet| { &m.property_key },
+                    |m: &mut ChangeSet| { &mut m.property_key },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
+                    "property_value",
+                    |m: &ChangeSet| { &m.property_value },
+                    |m: &mut ChangeSet| { &mut m.property_value },
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<ChangeSet>(
                     "ChangeSet",
@@ -708,9 +756,10 @@ impl ::protobuf::Clear for ChangeSet {
         self.split.clear();
         self.shard_delete = false;
         self.sequence = 0;
-        self.next_mem_table_size = 0;
         self.parent.clear();
         self.ingest_files.clear();
+        self.property_key.clear();
+        self.property_value.clear();
         self.unknown_fields.clear();
     }
 }
@@ -729,9 +778,10 @@ impl ::protobuf::PbPrint for ChangeSet {
         ::protobuf::PbPrint::fmt(&self.split, "split", buf);
         ::protobuf::PbPrint::fmt(&self.shard_delete, "shard_delete", buf);
         ::protobuf::PbPrint::fmt(&self.sequence, "sequence", buf);
-        ::protobuf::PbPrint::fmt(&self.next_mem_table_size, "next_mem_table_size", buf);
         ::protobuf::PbPrint::fmt(&self.parent, "parent", buf);
         ::protobuf::PbPrint::fmt(&self.ingest_files, "ingest_files", buf);
+        ::protobuf::PbPrint::fmt(&self.property_key, "property_key", buf);
+        ::protobuf::PbPrint::fmt(&self.property_value, "property_value", buf);
         if old_len < buf.len() {
           buf.push(' ');
         }
@@ -751,9 +801,10 @@ impl ::std::fmt::Debug for ChangeSet {
         ::protobuf::PbPrint::fmt(&self.split, "split", &mut s);
         ::protobuf::PbPrint::fmt(&self.shard_delete, "shard_delete", &mut s);
         ::protobuf::PbPrint::fmt(&self.sequence, "sequence", &mut s);
-        ::protobuf::PbPrint::fmt(&self.next_mem_table_size, "next_mem_table_size", &mut s);
         ::protobuf::PbPrint::fmt(&self.parent, "parent", &mut s);
         ::protobuf::PbPrint::fmt(&self.ingest_files, "ingest_files", &mut s);
+        ::protobuf::PbPrint::fmt(&self.property_key, "property_key", &mut s);
+        ::protobuf::PbPrint::fmt(&self.property_value, "property_value", &mut s);
         write!(f, "{}", s)
     }
 }
@@ -3313,7 +3364,7 @@ impl ::protobuf::reflect::ProtobufValue for Properties {
 }
 
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n\x0fchangeset.proto\x12\x08enginepb\"\x96\x03\n\tChangeSet\x12\x11\n\
+    \n\x0fchangeset.proto\x12\x08enginepb\"\xac\x03\n\tChangeSet\x12\x11\n\
     \x07shardID\x18\x01\x20\x01(\x04B\0\x12\x12\n\x08shardVer\x18\x02\x20\
     \x01(\x04B\0\x12*\n\ncompaction\x18\x04\x20\x01(\x0b2\x14.enginepb.Compa\
     ctionB\0\x12\x20\n\x05flush\x18\x05\x20\x01(\x0b2\x0f.enginepb.FlushB\0\
@@ -3321,35 +3372,36 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \n\rinitial_flush\x18\x07\x20\x01(\x0b2\x12.enginepb.SnapshotB\0\x12\x20\
     \n\x05split\x18\n\x20\x01(\x0b2\x0f.enginepb.SplitB\0\x12\x15\n\x0bshard\
     Delete\x18\x0b\x20\x01(\x08B\0\x12\x12\n\x08sequence\x18\x0c\x20\x01(\
-    \x04B\0\x12\x1a\n\x10nextMemTableSize\x18\r\x20\x01(\x04B\0\x12%\n\x06pa\
-    rent\x18\x0e\x20\x01(\x0b2\x13.enginepb.ChangeSetB\0\x12-\n\x0cingest_fi\
-    les\x18\x0f\x20\x01(\x0b2\x15.enginepb.IngestFilesB\0:\0\"\xa1\x01\n\nCo\
-    mpaction\x12\x0c\n\x02cf\x18\x01\x20\x01(\x05B\0\x12\x0f\n\x05level\x18\
-    \x02\x20\x01(\rB\0\x12-\n\x0ctableCreates\x18\x03\x20\x03(\x0b2\x15.engi\
-    nepb.TableCreateB\0\x12\x14\n\ntopDeletes\x18\x04\x20\x03(\x04B\0\x12\
-    \x17\n\rbottomDeletes\x18\x05\x20\x03(\x04B\0\x12\x14\n\nconflicted\x18\
-    \x06\x20\x01(\x08B\0:\0\"p\n\x05Flush\x12&\n\x08l0Create\x18\x01\x20\x01\
-    (\x0b2\x12.enginepb.L0CreateB\0\x12*\n\nproperties\x18\x02\x20\x01(\x0b2\
-    \x14.enginepb.PropertiesB\0\x12\x11\n\x07version\x18\x03\x20\x01(\x04B\0\
-    :\0\"\xe0\x01\n\x08Snapshot\x12\x0f\n\x05start\x18\x01\x20\x01(\x0cB\0\
-    \x12\r\n\x03end\x18\x02\x20\x01(\x0cB\0\x12*\n\nproperties\x18\x03\x20\
-    \x01(\x0b2\x14.enginepb.PropertiesB\0\x12'\n\tl0Creates\x18\x05\x20\x03(\
-    \x0b2\x12.enginepb.L0CreateB\0\x12-\n\x0ctableCreates\x18\x06\x20\x03(\
-    \x0b2\x15.enginepb.TableCreateB\0\x12\x15\n\x0bbaseVersion\x18\x07\x20\
-    \x01(\x04B\0\x12\x17\n\rdata_sequence\x18\x08\x20\x01(\x04B\0:\0\"A\n\
-    \x08L0Create\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x12\n\x08smalle\
-    st\x18\x02\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\x03\x20\x01(\x0cB\0:\
-    \0\"c\n\x0bTableCreate\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x0f\n\
-    \x05level\x18\x02\x20\x01(\rB\0\x12\x0c\n\x02CF\x18\x03\x20\x01(\x05B\0\
-    \x12\x12\n\x08smallest\x18\x04\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\
-    \x05\x20\x01(\x0cB\0:\0\"D\n\x05Split\x12)\n\tnewShards\x18\x01\x20\x03(\
-    \x0b2\x14.enginepb.PropertiesB\0\x12\x0e\n\x04Keys\x18\x03\x20\x03(\x0cB\
-    \0:\0\"\x93\x01\n\x0bIngestFiles\x12'\n\tl0Creates\x18\x01\x20\x03(\x0b2\
-    \x12.enginepb.L0CreateB\0\x12-\n\x0ctableCreates\x18\x02\x20\x03(\x0b2\
-    \x15.enginepb.TableCreateB\0\x12*\n\nproperties\x18\x03\x20\x01(\x0b2\
-    \x14.enginepb.PropertiesB\0:\0\"C\n\nProperties\x12\x11\n\x07shardID\x18\
-    \x01\x20\x01(\x04B\0\x12\x0e\n\x04keys\x18\x02\x20\x03(\tB\0\x12\x10\n\
-    \x06values\x18\x03\x20\x03(\x0cB\0:\0B\0b\x06proto3\
+    \x04B\0\x12%\n\x06parent\x18\r\x20\x01(\x0b2\x13.enginepb.ChangeSetB\0\
+    \x12-\n\x0cingest_files\x18\x0e\x20\x01(\x0b2\x15.enginepb.IngestFilesB\
+    \0\x12\x16\n\x0cproperty_key\x18\x0f\x20\x01(\tB\0\x12\x18\n\x0eproperty\
+    _value\x18\x10\x20\x01(\x0cB\0:\0\"\xa1\x01\n\nCompaction\x12\x0c\n\x02c\
+    f\x18\x01\x20\x01(\x05B\0\x12\x0f\n\x05level\x18\x02\x20\x01(\rB\0\x12-\
+    \n\x0ctableCreates\x18\x03\x20\x03(\x0b2\x15.enginepb.TableCreateB\0\x12\
+    \x14\n\ntopDeletes\x18\x04\x20\x03(\x04B\0\x12\x17\n\rbottomDeletes\x18\
+    \x05\x20\x03(\x04B\0\x12\x14\n\nconflicted\x18\x06\x20\x01(\x08B\0:\0\"p\
+    \n\x05Flush\x12&\n\x08l0Create\x18\x01\x20\x01(\x0b2\x12.enginepb.L0Crea\
+    teB\0\x12*\n\nproperties\x18\x02\x20\x01(\x0b2\x14.enginepb.PropertiesB\
+    \0\x12\x11\n\x07version\x18\x03\x20\x01(\x04B\0:\0\"\xe0\x01\n\x08Snapsh\
+    ot\x12\x0f\n\x05start\x18\x01\x20\x01(\x0cB\0\x12\r\n\x03end\x18\x02\x20\
+    \x01(\x0cB\0\x12*\n\nproperties\x18\x03\x20\x01(\x0b2\x14.enginepb.Prope\
+    rtiesB\0\x12'\n\tl0Creates\x18\x05\x20\x03(\x0b2\x12.enginepb.L0CreateB\
+    \0\x12-\n\x0ctableCreates\x18\x06\x20\x03(\x0b2\x15.enginepb.TableCreate\
+    B\0\x12\x15\n\x0bbaseVersion\x18\x07\x20\x01(\x04B\0\x12\x17\n\rdata_seq\
+    uence\x18\x08\x20\x01(\x04B\0:\0\"A\n\x08L0Create\x12\x0c\n\x02ID\x18\
+    \x01\x20\x01(\x04B\0\x12\x12\n\x08smallest\x18\x02\x20\x01(\x0cB\0\x12\
+    \x11\n\x07biggest\x18\x03\x20\x01(\x0cB\0:\0\"c\n\x0bTableCreate\x12\x0c\
+    \n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x0f\n\x05level\x18\x02\x20\x01(\rB\
+    \0\x12\x0c\n\x02CF\x18\x03\x20\x01(\x05B\0\x12\x12\n\x08smallest\x18\x04\
+    \x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\x05\x20\x01(\x0cB\0:\0\"D\n\
+    \x05Split\x12)\n\tnewShards\x18\x01\x20\x03(\x0b2\x14.enginepb.Propertie\
+    sB\0\x12\x0e\n\x04Keys\x18\x03\x20\x03(\x0cB\0:\0\"\x93\x01\n\x0bIngestF\
+    iles\x12'\n\tl0Creates\x18\x01\x20\x03(\x0b2\x12.enginepb.L0CreateB\0\
+    \x12-\n\x0ctableCreates\x18\x02\x20\x03(\x0b2\x15.enginepb.TableCreateB\
+    \0\x12*\n\nproperties\x18\x03\x20\x01(\x0b2\x14.enginepb.PropertiesB\0:\
+    \0\"C\n\nProperties\x12\x11\n\x07shardID\x18\x01\x20\x01(\x04B\0\x12\x0e\
+    \n\x04keys\x18\x02\x20\x03(\tB\0\x12\x10\n\x06values\x18\x03\x20\x03(\
+    \x0cB\0:\0B\0b\x06proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {

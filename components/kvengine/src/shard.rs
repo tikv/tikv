@@ -11,7 +11,7 @@ use std::{
 };
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes};
 use dashmap::DashMap;
 use kvenginepb as pb;
 use slog_global::*;
@@ -64,6 +64,7 @@ pub struct Shard {
 
 pub const MEM_TABLE_SIZE_KEY: &str = "_mem_table_size";
 pub const INGEST_ID_KEY: &str = "_ingest_id";
+pub const DEL_PREFIXES_KEY: &str = "_del_prefixes";
 
 impl Shard {
     pub fn new(
@@ -98,7 +99,10 @@ impl Shard {
             parent_snap: RwLock::new(None),
         };
         if let Some(val) = get_shard_property(MEM_TABLE_SIZE_KEY, props) {
-            shard.set_max_mem_table_size(LittleEndian::read_u64(val.as_slice()))
+            shard.set_max_mem_table_size(LittleEndian::read_u64(val.as_slice()));
+        }
+        if let Some(val) = get_shard_property(DEL_PREFIXES_KEY, props) {
+            shard.set_del_prefix(&val);
         }
         shard
     }
@@ -152,6 +156,19 @@ impl Shard {
 
     pub(crate) fn set_max_mem_table_size(&self, size: u64) {
         self.max_mem_table_size.store(size, Release);
+    }
+
+    pub(crate) fn set_del_prefix(&self, val: &[u8]) {
+        let data = self.get_data();
+        let new_data = ShardData::new(
+            data.start.clone(),
+            data.end.clone(),
+            DeletePrefixes::unmarshal(val),
+            data.mem_tbls.clone(),
+            data.l0_tbls.clone(),
+            data.cfs.clone(),
+        );
+        self.set_data(new_data);
     }
 
     pub(crate) fn get_max_mem_table_size(&self) -> u64 {
@@ -264,6 +281,7 @@ impl Shard {
         let new_data = ShardData::new(
             self.start.clone(),
             self.end.clone(),
+            old_data.del_prefixes.clone(),
             new_mem_tbls,
             old_data.l0_tbls.clone(),
             old_data.cfs.clone(),
@@ -364,6 +382,7 @@ impl ShardData {
         Self::new(
             start,
             end,
+            DeletePrefixes::default(),
             vec![CFTable::new()],
             vec![],
             [ShardCF::new(0), ShardCF::new(1), ShardCF::new(2)],
@@ -373,6 +392,7 @@ impl ShardData {
     pub fn new(
         start: Bytes,
         end: Bytes,
+        del_prefixes: DeletePrefixes,
         mem_tbls: Vec<memtable::CFTable>,
         l0_tbls: Vec<L0Table>,
         cfs: [ShardCF; 3],
@@ -382,6 +402,7 @@ impl ShardData {
             core: Arc::new(ShardDataCore {
                 start,
                 end,
+                del_prefixes,
                 mem_tbls,
                 l0_tbls,
                 cfs,
@@ -393,6 +414,7 @@ impl ShardData {
 pub(crate) struct ShardDataCore {
     pub(crate) start: Bytes,
     pub(crate) end: Bytes,
+    pub(crate) del_prefixes: DeletePrefixes,
     pub(crate) mem_tbls: Vec<memtable::CFTable>,
     pub(crate) l0_tbls: Vec<L0Table>,
     pub(crate) cfs: [ShardCF; 3],
@@ -752,4 +774,117 @@ pub fn get_splitting_start_end<'a: 'b, 'b>(
         split_keys[i].as_slice()
     };
     (start_key, end_key)
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct DeletePrefixes {
+    prefixes: Vec<Vec<u8>>,
+}
+
+impl DeletePrefixes {
+    pub fn merge(&self, prefix: &[u8]) -> Self {
+        let mut new_prefixes = vec![];
+        for old_prefix in &self.prefixes {
+            if prefix.starts_with(old_prefix) {
+                // old prefix covers new prefix, do not need to change.
+                return self.clone();
+            }
+            if old_prefix.starts_with(prefix) {
+                // new prefix covers old prefix. old prefix can be dropped.
+                continue;
+            }
+            new_prefixes.push(old_prefix.clone());
+        }
+        new_prefixes.push(prefix.to_vec());
+        new_prefixes.sort_unstable();
+        Self {
+            prefixes: new_prefixes,
+        }
+    }
+
+    pub fn marshal(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for prefix in &self.prefixes {
+            buf.put_u16_le(prefix.len() as u16);
+            buf.extend_from_slice(prefix);
+        }
+        buf
+    }
+
+    pub fn unmarshal(mut data: &[u8]) -> Self {
+        let mut prefixes = vec![];
+        while !data.is_empty() {
+            let len = data.get_u16_le() as usize;
+            prefixes.push(data[..len].to_vec());
+            data.advance(len);
+        }
+        Self { prefixes }
+    }
+
+    pub fn build_split(&self, start: &[u8], end: &[u8]) -> Self {
+        let prefixes = self
+            .prefixes
+            .iter()
+            .filter(|prefix| {
+                (start <= prefix.as_slice() && prefix.as_slice() < end) || start.starts_with(prefix)
+            })
+            .cloned()
+            .collect();
+        Self { prefixes }
+    }
+
+    pub fn cover_prefix(&self, prefix: &[u8]) -> bool {
+        self.prefixes.iter().any(|old| prefix.starts_with(old))
+    }
+}
+
+#[test]
+fn test_delete_prefix() {
+    let mut del_prefix = DeletePrefixes::default();
+    del_prefix = del_prefix.merge("101".as_bytes());
+    assert_eq!(del_prefix.prefixes.len(), 1);
+    for prefix in ["1010", "101"] {
+        assert!(del_prefix.cover_prefix(prefix.as_bytes()));
+    }
+    for prefix in ["10", "103"] {
+        assert!(!del_prefix.cover_prefix(prefix.as_bytes()));
+    }
+
+    del_prefix = del_prefix.merge("105".as_bytes());
+    let bin = del_prefix.marshal();
+    del_prefix = DeletePrefixes::unmarshal(&bin);
+    assert_eq!(del_prefix.prefixes.len(), 2);
+    for prefix in ["1010", "101", "1050", "105"] {
+        assert!(del_prefix.cover_prefix(prefix.as_bytes()));
+    }
+    for prefix in ["10", "103"] {
+        assert!(!del_prefix.cover_prefix(prefix.as_bytes()));
+    }
+
+    del_prefix = del_prefix.merge("10".as_bytes());
+    assert_eq!(del_prefix.prefixes.len(), 1);
+    for prefix in ["10", "101", "103", "104"] {
+        assert!(del_prefix.cover_prefix(prefix.as_bytes()));
+    }
+    for prefix in ["1", "11"] {
+        assert!(!del_prefix.cover_prefix(prefix.as_bytes()));
+    }
+
+    del_prefix = DeletePrefixes::default();
+    del_prefix = del_prefix.merge("101".as_bytes());
+    del_prefix = del_prefix.merge("1033".as_bytes());
+    del_prefix = del_prefix.merge("1055".as_bytes());
+    del_prefix = del_prefix.merge("107".as_bytes());
+
+    let split_del_range = del_prefix.build_split("1033".as_bytes(), "1055".as_bytes());
+    assert_eq!(split_del_range.prefixes.len(), 1);
+    assert_eq!(&split_del_range.prefixes[0], "1033".as_bytes());
+
+    let split_del_range = del_prefix.build_split("1034".as_bytes(), "1055".as_bytes());
+    assert_eq!(split_del_range.prefixes.len(), 0);
+
+    let split_del_range = del_prefix.build_split("10334".as_bytes(), "10555".as_bytes());
+    assert_eq!(split_del_range.prefixes.len(), 2);
+    assert_eq!(&split_del_range.prefixes[0], "1033".as_bytes());
+    assert_eq!(&split_del_range.prefixes[1], "1055".as_bytes());
 }

@@ -14,7 +14,7 @@ use raftstore::store::util::KeysInfoFormatter;
 use tikv_util::time::Instant;
 
 use super::{Peer, RaftApplyState};
-use crate::store::{ApplyMetrics, ChangePeer, ExecResult, Proposal, RegionSnapshot};
+use crate::store::{ApplyMetrics, ChangePeer, ExecResult, Proposal, RegionIDVer, RegionSnapshot};
 
 #[derive(Debug)]
 pub enum PeerMsg {
@@ -66,8 +66,12 @@ pub(crate) enum ApplyMsg {
 
 pub enum StoreMsg {
     Tick,
-    Start { store: metapb::Store },
-    StoreUnreachable { store_id: u64 },
+    Start {
+        store: metapb::Store,
+    },
+    StoreUnreachable {
+        store_id: u64,
+    },
     GenerateEngineChangeSet(kvenginepb::ChangeSet),
     RaftMessage(kvproto::raft_serverpb::RaftMessage),
     SplitRegion(Vec<metapb::Region>),
@@ -75,6 +79,11 @@ pub enum StoreMsg {
     DestroyPeer(u64),
     SnapshotReady(u64),
     PendingNewRegions(Vec<u64>),
+    GetRegionsInRange {
+        start: Vec<u8>,
+        end: Vec<u8>,
+        callback: Box<dyn FnOnce(Vec<RegionIDVer>) + Send>,
+    },
 }
 
 #[derive(Debug)]
@@ -291,6 +300,11 @@ pub enum CasualMessage {
         policy: pdpb::CheckPolicy,
         source: &'static str,
     },
+    DeletePrefix {
+        region_version: u64,
+        prefix: Vec<u8>,
+        callback: Callback,
+    },
 }
 
 impl fmt::Debug for CasualMessage {
@@ -308,6 +322,9 @@ impl fmt::Debug for CasualMessage {
             ),
             CasualMessage::HalfSplitRegion { source, .. } => {
                 write!(fmt, "Half Split from {}", source)
+            }
+            CasualMessage::DeletePrefix { prefix, .. } => {
+                write!(fmt, "delete prefix {:?}", prefix)
             }
         }
     }

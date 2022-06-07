@@ -88,6 +88,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 sst_importer = { path = "../sst_importer" }
 tempfile = "3.0"
 thiserror = "1.0"
+tidb_query_common = { path = "../tidb_query_common" }
 tikv = { path = "../..", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_kv = { path = "../tikv_kv" }

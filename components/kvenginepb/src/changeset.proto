@@ -28,9 +28,10 @@ message ChangeSet {
   // The sequence value is not set by the DB when generating the change set, user have to assign the value.
   // If specified, we check sequence is monotonically increasing.
   uint64 sequence = 12;
-  uint64 nextMemTableSize = 13;
-  ChangeSet parent = 14;
-  IngestFiles ingest_files = 15;
+  ChangeSet parent = 13;
+  IngestFiles ingest_files = 14;
+  string property_key = 15;
+  bytes property_value = 16;
 }
 
 message Compaction {

@@ -410,11 +410,6 @@ impl Applier {
         }
     }
 
-    #[allow(unused)]
-    pub(crate) fn exec_delete_range(&mut self, kv: &kvengine::Engine, cl: &CustomRaftLog<'_>) {
-        // TODO(x)
-    }
-
     fn exec_admin_cmd(
         &mut self,
         ctx: &mut ApplyContext,
@@ -505,17 +500,9 @@ impl Applier {
                     self.ingest_callback = self.find_callback(log_index, ctx.exec_log_term, false);
                     self.paused = true;
                 }
-            }
-            TYPE_NEX_MEM_TABLE_SIZE => {
-                let mut cs = cl.get_change_set().unwrap();
-                cs.sequence = ctx.exec_log_index;
-                wb.set_property(
-                    kvengine::MEM_TABLE_SIZE_KEY,
-                    &cs.next_mem_table_size.to_le_bytes(),
-                );
-            }
-            TYPE_DELETE_RANGE => {
-                self.exec_delete_range(engine, cl);
+                if !cs.get_property_key().is_empty() {
+                    wb.set_property(cs.get_property_key(), cs.get_property_value());
+                }
             }
             _ => panic!("unknown custom log type"),
         }
@@ -1472,7 +1459,7 @@ pub(crate) fn build_split_pb(
         split.mut_new_shards().push(props);
     }
     for new_region in &new_regions[1..] {
-        split.mut_keys().push(raw_start_key(new_region).to_vec());
+        split.mut_keys().push(raw_start_key(new_region));
     }
     split
 }

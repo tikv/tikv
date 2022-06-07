@@ -210,6 +210,7 @@ impl EngineCore {
         let data = ShardData::new(
             shard.start.clone(),
             shard.end.clone(),
+            shard.get_data().del_prefixes.clone(),
             vec![CFTable::new()],
             l0s,
             scfs,

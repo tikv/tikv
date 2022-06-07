@@ -8,6 +8,7 @@ edition = "2021"
 cloud_server = { path = "../cloud_server" }
 futures = "0.3"
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+kvengine = { path = "../kvengine" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 pd_client = { path = "../pd_client", default-features = false }
 security = { path = "../security", default-features = false }

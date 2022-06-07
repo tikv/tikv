@@ -90,9 +90,13 @@ impl Engine {
                     new_cfs[cf].set_level(new_level);
                 }
             }
+            let new_del_prefixes = old_data
+                .del_prefixes
+                .build_split(&new_shard.start, &new_shard.end);
             let new_data = ShardData::new(
                 new_shard.start.clone(),
                 new_shard.end.clone(),
+                new_del_prefixes,
                 new_mem_tbls,
                 new_l0s,
                 new_cfs,

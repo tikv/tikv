@@ -102,6 +102,7 @@ pub struct CompactionRequest {
     pub shard_ver: u64,
     pub start: Vec<u8>,
     pub end: Vec<u8>,
+    pub del_prefixes: Vec<u8>,
 
     // Used for L1+ compaction.
     pub bottoms: Vec<u64>,
@@ -463,11 +464,13 @@ impl Engine {
         cf: isize,
         level: usize,
     ) -> CompactionRequest {
+        let shard_data = shard.get_data();
         CompactionRequest {
             shard_id: shard.id,
             shard_ver: shard.ver,
             start: shard.start.to_vec(),
             end: shard.end.to_vec(),
+            del_prefixes: shard_data.del_prefixes.marshal(),
             cf,
             level,
             safe_ts: load_u64(&self.managed_safe_ts),

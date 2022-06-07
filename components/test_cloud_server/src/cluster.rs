@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, ops::Range, path::Path, sync::Arc};
 
 use cloud_server::TiKVServer;
 use futures::executor::block_on;
@@ -92,6 +92,44 @@ impl ServerCluster {
 
     pub fn get_ts(&self) -> TimeStamp {
         block_on(self.pd_client.get_tso()).unwrap()
+    }
+
+    pub fn put_kv<F, G>(&self, rng: Range<usize>, gen_key: F, gen_val: G)
+    where
+        F: Fn(usize) -> Vec<u8>,
+        G: Fn(usize) -> Vec<u8>,
+    {
+        let start_key = gen_key(rng.start);
+        let ctx = self.new_rpc_context(&start_key);
+        let kv_client = self.get_kv_client(ctx.get_peer().get_store_id());
+        let start_ts = self.get_ts().into_inner();
+
+        let mut mutations = vec![];
+        for i in rng.clone() {
+            let mut m = Mutation::default();
+            m.set_op(Op::Put);
+            m.set_key(gen_key(i));
+            m.set_value(gen_val(i));
+            mutations.push(m)
+        }
+        test_raftstore::must_kv_prewrite(&kv_client, ctx.clone(), mutations, start_key, start_ts);
+        let mut keys = vec![];
+        for i in rng {
+            keys.push(gen_key(i))
+        }
+        let commit_ts = self.get_ts().into_inner();
+        test_raftstore::must_kv_commit(&kv_client, ctx, keys, start_ts, commit_ts, commit_ts);
+    }
+
+    pub fn get_kvengine(&self, node_id: u8) -> kvengine::Engine {
+        let server = self.servers.get(&node_id).unwrap();
+        server.get_kv_engine()
+    }
+
+    pub fn get_snap(&self, node_id: u8, key: &[u8]) -> kvengine::SnapAccess {
+        let engine = self.get_kvengine(node_id);
+        let ctx = self.new_rpc_context(key);
+        engine.get_snap_access(ctx.region_id).unwrap()
     }
 }
 

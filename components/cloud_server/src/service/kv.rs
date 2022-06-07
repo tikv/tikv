@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use api_version::KvFormat;
 use futures::{
@@ -264,35 +264,95 @@ impl<T: RaftStoreRouter + 'static, L: LockManager, F: KvFormat> Tikv for Service
 
     fn unsafe_destroy_range(
         &mut self,
-        _ctx: RpcContext<'_>,
-        _req: UnsafeDestroyRangeRequest,
-        _sink: UnarySink<UnsafeDestroyRangeResponse>,
+        ctx: RpcContext<'_>,
+        mut req: UnsafeDestroyRangeRequest,
+        sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
-        // let begin_instant = Instant::now_coarse();
-        // TODO(x)
-        /*
+        let begin_instant = Instant::now_coarse();
+        let start = req.take_start_key();
+        let end = req.take_end_key();
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
         // MAX_KEY as end here.
-        assert!(!req.get_start_key().is_empty());
-        assert!(!req.get_end_key().is_empty());
-
-        let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.unsafe_destroy_range(
-            req.take_context(),
-            Key::from_raw(&req.take_start_key()),
-            Key::from_raw(&req.take_end_key()),
-            cb,
-        );
-
+        if start.is_empty()
+            || end.is_empty()
+            // All unsafe destroy range issued by TiDB are prefix range.
+            // To simplify the logic, we only handle prefix delete range.
+            || !tidb_query_common::util::is_prefix_next(&start, &end)
+        {
+            ctx.spawn(
+                sink.fail(RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT))
+                    .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+            );
+            return;
+        }
+        let prefix = start.clone();
+        let (callback, future) = paired_future_callback();
+        self.ch.send_store_msg(StoreMsg::GetRegionsInRange {
+            start,
+            end,
+            callback,
+        });
+        let ch = self.ch.clone();
+        let kv = self.storage.get_engine().kv_engine();
         let task = async move {
-            let res = match res {
-                Err(e) => Err(e),
-                Ok(_) => f.await?,
-            };
             let mut resp = UnsafeDestroyRangeResponse::default();
-            // Region error is impossible here.
-            if let Err(e) = res {
-                resp.set_error(format!("{}", e));
+            let regions = future.await?;
+            let mut region_futures = vec![];
+            for region in &regions {
+                if let Some(snap) = kv.get_snap_access(region.id()) {
+                    if !snap.has_data_in_prefix(&prefix) {
+                        continue;
+                    }
+                }
+                let (cb, fu) = paired_future_callback();
+                let callback = Callback::write(Box::new(move |_| {
+                    cb(());
+                }));
+                region_futures.push(fu);
+                ch.send_casual_msg(
+                    region.id(),
+                    CasualMessage::DeletePrefix {
+                        region_version: region.ver(),
+                        prefix: prefix.clone(),
+                        callback,
+                    },
+                );
+            }
+            let _ = futures::future::join_all(region_futures).await;
+            // Wait and check if all regions have applied delete prefix.
+            let mut regions_applied = false;
+            for i in 1..=5 {
+                let mut applied = true;
+                for region in &regions {
+                    if let Some(snap) = kv.get_snap_access(region.id()) {
+                        if snap.has_data_in_prefix(&prefix) {
+                            applied = false;
+                            break;
+                        }
+                    }
+                }
+                if !applied {
+                    let deadline = std::time::Instant::now() + Duration::from_secs(i);
+                    let _ = GLOBAL_TIMER_HANDLE.delay(deadline).compat().await.is_ok();
+                    continue;
+                }
+                regions_applied = true;
+                break;
+            }
+            if regions_applied {
+                // At last, make sure all shards exists and not split.
+                for region in &regions {
+                    let res = kv.get_shard_with_ver(region.id(), region.ver());
+                    if res.is_err() {
+                        resp.set_error(format!(
+                            "region {} changed during delete range",
+                            region.id()
+                        ));
+                        break;
+                    }
+                }
+            } else {
+                resp.set_error("some region failed to delete range".to_string());
             }
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
@@ -300,17 +360,15 @@ impl<T: RaftStoreRouter + 'static, L: LockManager, F: KvFormat> Tikv for Service
                 .observe(duration_to_sec(begin_instant.saturating_elapsed()));
             ServerResult::Ok(())
         }
-            .map_err(|e| {
-                debug!("kv rpc failed";
+        .map_err(|e| {
+            debug!("kv rpc failed";
                 "request" => "unsafe_destroy_range",
                 "err" => ?e
             );
-                GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
-            })
-            .map(|_| ());
-
+            GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
+        })
+        .map(|_| ());
         ctx.spawn(task);
-         */
     }
 
     fn coprocessor_stream(
@@ -1459,8 +1517,10 @@ pub mod batch_commands_request {
 }
 
 use protobuf::RepeatedField;
+use rfstore::store::StoreMsg;
 use tikv::server::service::{GrpcRequestDuration, MeasuredBatchResponse, MeasuredSingleResponse};
 use tikv_alloc::MemoryTraceGuard;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::RaftKv;
 

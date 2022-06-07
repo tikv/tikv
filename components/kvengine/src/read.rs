@@ -311,6 +311,18 @@ impl SnapAccessCore {
         }
         table::Value::new()
     }
+
+    pub fn has_data_in_prefix(&self, prefix: &[u8]) -> bool {
+        if self.data.del_prefixes.cover_prefix(prefix) {
+            return false;
+        }
+        let mut it = self.new_iterator(0, false, false, Some(u64::MAX));
+        it.seek(prefix);
+        if !it.valid() {
+            return false;
+        }
+        it.key().starts_with(prefix)
+    }
 }
 
 pub struct Iterator {

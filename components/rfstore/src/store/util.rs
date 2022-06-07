@@ -241,7 +241,6 @@ pub(crate) const STORE_IDENT_KEY: &[u8] = &[3];
 pub(crate) const PREPARE_BOOTSTRAP_KEY: &[u8] = &[4];
 pub(crate) const KV_ENGINE_META_KEY: &[u8] = &[5];
 pub(crate) const EMPTY_KEY: &[u8] = &[];
-pub(crate) const RAW_INITIAL_START_KEY: &[u8] = &[2];
 pub(crate) const RAW_INITIAL_END_KEY: &[u8] = &[255, 255, 255, 255, 255, 255, 255, 255];
 
 pub(crate) fn raft_state_key(version: u64) -> Bytes {
@@ -266,26 +265,23 @@ pub(crate) fn parse_region_state_key(key: &[u8]) -> (u64, u64) {
 }
 
 // Get the `start_key` of current region in raw form.
-pub(crate) fn raw_start_key(region: &metapb::Region) -> Bytes {
+pub(crate) fn raw_start_key(region: &metapb::Region) -> Vec<u8> {
     // only initialized region's start_key can be encoded, otherwise there must be bugs
     // somewhere.
     if region.start_key.is_empty() {
-        // Data starts with 0x01 is used as local key.
-        return Bytes::from_static(RAW_INITIAL_START_KEY);
+        return EMPTY_KEY.to_vec();
     }
     let mut slice = region.start_key.as_slice();
-    let start_key = decode_bytes(&mut slice, false).unwrap();
-    Bytes::from(start_key)
+    decode_bytes(&mut slice, false).unwrap()
 }
 
 // Get the `end_key` of current region in raw form.
-pub(crate) fn raw_end_key(region: &metapb::Region) -> Bytes {
+pub(crate) fn raw_end_key(region: &metapb::Region) -> Vec<u8> {
     // only initialized region's end_key can be encoded, otherwise there must be bugs
     // somewhere.
     if region.end_key.is_empty() {
-        return Bytes::from_static(RAW_INITIAL_END_KEY);
+        return RAW_INITIAL_END_KEY.to_vec();
     }
     let mut slice = region.end_key.as_slice();
-    let end_key = decode_bytes(&mut slice, false).unwrap();
-    Bytes::from(end_key)
+    decode_bytes(&mut slice, false).unwrap()
 }

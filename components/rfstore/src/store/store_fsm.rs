@@ -2,12 +2,14 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    ops::{Deref, DerefMut},
+    ops::{
+        Bound::{Excluded, Unbounded},
+        Deref, DerefMut,
+    },
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use bytes::Bytes;
 use concurrency_manager::ConcurrencyManager;
 use fail::fail_point;
 use kvproto::{
@@ -270,7 +272,7 @@ pub struct StoreMeta {
     /// store id
     pub store_id: Option<u64>,
     /// region_end_key -> region_id
-    pub region_ranges: BTreeMap<Bytes, u64>,
+    pub region_ranges: BTreeMap<Vec<u8>, u64>,
     /// region_id -> region
     pub regions: HashMap<u64, Region>,
 
@@ -534,6 +536,13 @@ impl<'a> StoreMsgHandler<'a> {
                 apply_region = self.on_snapshot_ready(region_id);
             }
             StoreMsg::PendingNewRegions(new_regions) => self.on_pending_new_regions(new_regions),
+            StoreMsg::GetRegionsInRange {
+                start,
+                end,
+                callback,
+            } => {
+                self.on_get_regions_in_range(start, end, callback);
+            }
         }
         apply_region
     }
@@ -1311,5 +1320,28 @@ impl<'a> StoreMsgHandler<'a> {
         let store_meta = &mut self.ctx.store_meta;
         peer_fsm.peer.handle_raft_ready(raft_ctx, Some(store_meta));
         self.maybe_apply(region_id)
+    }
+
+    fn on_get_regions_in_range(
+        &mut self,
+        start: Vec<u8>,
+        end: Vec<u8>,
+        callback: Box<dyn FnOnce(Vec<RegionIDVer>) + Send>,
+    ) {
+        let mut regions = vec![];
+        for (_, region_id) in self
+            .ctx
+            .store_meta
+            .region_ranges
+            .range((Excluded(start.clone()), Unbounded))
+        {
+            let region = self.ctx.store_meta.regions.get(region_id).unwrap();
+            let region_start_key = raw_start_key(region);
+            if region_start_key >= end {
+                break;
+            }
+            regions.push(RegionIDVer::from_region(region));
+        }
+        callback(regions)
     }
 }

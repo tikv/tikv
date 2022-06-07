@@ -100,6 +100,7 @@ impl EngineCore {
             let new_data = ShardData::new(
                 shard.start.clone(),
                 shard.end.clone(),
+                old_data.del_prefixes.clone(),
                 new_mem_tbls,
                 new_l0_tbls,
                 old_data.cfs.clone(),
@@ -123,7 +124,14 @@ impl EngineCore {
             }
             !flushed
         });
-        let new_data = ShardData::new(shard.start.clone(), shard.end.clone(), mem_tbls, l0s, scfs);
+        let new_data = ShardData::new(
+            shard.start.clone(),
+            shard.end.clone(),
+            data.del_prefixes.clone(),
+            mem_tbls,
+            l0s,
+            scfs,
+        );
         shard.set_data(new_data);
         store_bool(&shard.initial_flushed, true);
     }
@@ -171,6 +179,7 @@ impl EngineCore {
         let new_data = ShardData::new(
             shard.start.clone(),
             shard.end.clone(),
+            data.del_prefixes.clone(),
             data.mem_tbls.clone(),
             new_l0s,
             new_cfs,
@@ -297,6 +306,7 @@ impl EngineCore {
             let new_data = ShardData::new(
                 shard.start.clone(),
                 shard.end.clone(),
+                old_data.del_prefixes.clone(),
                 old_data.mem_tbls.clone(),
                 new_l0s,
                 old_data.cfs.clone(),
@@ -331,6 +341,7 @@ impl EngineCore {
         let new_data = ShardData::new(
             shard.start.clone(),
             shard.end.clone(),
+            old_data.del_prefixes.clone(),
             old_data.mem_tbls.clone(),
             old_data.l0_tbls.clone(),
             new_cfs,
