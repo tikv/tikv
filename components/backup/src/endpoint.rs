@@ -226,7 +226,7 @@ async fn save_backup_file_worker(
                         file.set_end_version(msg.end_version.into_inner());
                     }
                     if has_err {
-                        Err(Error::Other(box_err!("backup convert key range failed")))
+                        Err(box_err!("backup convert key range failed"))
                     } else {
                         Ok(split_files)
                     }
