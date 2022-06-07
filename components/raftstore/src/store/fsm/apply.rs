@@ -5420,8 +5420,8 @@ mod tests {
             sender,
             region_scheduler,
             coprocessor_host: host,
-            importer: importer.clone(),
-            engine: engine.clone(),
+            importer,
+            engine,
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
@@ -5463,7 +5463,7 @@ mod tests {
         };
         apply1.bucket_meta = Some(Arc::new(bucket_meta));
 
-        let mut apply2 = apply(1, 1, 1, vec![entry2], vec![cb(2, 1, capture_tx.clone())]);
+        let mut apply2 = apply(1, 1, 1, vec![entry2], vec![cb(2, 1, capture_tx)]);
         let mut bucket_meta2 = BucketMeta {
             region_id: 1,
             region_epoch: RegionEpoch::default(),
