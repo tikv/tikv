@@ -20,7 +20,7 @@ num-traits = "0.2"
 openssl = { version = "0.10" }
 protobuf = "2"
 rand = "0.8.3"
-regex = "1.1"
+regex = "1.5"
 safemem = { version = "0.3", default-features = false }
 serde = "1.0"
 serde_json = "1.0"
