@@ -710,8 +710,9 @@ impl<'a> PeerMsgHandler<'a> {
         let importer = self.ctx.global.importer.clone();
         let router = self.ctx.global.router.clone();
         let kv = self.ctx.global.engines.kv.clone();
+        let shard_meta = self.peer.get_store().shard_meta.as_ref().unwrap().clone();
         std::thread::spawn(move || {
-            match convert_sst(kv, importer, &msg) {
+            match convert_sst(kv, importer, &msg, shard_meta) {
                 Ok(cs) => {
                     // Make ingest command.
                     let mut cmd = RaftCmdRequest::default();

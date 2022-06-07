@@ -294,56 +294,32 @@ impl EngineCore {
                 return Ok(());
             }
         }
-        let has_ln_table = !ingest_files.get_table_creates().is_empty();
         let old_data = shard.get_data();
-        if !has_ln_table {
-            let mut new_l0s = vec![];
-            for l0_create in ingest_files.get_l0_creates() {
-                let l0 = cs.l0_tables.get(&l0_create.get_id()).unwrap().clone();
-                new_l0s.push(l0);
-            }
-            new_l0s.extend_from_slice(&old_data.l0_tbls);
-            let new_data = ShardData::new(
-                shard.start.clone(),
-                shard.end.clone(),
-                old_data.del_prefixes.clone(),
-                old_data.mem_tbls.clone(),
-                new_l0s,
-                old_data.cfs.clone(),
-            );
-            shard.set_data(new_data);
-            return Ok(());
+        let mut new_l0s = old_data.l0_tbls.clone();
+        for l0_create in ingest_files.get_l0_creates() {
+            let l0_table = cs.l0_tables.get(&l0_create.get_id()).unwrap().clone();
+            new_l0s.push(l0_table);
         }
-        let mut ingest_level = 0;
-        if old_data.l0_tbls.is_empty() {
-            for level in &old_data.cfs[0].levels {
-                if level.tables.is_empty() {
-                    ingest_level = level.level;
-                } else {
-                    break;
-                }
+        new_l0s.sort_unstable_by(|a, b| b.version().cmp(&a.version()));
+        let mut scf_builder = ShardCFBuilder::new(0);
+        for level in &old_data.cfs[0].levels {
+            for old_tbl in level.tables.as_ref() {
+                scf_builder.add_table(old_tbl.clone(), level.level);
             }
         }
-        if ingest_level == 0 && has_ln_table {
-            return Err(Error::IngestFiles(
-                "no spare level to ingest files".to_string(),
-            ));
-        }
-        let mut tables = vec![];
         for tbl_create in ingest_files.get_table_creates() {
             let table = cs.ln_tables.get(&tbl_create.get_id()).unwrap().clone();
-            tables.push(table);
+            scf_builder.add_table(table, tbl_create.level as usize);
         }
-        tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
-        let new_level = LevelHandler::new(ingest_level, tables);
+        let new_cf = scf_builder.build();
         let mut new_cfs = old_data.cfs.clone();
-        new_cfs[0].set_level(new_level);
+        new_cfs[0] = new_cf;
         let new_data = ShardData::new(
             shard.start.clone(),
             shard.end.clone(),
             old_data.del_prefixes.clone(),
             old_data.mem_tbls.clone(),
-            old_data.l0_tbls.clone(),
+            new_l0s,
             new_cfs,
         );
         shard.set_data(new_data);

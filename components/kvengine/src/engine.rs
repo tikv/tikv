@@ -27,7 +27,7 @@ use crate::{
     meta::ShardMeta,
     table::{
         memtable::CFTable,
-        sstable::{BlockCacheKey, MAGIC_NUMBER, NO_COMPRESSION, ZSTD_COMPRESSION},
+        sstable::{BlockCacheKey, MAGIC_NUMBER, ZSTD_COMPRESSION},
     },
     *,
 };
@@ -352,8 +352,8 @@ impl EngineCore {
         shard_id: u64,
         shard_ver: u64,
         mut iter: Box<dyn table::Iterator>,
-        level: u32,
         ingest_id: Vec<u8>,
+        meta: ShardMeta,
     ) -> Result<kvenginepb::ChangeSet> {
         let shard = self.get_shard_with_ver(shard_id, shard_ver)?;
         let l0_version = shard.load_mem_table_version();
@@ -369,12 +369,7 @@ impl EngineCore {
         let mut tbl_cnt = 0;
         let block_size = self.opts.table_builder_options.block_size;
         let max_table_size = self.opts.table_builder_options.max_table_size;
-        let compress_tp = if level == 0 {
-            NO_COMPRESSION
-        } else {
-            ZSTD_COMPRESSION
-        };
-        let mut builder = table::sstable::Builder::new(0, block_size, compress_tp);
+        let mut builder = table::sstable::Builder::new(0, block_size, ZSTD_COMPRESSION);
         let mut fids = vec![];
         iter.rewind();
         while iter.valid() {
@@ -390,6 +385,7 @@ impl EngineCore {
                     info!("builder estimated_size {}", builder.estimated_size());
                     let mut buf = BytesMut::with_capacity(builder.estimated_size());
                     let res = builder.finish(0, &mut buf);
+                    let level = meta.get_ingest_level(&res.smallest, &res.biggest);
                     if level == 0 {
                         let mut offsets = vec![buf.len() as u32; NUM_CFS];
                         offsets[0] = 0;

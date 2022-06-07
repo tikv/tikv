@@ -8,7 +8,7 @@ use std::{
 
 use engine_rocks::RocksSstReader;
 use engine_traits::{Iterator as TraitIterator, SstReader, CF_DEFAULT, CF_WRITE};
-use kvengine::table::Value;
+use kvengine::{table::Value, ShardMeta};
 use kvproto::{import_sstpb::SstMeta, raft_cmdpb::RaftCmdRequest};
 use sst_importer::SstImporter;
 use tikv_util::{codec, error, info};
@@ -20,6 +20,7 @@ pub(crate) fn convert_sst(
     kv: kvengine::Engine,
     importer: Arc<SstImporter>,
     req: &RaftCmdRequest,
+    shard_meta: ShardMeta,
 ) -> crate::Result<kvenginepb::ChangeSet> {
     info!("convert sst {:?}", req);
     let region_id = req.get_header().get_region_id();
@@ -57,25 +58,12 @@ pub(crate) fn convert_sst(
         combined_iters.push(combined_iter);
     }
     let concat_iter = ConcatIterator::new(combined_iters);
-    // TODO(x): check if the old data in the shard overlap with the ingested files, so we can
-    // ingest to lower level.
-    let mut level = 0;
-    let shard = kv.get_shard_with_ver(region_id, region_ver)?;
-    let stats = shard.get_stats();
-    if stats.l0_table_count == 0 {
-        let cf_stats = &stats.cfs[0];
-        for l in cf_stats.levels.iter() {
-            if l.num_tables == 0 {
-                level = l.level as u32;
-            }
-        }
-    }
     let cs = kv.build_ingest_files(
         region_id,
         region_ver,
         Box::new(concat_iter),
-        level,
         ingest_id,
+        shard_meta,
     )?;
     Ok(cs)
 }

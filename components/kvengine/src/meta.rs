@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use kvenginepb as pb;
 use protobuf::Message;
 use slog_global::*;
@@ -404,6 +404,22 @@ impl ShardMeta {
     pub fn overlap_table(&self, smallest: &[u8], biggest: &[u8]) -> bool {
         self.start.as_slice() <= biggest && smallest < self.end.as_slice()
     }
+
+    pub(crate) fn get_ingest_level(&self, smallest: &[u8], biggest: &[u8]) -> u32 {
+        let mut lowest_overlap_level = 4;
+        for file in self.files.values() {
+            if biggest < file.smallest.chunk() || file.biggest.chunk() < smallest {
+                continue;
+            } else if lowest_overlap_level > file.level {
+                lowest_overlap_level = file.level;
+            }
+        }
+        if lowest_overlap_level > 0 {
+            lowest_overlap_level as u32 - 1
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -443,4 +459,49 @@ trait MetaReader {
     fn iterate_meta<F>(&self, f: F) -> Result<()>
     where
         F: Fn(&pb::ChangeSet) -> Result<()>;
+}
+
+#[test]
+fn test_ingest_level() {
+    let mut cs = new_change_set(1, 1);
+    let snap = cs.mut_snapshot();
+    snap.set_end(GLOBAL_SHARD_END_KEY.to_vec());
+    let mut id = 0;
+    let mut make_table = |level: u32, smallest: &str, biggest: &str| {
+        id += 1;
+        let mut tbl = pb::TableCreate::new();
+        tbl.id = id;
+        tbl.level = level;
+        tbl.smallest = smallest.as_bytes().to_vec();
+        tbl.biggest = biggest.as_bytes().to_vec();
+        tbl
+    };
+    let tables = snap.mut_table_creates();
+    tables.push(make_table(3, "1000", "2000"));
+    tables.push(make_table(2, "1500", "2500"));
+    tables.push(make_table(1, "2100", "3100"));
+
+    let mut tbl4 = pb::L0Create::new();
+    tbl4.id = 4;
+    tbl4.smallest = "3000".as_bytes().to_vec();
+    tbl4.biggest = "4000".as_bytes().to_vec();
+    snap.mut_l0_creates().push(tbl4);
+
+    let meta = ShardMeta::new(&cs);
+    let assert_get_ingest_level = |smallest: &str, biggest: &str, level| {
+        assert_eq!(
+            meta.get_ingest_level(smallest.as_bytes(), biggest.as_bytes()),
+            level
+        );
+    };
+    //                       [3000, 4000]
+    //              [2100, 3100]
+    //      [1500, 2500]
+    // [1000, 2000]
+    assert_get_ingest_level("0000", "0999", 3);
+    assert_get_ingest_level("4001", "5000", 3);
+    assert_get_ingest_level("1000", "1499", 2);
+    assert_get_ingest_level("2000", "2099", 1);
+    assert_get_ingest_level("2500", "3500", 0);
+    assert_get_ingest_level("4000", "5000", 0);
 }
