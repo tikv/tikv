@@ -2615,7 +2615,6 @@ dependencies = [
  "panic_hook",
  "thiserror",
  "tikv_alloc",
- "tikv_util",
 ]
 
 [[package]]
@@ -4484,7 +4483,6 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "thread-id",
  "tikv_util",
 ]
 
@@ -5771,17 +5769,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "thread-id"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fdfe0627923f7411a43ec9ec9c39c3a9b4151be313e0922042581fb6c9b717f"
-dependencies = [
- "libc 0.2.125",
- "redox_syscall 0.2.11",
- "winapi 0.3.9",
 ]
 
 [[package]]
