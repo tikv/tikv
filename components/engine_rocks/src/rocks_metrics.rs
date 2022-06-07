@@ -1233,11 +1233,10 @@ lazy_static! {
     pub static ref STORE_ENGINE_CACHE_EFFICIENCY: EngineTickerMetrics =
         auto_flush_from!(STORE_ENGINE_CACHE_EFFICIENCY_VEC, EngineTickerMetrics);
 
-    pub static ref STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC: IntCounterVec = register_int_counter_vec_with_registry!(
+    pub static ref STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_memtable_efficiency",
         "Hit and miss of memtable",
-        &["db", "type"],
-        HIGH_PRIORITY_REGISTRY
+        &["db", "type"]
     ).unwrap();
     pub static ref STORE_ENGINE_MEMTABLE_EFFICIENCY: EngineTickerMetrics =
         auto_flush_from!(STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC, EngineTickerMetrics);
@@ -1260,11 +1259,10 @@ lazy_static! {
     pub static ref STORE_ENGINE_WRITE_SERVED: EngineTickerMetrics =
         auto_flush_from!(STORE_ENGINE_WRITE_SERVED_VEC, EngineTickerMetrics);
 
-    pub static ref STORE_ENGINE_BLOOM_EFFICIENCY_VEC: IntCounterVec = register_int_counter_vec_with_registry!(
+    pub static ref STORE_ENGINE_BLOOM_EFFICIENCY_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_bloom_efficiency",
         "Efficiency of rocksdb's bloom filter",
-        &["db", "type"],
-        HIGH_PRIORITY_REGISTRY
+        &["db", "type"]
     ).unwrap();
     pub static ref STORE_ENGINE_BLOOM_EFFICIENCY: EngineTickerMetrics =
         auto_flush_from!(STORE_ENGINE_BLOOM_EFFICIENCY_VEC, EngineTickerMetrics);
@@ -1327,11 +1325,10 @@ lazy_static! {
         linear_buckets(0.0, 1.0, 7).unwrap(),
         HIGH_PRIORITY_REGISTRY
     ).unwrap();
-    pub static ref STORE_ENGINE_LOCATE_VEC: IntCounterVec = register_int_counter_vec_with_registry!(
+    pub static ref STORE_ENGINE_LOCATE_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_locate",
         "Number of calls to seek/next/prev",
-        &["db", "type"],
-        HIGH_PRIORITY_REGISTRY
+        &["db", "type"]
     ).unwrap();
     pub static ref STORE_ENGINE_LOCATE: EngineTickerMetrics =
         auto_flush_from!(STORE_ENGINE_LOCATE_VEC, EngineTickerMetrics);

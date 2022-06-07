@@ -979,7 +979,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         initial_metric(&self.config.metric);
         // init metrics glboal variables
-        metrics::set_metrics_compact_level(self.config.server.metrics_compact_level);
+        metrics::set_metrics_compact_policy(self.config.server.metrics_compact_policy);
         metrics::set_metrics_level(self.config.server.metrics_level);
         if self.config.storage.enable_ttl {
             ttl_checker.start_with_timer(TtlChecker::new(

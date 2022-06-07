@@ -51,34 +51,35 @@ lazy_static! {
     pub static ref HIGH_PRIORITY_REGISTRY: Registry = Registry::new();
 }
 
-static METRICS_COMPACT_LEVZEL: AtomicU32 = AtomicU32::new(MetricsCompactLevel::NoCompact as u32);
+static METRICS_COMPACT_LEVZEL: AtomicU32 =
+    AtomicU32::new(MetricsCompactPolicy::NoCompaction as u32);
 static METRICS_LEVEL: AtomicU32 = AtomicU32::new(MetricsLevel::All as u32);
 
 // reduce the return frequency of normal metrics factor
 const NORMAL_METRICS_REDUCE_FACTOR: u64 = 2;
 static METRICS_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub fn set_metrics_compact_level(level: MetricsCompactLevel) {
-    METRICS_COMPACT_LEVZEL.store(level as u32, Ordering::Relaxed);
+pub fn set_metrics_compact_policy(level: MetricsCompactPolicy) {
+    METRICS_COMPACT_LEVZEL.store(level as u32, Ordering::Release);
 }
 
-pub fn get_metrics_compact_level() -> MetricsCompactLevel {
-    METRICS_COMPACT_LEVZEL.load(Ordering::Relaxed).into()
+pub fn get_metrics_compact_policy() -> MetricsCompactPolicy {
+    METRICS_COMPACT_LEVZEL.load(Ordering::Acquire).into()
 }
 
 pub fn set_metrics_level(level: MetricsLevel) {
-    METRICS_LEVEL.store(level as u32, Ordering::Relaxed);
+    METRICS_LEVEL.store(level as u32, Ordering::Release);
 }
 
 pub fn get_metrics_level() -> MetricsLevel {
-    METRICS_LEVEL.load(Ordering::Relaxed).into()
+    METRICS_LEVEL.load(Ordering::Acquire).into()
 }
 
 pub fn should_return_normal_metrics() -> bool {
     let metrics_level = get_metrics_level();
-    metrics_level == MetricsLevel::All
-        || (metrics_level == MetricsLevel::ReduceFrequency
-            && (METRICS_REQUEST_COUNTER.load(Ordering::Relaxed) % NORMAL_METRICS_REDUCE_FACTOR
+    metrics_level < MetricsLevel::Middle
+        || (metrics_level == MetricsLevel::Middle
+            && (METRICS_REQUEST_COUNTER.load(Ordering::Acquire) % NORMAL_METRICS_REDUCE_FACTOR
                 == 0))
 }
 
@@ -99,10 +100,10 @@ pub fn dump_to(w: &mut impl Write) {
 }
 
 pub fn dump_metrics_to(w: &mut impl Write, metric_families: Vec<MetricFamily>) {
-    let simplify_level = get_metrics_compact_level();
+    let compact_policy = get_metrics_compact_policy();
 
     let encoder = TextEncoder::new();
-    if simplify_level == MetricsCompactLevel::NoCompact {
+    if compact_policy == MetricsCompactPolicy::NoCompaction {
         if let Err(e) = encoder.encode(&*metric_families, w) {
             warn!("prometheus encoding error"; "err" => ?e);
         }
@@ -117,7 +118,7 @@ pub fn dump_metrics_to(w: &mut impl Write, metric_families: Vec<MetricFamily>) {
                 metrics.retain(|m| m.get_counter().get_value() > 0.0);
             }
             MetricType::HISTOGRAM => {
-                let threshold = if simplify_level == MetricsCompactLevel::LoseLess {
+                let threshold = if compact_policy == MetricsCompactPolicy::LoseLessCompaction {
                     0
                 } else {
                     // only retain histogram that the sample count > 0.01 * max_sample_count
@@ -186,50 +187,63 @@ pub fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
         .collect()
 }
 
-/// MetricsCompactLevel defines the level of compact metrics sample data, a higher level of
+/// MetricsCompactPolicy defines the level of compact metrics sample data, a higher level of
 /// means smaller data size and more information loss.
 #[derive(Serialize_repr, Deserialize_repr, Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
-pub enum MetricsCompactLevel {
-    // return full original data.
-    NoCompact = 0,
+pub enum MetricsCompactPolicy {
+    // return full original data, this is the default policy.
+    NoCompaction = 0,
     // this level try to compact sample without infromation loss.
     // currently only filter counter with 0 value and histogram with 0 samples.
-    LoseLess = 1,
+    LoseLessCompaction = 1,
     // this level try to reduce the data size as much as possible.
     // this level also compact histogram vector type by remove histograms which sample count is
     // smaller than 1% of the max sample count.
-    Aggressive = 2,
+    LossyCompaction = 2,
 }
 
-impl From<u32> for MetricsCompactLevel {
+impl Ord for MetricsCompactPolicy {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (*self as u32).cmp(&(*other as u32))
+    }
+}
+
+impl PartialOrd for MetricsCompactPolicy {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl From<u32> for MetricsCompactPolicy {
     fn from(v: u32) -> Self {
         match v {
-            0 => Self::NoCompact,
-            1 => Self::LoseLess,
-            2 => Self::Aggressive,
-            _ => unreachable!(),
+            0 => MetricsCompactPolicy::NoCompaction,
+            1 => MetricsCompactPolicy::LoseLessCompaction,
+            2 => MetricsCompactPolicy::LossyCompaction,
+            // all unknown value will be treat as the default value.
+            _ => MetricsCompactPolicy::NoCompaction,
         }
     }
 }
 
-impl From<MetricsCompactLevel> for ConfigValue {
-    fn from(l: MetricsCompactLevel) -> ConfigValue {
+impl From<MetricsCompactPolicy> for ConfigValue {
+    fn from(l: MetricsCompactPolicy) -> ConfigValue {
         ConfigValue::U32(l as u32)
     }
 }
 
-impl From<ConfigValue> for MetricsCompactLevel {
-    fn from(c: ConfigValue) -> MetricsCompactLevel {
+impl From<ConfigValue> for MetricsCompactPolicy {
+    fn from(c: ConfigValue) -> MetricsCompactPolicy {
         if let ConfigValue::U32(v) = c {
             v.into()
         } else {
-            panic!("expect: ConfigValue::U32, got: {:?}", c);
+            panic!("expect ConfigValue::U32 found {:?}", c)
         }
     }
 }
 
-impl From<&ConfigValue> for MetricsCompactLevel {
+impl From<&ConfigValue> for MetricsCompactPolicy {
     fn from(c: &ConfigValue) -> Self {
         c.clone().into()
     }
@@ -239,21 +253,36 @@ impl From<&ConfigValue> for MetricsCompactLevel {
 #[derive(Serialize_repr, Deserialize_repr, Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 pub enum MetricsLevel {
-    // return all metrics, the lowest level.
+    /// return all metrics, the lowest level, this is the default level.
     All = 0,
-    // always return high priority metrics, returns low level metrics with a low freq (1/2 for now).
-    ReduceFrequency = 1,
-    // only return high priority metrics
-    OnlyHighPriority = 2,
+    // we reserve some value here for furture usage.
+    /// always return high priority metrics, returns default level metrics with a low freq (1/2 for now).
+    Middle = 5,
+    // only return metrics registered in `HIGH_PRIORITY_REGISTRY`.
+    High = 10,
+}
+
+
+impl Ord for MetricsLevel {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (*self as u32).cmp(&(*other as u32))
+    }
+}
+
+impl PartialOrd for MetricsLevel {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl From<u32> for MetricsLevel {
     fn from(v: u32) -> Self {
         match v {
-            0 => Self::All,
-            1 => Self::ReduceFrequency,
-            2 => Self::OnlyHighPriority,
-            _ => unreachable!(),
+            0 => MetricsLevel::All,
+            5 => MetricsLevel::Middle,
+            10 => MetricsLevel::High,
+            // all unknown value will be treat as the default value.
+            _ => MetricsLevel::All,
         }
     }
 }
@@ -269,7 +298,7 @@ impl From<ConfigValue> for MetricsLevel {
         if let ConfigValue::U32(v) = c {
             v.into()
         } else {
-            panic!("expect: ConfigValue::U32, got: {:?}", c);
+            panic!("expect ConfigValue::U32 found {:?}", c)
         }
     }
 }
@@ -311,12 +340,12 @@ mod tests {
         }
 
         // test all data is 0.
-        set_metrics_compact_level(MetricsCompactLevel::NoCompact);
+        set_metrics_compact_policy(MetricsCompactPolicy::NoCompaction);
         let full_metrics = dump();
         assert!(!full_metrics.is_empty());
         check_duplicate(&full_metrics);
 
-        set_metrics_compact_level(MetricsCompactLevel::LoseLess);
+        set_metrics_compact_policy(MetricsCompactPolicy::LoseLessCompaction);
         let filtered_metrics = dump();
         check_duplicate(&full_metrics);
         assert!(full_metrics.len() > filtered_metrics.len());
@@ -325,13 +354,13 @@ mod tests {
         histogram.with_label_values(&["test"]).observe(1.0);
         gauge.inc();
 
-        set_metrics_compact_level(MetricsCompactLevel::NoCompact);
+        set_metrics_compact_policy(MetricsCompactPolicy::NoCompaction);
         let new_full_metrics = dump();
         assert!(!new_full_metrics.is_empty());
         check_duplicate(&new_full_metrics);
         assert!(new_full_metrics.len() > full_metrics.len());
 
-        set_metrics_compact_level(MetricsCompactLevel::LoseLess);
+        set_metrics_compact_policy(MetricsCompactPolicy::LoseLessCompaction);
         let new_filtered_metrics = dump();
         check_duplicate(&new_filtered_metrics);
         assert!(new_filtered_metrics.len() > filtered_metrics.len());

@@ -10,7 +10,7 @@ pub use raftstore::store::Config as RaftStoreConfig;
 use regex::Regex;
 use tikv_util::{
     config::{self, ReadableDuration, ReadableSize, VersionTrack},
-    metrics::{MetricsCompactLevel, MetricsLevel},
+    metrics::{MetricsCompactPolicy, MetricsLevel},
     sys::SysQuota,
     worker::Scheduler,
 };
@@ -177,7 +177,7 @@ pub struct Config {
 
     // the level of metrics compression
     #[doc(hidden)]
-    pub metrics_compact_level: MetricsCompactLevel,
+    pub metrics_compact_policy: MetricsCompactPolicy,
     // metrics filter level
     #[doc(hidden)]
     pub metrics_level: MetricsLevel,
@@ -261,7 +261,7 @@ impl Default for Config {
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
             simplify_metrics: false,
-            metrics_compact_level: MetricsCompactLevel::NoCompact,
+            metrics_compact_policy: MetricsCompactPolicy::NoCompaction,
             metrics_level: MetricsLevel::All,
         }
     }
@@ -393,9 +393,11 @@ impl Config {
         }
 
         // migrate legacy metrics config.
-        // simplify_metrics == ture has the same effect with MetricsCompactLevel::LoseLess
-        if self.simplify_metrics && self.metrics_compact_level == MetricsCompactLevel::NoCompact {
-            self.metrics_compact_level = MetricsCompactLevel::LoseLess;
+        // simplify_metrics == ture has the same effect with MetricsCompactPolicy::LoseLess
+        if self.simplify_metrics
+            && self.metrics_compact_policy == MetricsCompactPolicy::NoCompaction
+        {
+            self.metrics_compact_policy = MetricsCompactPolicy::LoseLessCompaction;
         }
 
         Ok(())
@@ -447,11 +449,21 @@ impl ConfigManager for ServerConfigManager {
                     .clone()
                     .resize_memory(mem_quota.0 as usize);
             }
-            if let Some(value) = c.get("metrics_compact_level") {
-                tikv_util::metrics::set_metrics_compact_level(value.into());
+            if let Some(value) = c.get("metrics_compact_policy") {
+                let v: u32 = value.into();
+                let policy = MetricsCompactPolicy::from(v);
+                if policy as u32 != v {
+                    return Err(format!("invalid metrics compact policy value '{}'", v).into());
+                }
+                tikv_util::metrics::set_metrics_compact_policy(policy);
             }
             if let Some(value) = c.get("metrics_level") {
-                tikv_util::metrics::set_metrics_level(value.into());
+                let v: u32 = value.into();
+                let level = MetricsLevel::from(v);
+                if level as u32 != v {
+                    return Err(format!("invalid metrics level '{}'", v).into());
+                }
+                tikv_util::metrics::set_metrics_level(level);
             }
             if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);

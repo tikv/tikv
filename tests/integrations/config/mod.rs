@@ -36,7 +36,7 @@ use tikv::{
 };
 use tikv_util::{
     config::{LogFormat, ReadableDuration, ReadableSize},
-    metrics::{MetricsCompactLevel, MetricsLevel},
+    metrics::{MetricsCompactPolicy, MetricsLevel},
 };
 
 mod dynamic;
@@ -122,7 +122,7 @@ fn test_serde_custom_tikv_config() {
         forward_max_connections_per_address: 5,
         reject_messages_on_memory_ratio: 0.8,
         simplify_metrics: false,
-        metrics_compact_level: MetricsCompactLevel::NoCompact,
+        metrics_compact_policy: MetricsCompactPolicy::NoCompaction,
         metrics_level: MetricsLevel::All,
     };
     value.readpool = ReadPoolConfig {

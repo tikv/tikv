@@ -203,16 +203,16 @@ impl Collector for ThreadsCollector {
                 }
             }
         }
-        let simplify_level = get_metrics_compact_level();
+        let compact_policy = get_metrics_compact_policy();
         let simplify_metrics = |mut mfs: Vec<proto::MetricFamily>| {
-            if simplify_level == MetricsCompactLevel::NoCompact {
+            if compact_policy == MetricsCompactPolicy::NoCompaction {
                 return mfs;
             }
             mfs.retain_mut(|mf| {
                 let mut metrics = mf.take_metric().into_vec();
                 // there are more than 100 threads and most of them are inactive,
                 // so only retain the sample which value >= 0.01 * max_sample_value
-                let threshold = if simplify_level == MetricsCompactLevel::LoseLess {
+                let threshold = if compact_policy == MetricsCompactPolicy::LoseLessCompaction {
                     0.
                 } else {
                     metrics
