@@ -1,12 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    ops::Deref,
-    os::unix::fs::{FileExt, MetadataExt},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::{ops::Deref, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -18,7 +12,7 @@ use rusoto_s3::{
 use tikv_util::time::Instant;
 use tokio::{io::AsyncReadExt, runtime::Runtime};
 
-use crate::dfs::{new_filename, File, Options, DFS};
+use crate::dfs::{Options, DFS};
 
 const MAX_RETRY_COUNT: u32 = 5;
 
@@ -30,7 +24,6 @@ pub struct S3FS {
 impl S3FS {
     pub fn new(
         tenant_id: u32,
-        local_dir: PathBuf,
         end_point: String,
         key_id: String,
         secret_key: String,
@@ -38,22 +31,15 @@ impl S3FS {
         bucket: String,
     ) -> Self {
         let core = Arc::new(S3FSCore::new(
-            tenant_id, local_dir, end_point, key_id, secret_key, region, bucket,
+            tenant_id, end_point, key_id, secret_key, region, bucket,
         ));
         Self { core }
     }
 
     #[cfg(test)]
-    pub fn new_for_test(
-        tenant_id: u32,
-        local_dir: PathBuf,
-        bucket: String,
-        s3c: rusoto_s3::S3Client,
-    ) -> Self {
+    pub fn new_for_test(tenant_id: u32, bucket: String, s3c: rusoto_s3::S3Client) -> Self {
         Self {
-            core: Arc::new(S3FSCore::new_with_s3_client(
-                tenant_id, local_dir, bucket, s3c,
-            )),
+            core: Arc::new(S3FSCore::new_with_s3_client(tenant_id, bucket, s3c)),
         }
     }
 }
@@ -68,7 +54,6 @@ impl Deref for S3FS {
 
 pub struct S3FSCore {
     tenant_id: u32,
-    local_dir: PathBuf,
     s3c: rusoto_s3::S3Client,
     bucket: String,
     runtime: tokio::runtime::Runtime,
@@ -77,7 +62,6 @@ pub struct S3FSCore {
 impl S3FSCore {
     pub fn new(
         tenant_id: u32,
-        local_dir: PathBuf,
         end_point: String,
         key_id: String,
         secret_key: String,
@@ -103,15 +87,10 @@ impl S3FSCore {
         s3c.set_config(S3Config {
             addressing_style: AddressingStyle::Path,
         });
-        Self::new_with_s3_client(tenant_id, local_dir, bucket, s3c)
+        Self::new_with_s3_client(tenant_id, bucket, s3c)
     }
 
-    pub fn new_with_s3_client(
-        tenant_id: u32,
-        local_dir: PathBuf,
-        bucket: String,
-        s3c: rusoto_s3::S3Client,
-    ) -> Self {
+    pub fn new_with_s3_client(tenant_id: u32, bucket: String, s3c: rusoto_s3::S3Client) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -120,15 +99,10 @@ impl S3FSCore {
             .unwrap();
         Self {
             tenant_id,
-            local_dir,
             s3c,
             bucket,
             runtime,
         }
-    }
-
-    fn local_file_path(&self, file_id: u64) -> PathBuf {
-        self.local_dir.join(new_filename(file_id))
     }
 
     fn file_key(&self, file_id: u64) -> String {
@@ -151,25 +125,6 @@ impl S3FSCore {
 
 #[async_trait]
 impl DFS for S3FS {
-    fn open(&self, file_id: u64, _opts: Options) -> crate::dfs::Result<Arc<dyn File>> {
-        let path = self.local_file_path(file_id);
-        match std::fs::File::open(&path) {
-            Ok(fd) => {
-                let meta = fd.metadata()?;
-                let local_file = LocalFile {
-                    id: file_id,
-                    fd: Arc::new(fd),
-                    size: meta.size(),
-                };
-                Ok(Arc::new(local_file))
-            }
-            Err(err) => {
-                error!("failed to open file {}, error {:?}", file_id, &err);
-                Err(err.into())
-            }
-        }
-    }
-
     async fn read_file(&self, file_id: u64, _opts: Options) -> crate::dfs::Result<Bytes> {
         let mut retry_cnt = 0;
         let start_time = Instant::now_coarse();
@@ -293,40 +248,8 @@ impl DFS for S3FS {
         &self.runtime
     }
 
-    fn local_dir(&self) -> &Path {
-        &self.local_dir
-    }
-
     fn tenant_id(&self) -> u32 {
         self.tenant_id
-    }
-}
-
-#[derive(Clone)]
-pub struct LocalFile {
-    pub id: u64,
-    fd: Arc<std::fs::File>,
-    pub size: u64,
-}
-
-impl File for LocalFile {
-    fn id(&self) -> u64 {
-        self.id
-    }
-
-    fn size(&self) -> u64 {
-        self.size
-    }
-
-    fn read(&self, off: u64, length: usize) -> crate::dfs::Result<Bytes> {
-        let mut buf = vec![0; length];
-        self.fd.read_at(&mut buf, off)?;
-        Ok(Bytes::from(buf))
-    }
-
-    fn read_at(&self, buf: &mut [u8], offset: u64) -> crate::dfs::Result<()> {
-        self.fd.read_at(buf, offset)?;
-        Ok(())
     }
 }
 
@@ -340,6 +263,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::table::sstable::{new_filename, File, LocalFile};
 
     #[test]
     fn test_s3() {
@@ -361,7 +285,7 @@ mod tests {
                 endpoint: Default::default(),
             },
         );
-        let s3fs = S3FS::new_for_test(123, local_dir.path().to_path_buf(), "shard-db".into(), s3c);
+        let s3fs = S3FS::new_for_test(123, "shard-db".into(), s3c);
         let (tx, rx) = tikv_util::mpsc::bounded(1);
 
         let fs = s3fs.clone();
@@ -385,7 +309,7 @@ mod tests {
         assert!(rx.recv().unwrap());
         let fs = s3fs.clone();
         let (tx, rx) = tikv_util::mpsc::bounded(1);
-        let local_file = s3fs.local_file_path(321);
+        let local_file = new_filename(321, local_dir.path());
         let move_local_file = local_file.clone();
         let f = async move {
             let opts = Options::new(1, 1);
@@ -406,7 +330,7 @@ mod tests {
         assert!(rx.recv().unwrap());
         let data = std::fs::read(&local_file).unwrap();
         assert_eq!(&data, &file_data);
-        let file = s3fs.open(321, Options::new(1, 1)).unwrap();
+        let file = LocalFile::open(321, &local_file).unwrap();
         assert_eq!(file.size(), 8u64);
         assert_eq!(file.id(), 321u64);
         let data = file.read(0, 8).unwrap();

@@ -1333,7 +1333,7 @@ impl<'a> StoreMsgHandler<'a> {
             .ctx
             .store_meta
             .region_ranges
-            .range((Excluded(start.clone()), Unbounded))
+            .range((Excluded(start), Unbounded))
         {
             let region = self.ctx.store_meta.regions.get(region_id).unwrap();
             let region_start_key = raw_start_key(region);

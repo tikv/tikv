@@ -8,7 +8,6 @@ use moka::sync::SegmentedCache;
 
 use super::*;
 use crate::{
-    dfs,
     table::{table::Result, Value},
     NUM_CFS,
 };
@@ -45,7 +44,7 @@ impl Deref for L0Table {
 
 impl L0Table {
     pub fn new(
-        file: Arc<dyn dfs::File>,
+        file: Arc<dyn File>,
         cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
     ) -> Result<Self> {
         let core = L0TableCore::new(file, cache)?;
@@ -57,7 +56,7 @@ impl L0Table {
 
 pub struct L0TableCore {
     footer: L0Footer,
-    file: Arc<dyn dfs::File>,
+    file: Arc<dyn File>,
     cfs: [Option<sstable::SSTable>; NUM_CFS],
     smallest: Bytes,
     biggest: Bytes,
@@ -65,7 +64,7 @@ pub struct L0TableCore {
 
 impl L0TableCore {
     pub fn new(
-        file: Arc<dyn dfs::File>,
+        file: Arc<dyn File>,
         cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
     ) -> Result<Self> {
         let footer_off = file.size() - L0_FOOTER_SIZE as u64;

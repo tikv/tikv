@@ -370,7 +370,7 @@ impl MiscExt for Engine {
     }
 
     fn path(&self) -> &str {
-        self.fs.local_dir().to_str().unwrap()
+        self.opts.local_dir.to_str().unwrap()
     }
 
     fn sync_wal(&self) -> TraitsResult<()> {

@@ -5,11 +5,7 @@ use std::{collections::HashMap, io::Write, path::PathBuf};
 use bytes::{Buf, Bytes};
 use file_system::{IOOp, IOType};
 
-use crate::{
-    apply::ChangeSet,
-    table::sstable::{L0Table, SSTable},
-    EngineCore, *,
-};
+use crate::{apply::ChangeSet, table::sstable::LocalFile, EngineCore, *};
 
 impl EngineCore {
     pub fn prepare_change_set(
@@ -73,27 +69,29 @@ impl EngineCore {
         let runtime = self.fs.get_runtime();
         let opts = dfs::Options::new(shard_id, shard_ver);
         let mut msg_count = 0;
-        for id in ids.keys() {
-            let local_path = self.local_file_path(*id);
-            if local_path.exists() {
+        for (&id, &is_l0) in &ids {
+            if let Ok(file) = self.open_sstable_file(id) {
+                cs.add_file(id, file, is_l0, self.cache.clone())?;
                 continue;
             }
             let fs = self.fs.clone();
             let tx = result_tx.clone();
-            let id = *id;
             runtime.spawn(async move {
                 let res = fs.read_file(id, opts).await;
-                tx.send(res.map(|data| (id, data))).unwrap();
+                tx.send(res.map(|data| (id, is_l0, data))).unwrap();
             });
             msg_count += 1;
         }
         let mut errors = vec![];
         for _ in 0..msg_count {
             match result_rx.recv().unwrap() {
-                Ok((id, data)) => {
+                Ok((id, is_l0, data)) => {
                     if let Err(err) = self.write_local_file(id, data, use_direct_io) {
                         error!("write local file failed {:?}", &err);
                         errors.push(err.into());
+                    } else {
+                        let file = self.open_sstable_file(id)?;
+                        cs.add_file(id, file, is_l0, self.cache.clone())?;
                     }
                 }
                 Err(err) => {
@@ -104,17 +102,6 @@ impl EngineCore {
         }
         if !errors.is_empty() {
             return Err(errors.pop().unwrap().into());
-        }
-        let opts = dfs::Options::new(shard_id, shard_ver);
-        for (id, is_l0) in ids {
-            let file = self.fs.open(id, opts)?;
-            if is_l0 {
-                let l0_table = L0Table::new(file, Some(self.cache.clone()))?;
-                cs.l0_tables.insert(id, l0_table);
-            } else {
-                let ln_table = SSTable::new(file, Some(self.cache.clone()))?;
-                cs.ln_tables.insert(id, ln_table);
-            }
         }
         Ok(())
     }
@@ -140,6 +127,10 @@ impl EngineCore {
             }
         }
         std::fs::rename(&tmp_file_name, &local_file_name)
+    }
+
+    fn open_sstable_file(&self, id: u64) -> std::io::Result<LocalFile> {
+        LocalFile::open(id, self.local_file_path(id).as_path())
     }
 
     pub(crate) fn local_file_path(&self, file_id: u64) -> PathBuf {

@@ -14,10 +14,7 @@ use moka::sync::SegmentedCache;
 use xorf::{BinaryFuse8, Filter};
 
 use super::{builder::*, iterator::TableIterator};
-use crate::{
-    dfs,
-    table::{table::Result, *},
-};
+use crate::table::{sstable::File, table::Result, *};
 
 #[derive(Clone)]
 pub struct SSTable {
@@ -33,7 +30,7 @@ impl Deref for SSTable {
 
 impl SSTable {
     pub fn new(
-        file: Arc<dyn dfs::File>,
+        file: Arc<dyn File>,
         cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
     ) -> Result<Self> {
         let size = file.size();
@@ -44,7 +41,7 @@ impl SSTable {
     }
 
     pub fn new_l0_cf(
-        file: Arc<dyn dfs::File>,
+        file: Arc<dyn File>,
         start: u64,
         end: u64,
         cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
@@ -117,7 +114,7 @@ impl SSTable {
 }
 
 pub struct SSTableCore {
-    file: Arc<dyn dfs::File>,
+    file: Arc<dyn File>,
     cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
     start_off: u64,
     footer: Footer,
@@ -133,7 +130,7 @@ pub struct SSTableCore {
 
 impl SSTableCore {
     pub fn new(
-        file: Arc<dyn dfs::File>,
+        file: Arc<dyn File>,
         start_off: u64,
         end_off: u64,
         cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
@@ -528,7 +525,7 @@ pub(crate) fn generate_key_values(prefix: &str, n: usize) -> Vec<(String, String
 }
 
 #[cfg(test)]
-pub(crate) fn build_test_table_with_kvs(key_vals: Vec<(String, String)>) -> Arc<dyn dfs::File> {
+pub(crate) fn build_test_table_with_kvs(key_vals: Vec<(String, String)>) -> Arc<dyn File> {
     let id = TEST_ID_ALLOC.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let mut builder = new_table_builder_for_test(id);
     for (k, v) in key_vals {
@@ -537,7 +534,7 @@ pub(crate) fn build_test_table_with_kvs(key_vals: Vec<(String, String)>) -> Arc<
     }
     let mut buf = BytesMut::with_capacity(builder.estimated_size());
     builder.finish(0, &mut buf);
-    Arc::new(dfs::InMemFile::new(id, buf.freeze()))
+    Arc::new(sstable::InMemFile::new(id, buf.freeze()))
 }
 
 #[cfg(test)]
@@ -546,7 +543,7 @@ pub(crate) fn new_table_builder_for_test(id: u64) -> Builder {
 }
 
 #[cfg(test)]
-pub(crate) fn build_test_table_with_prefix(prefix: &str, n: usize) -> Arc<dyn dfs::File> {
+pub(crate) fn build_test_table_with_prefix(prefix: &str, n: usize) -> Arc<dyn File> {
     let kvs = generate_key_values(prefix, n);
     build_test_table_with_kvs(kvs)
 }
@@ -571,9 +568,7 @@ mod tests {
     use super::*;
     use crate::Iterator;
 
-    fn build_multi_vesion_table(
-        mut key_vals: Vec<(String, String)>,
-    ) -> (Arc<dyn dfs::File>, usize) {
+    fn build_multi_vesion_table(mut key_vals: Vec<(String, String)>) -> (Arc<dyn File>, usize) {
         let id = TEST_ID_ALLOC.fetch_add(1, Ordering::Relaxed) + 1;
         let mut builder = new_table_builder_for_test(id);
         key_vals.sort_by(|a, b| a.0.cmp(&b.0));
@@ -584,7 +579,7 @@ mod tests {
             builder.add(k.as_bytes(), Value::decode(val_buf.as_slice()));
             let mut r = rand::thread_rng();
             for i in (1..=8).rev() {
-                if r.gen_range(0..4) == 0 {
+                if r.gen_range(0..4) == 0usize {
                     let val_str = format!("{}_{}", v, i);
                     let val_buf = Value::encode_buf(b'A', &[0], i, val_str.as_bytes());
                     builder.add(k.as_bytes(), Value::decode(val_buf.as_slice()));
@@ -594,7 +589,7 @@ mod tests {
         }
         let mut buf = BytesMut::with_capacity(builder.estimated_size());
         builder.finish(0, &mut buf);
-        (Arc::new(dfs::InMemFile::new(id, buf.freeze())), all_cnt)
+        (Arc::new(sstable::InMemFile::new(id, buf.freeze())), all_cnt)
     }
 
     #[test]

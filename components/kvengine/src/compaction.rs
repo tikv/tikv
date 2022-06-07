@@ -19,7 +19,7 @@ use crate::{
     dfs,
     table::{
         search,
-        sstable::{self, SSTable},
+        sstable::{self, InMemFile, SSTable},
     },
     Error::RemoteCompaction,
     *,
@@ -614,7 +614,7 @@ pub(crate) fn load_table_files(
     tbl_ids: &Vec<u64>,
     fs: Arc<dyn dfs::DFS>,
     opts: dfs::Options,
-) -> Result<Vec<dfs::InMemFile>> {
+) -> Result<Vec<InMemFile>> {
     let mut files = vec![];
     let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Bytes>>(tbl_ids.len());
     for id in tbl_ids {
@@ -634,7 +634,7 @@ pub(crate) fn load_table_files(
         match rx.recv().unwrap() {
             Err(err) => errors.push(err),
             Ok(data) => {
-                let file = dfs::InMemFile::new(*id, data);
+                let file = InMemFile::new(*id, data);
                 files.push(file);
             }
         }
@@ -645,7 +645,7 @@ pub(crate) fn load_table_files(
     Ok(files)
 }
 
-fn in_mem_files_to_l0_tables(files: &Vec<dfs::InMemFile>) -> Vec<sstable::L0Table> {
+fn in_mem_files_to_l0_tables(files: &Vec<InMemFile>) -> Vec<sstable::L0Table> {
     let mut tables = vec![];
     for file in files {
         let table = sstable::L0Table::new(Arc::new(file.clone()), None).unwrap();
@@ -654,7 +654,7 @@ fn in_mem_files_to_l0_tables(files: &Vec<dfs::InMemFile>) -> Vec<sstable::L0Tabl
     tables
 }
 
-fn in_mem_files_to_tables(files: &Vec<dfs::InMemFile>) -> Vec<sstable::SSTable> {
+fn in_mem_files_to_tables(files: &Vec<InMemFile>) -> Vec<sstable::SSTable> {
     let mut tables = vec![];
     for file in files {
         let table = sstable::SSTable::new(Arc::new(file.clone()), None).unwrap();

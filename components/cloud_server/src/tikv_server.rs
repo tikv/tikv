@@ -809,11 +809,10 @@ impl TiKVServer {
         let rf_engine = RfEngine::open(raft_db_path, wal_size).unwrap();
         let dfs_conf = &conf.dfs;
         let dfs: Arc<dyn DFS> = if dfs_conf.s3_endpoint == "memory" {
-            Arc::new(kvengine::dfs::InMemFS::new(kv_engine_path.clone()))
+            Arc::new(kvengine::dfs::InMemFS::new())
         } else {
             Arc::new(kvengine::dfs::S3FS::new(
                 dfs_conf.tenant_id,
-                kv_engine_path.clone(),
                 dfs_conf.s3_endpoint.clone(),
                 dfs_conf.s3_key_id.clone(),
                 dfs_conf.s3_secret_key.clone(),

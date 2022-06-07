@@ -34,13 +34,9 @@ fn main() {
     if config.tenant_id == 0 {
         config.tenant_id = 1;
     }
-    if config.local_dir.is_empty() {
-        config.local_dir = "/tmp".to_string();
-    }
     info!("config is {:?}", &config);
     let dfs = Arc::new(kvengine::dfs::S3FS::new(
         config.tenant_id,
-        PathBuf::from(config.local_dir),
         config.s3_endpoint,
         config.s3_key_id,
         config.s3_secret_key,
@@ -103,5 +99,4 @@ pub struct Config {
     pub s3_secret_key: String,
     pub s3_bucket: String,
     pub s3_region: String,
-    pub local_dir: String,
 }

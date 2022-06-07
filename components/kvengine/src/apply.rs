@@ -4,13 +4,15 @@ use std::{
     collections::HashMap,
     fmt::{Debug, Formatter},
     ops::Deref,
+    sync::Arc,
 };
 
-use bytes::Buf;
+use bytes::{Buf, Bytes};
+use moka::sync::SegmentedCache;
 
 use crate::{
     meta::is_move_down,
-    table::sstable::{L0Table, SSTable},
+    table::sstable::{BlockCacheKey, L0Table, LocalFile, SSTable},
     *,
 };
 
@@ -41,6 +43,23 @@ impl ChangeSet {
             l0_tables: HashMap::new(),
             ln_tables: HashMap::new(),
         }
+    }
+
+    pub fn add_file(
+        &mut self,
+        id: u64,
+        file: LocalFile,
+        is_l0: bool,
+        cache: SegmentedCache<BlockCacheKey, Bytes>,
+    ) -> Result<()> {
+        if is_l0 {
+            let l0_table = L0Table::new(Arc::new(file), Some(cache))?;
+            self.l0_tables.insert(id, l0_table);
+        } else {
+            let ln_table = SSTable::new(Arc::new(file), Some(cache))?;
+            self.ln_tables.insert(id, ln_table);
+        }
+        Ok(())
     }
 }
 

@@ -2,7 +2,6 @@
 
 use std::{
     ops::Deref,
-    path::PathBuf,
     sync::{atomic::AtomicU64, Arc},
     thread,
     time::Duration,
@@ -116,7 +115,7 @@ impl EngineTester {
         Self {
             core: Arc::new(EngineTesterCore {
                 metas,
-                fs: Arc::new(InMemFS::new(PathBuf::from("/tmp"))),
+                fs: Arc::new(InMemFS::new()),
                 opts: Arc::new(new_test_options()),
                 id: AtomicU64::new(0),
             }),
