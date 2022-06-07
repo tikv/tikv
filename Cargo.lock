@@ -4037,7 +4037,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tier-cap/raft-rs?branch=oom-limit-leader-replication-debug-log#0902c2ad4f8b8e66a316838f9212a9942691d12a"
+source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4093,7 +4093,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tier-cap/raft-rs?branch=oom-limit-leader-replication-debug-log#0902c2ad4f8b8e66a316838f9212a9942691d12a"
+source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
 dependencies = [
  "bytes",
  "protobuf",
