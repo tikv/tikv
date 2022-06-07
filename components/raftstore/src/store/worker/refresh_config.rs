@@ -8,7 +8,7 @@ use std::{
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
 use file_system::{set_io_type, IOType};
 use tikv_util::{
-    debug, error, info, sys::thread::StdThreadBuildWrapper, safe_panic, thd_name, worker::Runnable,
+    debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable,
 };
 
 use crate::store::fsm::{

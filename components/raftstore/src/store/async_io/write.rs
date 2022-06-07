@@ -27,9 +27,9 @@ use raft::eraftpb::Entry;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
-    debug, info,
+    debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
-    slow_log, thd_name,
+    thd_name,
     time::{duration_to_sec, Instant},
     warn,
 };

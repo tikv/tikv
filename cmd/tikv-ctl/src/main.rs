@@ -45,7 +45,7 @@ use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
 use tikv::{config::TiKvConfig, server::debug::BottommostLevelCompaction};
-use tikv_util::{escape, sys::thread::StdThreadBuildWrapper, run_and_wait_child_process, unescape};
+use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
 use txn_types::Key;
 
 use crate::{cmd::*, executor::*, util::*};

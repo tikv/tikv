@@ -65,8 +65,8 @@ use tikv::{
 };
 use tikv_util::{
     config::VersionTrack,
-    sys::thread::ThreadBuildWrapper,
     quota_limiter::QuotaLimiter,
+    sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker},
     HandyRwLock,
