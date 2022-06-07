@@ -206,20 +206,30 @@ async fn save_backup_file_worker(
         let files = if msg.files.need_flush_keys() {
             match msg.files.save(&storage).await {
                 Ok(mut split_files) => {
+                    let mut has_err = false;
                     for file in split_files.iter_mut() {
                         // In the case that backup from v1 and restore to v2,
                         // the file range need be encoded as v2 format.
                         // And range in response keep in v1 format.
-                        let (start, end) = codec.convert_key_range_to_dst_version(
+                        let ret = codec.convert_key_range_to_dst_version(
                             msg.start_key.clone(),
                             msg.end_key.clone(),
                         );
+                        if ret.is_err() {
+                            has_err = true;
+                            break;
+                        }
+                        let (start, end) = ret.unwrap();
                         file.set_start_key(start);
                         file.set_end_key(end);
                         file.set_start_version(msg.start_version.into_inner());
                         file.set_end_version(msg.end_version.into_inner());
                     }
-                    Ok(split_files)
+                    if has_err {
+                        Err(Error::Other(box_err!("backup convert key range failed")))
+                    } else {
+                        Ok(split_files)
+                    }
                 }
                 Err(e) => {
                     error_unknown!(?e; "backup save file failed");

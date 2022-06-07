@@ -80,7 +80,7 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
         src_api: ApiVersion,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>);
+    ) -> Result<(Vec<u8>, Vec<u8>)>;
 
     /// Convert the encoded value from src_api version to Self::TAG version
     fn convert_raw_encoded_value_version_from(
@@ -761,7 +761,7 @@ mod tests {
                     let (src_start, src_end) = src_data[i].clone();
                     API::convert_raw_user_key_range_version_from(src_api_ver, src_start, src_end)
                 });
-                assert_eq!(dst_key_range, dst_data[i]);
+                assert_eq!(dst_key_range.unwrap(), dst_data[i]);
             }
         }
     }

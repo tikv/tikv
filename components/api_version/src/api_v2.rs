@@ -195,7 +195,7 @@ impl KvFormat for ApiV2 {
         src_api: ApiVersion,
         mut start_key: Vec<u8>,
         mut end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>) {
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
                 start_key = ApiV2::add_prefix(&start_key, &DEFAULT_KEY_SPACE_ID);
@@ -204,9 +204,9 @@ impl KvFormat for ApiV2 {
                 } else {
                     end_key = ApiV2::add_prefix(&end_key, &DEFAULT_KEY_SPACE_ID);
                 }
-                (start_key, end_key)
+                Ok((start_key, end_key))
             }
-            ApiVersion::V2 => (start_key, end_key),
+            ApiVersion::V2 => Ok((start_key, end_key)),
         }
     }
 }

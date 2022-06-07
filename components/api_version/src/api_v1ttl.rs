@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::Result;
+use engine_traits::{Error as EngineError, Result};
 use tikv_util::codec::{
     number::{self, NumberEncoder},
     Error,
@@ -67,7 +67,7 @@ impl KvFormat for ApiV1Ttl {
     ) -> Result<Key> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => Ok(Key::from_encoded_slice(key)),
-            ApiVersion::V2 => unreachable!(), // reject apiv2 -> apiv1ttl conversion
+            ApiVersion::V2 => Err(EngineError::Engine(String::from("unsupported conversion"))), // reject apiv2 -> apiv1ttl conversion
         }
     }
 
@@ -75,10 +75,10 @@ impl KvFormat for ApiV1Ttl {
         src_api: ApiVersion,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>) {
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         match src_api {
-            ApiVersion::V1 | ApiVersion::V1ttl => (start_key, end_key),
-            ApiVersion::V2 => unreachable!(), // reject apiv2 -> apiv1ttl conversion
+            ApiVersion::V1 | ApiVersion::V1ttl => Ok((start_key, end_key)),
+            ApiVersion::V2 => Err(EngineError::Engine(String::from("unsupported conversion"))), // reject apiv2 -> apiv1ttl conversion
         }
     }
 }
