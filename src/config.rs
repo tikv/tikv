@@ -178,7 +178,6 @@ impl TitanCfConfig {
         opts.set_level_merge(self.level_merge);
         opts.set_range_merge(self.range_merge);
         opts.set_max_sorted_runs(self.max_sorted_runs);
-        opts.set_gc_merge_rewrite(self.gc_merge_rewrite);
         opts
     }
 }

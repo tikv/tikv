@@ -22,7 +22,7 @@ pub mod status_server;
 pub mod transport;
 pub mod ttl;
 
-pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder};
+pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder, SingleRockEnginesFactory};
 
 #[cfg(any(test, feature = "testexport"))]
 pub use self::server::test_router::TestRaftStoreRouter;

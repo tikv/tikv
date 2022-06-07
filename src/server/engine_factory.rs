@@ -10,7 +10,10 @@ use engine_rocks::{
     CompactionListener, FlowListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine,
     RocksEventListener,
 };
-use engine_traits::{CompactionJobInfo, RaftEngine, Result, TabletFactory, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    CompactionJobInfo, Engines, EnginesFactory, RaftEngine, Result, TabletFactory, CF_DEFAULT,
+    CF_WRITE,
+};
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::{
     store::{RaftRouter, StoreMsg},
@@ -192,7 +195,22 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     fn tablets_path(&self) -> PathBuf {
         self.kv_engine_path()
     }
-    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
-        Box::new(std::clone::Clone::clone(self))
+}
+
+#[derive(Clone)]
+pub struct SingleRockEnginesFactory<RocksEngine, R> {
+    kv: RocksEngine,
+    raft: R,
+}
+
+impl<R: RaftEngine> EnginesFactory<RocksEngine, R> for SingleRockEnginesFactory<RocksEngine, R> {
+    fn create_engines(&self, _region_id: u64, _suffix: u64) -> Result<Engines<RocksEngine, R>> {
+        Ok(Engines::new(self.kv.clone(), self.raft.clone()))
+    }
+}
+
+impl<R: RaftEngine> SingleRockEnginesFactory<RocksEngine, R> {
+    pub fn new(kv: RocksEngine, raft: R) -> Self {
+        SingleRockEnginesFactory { kv, raft }
     }
 }
