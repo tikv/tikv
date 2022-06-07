@@ -949,9 +949,7 @@ mod tests {
     fn test_full() {
         use std::sync::Mutex;
 
-        use tikv_util::{
-            yatp_pool::{DefaultTicker, YatpPoolBuilder},
-        };
+        use tikv_util::yatp_pool::{DefaultTicker, YatpPoolBuilder};
 
         use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 

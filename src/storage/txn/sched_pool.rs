@@ -71,8 +71,8 @@ impl SchedPool {
         let pool = YatpPoolBuilder::new(SchedTicker {reporter:reporter.clone()})
             .thread_count(1, pool_size, max_pool_size)
             .name_prefix(name_prefix)
-            // Safety: by setting `after_start_wrapper` and `before_stop_wrapper`,
-            // `FuturePool` ensures the tls_engine invariants.
+            // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
+            // the tls_engine invariants.
             .after_start(move || {
                 set_tls_engine(engine.lock().unwrap().clone());
                 set_io_type(IOType::ForegroundWrite);
