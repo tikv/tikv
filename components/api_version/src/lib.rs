@@ -80,7 +80,7 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
         src_api: ApiVersion,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>);
+    ) -> Result<(Vec<u8>, Vec<u8>)>;
 
     /// Convert the encoded value from src_api version to Self::TAG version
     fn convert_raw_encoded_value_version_from(
@@ -633,8 +633,8 @@ mod tests {
             .clone()
             .into_iter()
             .map(|key| {
-                let mut v2_key = key;
-                v2_key.insert(0, RAW_KEY_PREFIX);
+                let mut v2_key = vec![RAW_KEY_PREFIX, 0, 0, 0];
+                v2_key.extend(key);
                 ApiV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
             })
             .collect();
@@ -642,8 +642,6 @@ mod tests {
         let test_cases = vec![
             (ApiVersion::V1, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
             (ApiVersion::V1ttl, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
-            (ApiVersion::V2, ApiVersion::V1, &apiv2_keys, &apiv1_keys),
-            (ApiVersion::V2, ApiVersion::V1ttl, &apiv2_keys, &apiv1_keys),
         ];
         for i in 0..apiv1_keys.len() {
             for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
@@ -731,14 +729,14 @@ mod tests {
             .clone()
             .into_iter()
             .map(|(start_key, end_key)| {
-                let mut v2_start_key = start_key;
-                let mut v2_end_key = end_key;
-                v2_start_key.insert(0, RAW_KEY_PREFIX);
-                if v2_end_key.is_empty() {
-                    v2_end_key.insert(0, RAW_KEY_PREFIX_END);
+                let mut v2_start_key = vec![RAW_KEY_PREFIX, 0, 0, 0]; // key space takes 3 bytes.
+                let mut v2_end_key = if end_key.is_empty() {
+                    vec![RAW_KEY_PREFIX, 0, 0, 1]
                 } else {
-                    v2_end_key.insert(0, RAW_KEY_PREFIX);
-                }
+                    vec![RAW_KEY_PREFIX, 0, 0, 0] // key space takes 3 bytes.
+                };
+                v2_start_key.extend(start_key);
+                v2_end_key.extend(end_key);
                 (v2_start_key, v2_end_key)
             })
             .collect();
@@ -756,18 +754,6 @@ mod tests {
                 &apiv1_key_ranges,
                 &apiv2_key_ranges,
             ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V1,
-                &apiv2_key_ranges,
-                &apiv1_key_ranges,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V1ttl,
-                &apiv2_key_ranges,
-                &apiv1_key_ranges,
-            ),
         ];
         for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases {
             for i in 0..apiv1_key_ranges.len() {
@@ -775,7 +761,7 @@ mod tests {
                     let (src_start, src_end) = src_data[i].clone();
                     API::convert_raw_user_key_range_version_from(src_api_ver, src_start, src_end)
                 });
-                assert_eq!(dst_key_range, dst_data[i]);
+                assert_eq!(dst_key_range.unwrap(), dst_data[i]);
             }
         }
     }
