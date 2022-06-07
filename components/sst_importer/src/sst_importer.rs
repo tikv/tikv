@@ -230,7 +230,7 @@ impl SstImporter {
         dst_file: std::path::PathBuf,
         backend: &StorageBackend,
         expect_sha256: Option<Vec<u8>>,
-        use_kms: bool,
+        support_kms: bool,
         file_crypter: Option<FileEncryptionInfo>,
         speed_limiter: &Limiter,
     ) -> Result<()> {
@@ -249,7 +249,7 @@ impl SstImporter {
         let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
         let url = ext_storage.url()?.to_string();
 
-        let ext_storage: Box<dyn external_storage_export::ExternalStorage> = if use_kms {
+        let ext_storage: Box<dyn external_storage_export::ExternalStorage> = if support_kms {
             if let Some(key_manager) = &self.key_manager {
                 Box::new(external_storage_export::EncryptedExternalStorage {
                     key_manager: (*key_manager).clone(),
@@ -1016,16 +1016,17 @@ mod tests {
 
     fn create_sample_external_kv_file() -> Result<(tempfile::TempDir, StorageBackend, KvMeta)> {
         let ext_dir = tempfile::tempdir()?;
-        let file_name = "v1/t00001/abc.log";
-        let file_path = ext_dir.path().join(file_name).clone();
+        let file_name = "v1/t000001/abc.log";
+        let file_path = ext_dir.path().join(file_name);
         std::fs::create_dir_all(file_path.parent().unwrap())?;
         let file = File::create(file_path).unwrap();
         let mut buff = BufWriter::new(file);
 
-        let mut kvs = Vec::<(Vec<u8>, Vec<u8>)>::new();
-        kvs.push((b"t1_r01".to_vec(), b"tidb".to_vec()));
-        kvs.push((b"t1_r02".to_vec(), b"tikv".to_vec()));
-        kvs.push((b"t1_r03".to_vec(), b"pingcap".to_vec()));
+        let kvs = vec![
+            (b"t1_r01".to_vec(), b"tidb".to_vec()),
+            (b"t1_r02".to_vec(), b"tikv".to_vec()),
+            (b"t1_r03".to_vec(), b"pingcap".to_vec()),
+        ];
 
         let mut sha256 = Hasher::new(MessageDigest::sha256()).unwrap();
         let mut len = 0;
@@ -1270,7 +1271,7 @@ mod tests {
         let importer = SstImporter::new(
             &Config::default(),
             import_dir,
-            Some(key_manager.clone()),
+            Some(key_manager),
             ApiVersion::V1,
         )
         .unwrap();
