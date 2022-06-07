@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
 use engine_traits::{DeleteStrategy, MiscExt, Range, Result};
+
+use crate::engine::PanicEngine;
 
 impl MiscExt for PanicEngine {
     fn flush(&self, sync: bool) -> Result<()> {

@@ -1,10 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
-use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
-use super::{Json, JsonRef, JsonType};
-use crate::impl_chunked_vec_common;
 use std::convert::TryFrom;
+
+use super::{bit_vec::BitVec, ChunkRef, ChunkedVec, Json, JsonRef, JsonType, UnsafeRefInto};
+use crate::impl_chunked_vec_common;
 
 /// A vector storing `Option<Json>` with a compact layout.
 ///

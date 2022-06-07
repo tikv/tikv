@@ -1,21 +1,27 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::rpn_fn;
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    codec::{
+        data_type::*,
+        mysql::{
+            duration::{
+                MAX_HOUR_PART, MAX_MINUTE_PART, MAX_NANOS, MAX_NANOS_PART, MAX_SECOND_PART,
+                NANOS_PER_SEC,
+            },
+            time::{
+                extension::DateTimeExtension, weekmode::WeekMode, WeekdayExtension, MONTH_NAMES,
+            },
+            Duration, TimeType, MAX_FSP,
+        },
+        Error,
+    },
+    expr::{EvalContext, SqlMode},
+    FieldTypeAccessor,
+};
 
 use crate::RpnFnCallExtra;
-use tidb_query_common::Result;
-
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::duration::{
-    MAX_HOUR_PART, MAX_MINUTE_PART, MAX_NANOS, MAX_NANOS_PART, MAX_SECOND_PART, NANOS_PER_SEC,
-};
-use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
-use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
-use tidb_query_datatype::codec::mysql::time::{WeekdayExtension, MONTH_NAMES};
-use tidb_query_datatype::codec::mysql::{Duration, TimeType, MAX_FSP};
-use tidb_query_datatype::codec::Error;
-use tidb_query_datatype::expr::{EvalContext, SqlMode};
-use tidb_query_datatype::FieldTypeAccessor;
 
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
@@ -906,15 +912,18 @@ fn datetime_to_string(mut datetime: DateTime) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::{
+            error::ERR_TRUNCATE_WRONG_VALUE,
+            mysql::{Time, MAX_FSP},
+        },
+        FieldTypeTp,
+    };
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
-    use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
-    use tidb_query_datatype::FieldTypeTp;
 
     #[test]
     fn test_add_duration_and_duration() {

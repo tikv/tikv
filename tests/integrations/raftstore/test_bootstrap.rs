@@ -1,25 +1,25 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-
-use tempfile::Builder;
-
-use kvproto::kvrpcpb::ApiVersion;
-use kvproto::metapb;
-use kvproto::raft_serverpb::RegionLocalState;
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{Engines, Peekable, ALL_CFS, CF_RAFT};
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::{bootstrap_store, fsm, AutoSplitController, SnapManager};
+use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{bootstrap_store, fsm, fsm::store::StoreMeta, AutoSplitController, SnapManager},
+};
 use resource_metering::CollectorRegHandle;
+use tempfile::Builder;
 use test_raftstore::*;
-use tikv::import::SstImporter;
-use tikv::server::Node;
-use tikv_util::config::VersionTrack;
-use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, LazyWorker};
+use tikv::{import::SstImporter, server::Node};
+use tikv_util::{
+    config::VersionTrack,
+    worker::{dummy_scheduler, Builder as WorkerBuilder, LazyWorker},
+};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully

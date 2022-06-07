@@ -5,18 +5,16 @@ mod keys;
 mod size;
 mod table;
 
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
+use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::box_try;
 
-use super::config::Config;
-use super::error::Result;
-use super::{Bucket, KeyEntry, ObserverContext, SplitChecker};
-
-pub use self::half::{get_region_approximate_middle, HalfCheckObserver};
-pub use self::keys::{get_region_approximate_keys, KeysCheckObserver};
-pub use self::size::{get_region_approximate_size, SizeCheckObserver};
-pub use self::table::TableCheckObserver;
+pub use self::{
+    half::{get_region_approximate_middle, HalfCheckObserver},
+    keys::{get_region_approximate_keys, KeysCheckObserver},
+    size::{get_region_approximate_size, SizeCheckObserver},
+    table::TableCheckObserver,
+};
+use super::{config::Config, error::Result, Bucket, KeyEntry, ObserverContext, SplitChecker};
 
 pub struct Host<'a, E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,
@@ -129,4 +127,30 @@ impl<'a, E> Host<'a, E> {
     pub fn region_bucket_size(&self) -> u64 {
         self.cfg.region_bucket_size.0
     }
+}
+
+#[inline]
+pub fn calc_split_keys_count(
+    count_per_region: u64,
+    split_threshold: u64,
+    max_count_per_region: u64,
+    batch_split_limit: u64,
+) -> u64 {
+    if count_per_region < max_count_per_region {
+        return 0;
+    }
+
+    // split keys count is split count - 1
+    // e.g. when split_threshold is 60 & max_count_per_region is 90
+    //      if count_per_region is 60, return 0
+    //      if count_per_region is 90, return 1
+    //      if count_per_region is 121, return 1
+    //      if count_per_region is 183, return 2
+    std::cmp::min(
+        std::cmp::max(
+            ((count_per_region as f64 / split_threshold as f64).round() as u64).saturating_sub(1),
+            count_per_region / max_count_per_region,
+        ),
+        batch_split_limit,
+    )
 }

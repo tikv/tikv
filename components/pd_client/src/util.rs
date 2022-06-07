@@ -1,44 +1,45 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::pin::Pin;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
-use std::sync::RwLock;
-use std::thread;
-use std::time::Duration;
+use std::{
+    pin::Pin,
+    sync::{atomic::AtomicU64, Arc, RwLock},
+    thread,
+    time::Duration,
+};
 
-use futures::channel::mpsc::UnboundedSender;
-use futures::compat::Future01CompatExt;
-use futures::executor::block_on;
-use futures::future::{self, TryFutureExt};
-use futures::stream::Stream;
-use futures::stream::TryStreamExt;
-use futures::task::Context;
-use futures::task::Poll;
-use futures::task::Waker;
+use collections::HashSet;
+use fail::fail_point;
+use futures::{
+    channel::mpsc::UnboundedSender,
+    compat::Future01CompatExt,
+    executor::block_on,
+    future::{self, TryFutureExt},
+    stream::{Stream, TryStreamExt},
+    task::{Context, Poll, Waker},
+};
+use grpcio::{
+    CallOption, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver, ClientDuplexSender,
+    Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
+};
+use kvproto::{
+    metapb::BucketStats,
+    pdpb::{
+        ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
+        RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest,
+        ReportBucketsResponse, ResponseHeader,
+    },
+};
+use security::SecurityManager;
+use tikv_util::{
+    box_err, debug, error, info, slow_log, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, Either,
+    HandyRwLock,
+};
+use tokio_timer::timer::Handle;
 
 use super::{
     metrics::*, tso::TimestampOracle, BucketMeta, Config, Error, FeatureGate, PdFuture, Result,
     REQUEST_TIMEOUT,
 };
-use collections::HashSet;
-use fail::fail_point;
-use grpcio::{
-    CallOption, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver, ClientDuplexSender,
-    Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
-};
-use kvproto::metapb::BucketStats;
-use kvproto::pdpb::{
-    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
-    RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest, ReportBucketsResponse,
-    ResponseHeader,
-};
-use security::SecurityManager;
-use tikv_util::time::Instant;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{box_err, debug, error, info, slow_log, warn};
-use tikv_util::{Either, HandyRwLock};
-use tokio_timer::timer::Handle;
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // 1s
 const MAX_RETRY_TIMES: u64 = 5;
@@ -440,11 +441,14 @@ where
     fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
-            // Error::Incompatible is returned by response header from PD, no need to retry
-            Err(Error::Incompatible) => true,
             Err(err) => {
-                error!(?*err; "request failed, retry");
-                false
+                // these errors are not caused by network, no need to retry
+                if err.retryable() {
+                    error!(?*err; "request failed, retry");
+                    false
+                } else {
+                    true
+                }
             }
         }
     }
@@ -572,6 +576,8 @@ impl PdConnector {
         let addr_trim = trim_http_prefix(addr);
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
+                .max_send_message_len(-1)
+                .max_receive_message_len(-1)
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
             self.security_mgr.connect(cb, addr_trim)
@@ -922,8 +928,9 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
 
 #[cfg(test)]
 mod test {
-    use crate::{merge_bucket_stats, util::find_bucket_index};
     use kvproto::metapb::BucketStats;
+
+    use crate::{merge_bucket_stats, util::find_bucket_index};
 
     #[test]
     fn test_merge_bucket_stats() {

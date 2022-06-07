@@ -7,8 +7,16 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 failpoints = ["fail/failpoints"]
+
+test-engine-kv-rocksdb = [
+  "raftstore/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "raftstore/test-engine-raft-raft-engine"
+]
+
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",
 ]
@@ -18,7 +26,6 @@ test-engines-panic = [
 
 [dependencies]
 backtrace = "0.3"
-derive_more = "0.99.3"
 engine_panic = { path = "../engine_panic", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
@@ -34,8 +41,8 @@ prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 raftstore = { path = "../raftstore", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog_derive = "0.2"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog_derive = "0.2"
 tempfile = "3.0"
 thiserror = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }

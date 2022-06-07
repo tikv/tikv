@@ -1,9 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raw::Env;
+use std::sync::Arc;
+
 use engine_traits::{EngineFileSystemInspector, FileSystemInspector};
 use rocksdb::FileSystemInspector as DBFileSystemInspector;
-use std::sync::Arc;
+
+use crate::raw::Env;
 
 // Use engine::Env directly since Env is not abstracted.
 pub(crate) fn get_env(
@@ -35,23 +37,26 @@ impl<T: FileSystemInspector> DBFileSystemInspector for WrappedFileSystemInspecto
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::compat::Compat;
-    use crate::event_listener::RocksEventListener;
-    use crate::raw::{ColumnFamilyOptions, DBCompressionType};
-    use crate::raw_util::{new_engine_opt, CFOptions};
+    use std::sync::Arc;
+
     use engine_traits::{CompactExt, CF_DEFAULT};
     use file_system::{IOOp, IORateLimiter, IORateLimiterStatistics, IOType};
     use keys::data_key;
-    use rocksdb::Writable;
-    use rocksdb::{DBOptions, DB};
-    use std::sync::Arc;
+    use rocksdb::{DBOptions, Writable, DB};
     use tempfile::Builder;
+
+    use super::*;
+    use crate::{
+        compat::Compat,
+        event_listener::RocksEventListener,
+        raw::{ColumnFamilyOptions, DBCompressionType},
+        raw_util::{new_engine_opt, CFOptions},
+    };
 
     fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IORateLimiterStatistics>) {
         let limiter = Arc::new(IORateLimiter::new_for_test());
         let mut db_opts = DBOptions::new();
-        db_opts.add_event_listener(RocksEventListener::new("test_db"));
+        db_opts.add_event_listener(RocksEventListener::new("test_db", None));
         let env = get_env(None, Some(limiter.clone())).unwrap();
         db_opts.set_env(env);
         let mut cf_opts = ColumnFamilyOptions::new();

@@ -21,19 +21,26 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-use std::{mem, u64};
+use std::{
+    marker::PhantomData,
+    mem,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+    u64,
+};
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::compat::Future01CompatExt;
-use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
-use kvproto::pdpb::QueryKind;
+use kvproto::{
+    kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp},
+    pdpb::QueryKind,
+};
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
@@ -42,28 +49,27 @@ use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
-use crate::server::lock_manager::waiter_manager;
-use crate::storage::config::Config;
-use crate::storage::kv::{
-    self, with_tls_engine, Engine, ExtCallback, Result as EngineResult, SnapContext, Statistics,
-};
-use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
-use crate::storage::metrics::{self, *};
-use crate::storage::txn::commands::{
-    ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
-};
-use crate::storage::txn::sched_pool::tls_collect_query;
-use crate::storage::txn::{
-    commands::Command,
-    flow_controller::FlowController,
-    latch::{Latches, Lock},
-    sched_pool::{tls_collect_read_duration, tls_collect_scan_details, SchedPool},
-    Error, ProcessResult,
-};
-use crate::storage::DynamicConfigs;
-use crate::storage::{
-    get_priority_tag, kv::FlowStatsReporter, types::StorageCallback, Error as StorageError,
-    ErrorInner as StorageErrorInner,
+use crate::{
+    server::lock_manager::waiter_manager,
+    storage::{
+        config::Config,
+        get_priority_tag,
+        kv::{
+            self, with_tls_engine, Engine, ExtCallback, FlowStatsReporter, Result as EngineResult,
+            SnapContext, Statistics,
+        },
+        lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout},
+        metrics::{self, *},
+        txn::{
+            commands::{Command, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo},
+            flow_controller::FlowController,
+            latch::{Latches, Lock},
+            sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            Error, ProcessResult,
+        },
+        types::StorageCallback,
+        DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
+    },
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -725,8 +731,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 tag,
                 ts
             );
-
-            tls_collect_read_duration(tag.get_str(), elapsed);
         }
         .in_resource_metering_tag(resource_tag)
         .await;
@@ -740,10 +744,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let tag = task.cmd.tag();
 
+        let begin_instant = Instant::now();
         let pr = task
             .cmd
             .process_read(snapshot, statistics)
             .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() });
+        SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+            .get(tag)
+            .observe(begin_instant.saturating_elapsed_secs());
         self.on_read_finished(task.cid, pr, tag);
     }
 
@@ -774,10 +782,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
             };
-
-            task.cmd
+            let begin_instant = Instant::now();
+            let res = task
+                .cmd
                 .process_write(snapshot, context)
-                .map_err(StorageError::from)
+                .map_err(StorageError::from);
+            SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                .get(tag)
+                .observe(begin_instant.saturating_elapsed_secs());
+            res
         };
 
         if write_result.is_ok() {
@@ -812,7 +825,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                debug!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
+                debug!("write command failed"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
                 return;
             }
@@ -1153,24 +1166,20 @@ enum PessimisticLockMode {
 mod tests {
     use std::thread;
 
+    use futures_executor::block_on;
+    use kvproto::kvrpcpb::{BatchRollbackRequest, CheckTxnStatusRequest, Context};
+    use raftstore::store::{ReadStats, WriteStats};
+    use tikv_util::{config::ReadableSize, future::paired_future_callback};
+    use txn_types::{Key, OldValues};
+
     use super::*;
     use crate::storage::{
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
-        txn::commands::TypedCommand,
-        TxnStatus,
+        txn::{commands, commands::TypedCommand, latch::*},
+        TestEngineBuilder, TxnStatus,
     };
-    use crate::storage::{
-        txn::{commands, latch::*},
-        TestEngineBuilder,
-    };
-    use futures_executor::block_on;
-    use kvproto::kvrpcpb::{BatchRollbackRequest, CheckTxnStatusRequest, Context};
-    use raftstore::store::{ReadStats, WriteStats};
-    use tikv_util::config::ReadableSize;
-    use tikv_util::future::paired_future_callback;
-    use txn_types::{Key, OldValues};
 
     #[derive(Clone)]
     struct DummyReporter;

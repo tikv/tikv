@@ -1,31 +1,34 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-#[cfg(test)]
-pub use self::test_utils::TEST_PROFILE_MUTEX;
-
-use std::fs::{File, Metadata};
-use std::io::Read;
-use std::path::PathBuf;
-use std::pin::Pin;
-use std::process::Command;
-use std::sync::Mutex as StdMutex;
-use std::time::{Duration, UNIX_EPOCH};
+use std::{
+    fs::{File, Metadata},
+    io::Read,
+    path::PathBuf,
+    pin::Pin,
+    process::Command,
+    sync::Mutex as StdMutex,
+    time::{Duration, UNIX_EPOCH},
+};
 
 use chrono::{offset::Local, DateTime};
-use futures::channel::oneshot::{self, Sender};
-use futures::future::BoxFuture;
-use futures::task::{Context, Poll};
-use futures::{select, Future, FutureExt, Stream, StreamExt};
+use futures::{
+    channel::oneshot::{self, Sender},
+    future::BoxFuture,
+    select,
+    task::{Context, Poll},
+    Future, FutureExt, Stream, StreamExt,
+};
 use lazy_static::lazy_static;
-#[cfg(target_arch = "x86_64")]
 use pprof::protos::Message;
 use regex::Regex;
 use tempfile::{NamedTempFile, TempDir};
+#[cfg(not(test))]
+use tikv_alloc::{activate_prof, deactivate_prof, dump_prof};
 use tokio::sync::{Mutex, MutexGuard};
 
 #[cfg(test)]
+pub use self::test_utils::TEST_PROFILE_MUTEX;
+#[cfg(test)]
 use self::test_utils::{activate_prof, deactivate_prof, dump_prof};
-#[cfg(not(test))]
-use tikv_alloc::{activate_prof, deactivate_prof, dump_prof};
 
 // File name suffix for periodically dumped heap profiles.
 const HEAP_PROFILE_SUFFIX: &str = ".heap";
@@ -173,24 +176,7 @@ pub fn deactivate_heap_profile() -> bool {
     activate.take().is_some()
 }
 
-/// Currently, on aarch64 architectures, the underlying libgcc/llvm-libunwind/... which pprof-rs
-/// depends on has a segmentation fault (when backtracking happens in the signal handler).
-/// So, for now, we only allow the x86_64 architecture to perform real profiling, other
-/// architectures will directly return an error until we fix the seg-fault in backtrace.
-#[cfg(not(target_arch = "x86_64"))]
-pub async fn start_one_cpu_profile<F>(
-    _end: F,
-    _frequency: i32,
-    _protobuf: bool,
-) -> Result<Vec<u8>, String>
-where
-    F: Future<Output = Result<(), String>> + Send + 'static,
-{
-    Err("unsupported arch".to_string())
-}
-
 /// Trigger one cpu profile.
-#[cfg(target_arch = "x86_64")]
 pub async fn start_one_cpu_profile<F>(
     end: F,
     frequency: i32,
@@ -300,7 +286,6 @@ where
     Ok(())
 }
 
-#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 fn extract_thread_name(thread_name: &str) -> String {
     THREAD_NAME_RE
         .captures(thread_name)
@@ -318,6 +303,7 @@ fn extract_thread_name(thread_name: &str) -> String {
 #[cfg(test)]
 mod test_utils {
     use std::sync::Mutex;
+
     use tikv_alloc::error::ProfResult;
 
     lazy_static! {
@@ -348,12 +334,12 @@ fn last_change_epoch(metadata: &Metadata) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::channel::mpsc;
-    use futures::executor::block_on;
-    use futures::SinkExt;
     use std::sync::mpsc::sync_channel;
+
+    use futures::{channel::mpsc, executor::block_on, SinkExt};
     use tokio::runtime;
+
+    use super::*;
 
     #[test]
     fn test_last_change_epoch() {
@@ -373,12 +359,10 @@ mod tests {
 
     // Test there is at most 1 concurrent profiling.
     #[test]
-    #[cfg(target_arch = "x86_64")]
     fn test_profile_guard_concurrency() {
-        use futures::channel::oneshot;
-        use futures::TryFutureExt;
-        use std::thread;
-        use std::time::Duration;
+        use std::{thread, time::Duration};
+
+        use futures::{channel::oneshot, TryFutureExt};
 
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let rt = runtime::Builder::new_multi_thread()

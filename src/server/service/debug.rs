@@ -2,25 +2,34 @@
 
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, MiscExt, RaftEngine};
-use futures::channel::oneshot;
-use futures::future::Future;
-use futures::future::{FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::{self, TryStreamExt};
-use grpcio::{Error as GrpcError, WriteFlags};
-use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use kvproto::debugpb::{self, *};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
-    StatusCmdType, StatusRequest,
+use futures::{
+    channel::oneshot,
+    future::{Future, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::{self, TryStreamExt},
 };
+use grpcio::{
+    Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
+    WriteFlags,
+};
+use kvproto::{
+    debugpb::{self, *},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
+        StatusCmdType, StatusRequest,
+    },
+};
+use raftstore::{
+    router::RaftStoreRouter,
+    store::msg::{Callback, RaftCmdExtraOpts},
+};
+use tikv_util::metrics;
 use tokio::runtime::Handle;
 
-use crate::config::ConfigController;
-use crate::server::debug::{Debugger, Error, Result};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::msg::{Callback, RaftCmdExtraOpts};
-use tikv_util::metrics;
+use crate::{
+    config::ConfigController,
+    server::debug::{Debugger, Error, Result},
+};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -351,7 +360,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
             .spawn(async move {
                 let mut resp = GetMetricsResponse::default();
                 resp.set_store_id(debugger.get_store_ident()?.store_id);
-                resp.set_prometheus(metrics::dump());
+                resp.set_prometheus(metrics::dump(false));
                 if req.get_all() {
                     let engines = debugger.get_engine();
                     resp.set_rocksdb_kv(box_try!(MiscExt::dump_stats(&engines.kv)));

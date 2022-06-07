@@ -8,13 +8,14 @@ extern crate slog;
 extern crate tikv_alloc;
 
 pub mod hex;
-pub use crate::hex::*;
-
-use protobuf::atomic_flags::set_redact_bytes as proto_set_redact_bytes;
 use std::{
     fmt,
     sync::atomic::{AtomicBool, Ordering},
 };
+
+use protobuf::atomic_flags::set_redact_bytes as proto_set_redact_bytes;
+
+pub use crate::hex::*;
 
 pub mod test_util;
 

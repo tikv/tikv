@@ -1,27 +1,33 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::fmt::{self, Display, Formatter};
-use std::mem;
+use std::{
+    cmp::Ordering,
+    collections::BinaryHeap,
+    fmt::{self, Display, Formatter},
+    mem,
+};
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
-use kvproto::metapb::{Region, RegionEpoch};
-use kvproto::pdpb::CheckPolicy;
-
-#[cfg(any(test, feature = "testexport"))]
-use crate::coprocessor::Config;
-use crate::coprocessor::CoprocessorHost;
-use crate::coprocessor::SplitCheckerHost;
-use crate::store::{Callback, CasualMessage, CasualRouter};
-use crate::Result;
 use file_system::{IOType, WithIOType};
+use itertools::Itertools;
+use kvproto::{
+    metapb::{Region, RegionEpoch},
+    pdpb::CheckPolicy,
+};
 use online_config::{ConfigChange, OnlineConfig};
-use tikv_util::keybuilder::KeyBuilder;
-use tikv_util::worker::Runnable;
-use tikv_util::{box_err, debug, error, info, warn};
+use tikv_util::{box_err, debug, error, info, keybuilder::KeyBuilder, warn, worker::Runnable};
 
 use super::metrics::*;
+#[cfg(any(test, feature = "testexport"))]
+use crate::coprocessor::Config;
+use crate::{
+    coprocessor::{
+        split_observer::{is_valid_split_key, strip_timestamp_if_exists},
+        CoprocessorHost, SplitCheckerHost,
+    },
+    store::{Callback, CasualMessage, CasualRouter},
+    Result,
+};
 
 #[derive(PartialEq, Eq)]
 pub struct KeyEntry {
@@ -219,10 +225,10 @@ where
             )]
         });
         let mut buckets = vec![];
-        for range in ranges {
+        for range in &ranges {
             let mut bucket = region.clone();
-            bucket.set_start_key(range.0);
-            bucket.set_end_key(range.1);
+            bucket.set_start_key(range.0.clone());
+            bucket.set_end_key(range.1.clone());
             let bucket_entry = host.approximate_bucket_keys(&bucket, &self.engine)?;
             debug!(
                 "bucket_entry size {} keys count {}",
@@ -232,18 +238,76 @@ where
             buckets.push(bucket_entry);
         }
 
-        if !buckets.is_empty() {
-            return self.router.send(
-                region.get_id(),
-                CasualMessage::RefreshRegionBuckets {
-                    region_epoch: region.get_region_epoch().clone(),
-                    buckets,
-                    bucket_ranges,
-                    cb: Callback::None,
-                },
-            );
-        }
+        self.on_buckets_created(&mut buckets, region, &ranges);
+        self.refresh_region_buckets(buckets, region, bucket_ranges);
         Ok(())
+    }
+
+    fn on_buckets_created(
+        &self,
+        buckets: &mut [Bucket],
+        region: &Region,
+        bucket_ranges: &Vec<BucketRange>,
+    ) {
+        for (mut bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
+            let mut bucket_region = region.clone();
+            bucket_region.set_start_key(bucket_range.0.clone());
+            bucket_region.set_end_key(bucket_range.1.clone());
+            let adjusted_keys = std::mem::take(&mut bucket.keys)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, key)| {
+                    let key = strip_timestamp_if_exists(key);
+                    if is_valid_split_key(&key, i, &bucket_region) {
+                        assert!(
+                            is_valid_split_key(&key, i, region),
+                            "region_id={}, key={}, region start_key={}, end_key={}, bucket_range start_key={}, end_key={}",
+                            region.get_id(),
+                            log_wrappers::Value::key(&key),
+                            log_wrappers::Value::key(region.get_start_key()),
+                            log_wrappers::Value::key(region.get_end_key()),
+                            log_wrappers::Value::key(&bucket_range.0),
+                            log_wrappers::Value::key(&bucket_range.1),
+                        );
+                        Some(key)
+                    } else {
+                        None
+                    }
+                })
+                .coalesce(|prev, curr| {
+                    // Make sure that the split keys are sorted and unique.
+                    if prev < curr {
+                        Err((prev, curr))
+                    } else {
+                        warn!(
+                            "skip invalid split key: key should not be larger than the previous.";
+                            "region_id" => region.id,
+                            "key" => log_wrappers::Value::key(&curr),
+                            "previous" => log_wrappers::Value::key(&prev),
+                        );
+                        Ok(prev)
+                    }
+                })
+                .collect::<Vec<_>>();
+            bucket.keys = adjusted_keys;
+        }
+    }
+
+    fn refresh_region_buckets(
+        &self,
+        buckets: Vec<Bucket>,
+        region: &Region,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    ) {
+        let _ = self.router.send(
+            region.get_id(),
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch: region.get_region_epoch().clone(),
+                buckets,
+                bucket_ranges,
+                cb: Callback::None,
+            },
+        );
     }
 
     /// Checks a Region with split and bucket checkers to produce split keys and buckets keys and generates split admin command.
@@ -343,6 +407,9 @@ where
     }
 
     /// Gets the split keys by scanning the range.
+    /// bucket_ranges: specify the ranges to generate buckets.
+    ///                If none, gengerate buckets for the whole region.
+    ///                If it's Some(vec![]), skip generating buckets.
     fn scan_split_keys(
         &self,
         host: &mut SplitCheckerHost<'_, E>,
@@ -389,6 +456,8 @@ where
                 keys += 1;
                 if !skip_check_bucket {
                     let origin_key = keys::origin_key(e.key());
+                    // generate buckets for the whole region,
+                    // skip checking bucket range
                     if bucket_range_list.is_empty() {
                         bucket_size += e.entry_size() as u64;
                         if bucket_size >= host.region_bucket_size() {
@@ -428,6 +497,12 @@ where
                 || bucket_range_list.is_empty() && !skip_check_bucket
             {
                 buckets.push(bucket);
+                // in case some range's data in bucket_range_list is deleted
+                if buckets.len() < bucket_range_list.len() {
+                    let mut deleted_buckets =
+                        vec![Bucket::default(); bucket_range_list.len() - buckets.len()];
+                    buckets.append(&mut deleted_buckets);
+                }
                 if !bucket_range_list.is_empty() {
                     assert_eq!(buckets.len(), bucket_range_list.len());
                 }
@@ -453,15 +528,14 @@ where
         })?;
 
         if host.enable_region_bucket() {
-            let _ = self.router.send(
-                region.get_id(),
-                CasualMessage::RefreshRegionBuckets {
-                    region_epoch: region.get_region_epoch().clone(),
-                    buckets,
-                    bucket_ranges,
-                    cb: Callback::None,
-                },
-            );
+            let ranges = bucket_ranges.clone().unwrap_or_else(|| {
+                vec![BucketRange(
+                    region.get_start_key().to_vec(),
+                    region.get_end_key().to_vec(),
+                )]
+            });
+            self.on_buckets_created(&mut buckets, region, &ranges);
+            self.refresh_region_buckets(buckets, region, bucket_ranges);
         }
         timer.observe_duration();
 

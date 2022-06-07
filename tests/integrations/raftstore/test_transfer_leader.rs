@@ -1,17 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{sync::Arc, thread, time::Duration};
 
 use engine_traits::CF_LOCK;
 use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
-
 use raftstore::store::LocksStatus;
 use test_raftstore::*;
-use tikv::storage::kv::{SnapContext, SnapshotExt};
-use tikv::storage::{Engine, Snapshot};
+use tikv::storage::{
+    kv::{SnapContext, SnapshotExt},
+    Engine, Snapshot,
+};
 use tikv_util::config::*;
 use txn_types::{Key, PessimisticLock};
 
@@ -182,7 +181,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     // Disable default max peer count check.
     pd_client.disable_default_operator();
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
     cluster.cfg.raft_store.merge_max_log_gap = 1;
 
     let r1 = cluster.run_conf_change();

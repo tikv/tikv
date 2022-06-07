@@ -1,31 +1,24 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::*;
-use std::sync::*;
-use std::thread;
-use std::time::*;
-
-use engine_traits::CF_LOCK;
-use kvproto::kvrpcpb::Context;
-use kvproto::raft_cmdpb::CmdType;
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use raft::eraftpb::ConfChangeType;
-use raft::eraftpb::MessageType;
+use std::{iter::*, sync::*, thread, time::*};
 
 use engine_rocks::Compat;
-use engine_traits::Peekable;
-use engine_traits::{CF_RAFT, CF_WRITE};
+use engine_traits::{Peekable, CF_LOCK, CF_RAFT, CF_WRITE};
+use kvproto::{
+    kvrpcpb::Context,
+    raft_cmdpb::CmdType,
+    raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
+};
 use pd_client::PdClient;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
-use tikv::storage::kv::SnapContext;
-use tikv::storage::kv::SnapshotExt;
-use tikv::storage::Engine;
-use tikv::storage::Snapshot;
-use tikv_util::config::*;
-use tikv_util::HandyRwLock;
-use txn_types::Key;
-use txn_types::PessimisticLock;
+use tikv::storage::{
+    kv::{SnapContext, SnapshotExt},
+    Engine, Snapshot,
+};
+use tikv_util::{config::*, HandyRwLock};
+use txn_types::{Key, PessimisticLock};
 
 /// Test if merge is working as expected in a general condition.
 #[test]
@@ -122,7 +115,7 @@ fn test_node_merge_with_slow_learner() {
     let mut cluster = new_node_cluster(0, 2);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 40;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 40;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(40);
     cluster.cfg.raft_store.merge_max_log_gap = 15;
     cluster.pd_client.disable_default_operator();
 
@@ -489,7 +482,7 @@ fn test_node_merge_brain_split() {
     configure_for_merge(&mut cluster);
     ignore_merge_target_integrity(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");

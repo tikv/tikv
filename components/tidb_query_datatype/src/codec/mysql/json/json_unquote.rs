@@ -2,8 +2,7 @@
 
 use std::{char, str, u32};
 
-use super::super::Result;
-use super::{JsonRef, JsonType};
+use super::{super::Result, JsonRef, JsonType};
 
 const ESCAPED_UNICODE_BYTES_SIZE: usize = 4;
 
@@ -81,9 +80,9 @@ fn decode_escaped_unicode(s: &str) -> Result<char> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::Json;
-    use super::*;
     use std::collections::BTreeMap;
+
+    use super::{super::Json, *};
 
     #[test]
     fn test_decode_escaped_unicode() {

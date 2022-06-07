@@ -50,12 +50,44 @@ pub mod txn;
 mod read_pool;
 mod types;
 
+use std::{
+    borrow::Cow,
+    iter,
+    marker::PhantomData,
+    sync::{
+        atomic::{self, AtomicBool},
+        Arc,
+    },
+};
+
+use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
+use concurrency_manager::ConcurrencyManager;
+use engine_rocks::{ReadPerfContext, ReadPerfInstant};
+use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use futures::prelude::*;
+use kvproto::{
+    kvrpcpb::{
+        ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
+        LockInfo, RawGetRequest,
+    },
+    pdpb::QueryKind,
+};
+use pd_client::FeatureGate;
+use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
+use rand::prelude::*;
+use resource_metering::{FutureExt, ResourceTagFactory};
+use tikv_kv::SnapshotExt;
+use tikv_util::{
+    quota_limiter::QuotaLimiter,
+    time::{duration_to_ms, Instant, ThreadReadId},
+};
+use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
+
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot,
-        StageLatencyStats, Statistics, TestEngineBuilder,
+        RocksEngine, ScanMode, Snapshot, StageLatencyStats, Statistics, TestEngineBuilder,
     },
     raw::RawStore,
     read_pool::{build_read_pool, build_read_pool_for_test},
@@ -63,52 +95,24 @@ pub use self::{
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 use self::{kv::SnapContext, test_util::latest_feature_gate};
-
-use crate::read_pool::{ReadPool, ReadPoolHandle};
-use crate::storage::metrics::CommandKind;
-use crate::storage::mvcc::MvccReader;
-use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
-use crate::storage::txn::flow_controller::FlowController;
-
-use crate::server::lock_manager::waiter_manager;
-use crate::storage::{
-    config::Config,
-    kv::{with_tls_engine, Modify, WriteData},
-    lock_manager::{DummyLockManager, LockManager},
-    metrics::*,
-    mvcc::PointGetterBuilder,
-    txn::{commands::TypedCommand, scheduler::Scheduler as TxnScheduler, Command},
-    types::StorageCallbackType,
-};
-
-use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
-use concurrency_manager::ConcurrencyManager;
-use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
-use futures::prelude::*;
-use kvproto::kvrpcpb::ApiVersion;
-use kvproto::kvrpcpb::{
-    ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo,
-    RawGetRequest,
-};
-use kvproto::pdpb::QueryKind;
-use pd_client::FeatureGate;
-use raftstore::store::{util::build_key_range, TxnExt};
-use raftstore::store::{ReadStats, WriteStats};
-use rand::prelude::*;
-use resource_metering::{FutureExt, ResourceTagFactory};
-use std::marker::PhantomData;
-use std::{
-    borrow::Cow,
-    iter,
-    sync::{
-        atomic::{self, AtomicBool},
-        Arc,
+use crate::{
+    read_pool::{ReadPool, ReadPoolHandle},
+    server::lock_manager::waiter_manager,
+    storage::{
+        config::Config,
+        kv::{with_tls_engine, Modify, WriteData},
+        lock_manager::{DummyLockManager, LockManager},
+        metrics::{CommandKind, *},
+        mvcc::{MvccReader, PointGetterBuilder},
+        txn::{
+            commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
+            flow_controller::FlowController,
+            scheduler::Scheduler as TxnScheduler,
+            Command,
+        },
+        types::StorageCallbackType,
     },
 };
-use tikv_kv::SnapshotExt;
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -543,7 +547,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
-        let stage_begin_ts = Instant::now_coarse();
+        let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -559,7 +563,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                let stage_scheduled_ts = Instant::now_coarse();
+                let stage_scheduled_ts = Instant::now();
                 tls_collect_query(
                     ctx.get_region_id(),
                     ctx.get_peer(),
@@ -576,7 +580,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [key.as_encoded()])?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
 
                 // The bypass_locks and access_locks set will be checked at most once.
                 // `TsSet::vec` is more efficient here.
@@ -594,13 +598,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
                     let stage_snap_recv_ts = begin_instant;
                     let buckets = snapshot.ext().get_buckets();
                     let mut statistics = Statistics::default();
                     let (result, delta) = {
                         let _guard = sample.observe_cpu();
-                        let perf_statistics = PerfStatisticsInstant::new();
+                        let perf_statistics = ReadPerfInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
                             start_ts,
@@ -652,7 +656,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .inc_by(quota_delay.as_micros() as u64);
                     }
 
-                    let stage_finished_ts = Instant::now_coarse();
+                    let stage_finished_ts = Instant::now();
                     let schedule_wait_time =
                         stage_scheduled_ts.saturating_duration_since(stage_begin_ts);
                     let snapshot_wait_time =
@@ -691,7 +695,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ///
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn batch_get_command<
-        P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+        P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, ReadPerfContext)>,
     >(
         &self,
         requests: Vec<GetRequest>,
@@ -720,7 +724,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(requests.len() as f64);
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let read_id = Some(ThreadReadId::new());
                 let mut statistics = Statistics::default();
                 let mut req_snaps = vec![];
@@ -807,7 +811,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 .build()
                             {
                                 Ok(mut point_getter) => {
-                                    let perf_statistics = PerfStatisticsInstant::new();
+                                    let perf_statistics = ReadPerfInstant::new();
                                     let v = point_getter.get(&key);
                                     let stat = point_getter.take_statistics();
                                     let delta = perf_statistics.delta();
@@ -867,7 +871,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
-        let stage_begin_ts = Instant::now_coarse();
+        let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -884,7 +888,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let mut sample = quota_limiter.new_sample();
         let res = self.read_pool.spawn_handle(
             async move {
-                let stage_scheduled_ts = Instant::now_coarse();
+                let stage_scheduled_ts = Instant::now();
                 let mut key_ranges = vec![];
                 for key in &keys {
                     key_ranges.push(build_key_range(key.as_encoded(), key.as_encoded(), false));
@@ -908,7 +912,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     keys.iter().map(Key::as_encoded),
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
@@ -924,14 +928,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
 
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
                     let buckets = snapshot.ext().get_buckets();
                     let (result, delta, stats) = {
                         let _guard = sample.observe_cpu();
-                        let perf_statistics = PerfStatisticsInstant::new();
+                        let perf_statistics = ReadPerfInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
                             start_ts,
@@ -995,7 +999,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .inc_by(quota_delay.as_micros() as u64);
                     }
 
-                    let stage_finished_ts = Instant::now_coarse();
+                    let stage_finished_ts = Instant::now();
                     let schedule_wait_time =
                         stage_scheduled_ts.saturating_duration_since(stage_begin_ts);
                     let snapshot_wait_time =
@@ -1098,7 +1102,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 if reverse_scan {
                     std::mem::swap(&mut start_key, &mut end_key);
                 }
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
                 let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
@@ -1151,8 +1155,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    let begin_instant = Instant::now_coarse();
-                    let perf_statistics = PerfStatisticsInstant::new();
+                    let begin_instant = Instant::now();
+                    let perf_statistics = ReadPerfInstant::new();
                     let buckets = snapshot.ext().get_buckets();
 
                     let snap_store = SnapshotStore::new(
@@ -1234,7 +1238,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             )],
         );
         let concurrency_manager = self.concurrency_manager.clone();
-        let api_version = self.api_version;
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
 
@@ -1260,17 +1263,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version_ranges(
-                    api_version,
-                    ctx.api_version,
-                    CMD,
-                    [(
-                        start_key.as_ref().map(Key::as_encoded),
-                        end_key.as_ref().map(Key::as_encoded),
-                    )],
-                )?;
+                // Do not check_api_version in scan_lock, to be compatible with TiDB gc-worker,
+                // which resolves locks on regions, and boundary of regions will be out of range of TiDB keys.
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
 
                 concurrency_manager.update_max_ts(max_ts);
                 let begin_instant = Instant::now();
@@ -1309,9 +1305,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
                     let mut statistics = Statistics::default();
-                    let perf_statistics = PerfStatisticsInstant::new();
+                    let perf_statistics = ReadPerfInstant::new();
                     let buckets = snapshot.ext().get_buckets();
                     let mut reader = MvccReader::new(
                         snapshot,
@@ -1485,7 +1481,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -1496,7 +1492,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
                     let mut stats = Statistics::default();
                     let key = F::encode_raw_key_owned(key, None);
                     // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
@@ -1581,7 +1577,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .map_err(Error::from)?;
                 }
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let read_id = Some(ThreadReadId::new());
                 let mut snaps = vec![];
                 for (mut req, id) in gets.into_iter().zip(ids) {
@@ -1608,7 +1604,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     snaps.push((id, key, ctx, req, snap));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
-                let begin_instant = Instant::now_coarse();
+                let begin_instant = Instant::now();
                 for (id, key, ctx, mut req, snap) in snaps {
                     let cf = req.take_cf();
                     match snap.await {
@@ -1688,7 +1684,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -1698,7 +1694,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
 
                     let cf = Self::rawkv_cf(&cf, api_version)?;
                     // no scan_count for this kind of op.
@@ -2024,7 +2020,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     [(Some(&start_key), end_key.as_ref())],
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2035,7 +2031,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
                     let store = RawStore::new(snapshot, api_version);
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
 
                     let start_key = F::encode_raw_key_owned(start_key, None);
                     let end_key = end_key.map(|k| F::encode_raw_key_owned(k, None));
@@ -2159,7 +2155,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2301,7 +2297,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2312,7 +2308,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
-                    let begin_instant = Instant::now_coarse();
+                    let begin_instant = Instant::now();
                     let mut stats = Statistics::default();
                     let key = F::encode_raw_key_owned(key, None);
                     // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
@@ -2466,7 +2462,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
+                let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
                     ..Default::default()
@@ -2477,7 +2473,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf("", api_version)?;
 
-                let begin_instant = tikv_util::time::Instant::now_coarse();
+                let begin_instant = tikv_util::time::Instant::now();
                 let mut stats = Vec::with_capacity(ranges.len());
                 let ret = store
                     .raw_checksum_ranges(cf, &ranges, &mut stats)
@@ -2859,13 +2855,16 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
 }
 
 pub mod test_util {
-    use super::*;
-    use crate::storage::txn::commands;
-    use std::sync::Mutex;
     use std::{
         fmt::Debug,
-        sync::mpsc::{channel, Sender},
+        sync::{
+            mpsc::{channel, Sender},
+            Mutex,
+        },
     };
+
+    use super::*;
+    use crate::storage::txn::commands;
 
     pub fn expect_none(x: Option<Value>) {
         assert_eq!(x, None);
@@ -3030,11 +3029,11 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetConsumer {
+    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, ReadPerfContext)> for GetConsumer {
         fn consume(
             &self,
             id: u64,
-            res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+            res: Result<(Option<Vec<u8>>, Statistics, ReadPerfContext)>,
             _: tikv_util::time::Instant,
         ) {
             self.data.lock().unwrap().push(GetResult {
@@ -3061,31 +3060,22 @@ pub mod test_util {
 #[derive(Debug, Default, Clone)]
 pub struct KvGetStatistics {
     pub stats: Statistics,
-    pub perf_stats: PerfStatisticsDelta,
+    pub perf_stats: ReadPerfContext,
     pub latency_stats: StageLatencyStats,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        mvcc::tests::{must_unlocked, must_written},
-        test_util::*,
-        *,
+    use std::{
+        iter::Iterator,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc::{channel, Sender},
+            Arc,
+        },
+        time::Duration,
     };
-    use crate::config::TitanDBConfig;
-    use crate::coprocessor::checksum_crc64_xor;
-    use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
-    use crate::storage::lock_manager::DiagnosticContext;
-    use crate::storage::mvcc::LockType;
-    use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
-    use crate::storage::txn::tests::must_rollback;
-    use crate::storage::{
-        config::BlockCacheConfig,
-        kv::{Error as KvError, ErrorInner as EngineErrorInner},
-        lock_manager::{Lock, WaitTimeout},
-        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
-        txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
-    };
+
     use api_version::{test_kv_format_impl, ApiV2};
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
@@ -3094,17 +3084,32 @@ mod tests {
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op};
-    use std::iter::Iterator;
-    use std::{
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            mpsc::{channel, Sender},
-            Arc,
-        },
-        time::Duration,
-    };
     use tikv_util::config::ReadableSize;
     use txn_types::{Mutation, PessimisticLock, WriteType};
+
+    use super::{
+        mvcc::tests::{must_unlocked, must_written},
+        test_util::*,
+        *,
+    };
+    use crate::{
+        config::TitanDBConfig,
+        coprocessor::checksum_crc64_xor,
+        storage::{
+            config::BlockCacheConfig,
+            kv::{
+                Error as KvError, ErrorInner as EngineErrorInner, ExpectedWrite, MockEngineBuilder,
+            },
+            lock_manager::{DiagnosticContext, Lock, WaitTimeout},
+            mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, LockType},
+            txn::{
+                commands,
+                commands::{AcquirePessimisticLock, Prewrite},
+                tests::must_rollback,
+                Error as TxnError, ErrorInner as TxnErrorInner,
+            },
+        },
+    };
 
     #[test]
     fn test_prewrite_blocks_read() {
@@ -6295,9 +6300,14 @@ mod tests {
 
     #[test]
     fn test_resolve_lock() {
+        test_resolve_lock_impl::<ApiV1>();
+        test_resolve_lock_impl::<ApiV2>();
+    }
+
+    fn test_resolve_lock_impl<F: KvFormat>() {
         use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -6307,11 +6317,11 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
-                        Mutation::make_put(Key::from_raw(b"a"), b"foo".to_vec()),
-                        Mutation::make_put(Key::from_raw(b"b"), b"foo".to_vec()),
-                        Mutation::make_put(Key::from_raw(b"c"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"ta"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"tb"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"tc"), b"foo".to_vec()),
                     ],
-                    b"c".to_vec(),
+                    b"tc".to_vec(),
                     99.into(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -6322,23 +6332,23 @@ mod tests {
         let (lock_a, lock_b, lock_c) = (
             {
                 let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"c".to_vec());
+                lock.set_primary_lock(b"tc".to_vec());
                 lock.set_lock_version(99);
-                lock.set_key(b"a".to_vec());
+                lock.set_key(b"ta".to_vec());
                 lock
             },
             {
                 let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"c".to_vec());
+                lock.set_primary_lock(b"tc".to_vec());
                 lock.set_lock_version(99);
-                lock.set_key(b"b".to_vec());
+                lock.set_key(b"tb".to_vec());
                 lock
             },
             {
                 let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"c".to_vec());
+                lock.set_primary_lock(b"tc".to_vec());
                 lock.set_lock_version(99);
-                lock.set_key(b"c".to_vec());
+                lock.set_key(b"tc".to_vec());
                 lock
             },
         );
@@ -6366,14 +6376,14 @@ mod tests {
                 let mut mutations = vec![];
                 for i in 0..scanned_locks {
                     mutations.push(Mutation::make_put(
-                        Key::from_raw(format!("x{:08}", i).as_bytes()),
+                        Key::from_raw(format!("tx{:08}", i).as_bytes()),
                         b"foo".to_vec(),
                     ));
                 }
 
                 storage
                     .sched_txn_command(
-                        commands::Prewrite::with_defaults(mutations, b"x".to_vec(), ts),
+                        commands::Prewrite::with_defaults(mutations, b"tx".to_vec(), ts),
                         expect_ok_callback(tx.clone(), 0),
                     )
                     .unwrap();

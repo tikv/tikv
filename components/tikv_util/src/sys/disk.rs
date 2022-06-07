@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+
 use fail::fail_point;
 pub use kvproto::disk_usage::DiskUsage;
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
 // DISK_RESERVED_SPACE means if left space is less than this, tikv will
 // turn to maintenance mode. There are another 2 value derived from this,

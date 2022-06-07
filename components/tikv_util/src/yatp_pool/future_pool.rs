@@ -3,27 +3,27 @@
 //! This mod implemented a wrapped future pool that supports `on_tick()` which
 //! is invoked no less than the specific interval.
 
-use std::future::Future;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    future::Future,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use fail::fail_point;
 use futures::channel::oneshot::{self, Canceled};
-use prometheus::{Histogram, IntCounter, IntGauge};
+use prometheus::{IntCounter, IntGauge};
 use yatp::task::future;
 
 pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
 use super::metrics;
-use crate::time::Instant;
 
 #[derive(Clone)]
 struct Env {
     metrics_running_task_count: IntGauge,
     metrics_handled_task_count: IntCounter,
-    metrics_pool_schedule_duration: Histogram,
 }
 
 #[derive(Clone)]
@@ -46,8 +46,6 @@ impl FuturePool {
             metrics_running_task_count: metrics::FUTUREPOOL_RUNNING_TASK_VEC
                 .with_label_values(&[name]),
             metrics_handled_task_count: metrics::FUTUREPOOL_HANDLED_TASK_VEC
-                .with_label_values(&[name]),
-            metrics_pool_schedule_duration: metrics::FUTUREPOOL_SCHEDULE_DURATION_VEC
                 .with_label_values(&[name]),
         };
         FuturePool {
@@ -147,8 +145,6 @@ impl PoolInner {
     where
         F: Future + Send + 'static,
     {
-        let timer = Instant::now_coarse();
-        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
         let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
         let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
@@ -157,7 +153,6 @@ impl PoolInner {
         metrics_running_task_count.inc();
 
         self.pool.spawn(async move {
-            h_schedule.observe(timer.saturating_elapsed_secs());
             let _ = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
@@ -173,8 +168,6 @@ impl PoolInner {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        let timer = Instant::now_coarse();
-        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
         let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
         let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
@@ -183,7 +176,6 @@ impl PoolInner {
         let (tx, rx) = oneshot::channel();
         metrics_running_task_count.inc();
         self.pool.spawn(async move {
-            h_schedule.observe(timer.saturating_elapsed_secs());
             let res = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
@@ -213,18 +205,21 @@ impl std::error::Error for Full {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::sync::mpsc;
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            mpsc, Mutex,
+        },
+        thread,
+        time::Duration,
     };
-    use std::thread;
-    use std::time::Duration;
 
-    use super::super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL};
     use futures::executor::block_on;
+
+    use super::{
+        super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL},
+        *,
+    };
 
     fn spawn_future_and_wait(pool: &FuturePool, duration: Duration) {
         block_on(

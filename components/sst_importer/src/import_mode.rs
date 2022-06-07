@@ -1,9 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use std::time::Instant;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
 
 use engine_traits::{ColumnFamilyOptions, DBOptions, KvEngine};
 use futures::executor::ThreadPool;
@@ -11,8 +14,7 @@ use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
-use super::Config;
-use super::Result;
+use super::{Config, Result};
 
 pub type RocksDBMetricsFn = fn(cf: &str, name: &str, v: f64);
 
@@ -238,14 +240,15 @@ impl ImportModeCFOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::thread;
 
     use engine_traits::KvEngine;
     use futures::executor::ThreadPoolBuilder;
-    use std::thread;
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::config::ReadableDuration;
+
+    use super::*;
 
     fn check_import_options<E>(
         db: &E,

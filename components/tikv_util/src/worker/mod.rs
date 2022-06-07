@@ -18,20 +18,19 @@ mod future;
 mod metrics;
 mod pool;
 
-pub use self::future::dummy_scheduler as dummy_future_scheduler;
-pub use self::future::Runnable as FutureRunnable;
-pub use self::future::Scheduler as FutureScheduler;
-pub use self::future::{Stopped, Worker as FutureWorker};
 pub use pool::{
     dummy_scheduler, Builder, LazyWorker, ReceiverWrapper, Runnable, RunnableWithTimer,
     ScheduleError, Scheduler, Worker,
 };
 
+pub use self::future::{
+    dummy_scheduler as dummy_future_scheduler, Runnable as FutureRunnable,
+    Scheduler as FutureScheduler, Stopped, Worker as FutureWorker,
+};
+
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
+    use std::{sync::mpsc, thread, time::Duration};
 
     use super::*;
 
