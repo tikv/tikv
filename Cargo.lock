@@ -2616,7 +2616,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/tier-cap/kvproto.git?branch=add-reject-log-append-msg#c9f1185047e92561b2a5e63f6707650b55507b82"
+source = "git+https://github.com/tier-cap/kvproto.git?branch=add-reject-log-append-msg#e0d6a58eb3164572f114f3c528acf2edf2631a20"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4037,7 +4037,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/tier-cap/raft-rs?branch=oom-limit-leader-replication-debug-log#0902c2ad4f8b8e66a316838f9212a9942691d12a"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4093,7 +4093,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/tier-cap/raft-rs?branch=oom-limit-leader-replication-debug-log#0902c2ad4f8b8e66a316838f9212a9942691d12a"
 dependencies = [
  "bytes",
  "protobuf",

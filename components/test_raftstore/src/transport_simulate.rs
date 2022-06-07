@@ -390,14 +390,14 @@ impl Filter for RegionPacketFilter {
             let from_store_id = m.get_from_peer().get_store_id();
             let to_store_id = m.get_to_peer().get_store_id();
             let msg_type = m.get_message().get_msg_type();
-            let extra_msg_type = m.get_extra_msg().get_type();
 
             if self.region_id == region_id
                 && (self.direction.is_send() && self.store_id == from_store_id
                     || self.direction.is_recv() && self.store_id == to_store_id)
-                && ((self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
-                    || (self.extra_msg_type.is_empty()
-                        || self.extra_msg_type.contains(&extra_msg_type)))
+                && (self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
+                && (self.extra_msg_type.is_empty()
+                    || m.has_extra_msg()
+                        && self.extra_msg_type.contains(&m.get_extra_msg().get_type()))
                 && !self.skip_type.contains(&msg_type)
             {
                 let res = match self.block {

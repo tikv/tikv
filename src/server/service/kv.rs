@@ -169,6 +169,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         }
         if reject && msg.get_message().get_msg_type() == MessageType::MsgAppend {
             RAFT_APPEND_REJECTS.inc();
+            debug!("handle_raft_message reject MsgAppend: {:?}", msg);
             let id = msg.get_region_id();
             let peer_id = msg.get_message().get_from();
             let m = CasualMessage::RejectRaftAppend { peer_id };
