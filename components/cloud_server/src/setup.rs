@@ -148,7 +148,7 @@ pub fn initial_logger(config: &TiKvConfig) {
     {
         // Use async drainer and init std log.
         let drainer = logger::LogDispatcher::new(normal, rocksdb, raftdb, slow);
-        let level = config.log_level;
+        let level = config.log.level;
         let slow_threshold = config.slow_log_threshold.as_millis();
         logger::init_log(drainer, level, true, true, vec![], slow_threshold).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
@@ -176,7 +176,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         };
     }
 
-    if config.log_file.is_empty() {
+    if config.log.file.filename.is_empty() {
         let log = logger::term_writer();
         do_build!(
             log,
@@ -187,7 +187,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         );
     } else {
         let log = logger::file_writer(
-            &config.log_file,
+            &config.log.file.filename,
             config.log.file.max_size,
             config.log.file.max_backups,
             config.log.file.max_days,
@@ -196,7 +196,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         .unwrap_or_else(|e| {
             fatal!(
                 "failed to initialize log with file {}: {}",
-                config.log_file,
+                config.log.file.filename,
                 e
             );
         });
@@ -235,11 +235,13 @@ pub fn initial_metric(cfg: &MetricConfig) {
 #[allow(dead_code)]
 pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches<'_>) {
     if let Some(level) = matches.value_of("log-level") {
-        config.log_level = logger::get_level_by_string(level).unwrap();
+        config.log.level = logger::get_level_by_string(level).unwrap();
+        config.log_level = slog::Level::Info;
     }
 
     if let Some(file) = matches.value_of("log-file") {
-        config.log_file = file.to_owned();
+        config.log.file.filename = file.to_owned();
+        config.log_file = "".to_owned();
     }
 
     if let Some(addr) = matches.value_of("addr") {
