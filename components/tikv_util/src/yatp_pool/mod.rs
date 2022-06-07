@@ -107,7 +107,8 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
         if let Some(f) = self.after_start.take() {
             f();
         }
-        tikv_alloc::add_thread_memory_accessor()
+        tikv_alloc::add_thread_memory_accessor();
+        crate::sys::thread::add_thread_name_to_map()
     }
 
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, mut task_cell: Self::TaskCell) -> bool {
@@ -138,6 +139,7 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
         }
         self.ticker.on_tick();
         self.inner.end(local);
+        crate::sys::thread::remove_thread_name_from_map();
         tikv_alloc::remove_thread_memory_accessor()
     }
 }
@@ -231,10 +233,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.before_stop = Some(Arc::new(move || {
-            f();
-            crate::sys::thread::remove_thread_name_from_map();
-        }));
+        self.before_stop = Some(Arc::new(f));
         self
     }
 
@@ -242,10 +241,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.after_start = Some(Arc::new(move || {
-            crate::sys::thread::add_thread_name_to_map();
-            f();
-        }));
+        self.after_start = Some(Arc::new(f));
         self
     }
 
@@ -283,10 +279,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     }
 
     fn create_builder(&mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
-        let name = self
-            .name_prefix
-            .clone()
-            .unwrap_or_else(|| "yatp_pool".into());
+        let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
         let mut builder = yatp::Builder::new(thd_name!(name));
         builder
             .stack_size(self.stack_size)
@@ -294,23 +287,11 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             .core_thread_count(self.core_thread_count)
             .max_thread_count(self.max_thread_count);
 
-        let after_start = match self.after_start.take() {
-            f @ Some(_) => f,
-            None => {
-                self.after_start(|| {});
-                self.after_start.take()
-            }
-        };
-        let before_stop = match self.before_stop.take() {
-            f @ Some(_) => f,
-            None => {
-                self.before_stop(|| {});
-                self.before_stop.take()
-            }
-        };
+        let after_start = self.after_start.take();
+        let before_stop = self.before_stop.take();
         let before_pause = self.before_pause.take();
         let schedule_wait_duration =
-            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[&name]);
+            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name]);
         let read_pool_runner = YatpPoolRunner::new(
             Default::default(),
             self.ticker.clone(),
