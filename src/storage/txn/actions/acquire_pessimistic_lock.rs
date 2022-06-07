@@ -135,8 +135,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
     // Following seek_write read the previous write.
     let (prev_write_loaded, mut prev_write) = (true, None);
-    let can_use_get_newer = !should_not_exist && !need_value && !need_old_value;
-    let res = if can_use_get_newer && reader.cloud_reader.is_some() {
+    // The get_newer API returns None if there is no conflict,
+    // so it can not be used to check if key exists or get the value of the key.
+    let can_use_get_newer = !need_check_existence
+        && !should_not_exist
+        && !need_value
+        && !need_old_value
+        && reader.cloud_reader.is_some();
+    let res = if can_use_get_newer {
         let cloud_reader = reader.cloud_reader.as_mut().unwrap();
         cloud_reader.get_newer(&key, reader.start_ts)?
     } else {

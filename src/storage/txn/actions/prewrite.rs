@@ -340,7 +340,12 @@ impl<'a> PrewriteMutation<'a> {
         &self,
         reader: &mut SnapshotReader<S>,
     ) -> Result<Option<(Write, TimeStamp)>> {
-        let opt_write = if !self.should_not_exist && reader.cloud_reader.is_some() {
+        // The get_newer API returns None if there is no conflict,
+        // so it can not be used to check if key exists or get the value of the key.
+        let can_use_get_newer = self.assertion == Assertion::None
+            && !self.should_not_exist
+            && reader.cloud_reader.is_some();
+        let opt_write = if can_use_get_newer {
             let cloud_reader = reader.cloud_reader.as_mut().unwrap();
             cloud_reader.get_newer(&self.key, self.txn_props.start_ts)?
         } else {
