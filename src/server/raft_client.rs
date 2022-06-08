@@ -1230,10 +1230,10 @@ mod tests {
         assert!(!msg_buf.full());
         msg_buf.push(new_test_msg(1));
         assert!(msg_buf.full());
-        msg_buf.clear();
 
         // update config
         version_track.update(|cfg| cfg.max_grpc_send_msg_len *= 2);
+        msg_buf.clear();
 
         let new_max_msg_len =
             default_grpc_msg_len * 2 - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
