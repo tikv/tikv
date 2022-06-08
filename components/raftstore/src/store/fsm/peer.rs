@@ -5512,8 +5512,8 @@ where
         source: &str,
         _cb: Callback<EK::Snapshot>,
     ) {
-        let start_key_to_log = start_key.clone().unwrap_or(vec![]);
-        let end_key_to_log = end_key.clone().unwrap_or(vec![]);
+        let start_key_to_log = start_key.clone().unwrap_or_default();
+        let end_key_to_log = end_key.clone().unwrap_or_default();
         info!(
             "on half split key range";
             "region_id" => self.fsm.region_id(),

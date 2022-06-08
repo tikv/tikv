@@ -670,7 +670,7 @@ impl AutoSplitController {
         });
         // Calculate the Region CPU usage.
         region_cpu_map.iter_mut().for_each(|(_, (cpu_time, _))| {
-            *cpu_time = *cpu_time / collect_interval_ms as f64;
+            *cpu_time /= collect_interval_ms as f64;
         });
         // Choose the hottest key range for each Region.
         let mut hottest_key_range_cpu_time_map = HashMap::with_capacity(region_cpu_map.len());
