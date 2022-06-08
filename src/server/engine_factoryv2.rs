@@ -8,7 +8,7 @@ use std::{
 use collections::HashMap;
 use engine_rocks::{
     raw::{Cache, Env},
-    CompactionListener, FlowListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine,
+    CompactionListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine,
     RocksEventListener,
 };
 use engine_traits::{CompactionJobInfo, RaftEngine, Result, TabletFactory, CF_DEFAULT, CF_WRITE};
@@ -19,7 +19,9 @@ use raftstore::{
 };
 use tikv_util::worker::Scheduler;
 
-use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::config::DbConfig;
+
+const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
 
 pub struct FactoryInnerV2 {
     env: Arc<Env>,
@@ -115,13 +117,11 @@ impl<ER: RaftEngine> KvEngineFactoryV2<ER> {
         info!("destroy tablet"; "path" => %tablet_path.display());
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
-        if let Some(env) = &self.inner.env {
-            kv_db_opts.set_env(env.clone());
-        }
+        kv_db_opts.set_env(self.inner.env.clone());
         if let Some(filter) = self.create_raftstore_compaction_listener() {
             kv_db_opts.add_event_listener(filter);
         }
-        let kv_cfs_opts = self.inner.rocksdb_config.build_cf_opts(
+        let _kv_cfs_opts = self.inner.rocksdb_config.build_cf_opts(
             &self.inner.block_cache,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
@@ -136,44 +136,32 @@ impl<ER: RaftEngine> KvEngineFactoryV2<ER> {
         let _ = std::fs::remove_dir_all(tablet_path);
         Ok(())
     }
-
-    #[inline]
-    fn root_db_path(&self) -> PathBuf {
-        self.inner.store_path.join(DEFAULT_ROCKSDB_SUB_DIR)
-    }
-
-    #[inline]
-    fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
-        self.inner
-            .store_path
-            .join(format!("tablets/{}_{}", id, suffix))
-    }
 }
 
 impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
-    fn create_tablet(&self, id: u64, suffix: u64) -> RocksEngine {
+    fn create_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
         let mut reg = self.inner.registry.lock().unwrap();
         if let Some(db) = reg.get(&(id, suffix)) {
             panic!("region {} {} already exists", id, db.as_inner().path());
         }
 
-        let kv_engine = self.create_tablet(id, suffix);
+        let kv_engine = self.create_tablet(id, suffix)?;
         debug!("inserting tablet"; "key" => ?(id, suffix));
         reg.insert((id, suffix), kv_engine.clone());
-        kv_engine
+        Ok(kv_engine)
     }
 
-    fn open_tablet(&self, id: u64, suffix: u64) -> RocksEngine {
+    fn open_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
         let mut reg = self.inner.registry.lock().unwrap();
         if let Some(db) = reg.get(&(id, suffix)) {
-            return db.clone();
+            return Ok(db.clone());
         }
 
         let db_path = self.tablet_path(id, suffix);
-        let db = self.open_tablet_raw(db_path.as_path(), false);
+        let db = self.open_tablet_raw(db_path.as_path(), false)?;
         debug!("open tablet"; "key" => ?(id, suffix));
         reg.insert((id, suffix), db.clone());
-        db
+        Ok(db)
     }
 
     fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<RocksEngine> {
@@ -188,14 +176,17 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
         let reg = self.inner.registry.lock().unwrap();
         if let Some(k) = reg.keys().find(|k| k.0 == id) {
             debug!("choose a random tablet"; "key" => ?k);
-            return reg.get(k).cloned();
+            return Some(reg.get(k).unwrap().clone());
         }
         None
     }
 
-    fn open_tablet_raw(&self, path: &Path, readonly: bool) -> RocksEngine {
-        if !RocksEngine::exists(&path) {
-            panic!("tablet {} doesn't exist", path.display());
+    fn open_tablet_raw(&self, path: &Path, _readonly: bool) -> Result<RocksEngine> {
+        if !RocksEngine::exists(path.to_str().unwrap_or_default()) {
+            return Err(box_err!(
+                "path {} does not have db",
+                path.to_str().unwrap_or_default()
+            ));
         }
         let (mut tablet_id, mut tablet_suffix) = (0, 1);
         if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
@@ -203,18 +194,17 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
             tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
             tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
         }
-        self.create_tablet(tablet_id, tablet_suffix, path, false, readonly)
+        self.create_tablet(tablet_id, tablet_suffix)
     }
 
     #[inline]
-    fn create_root_db(&self) -> RocksEngine {
-        let root_path = self.root_db_path();
-        self.create_tablet(0, 0, &root_path, true, false)
+    fn create_root_db(&self) -> Result<RocksEngine> {
+        self.create_tablet(0, 0)
     }
 
     #[inline]
     fn exists_raw(&self, path: &Path) -> bool {
-        RocksEngine::exists(&path)
+        RocksEngine::exists(path.to_str().unwrap_or_default())
     }
 
     #[inline]
@@ -224,7 +214,9 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
 
     #[inline]
     fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
-        KvEngineFactory::tablet_path(self, id, suffix)
+        self.inner
+            .store_path
+            .join(format!("tablets/{}_{}", id, suffix))
     }
 
     #[inline]
@@ -261,49 +253,23 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     }
 
     #[inline]
-    fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> RocksEngine {
-        let mut reg = self.inner.registry.lock().unwrap();
+    fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<RocksEngine> {
+        let reg = self.inner.registry.lock().unwrap();
         if let Some(db) = reg.get(&(id, suffix)) {
-            panic!("region {} {} already exists", id, db.as_inner().path());
+            return Err(box_err!(
+                "region {} {} already exists",
+                id,
+                db.as_inner().path()
+            ));
         }
 
         let db_path = self.tablet_path(id, suffix);
         if !path.exists() {}
-        if let Err(e) = std::fs::rename(path, &db_path) {
-            panic!(
-                "failed to move {} to {}: {:?}",
-                path.display(),
-                db_path.display(),
-                e
-            );
-        }
-        let db = self.open_tablet_raw(db_path.as_path(), false);
-        debug!("open tablet"; "key" => ?(id, suffix));
-        reg.insert((id, suffix), db.clone());
-        db
+        std::fs::rename(path, &db_path)?;
+        self.open_tablet_raw(db_path.as_path(), false)
     }
-}
 
-#[derive(Clone)]
-struct MultiRocksEnginesFactory<RocksEngine, R> {
-    kv: RocksEngine,
-    raft: R,
-    tablet_factory: KvEngineFactoryV2,
-}
-
-impl<RocksEngine, R: RaftEngine> EnginesFactory for MultiRocksEnginesFactory<RocksEngine, R> {
-    fn create_engines(&self, region_id: u64, suffix: u64) -> Result<Engines<K, R>> {
-        let kv = self.tablet_factory.create_tablet(region_id, suffix);
-        Ok(Engines::new(kv, self.raft.clone()))
-    }
-}
-
-impl<R: RaftEngine> MultiRocksEnginesFactory<RocksEngine, R> {
-    fn new(kv: RocksEngine, raft: R, tablet_factory: KvEngineFactoryV2) {
-        MultiRocksEnginesFactory {
-            kv,
-            raft,
-            tablet_factory,
-        }
+    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
+        Box::new(std::clone::Clone::clone(self))
     }
 }

@@ -65,7 +65,7 @@ pub trait KvEngine:
 ///
 // It should be named as `EngineFactory` for consistency, but we are about to rename
 // engine to tablet, so always use tablet for new traits/types.
-pub trait TabletFactory<EK>: Clone {
+pub trait TabletFactory<EK> {
     fn loop_tablet_cache(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>) {}
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> crate::Result<()> {
         Ok(())
@@ -74,11 +74,14 @@ pub trait TabletFactory<EK>: Clone {
     fn open_tablet(&self, id: u64, suffix: u64) -> Result<EK> {
         self.open_tablet_raw(&self.tablet_path(id, suffix), false)
     }
-    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Result<EK> {
-        self.open_tablet_raw(&self.tablet_path(id, suffix), false)
+    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK> {
+        if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(id, suffix), false) {
+            return Some(engine);
+        }
+        None
     }
-    fn open_tablet_cache_any(&self, id: u64) -> Result<EK> {
-        self.open_tablet_raw(&self.tablet_path(id, 0), false)
+    fn open_tablet_cache_any(&self, id: u64) -> Option<EK> {
+        self.open_tablet_cache(id, 0)
     }
     fn open_tablet_raw(&self, path: &Path, readonly: bool) -> Result<EK>;
     fn create_root_db(&self) -> Result<EK>;
@@ -89,6 +92,7 @@ pub trait TabletFactory<EK>: Clone {
     fn exists_raw(&self, path: &Path) -> bool;
     fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf;
     fn tablets_path(&self) -> PathBuf;
+    fn clone(&self) -> Box<dyn TabletFactory<EK> + Send>;
     fn load_tablet(&self, _path: &Path, id: u64, suffix: u64) -> Result<EK> {
         self.open_tablet(id, suffix)
     }
@@ -98,7 +102,6 @@ pub trait TabletFactory<EK>: Clone {
     }
 }
 
-#[derive(Clone)]
 pub struct DummyFactory<EK>
 where
     EK: KvEngine,
@@ -128,6 +131,19 @@ where
     }
     fn tablets_path(&self) -> PathBuf {
         PathBuf::from(&self.root_path)
+    }
+
+    fn clone(&self) -> Box<dyn TabletFactory<EK> + Send> {
+        if self.engine.is_none() {
+            return Box::<DummyFactory<EK>>::new(DummyFactory {
+                engine: None,
+                root_path: self.root_path.clone(),
+            });
+        }
+        Box::<DummyFactory<EK>>::new(DummyFactory {
+            engine: Some(self.engine.as_ref().unwrap().clone()),
+            root_path: self.root_path.clone(),
+        })
     }
 }
 

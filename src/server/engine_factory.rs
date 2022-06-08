@@ -10,10 +10,7 @@ use engine_rocks::{
     CompactionListener, FlowListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine,
     RocksEventListener,
 };
-use engine_traits::{
-    CompactionJobInfo, Engines, EnginesFactory, RaftEngine, Result, TabletFactory, CF_DEFAULT,
-    CF_WRITE,
-};
+use engine_traits::{CompactionJobInfo, RaftEngine, Result, TabletFactory, CF_DEFAULT, CF_WRITE};
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::{
     store::{RaftRouter, StoreMsg},
@@ -32,6 +29,7 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
+    root_db: Mutex<Option<RocksEngine>>,
 }
 
 pub struct KvEngineFactoryBuilder<ER: RaftEngine> {
@@ -51,6 +49,7 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
+                root_db: Mutex::default(),
             },
             router: None,
         }
@@ -176,13 +175,20 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     #[inline]
     fn create_root_db(&self) -> Result<RocksEngine> {
         let root_path = self.kv_engine_path();
-        self.create_tablet(&root_path)
+        let tablet = self.create_tablet(&root_path)?;
+        let mut root_db = self.inner.root_db.lock().unwrap();
+        root_db.replace(tablet.clone());
+        Ok(tablet)
     }
 
-    // followings are dummy implementation for now
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<RocksEngine> {
+        if let Ok(db) = self.inner.root_db.lock() {
+            let cp = db.as_ref().unwrap().clone();
+            return Ok(cp);
+        }
         self.create_root_db()
     }
+
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
         self.create_root_db()
     }
@@ -195,22 +201,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     fn tablets_path(&self) -> PathBuf {
         self.kv_engine_path()
     }
-}
-
-#[derive(Clone)]
-pub struct SingleRockEnginesFactory<RocksEngine, R> {
-    kv: RocksEngine,
-    raft: R,
-}
-
-impl<R: RaftEngine> EnginesFactory<RocksEngine, R> for SingleRockEnginesFactory<RocksEngine, R> {
-    fn create_engines(&self, _region_id: u64, _suffix: u64) -> Result<Engines<RocksEngine, R>> {
-        Ok(Engines::new(self.kv.clone(), self.raft.clone()))
-    }
-}
-
-impl<R: RaftEngine> SingleRockEnginesFactory<RocksEngine, R> {
-    pub fn new(kv: RocksEngine, raft: R) -> Self {
-        SingleRockEnginesFactory { kv, raft }
+    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
+        Box::new(std::clone::Clone::clone(self))
     }
 }

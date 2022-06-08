@@ -6,6 +6,7 @@ mod raft_client;
 pub mod config;
 pub mod debug;
 mod engine_factory;
+mod engine_factoryv2;
 pub mod errors;
 pub mod gc_worker;
 pub mod load_statistics;
@@ -22,7 +23,7 @@ pub mod status_server;
 pub mod transport;
 pub mod ttl;
 
-pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder, SingleRockEnginesFactory};
+pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder};
 
 #[cfg(any(test, feature = "testexport"))]
 pub use self::server::test_router::TestRaftStoreRouter;

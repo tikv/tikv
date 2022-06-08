@@ -41,8 +41,8 @@ use engine_rocks::{
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, Engines, EnginesFactory, FlowControlFactorsExt, KvEngine,
-    MiscExt, RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
+    RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -93,8 +93,8 @@ use tikv::{
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
         ttl::TtlChecker,
-        KvEngineFactoryBuilder, Node, RaftKv, Server, SingleRockEnginesFactory,
-        CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
+        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
+        GRPC_THREAD_PREFIX,
     },
     storage::{
         self, config_manager::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
@@ -1505,9 +1505,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         let kv_engine = factory
             .create_root_db()
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        // TODOTODO: to read config and create Engines properly
-        let engines_factory = SingleRockEnginesFactory::new(kv_engine, raft_engine);
-        let engines = engines_factory.create_engines(0, 0).unwrap();
+        let engines = Engines::new(kv_engine, raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(

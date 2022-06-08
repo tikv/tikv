@@ -32,7 +32,3 @@ impl<K: KvEngine, R: RaftEngine> Engines<K, R> {
         self.kv.sync()
     }
 }
-
-pub trait EnginesFactory<K, R> {
-    fn create_engines(&self, region_id: u64, suffix: u64) -> Result<Engines<K, R>>;
-}
