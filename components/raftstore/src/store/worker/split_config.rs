@@ -19,8 +19,14 @@ const DEFAULT_SPLIT_BALANCE_SCORE: f64 = 0.25;
 // We get contained score by sample.contained/(sample.right+sample.left+sample.contained). It will be used to avoid to split regions requested by range.
 const DEFAULT_SPLIT_CONTAINED_SCORE: f64 = 0.5;
 
+// When the gRPC poll thread CPU usage is higher than gRPC poll thread count * `DEFAULT_GRPC_THREAD_CPU_THRESHOLD_RATIO`,
+// the split won't be triggered to prevent from increasing the CPU usage.
 const DEFAULT_GRPC_THREAD_CPU_THRESHOLD_RATIO: f64 = 0.5;
+// When the Unified Read Poll thread CPU usage is higher than Unified Read Poll thread count * `DEFAULT_UNIFIED_READ_THREAD_CPU_THRESHOLD_RATIO`,
+// the CPU based split will be triggered to split the top hot CPU region.
 const DEFAULT_UNIFIED_READ_POOL_THREAD_CPU_THRESHOLD_RATIO: f64 = 0.8;
+// When the Unified Read Poll is hot and the region's CPU usage reaches `REGION_CPU_THRESHOLD_RATIO` as a percentage of the Unified Read Poll,
+// it will be added into the hot region list and may be split later as the top hot CPU region.
 const REGION_CPU_THRESHOLD_RATIO: f64 = 0.25;
 
 lazy_static! {

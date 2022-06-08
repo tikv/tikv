@@ -50,10 +50,10 @@ const NO_ENOUGH_LR_KEY: &str = "no_enough_lr_key";
 const NO_BALANCE_KEY: &str = "no_balance_key";
 // The number of contained keys does not meet the score.
 const NO_UNCROSS_KEY: &str = "no_uncross_key";
-// Split info for the hot CPU region has been collected, ready to split.
-const READY_TO_SPLIT_HOT: &str = "ready_to_split_hot";
-// The hot CPU region is not ready to split.
-const UNABLE_TO_SPLIT_HOT: &str = "unable_to_split_hot";
+// Split info for the top hot CPU region has been collected, ready to split.
+const READY_TO_SPLIT_CPU_TOP: &str = "ready_to_split_cpu_top";
+// The top hot CPU region is not ready to split.
+const UNABLE_TO_SPLIT_CPU_TOP: &str = "unable_to_split_cpu_top";
 
 // It will return prefix sum of the given iter,
 // `read` is a function to process the item from the iter.
@@ -620,6 +620,9 @@ impl AutoSplitController {
     }
 
     fn is_region_busy(&self, unified_read_pool_thread_usage: f64, region_cpu_usage: f64) -> bool {
+        if unified_read_pool_thread_usage <= 0.0 {
+            return false;
+        }
         region_cpu_usage / unified_read_pool_thread_usage >= self.cfg.region_cpu_threshold_ratio
     }
 
@@ -855,7 +858,7 @@ impl AutoSplitController {
                     recorder.hottest_key_range.as_ref().unwrap().end_key.clone(),
                 ));
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[READY_TO_SPLIT_HOT])
+                    .with_label_values(&[READY_TO_SPLIT_CPU_TOP])
                     .inc();
                 info!("load base split region";
                     "region_id" => region_id,
@@ -865,7 +868,7 @@ impl AutoSplitController {
                 );
             } else {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[UNABLE_TO_SPLIT_HOT])
+                    .with_label_values(&[UNABLE_TO_SPLIT_CPU_TOP])
                     .inc();
             }
         }
