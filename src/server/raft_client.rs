@@ -1239,10 +1239,10 @@ mod tests {
         let new_max_msg_len =
             default_grpc_msg_len * 2 - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
         for _i in 0..2 {
-            msg_buf.push(make_msg(new_max_msg_len / 2 - 1));
+            msg_buf.push(new_test_msg(new_max_msg_len / 2 - 1));
             assert!(!msg_buf.full());
         }
-        msg_buf.push(make_msg(2));
+        msg_buf.push(new_test_msg(2));
         assert!(msg_buf.full());
     }
 
