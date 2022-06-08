@@ -1202,6 +1202,21 @@ mod tests {
         assert!(msg_buf.full());
     }
 
+    fn new_test_msg(size: usize) -> RaftMessage {
+        let mut msg = RaftMessage::default();
+        msg.set_region_id(1);
+        let mut region_epoch = RegionEpoch::default();
+        region_epoch.conf_ver = 1;
+        region_epoch.version = 0x123456;
+        msg.set_region_epoch(region_epoch);
+        msg.set_start_key(vec![0; size]);
+        msg.set_end_key(vec![]);
+        msg.mut_message().set_snapshot(Snapshot::default());
+        msg.mut_message().set_commit(0);
+        assert_eq!(BatchMessageBuffer::message_size(&msg), size);
+        msg
+    }
+
     #[test]
     fn test_push_raft_message_cfg_change() {
         let version_track = Arc::new(VersionTrack::new(Config::default()));
@@ -1211,25 +1226,10 @@ mod tests {
         );
 
         let default_grpc_msg_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
-        let make_msg = |size: usize| {
-            let mut msg = RaftMessage::default();
-            msg.set_region_id(1);
-            let mut region_epoch = RegionEpoch::default();
-            region_epoch.conf_ver = 1;
-            region_epoch.version = 0x123456;
-            msg.set_region_epoch(region_epoch);
-            msg.set_start_key(vec![0; size]);
-            msg.set_end_key(vec![]);
-            msg.mut_message().set_snapshot(Snapshot::default());
-            msg.mut_message().set_commit(0);
-            assert_eq!(BatchMessageBuffer::message_size(&msg), size);
-            msg
-        };
-
         let max_msg_len = default_grpc_msg_len - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
-        msg_buf.push(make_msg(max_msg_len));
+        msg_buf.push(new_test_msg(max_msg_len));
         assert!(!msg_buf.full());
-        msg_buf.push(make_msg(1));
+        msg_buf.push(new_test_msg(1));
         assert!(msg_buf.full());
         msg_buf.clear();
 
@@ -1254,24 +1254,9 @@ mod tests {
             Arc::new(ThreadLoadPool::with_threshold(100)),
         );
 
-        let make_msg = |size: usize| {
-            let mut msg = RaftMessage::default();
-            msg.set_region_id(1);
-            let mut region_epoch = RegionEpoch::default();
-            region_epoch.conf_ver = 1;
-            region_epoch.version = 0x123456;
-            msg.set_region_epoch(region_epoch);
-            msg.set_start_key(vec![0; size]);
-            msg.set_end_key(vec![]);
-            msg.mut_message().set_snapshot(Snapshot::default());
-            msg.mut_message().set_commit(0);
-            assert_eq!(BatchMessageBuffer::message_size(&msg), size);
-            msg
-        };
-
         b.iter(|| {
             for _i in 0..10 {
-                msg_buf.push(test::black_box(make_msg(1000)));
+                msg_buf.push(test::black_box(new_test_msg(1024)));
             }
             // run clear to mock flush.
             msg_buf.clear();
