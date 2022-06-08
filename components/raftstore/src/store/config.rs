@@ -369,7 +369,8 @@ impl Default for Config {
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
-
+            // This config is arbitrary, a more reasonable and accurate switch needs to be decided.
+            // TODO: update this config.
             enable_cpu_collector: false,
         }
     }

@@ -836,6 +836,7 @@ impl AutoSplitController {
         }
 
         // Check if the top CPU usage region could be split.
+        // TODO: avoid unnecessary split by introducing the feedback mechanism from PD.
         if !top_cpu_usage.is_empty() && !is_grpc_poll_busy {
             // Calculate by using the latest CPU usage.
             top_cpu_usage.sort_by(|a, b| {
