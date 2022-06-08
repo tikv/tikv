@@ -450,18 +450,16 @@ impl ConfigManager for ServerConfigManager {
                     .resize_memory(mem_quota.0 as usize);
             }
             if let Some(value) = c.get("metrics_compact_policy") {
-                let v: u32 = value.into();
-                let policy = MetricsCompactPolicy::from(v);
-                if policy as u32 != v {
-                    return Err(format!("invalid metrics compact policy value '{}'", v).into());
+                let policy = MetricsCompactPolicy::from(value);
+                if policy == MetricsCompactPolicy::Unknown {
+                    return Err("invalid `metrics-compact-policy`".into());
                 }
                 tikv_util::metrics::set_metrics_compact_policy(policy);
             }
             if let Some(value) = c.get("metrics_level") {
-                let v: u32 = value.into();
-                let level = MetricsLevel::from(v);
-                if level as u32 != v {
-                    return Err(format!("invalid metrics level '{}'", v).into());
+                let level = MetricsLevel::from(value);
+                if level == MetricsLevel::Unknown {
+                    return Err("invalid `metrics-level`".into());
                 }
                 tikv_util::metrics::set_metrics_level(level);
             }

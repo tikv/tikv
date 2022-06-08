@@ -205,7 +205,7 @@ impl Collector for ThreadsCollector {
         }
         let compact_policy = get_metrics_compact_policy();
         let simplify_metrics = |mut mfs: Vec<proto::MetricFamily>| {
-            if compact_policy == MetricsCompactPolicy::NoCompaction {
+            if compact_policy <= MetricsCompactPolicy::NoCompaction {
                 return mfs;
             }
             mfs.retain_mut(|mf| {

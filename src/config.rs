@@ -4634,14 +4634,14 @@ mod tests {
         check_cfg(&cfg);
 
         cfg_controller
-            .update_config("server.metrics-compact-policy", "1")
+            .update_config("server.metrics-compact-policy", "2")
             .unwrap();
         cfg.server.metrics_compact_policy = MetricsCompactPolicy::LoseLessCompaction;
         assert_eq!(cfg_controller.get_current(), cfg);
 
         assert!(
             cfg_controller
-                .update_config("server.metrics-compact-policy", "3")
+                .update_config("server.metrics-compact-policy", "4")
                 .is_err()
         );
 

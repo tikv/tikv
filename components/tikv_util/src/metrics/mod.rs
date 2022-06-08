@@ -103,7 +103,7 @@ pub fn dump_metrics_to(w: &mut impl Write, metric_families: Vec<MetricFamily>) {
     let compact_policy = get_metrics_compact_policy();
 
     let encoder = TextEncoder::new();
-    if compact_policy == MetricsCompactPolicy::NoCompaction {
+    if compact_policy <= MetricsCompactPolicy::NoCompaction {
         if let Err(e) = encoder.encode(&*metric_families, w) {
             warn!("prometheus encoding error"; "err" => ?e);
         }
@@ -192,15 +192,18 @@ pub fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
 #[derive(Serialize_repr, Deserialize_repr, Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 pub enum MetricsCompactPolicy {
+    // this is a fallback level when deserialize a invalid config, its behavior should be the same
+    // as `NoCompaction`. Use a separate value to return an error in online config.
+    Unknown = 0,
     // return full original data, this is the default policy.
-    NoCompaction = 0,
+    NoCompaction = 1,
     // this level try to compact sample without infromation loss.
     // currently only filter counter with 0 value and histogram with 0 samples.
-    LoseLessCompaction = 1,
+    LoseLessCompaction = 2,
     // this level try to reduce the data size as much as possible.
     // this level also compact histogram vector type by remove histograms which sample count is
     // smaller than 1% of the max sample count.
-    LossyCompaction = 2,
+    LossyCompaction = 3,
 }
 
 impl Ord for MetricsCompactPolicy {
@@ -218,11 +221,10 @@ impl PartialOrd for MetricsCompactPolicy {
 impl From<u32> for MetricsCompactPolicy {
     fn from(v: u32) -> Self {
         match v {
-            0 => MetricsCompactPolicy::NoCompaction,
-            1 => MetricsCompactPolicy::LoseLessCompaction,
-            2 => MetricsCompactPolicy::LossyCompaction,
-            // all unknown value will be treat as the default value.
-            _ => MetricsCompactPolicy::NoCompaction,
+            1 => MetricsCompactPolicy::NoCompaction,
+            2 => MetricsCompactPolicy::LoseLessCompaction,
+            3 => MetricsCompactPolicy::LossyCompaction,
+            _ => MetricsCompactPolicy::Unknown,
         }
     }
 }
@@ -253,8 +255,11 @@ impl From<&ConfigValue> for MetricsCompactPolicy {
 #[derive(Serialize_repr, Deserialize_repr, Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 pub enum MetricsLevel {
+    // this is a fallback level when deserialize a invalid config, its behavior should be the same
+    // as `All`. Use a separate value to return an error in online config.
+    Unknown = 0,
     /// return all metrics, the lowest level, this is the default level.
-    All = 0,
+    All = 1,
     // we reserve some value here for furture usage.
     /// always return high priority metrics, returns default level metrics with a low freq (1/2 for now).
     Middle = 5,
@@ -277,11 +282,10 @@ impl PartialOrd for MetricsLevel {
 impl From<u32> for MetricsLevel {
     fn from(v: u32) -> Self {
         match v {
-            0 => MetricsLevel::All,
+            1 => MetricsLevel::All,
             5 => MetricsLevel::Middle,
             10 => MetricsLevel::High,
-            // all unknown value will be treat as the default value.
-            _ => MetricsLevel::All,
+            _ => MetricsLevel::Unknown,
         }
     }
 }
