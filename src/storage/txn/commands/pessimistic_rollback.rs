@@ -25,7 +25,7 @@ command! {
     /// This can roll back an [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) command.
     PessimisticRollback:
         cmd_ty => Vec<StorageResult<()>>,
-        display => "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}", (keys.len, start_ts, for_update_ts, ctx),
+        display => "kv::command::pessimistic_rollback keys({:?}) @ {} {} | {:?}", (keys, start_ts, for_update_ts, ctx),
         content => {
             /// The keys to be rolled back.
             keys: Vec<Key>,
