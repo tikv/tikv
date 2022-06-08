@@ -262,7 +262,6 @@ pub enum MetricsLevel {
     High = 10,
 }
 
-
 impl Ord for MetricsLevel {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (*self as u32).cmp(&(*other as u32))
