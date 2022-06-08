@@ -175,7 +175,7 @@ pub struct Config {
     // deprecated. use metrics_compact_level and metrics_level instead.
     pub simplify_metrics: bool,
 
-    // the level of metrics compression
+    // the policy of metrics compaction.
     #[doc(hidden)]
     pub metrics_compact_policy: MetricsCompactPolicy,
     // metrics filter level
