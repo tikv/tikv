@@ -230,7 +230,6 @@ impl BatchMessageBuffer {
         self.overflowing = None;
         // try refresh config
         self.maybe_refresh_config();
-        
     }
 }
 
