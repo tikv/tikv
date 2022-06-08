@@ -216,11 +216,21 @@ impl BatchMessageBuffer {
         msg_size
     }
 
+    #[inline]
+    fn maybe_refresh_config(&mut self) {
+        if let Some(new_cfg) = self.cfg_tracker.any_new() {
+            self.cfg = new_cfg.clone();
+        }
+    }
+
     #[cfg(test)]
     fn clear(&mut self) {
         self.batch = BatchRaftMessage::default();
         self.size = 0;
         self.overflowing = None;
+        // try refresh config
+        self.maybe_refresh_config();
+        
     }
 }
 
@@ -235,10 +245,6 @@ impl Buffer for BatchMessageBuffer {
     #[inline]
     fn push(&mut self, msg: RaftMessage) {
         let msg_size = Self::message_size(&msg);
-        // try refresh config before check
-        if let Some(new_cfg) = self.cfg_tracker.any_new() {
-            self.cfg = new_cfg.clone();
-        }
         // To avoid building too large batch, we limit each batch's size. Since `msg_size`
         // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
@@ -270,6 +276,12 @@ impl Buffer for BatchMessageBuffer {
         if let Some(more) = self.overflowing.take() {
             self.push(more);
         }
+
+        // try refresh config after flush. `max_grpc_send_msg_len` and `raft_msg_max_batch_size`
+        // can impact the buffer push logic, but since they are soft restriction, we check config change
+        // at here to avoid affact performance since `push` is a hot path.
+        self.maybe_refresh_config();
+
         res
     }
 
@@ -1232,5 +1244,39 @@ mod tests {
         }
         msg_buf.push(make_msg(2));
         assert!(msg_buf.full());
+    }
+
+    #[bench]
+    fn bench_client_buffer_push(b: &mut test::Bencher) {
+        let version_track = Arc::new(VersionTrack::new(Config::default()));
+        let mut msg_buf = BatchMessageBuffer::new(
+            &version_track,
+            Arc::new(ThreadLoadPool::with_threshold(100)),
+        );
+
+        let make_msg = |size: usize| {
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(1);
+            let mut region_epoch = RegionEpoch::default();
+            region_epoch.conf_ver = 1;
+            region_epoch.version = 0x123456;
+            msg.set_region_epoch(region_epoch);
+            msg.set_start_key(vec![0; size]);
+            msg.set_end_key(vec![]);
+            msg.mut_message().set_snapshot(Snapshot::default());
+            msg.mut_message().set_commit(0);
+            assert_eq!(BatchMessageBuffer::message_size(&msg), size);
+            msg
+        };
+
+        b.iter(|| {
+            for _i in 0..10 {
+                msg_buf.push(test::black_box(make_msg(1000)));
+            }
+            // run clear to mock flush.
+            msg_buf.clear();
+
+            test::black_box(&mut msg_buf);
+        });
     }
 }
