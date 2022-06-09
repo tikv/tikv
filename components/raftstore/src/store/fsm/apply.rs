@@ -1075,6 +1075,9 @@ where
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
+        } else if term > self.applied_index_term {
+            // An empty entry is a new leader's first entry.
+            RAFT_LEADER_ELECTION_ROUNDS.observe((term - self.applied_index_term) as _)
         }
         // TOOD(cdc): should we observe empty cmd, aka leader change?
 

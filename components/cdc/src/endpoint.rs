@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::{Ord, Ordering as CmpOrdering, PartialOrd, Reverse},
+    cmp::{self, Ord, Ordering as CmpOrdering, PartialOrd, Reverse},
     collections::BinaryHeap,
     fmt,
     sync::{Arc, Mutex as StdMutex},
@@ -255,9 +255,11 @@ impl Ord for ResolvedRegion {
     }
 }
 
+#[derive(Default)]
 struct ResolvedRegionHeap {
     // BinaryHeap is max heap, so we reverse order to get a min heap.
     heap: BinaryHeap<Reverse<ResolvedRegion>>,
+    max_resolved_ts: TimeStamp,
 }
 
 impl ResolvedRegionHeap {
@@ -265,45 +267,31 @@ impl ResolvedRegionHeap {
         self.heap.push(Reverse(ResolvedRegion {
             region_id,
             resolved_ts,
-        }))
+        }));
+        self.max_resolved_ts = cmp::max(self.max_resolved_ts, resolved_ts);
     }
 
-    // Pop slow regions and the minimum resolved ts among them.
-    fn pop(&mut self, count: usize) -> (TimeStamp, HashSet<u64>) {
-        let mut min_resolved_ts = TimeStamp::max();
-        let mut outliers = HashSet::with_capacity_and_hasher(count, Default::default());
-        for _ in 0..count {
-            if let Some(resolved_region) = self.heap.pop() {
-                outliers.insert(resolved_region.0.region_id);
-                if min_resolved_ts > resolved_region.0.resolved_ts {
-                    min_resolved_ts = resolved_region.0.resolved_ts;
-                }
-            } else {
+    fn grade(&mut self, bucket_ms: u64) -> Vec<(TimeStamp, HashSet<u64>)> {
+        let mut buckets = Vec::with_capacity(128);
+        let mut fence = TimeStamp::zero().physical();
+        let last_fence = self.max_resolved_ts.physical() - bucket_ms;
+        while let Some(Reverse(item)) = self.heap.pop() {
+            let physical = item.resolved_ts.physical();
+            if physical - fence > bucket_ms {
+                fence = physical;
+                buckets.push((item.resolved_ts, HashSet::with_hasher(Default::default())));
+            }
+            let bucket = &mut buckets.last_mut().unwrap().1;
+            bucket.insert(item.region_id);
+            if physical > last_fence {
                 break;
             }
         }
-        (min_resolved_ts, outliers)
-    }
-
-    fn to_hash_set(&self) -> (TimeStamp, HashSet<u64>) {
-        let mut min_resolved_ts = TimeStamp::max();
-        let mut regions = HashSet::with_capacity_and_hasher(self.heap.len(), Default::default());
-        for resolved_region in &self.heap {
-            regions.insert(resolved_region.0.region_id);
-            if min_resolved_ts > resolved_region.0.resolved_ts {
-                min_resolved_ts = resolved_region.0.resolved_ts;
-            }
+        for Reverse(item) in &self.heap {
+            let bucket = &mut buckets.last_mut().unwrap().1;
+            bucket.insert(item.region_id);
         }
-        (min_resolved_ts, regions)
-    }
-
-    fn clear(&mut self) {
-        self.heap.clear();
-    }
-
-    fn reset_and_shrink_to(&mut self, min_capacity: usize) {
-        self.clear();
-        self.heap.shrink_to(min_capacity);
+        buckets
     }
 }
 
@@ -337,7 +325,6 @@ pub struct Endpoint<T, E> {
     sink_memory_quota: MemoryQuota,
 
     old_value_cache: OldValueCache,
-    resolved_region_heap: ResolvedRegionHeap,
 
     // Check leader
     // store_id -> client
@@ -423,9 +410,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             concurrency_manager,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
-            resolved_region_heap: ResolvedRegionHeap {
-                heap: BinaryHeap::new(),
-            },
             old_value_cache,
             resolved_region_count: 0,
             unresolved_region_count: 0,
@@ -812,16 +796,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
-        // Reset resolved_regions to empty.
-        let resolved_regions = &mut self.resolved_region_heap;
-        resolved_regions.clear();
-
         let total_region_count = regions.len();
         self.min_resolved_ts = TimeStamp::max();
         let mut advance_ok = 0;
         let mut advance_failed_none = 0;
         let mut advance_failed_same = 0;
         let mut advance_failed_stale = 0;
+        let mut resolved_regions = ResolvedRegionHeap::default();
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 let old_resolved_ts = delegate
@@ -874,11 +855,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         //
         // Max number of outliers, in most cases, only a few regions are outliers.
         // TODO: figure out how to avoid create hashset every time, saving some CPU.
-        let max_outlier_count = 32;
-        let (outlier_min_resolved_ts, outlier_regions) = resolved_regions.pop(max_outlier_count);
-        let (normal_min_resolved_ts, normal_regions) = resolved_regions.to_hash_set();
-        self.broadcast_resolved_ts(outlier_min_resolved_ts, outlier_regions);
-        self.broadcast_resolved_ts(normal_min_resolved_ts, normal_regions);
+        for (ts, regions) in resolved_regions.grade(5000) {
+            self.broadcast_resolved_ts(ts, regions);
+        }
     }
 
     fn broadcast_resolved_ts(&self, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
@@ -1191,10 +1170,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoint<T, E> {
     fn on_timeout(&mut self) {
         CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);
-
-        // Reclaim resolved_region_heap memory.
-        self.resolved_region_heap
-            .reset_and_shrink_to(self.capture_regions.len());
 
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         CDC_REGION_RESOLVE_STATUS_GAUGE_VEC

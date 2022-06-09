@@ -726,4 +726,12 @@ lazy_static! {
     .unwrap();
     pub static ref RAFT_LOG_GC_SKIPPED: RaftLogGcSkippedVec =
         auto_flush_from!(RAFT_LOG_GC_SKIPPED_VEC, RaftLogGcSkippedVec);
+
+    pub static ref RAFT_LEADER_ELECTION_ROUNDS: Histogram =
+        register_histogram!(
+            "tikv_raftstore_leader_election_rounds",
+            "how many rounds to elect a leader",
+            linear_buckets(1.0, 1.0, 64).unwrap()
+        ).unwrap();
+
 }
