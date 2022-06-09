@@ -84,7 +84,10 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     time::{duration_to_ms, Instant, ThreadReadId},
 };
-use tracker::{clear_tls_tracker, get_tls_tracker, set_tls_tracker, TrackedFuture, TrackerToken};
+use tracker::{
+    clear_tls_tracker_token, get_tls_tracker_token, set_tls_tracker_token, TrackedFuture,
+    TrackerToken,
+};
 use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
 
 pub use self::{
@@ -307,7 +310,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             });
             perf_context.start_observe();
             let res = f();
-            perf_context.report_metrics(&[get_tls_tracker()]);
+            perf_context.report_metrics(&[get_tls_tracker_token()]);
             res
         })
     }
@@ -752,7 +755,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .resource_tag_factory
             .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
         // Unset the TLS tracker because the future below does not belong to any specific request
-        clear_tls_tracker();
+        clear_tls_tracker_token();
         let res = self.read_pool.spawn_handle(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -765,7 +768,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let mut req_snaps = vec![];
 
                 for ((mut req, id), tracker) in requests.into_iter().zip(ids).zip(trackers) {
-                    set_tls_tracker(tracker);
+                    set_tls_tracker_token(tracker);
                     let mut ctx = req.take_context();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
@@ -839,7 +842,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         tracker,
                     ) = req_snap;
                     let snap_res = snap.await;
-                    set_tls_tracker(tracker);
+                    set_tls_tracker_token(tracker);
                     match snap_res {
                         Ok(snapshot) => Self::with_perf_context(CMD, || {
                             let buckets = snapshot.ext().get_buckets();

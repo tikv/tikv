@@ -15,17 +15,17 @@ thread_local! {
     static TLS_TRACKER_TOKEN: Cell<TrackerToken> = Cell::new(INVALID_TRACKER_TOKEN);
 }
 
-pub fn set_tls_tracker(token: TrackerToken) {
+pub fn set_tls_tracker_token(token: TrackerToken) {
     TLS_TRACKER_TOKEN.with(|c| {
         c.set(token);
     })
 }
 
-pub fn clear_tls_tracker() {
-    set_tls_tracker(INVALID_TRACKER_TOKEN);
+pub fn clear_tls_tracker_token() {
+    set_tls_tracker_token(INVALID_TRACKER_TOKEN);
 }
 
-pub fn get_tls_tracker() -> TrackerToken {
+pub fn get_tls_tracker_token() -> TrackerToken {
     TLS_TRACKER_TOKEN.with(|c| c.get())
 }
 
@@ -49,7 +49,7 @@ impl<F> TrackedFuture<F> {
     pub fn new(future: F) -> TrackedFuture<F> {
         TrackedFuture {
             future,
-            tracker: get_tls_tracker(),
+            tracker: get_tls_tracker_token(),
         }
     }
 }

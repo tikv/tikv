@@ -48,7 +48,9 @@ pub trait PerfContextExt {
 pub enum PerfContextKind {
     RaftstoreApply,
     RaftstoreStore,
+    /// Commands in tikv::storage, the inner str is the command tag.
     Storage(&'static str),
+    /// Coprocessor requests in tikv::coprocessor, the inner str is the request type.
     Coprocessor(&'static str),
 }
 
@@ -60,6 +62,6 @@ pub trait PerfContext: Send {
     /// Reinitializes statistics and the perf level
     fn start_observe(&mut self);
 
-    /// Reports the current collected metrics to prometheus
+    /// Reports the current collected metrics to prometheus and trackers
     fn report_metrics(&mut self, trackers: &[TrackerToken]);
 }

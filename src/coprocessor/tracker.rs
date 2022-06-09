@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, marker::PhantomData};
 
-use ::tracker::{get_tls_tracker, with_tls_tracker};
+use ::tracker::{get_tls_tracker_token, with_tls_tracker};
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
@@ -153,7 +153,7 @@ impl<E: Engine> Tracker<E> {
                 self.total_storage_stats.add(&storage_stats);
             }
             self.with_perf_context(|perf_context| {
-                perf_context.report_metrics(&[get_tls_tracker()])
+                perf_context.report_metrics(&[get_tls_tracker_token()])
             });
             self.current_stage = TrackerState::ItemFinished(now);
         } else {

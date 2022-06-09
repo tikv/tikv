@@ -2,7 +2,9 @@
 
 use std::{borrow::Cow, future::Future, marker::PhantomData, sync::Arc, time::Duration};
 
-use ::tracker::{set_tls_tracker, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS};
+use ::tracker::{
+    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
+};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -488,7 +490,7 @@ impl<E: Engine> Endpoint<E> {
             RequestType::Unknown,
             req.start_ts,
         )));
-        set_tls_tracker(tracker);
+        set_tls_tracker_token(tracker);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));

@@ -43,7 +43,7 @@ use tikv_util::{
     time::{duration_to_ms, duration_to_sec, Instant},
     worker::Scheduler,
 };
-use tracker::{set_tls_tracker, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
+use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
 use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
@@ -1333,7 +1333,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
         RequestType::KvGet,
         req.get_version(),
     )));
-    set_tls_tracker(tracker);
+    set_tls_tracker_token(tracker);
     let start = Instant::now();
     let v = storage.get(
         req.take_context(),
@@ -1383,7 +1383,7 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
         RequestType::KvScan,
         req.get_version(),
     )));
-    set_tls_tracker(tracker);
+    set_tls_tracker_token(tracker);
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
     let v = storage.scan(
@@ -1431,7 +1431,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
         RequestType::KvBatchGet,
         req.get_version(),
     )));
-    set_tls_tracker(tracker);
+    set_tls_tracker_token(tracker);
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
@@ -1483,7 +1483,7 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
         RequestType::KvScanLock,
         req.get_max_version(),
     )));
-    set_tls_tracker(tracker);
+    set_tls_tracker_token(tracker);
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
