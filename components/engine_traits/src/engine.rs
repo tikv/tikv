@@ -84,7 +84,7 @@ pub trait TabletFactory<EK> {
         self.open_tablet_cache(id, 0)
     }
     fn open_tablet_raw(&self, path: &Path, readonly: bool) -> Result<EK>;
-    fn create_root_db(&self) -> Result<EK>;
+    fn create_shared_db(&self) -> Result<EK>;
     #[inline]
     fn exists(&self, id: u64, suffix: u64) -> bool {
         self.exists_raw(&self.tablet_path(id, suffix))
@@ -120,7 +120,7 @@ where
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
-    fn create_root_db(&self) -> Result<EK> {
+    fn create_shared_db(&self) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
     fn exists_raw(&self, _path: &Path) -> bool {

@@ -95,7 +95,7 @@ pub struct KvEngineFactory<ER: RaftEngine> {
 }
 
 impl<ER: RaftEngine> KvEngineFactory<ER> {
-    fn create_raftstore_compaction_listener(&self) -> Option<CompactionListener> {
+    pub fn create_raftstore_compaction_listener(&self) -> Option<CompactionListener> {
         let ch = match &self.router {
             Some(r) => Mutex::new(r.clone()),
             None => return None,
@@ -128,7 +128,7 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
         ))
     }
 
-    fn create_tablet(&self, tablet_path: &Path) -> Result<RocksEngine> {
+    pub fn create_tablet(&self, tablet_path: &Path) -> Result<RocksEngine> {
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
         kv_db_opts.set_env(self.inner.env.clone());
@@ -165,6 +165,34 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
         Ok(kv_engine)
     }
 
+    pub fn destroy_tablet(&self, tablet_path: &Path) -> engine_traits::Result<()> {
+        info!("destroy tablet"; "path" => %tablet_path.display());
+        // Create kv engine.
+        let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
+        kv_db_opts.set_env(self.inner.env.clone());
+        if let Some(filter) = self.create_raftstore_compaction_listener() {
+            kv_db_opts.add_event_listener(filter);
+        }
+        let _kv_cfs_opts = self.inner.rocksdb_config.build_cf_opts(
+            &self.inner.block_cache,
+            self.inner.region_info_accessor.as_ref(),
+            self.inner.api_version,
+        );
+        // TODOTODO: call rust-rocks or tirocks to destroy_engine;
+        /*
+        engine_rocks::raw_util::destroy_engine(
+            tablet_path.to_str().unwrap(),
+            kv_db_opts,
+            kv_cfs_opts,
+        )?;*/
+        let _ = std::fs::remove_dir_all(tablet_path);
+        Ok(())
+    }
+
+    pub fn store_path(&self) -> PathBuf {
+        self.inner.store_path.clone()
+    }
+
     #[inline]
     fn kv_engine_path(&self) -> PathBuf {
         self.inner.store_path.join(DEFAULT_ROCKSDB_SUB_DIR)
@@ -173,7 +201,7 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
 
 impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     #[inline]
-    fn create_root_db(&self) -> Result<RocksEngine> {
+    fn create_shared_db(&self) -> Result<RocksEngine> {
         let root_path = self.kv_engine_path();
         let tablet = self.create_tablet(&root_path)?;
         let mut root_db = self.inner.root_db.lock().unwrap();
@@ -186,12 +214,13 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
             let cp = db.as_ref().unwrap().clone();
             return Ok(cp);
         }
-        self.create_root_db()
+        self.create_shared_db()
     }
 
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
-        self.create_root_db()
+        TabletFactory::create_tablet(self, 0, 0)
     }
+
     fn exists_raw(&self, _path: &Path) -> bool {
         false
     }
@@ -201,6 +230,12 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     fn tablets_path(&self) -> PathBuf {
         self.kv_engine_path()
     }
+
+    #[inline]
+    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
+       Ok(())
+    }
+    
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
         Box::new(std::clone::Clone::clone(self))
     }
