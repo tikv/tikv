@@ -1,6 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    marker::PhantomData,
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
@@ -627,6 +633,11 @@ where
             {
                 warn!("during failover, skipping advancing resolved ts"; 
                     "failover_time_ago" => ?failover.map(|failover_t| failover_t.saturating_elapsed()));
+                return false;
+            }
+            let in_flight = crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.load(Ordering::SeqCst);
+            if in_flight > 0 {
+                warn!("inflight leader detected, skipping advancing resolved ts"; "in_flight" => %in_flight);
                 return false;
             }
             true
