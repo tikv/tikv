@@ -19,15 +19,6 @@ pub struct KvEngineFactoryV2<ER: RaftEngine> {
     registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
 }
 
-impl<ER: RaftEngine> KvEngineFactoryV2<ER> {
-    pub fn new(inner: KvEngineFactory<ER>) -> Self {
-        KvEngineFactoryV2 {
-            inner,
-            registry: Arc::new(Mutex::new(HashMap::default())),
-        }
-    }
-}
-
 impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     fn create_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
         let mut reg = self.registry.lock().unwrap();
@@ -188,6 +179,15 @@ mod tests {
         };
     }
 
+    impl<ER: RaftEngine> KvEngineFactoryV2<ER> {
+        pub fn new(inner: KvEngineFactory<ER>) -> Self {
+            KvEngineFactoryV2 {
+                inner,
+                registry: Arc::new(Mutex::new(HashMap::default())),
+            }
+        }
+    }
+
     #[test]
     fn test_kvengine_factory() {
         let cfg = TEST_CONFIG.clone();
@@ -213,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn test_kvengine_xx_factory_v2() {
+    fn test_kvengine_factory_v2() {
         let cfg = TEST_CONFIG.clone();
         let dir = test_util::temp_dir("test_kvengine_factory_v2", false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
@@ -240,7 +240,6 @@ mod tests {
         assert!(!factory.exists(2, 11));
         assert!(factory.exists_raw(&tablet_path));
         assert!(!factory.is_tombstoned(1, 10));
-        drop(tablet2.as_inner());
         assert!(factory.load_tablet(&tablet_path, 1, 10).is_err());
         assert!(factory.load_tablet(&tablet_path, 1, 20).is_ok());
         factory.mark_tombstone(1, 20);
