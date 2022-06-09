@@ -26,8 +26,6 @@ pub trait DFS: Sync + Send {
 
     /// get_runtime gets the tokio runtime for the DFS.
     fn get_runtime(&self) -> &tokio::runtime::Runtime;
-
-    fn tenant_id(&self) -> u32;
 }
 
 pub struct InMemFS {
@@ -74,10 +72,6 @@ impl DFS for InMemFS {
 
     fn get_runtime(&self) -> &Runtime {
         &self.runtime
-    }
-
-    fn tenant_id(&self) -> u32 {
-        0
     }
 }
 

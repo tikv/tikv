@@ -812,7 +812,7 @@ impl TiKVServer {
             Arc::new(kvengine::dfs::InMemFS::new())
         } else {
             Arc::new(kvengine::dfs::S3FS::new(
-                dfs_conf.tenant_id,
+                dfs_conf.prefix.clone(),
                 dfs_conf.s3_endpoint.clone(),
                 dfs_conf.s3_key_id.clone(),
                 dfs_conf.s3_secret_key.clone(),

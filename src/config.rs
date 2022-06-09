@@ -2465,7 +2465,7 @@ impl Default for ResolvedTsConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct DFSConfig {
     #[online_config(skip)]
-    pub tenant_id: u32,
+    pub prefix: String,
 
     #[online_config(skip)]
     pub s3_endpoint: String,

@@ -31,12 +31,9 @@ fn main() {
     if config.port == 0 {
         config.port = 19000;
     }
-    if config.tenant_id == 0 {
-        config.tenant_id = 1;
-    }
     info!("config is {:?}", &config);
     let dfs = Arc::new(kvengine::dfs::S3FS::new(
-        config.tenant_id,
+        config.prefix,
         config.s3_endpoint,
         config.s3_key_id,
         config.s3_secret_key,
@@ -93,7 +90,7 @@ extern crate serde_derive;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub port: u16,
-    pub tenant_id: u32,
+    pub prefix: String,
     pub s3_endpoint: String,
     pub s3_key_id: String,
     pub s3_secret_key: String,

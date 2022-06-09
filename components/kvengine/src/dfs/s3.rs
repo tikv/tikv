@@ -23,7 +23,7 @@ pub struct S3FS {
 
 impl S3FS {
     pub fn new(
-        tenant_id: u32,
+        prefix: String,
         end_point: String,
         key_id: String,
         secret_key: String,
@@ -31,15 +31,15 @@ impl S3FS {
         bucket: String,
     ) -> Self {
         let core = Arc::new(S3FSCore::new(
-            tenant_id, end_point, key_id, secret_key, region, bucket,
+            prefix, end_point, key_id, secret_key, region, bucket,
         ));
         Self { core }
     }
 
     #[cfg(test)]
-    pub fn new_for_test(tenant_id: u32, bucket: String, s3c: rusoto_s3::S3Client) -> Self {
+    pub fn new_for_test(prefix: String, bucket: String, s3c: rusoto_s3::S3Client) -> Self {
         Self {
-            core: Arc::new(S3FSCore::new_with_s3_client(tenant_id, bucket, s3c)),
+            core: Arc::new(S3FSCore::new_with_s3_client(prefix, bucket, s3c)),
         }
     }
 }
@@ -53,7 +53,7 @@ impl Deref for S3FS {
 }
 
 pub struct S3FSCore {
-    tenant_id: u32,
+    prefix: String,
     s3c: rusoto_s3::S3Client,
     bucket: String,
     runtime: tokio::runtime::Runtime,
@@ -61,7 +61,7 @@ pub struct S3FSCore {
 
 impl S3FSCore {
     pub fn new(
-        tenant_id: u32,
+        prefix: String,
         end_point: String,
         key_id: String,
         secret_key: String,
@@ -87,10 +87,10 @@ impl S3FSCore {
         s3c.set_config(S3Config {
             addressing_style: AddressingStyle::Path,
         });
-        Self::new_with_s3_client(tenant_id, bucket, s3c)
+        Self::new_with_s3_client(prefix, bucket, s3c)
     }
 
-    pub fn new_with_s3_client(tenant_id: u32, bucket: String, s3c: rusoto_s3::S3Client) -> Self {
+    pub fn new_with_s3_client(prefix: String, bucket: String, s3c: rusoto_s3::S3Client) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -98,7 +98,7 @@ impl S3FSCore {
             .build()
             .unwrap();
         Self {
-            tenant_id,
+            prefix,
             s3c,
             bucket,
             runtime,
@@ -106,7 +106,7 @@ impl S3FSCore {
     }
 
     fn file_key(&self, file_id: u64) -> String {
-        format!("{:08x}/{:016x}.sst", self.tenant_id, file_id)
+        format!("{}/{:08x}/{:016x}.sst", self.prefix, 0, file_id)
     }
 
     fn is_err_retryable<T>(&self, rustoto_err: &RusotoError<T>) -> bool {
@@ -247,10 +247,6 @@ impl DFS for S3FS {
     fn get_runtime(&self) -> &Runtime {
         &self.runtime
     }
-
-    fn tenant_id(&self) -> u32 {
-        self.tenant_id
-    }
 }
 
 #[cfg(test)]
@@ -285,7 +281,7 @@ mod tests {
                 endpoint: Default::default(),
             },
         );
-        let s3fs = S3FS::new_for_test(123, "shard-db".into(), s3c);
+        let s3fs = S3FS::new_for_test("prefix".into(), "shard-db".into(), s3c);
         let (tx, rx) = tikv_util::mpsc::bounded(1);
 
         let fs = s3fs.clone();
