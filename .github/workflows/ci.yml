@@ -15,6 +15,13 @@ jobs:
   dev:
     name: Run clippy and rustfmt then build and test
     runs-on: large-quota
+    env:
+      RUSTFLAGS: -Dwarnings
+      FAIL_POINT: "1"
+      ROCKSDB_SYS_SSE: "1"
+      RUST_BACKTRACE: "1"
+      LOG_LEVEL: INFO
+      EXTRA_CARGO_ARGS: --no-run
     steps:
       - uses: actions/checkout@v2
       - uses: lukka/get-cmake@latest
@@ -38,39 +45,20 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-                        cargo-
-#      - name: Run format and clippy
-#        env:
-#          RUSTFLAGS: -Dwarnings
-#          FAIL_POINT: "1"
-#          ROCKSDB_SYS_SSE: "1"
-#          RUST_BACKTRACE: "1"
-#          LOG_LEVEL: INFO
-#          EXTRA_CARGO_ARGS: --no-run
-#        working-directory: ./
-#        run: |
-#          make format clippy
-      - name: Run build
-        env:
-          RUSTFLAGS: -Dwarnings
-          FAIL_POINT: "1"
-          ROCKSDB_SYS_SSE: "1"
-          RUST_BACKTRACE: "1"
-          LOG_LEVEL: INFO
-          EXTRA_CARGO_ARGS: --no-run
+          restore-keys: cargo-
+      - name: Run format
         working-directory: ./
         run: |
-          make build
+          make format
+          git diff --quiet
+      - name: Run clippy
+        working-directory: ./
+        run: make clippy
+      - name: Run build
+        working-directory: ./
+        run: make build
       - name: Run tests
         env:
-          RUSTFLAGS: -Dwarnings
-          FAIL_POINT: "1"
-          ROCKSDB_SYS_SSE: "1"
-          RUST_BACKTRACE: "1"
-          LOG_LEVEL: INFO
           CARGO_INCREMENTAL: "0"
-          EXTRA_CARGO_ARGS: --no-run
         working-directory: ./
-        run: |
-          cargo test --package cloud_server --package rfstore --package  rfengine --package kvengine --tests
+        run: cargo test --package cloud_server --package rfstore --package  rfengine --package kvengine --tests

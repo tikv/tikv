@@ -127,7 +127,7 @@ impl Worker {
     fn get_region_states(&mut self, region_id: u64) -> &mut BTreeMap<Bytes, Bytes> {
         self.all_states
             .entry(region_id)
-            .or_insert_with(|| BTreeMap::new())
+            .or_insert_with(BTreeMap::new)
     }
 
     fn compact(&mut self, epoch_idx: usize) -> Result<()> {
