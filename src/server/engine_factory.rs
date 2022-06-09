@@ -233,9 +233,8 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
 
     #[inline]
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
-       Ok(())
+        Ok(())
     }
-    
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
         Box::new(std::clone::Clone::clone(self))
     }
