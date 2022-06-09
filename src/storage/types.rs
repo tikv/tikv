@@ -2,6 +2,7 @@
 
 //! Core data types.
 
+use crate::storage::txn::commands::WriteResultLockInfo;
 use crate::storage::{
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
@@ -130,7 +131,8 @@ pub enum PessimisticLockKeyResult {
         value: Option<Value>,
         conflict_ts: TimeStamp,
     },
-    Waiting,
+    Waiting(Option<WriteResultLockInfo>),
+    PrimaryWaiting(usize),
     Failed(Arc<Error>),
 }
 
@@ -248,7 +250,8 @@ impl PessimisticLockResults {
                         res_pb.set_value(value.unwrap_or_default());
                         res_pb.set_locked_with_conflict_ts(conflict_ts.into_inner());
                     }
-                    PessimisticLockKeyResult::Waiting => unreachable!(),
+                    PessimisticLockKeyResult::Waiting(_) => unreachable!(),
+                    PessimisticLockKeyResult::PrimaryWaiting(_) => unreachable!(),
                     PessimisticLockKeyResult::Failed(e) => {
                         if error.is_none() {
                             error = Some(e)

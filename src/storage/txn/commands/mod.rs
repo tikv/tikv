@@ -55,6 +55,7 @@ use txn_types::{Key, OldValues, TimeStamp, Value, Write};
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader};
+use crate::storage::txn::commands::acquire_pessimistic_lock::PessimisticLockKeyContext;
 use crate::storage::txn::latch;
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
@@ -365,7 +366,6 @@ pub struct WriteResult {
     pub to_be_write: WriteData,
     pub rows: usize,
     pub pr: ProcessResult,
-    pub encountered_locks: Option<Vec<WriteResultLockInfo>>,
     pub released_locks: Option<ReleasedLocks>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
@@ -387,6 +387,8 @@ pub struct PessimisticLockParameters {
 pub type CallbackWithArcError<T> =
     Box<dyn FnOnce(std::result::Result<T, std::sync::Arc<StorageError>>) + Send>;
 
+pub type PessimisticLockKeyCallback = CallbackWithArcError<PessimisticLockKeyResult>;
+
 pub struct WriteResultLockInfo {
     pub index_in_request: usize,
     pub key: Key,
@@ -394,10 +396,18 @@ pub struct WriteResultLockInfo {
     pub last_found_lock: LockInfo,
     pub lock_digest: lock_manager::LockDigest,
     pub hash_for_latch: u64,
-    pub key_cb: Option<CallbackWithArcError<PessimisticLockKeyResult>>,
+    pub key_cb: Option<PessimisticLockKeyCallback>,
     // pub locks: Vec<(usize, LockInfo, lock_manager::LockDigest, Option<Callback<PessimisticLockKeyResult>>)>,
     pub term: Option<NonZeroU64>,
     pub parameters: PessimisticLockParameters,
+    pub secondaries: Option<
+        Vec<(
+            Key,
+            bool,
+            PessimisticLockKeyContext,
+            Option<PessimisticLockKeyCallback>,
+        )>,
+    >,
 }
 
 impl WriteResultLockInfo {
@@ -422,6 +432,7 @@ impl WriteResultLockInfo {
             key_cb,
             term,
             parameters,
+            secondaries: None,
         }
     }
 }

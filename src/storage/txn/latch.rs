@@ -236,6 +236,20 @@ impl Latches {
         lock.acquired()
     }
 
+    pub fn try_acquire(&self, hash: u64, cid: u64) -> bool {
+        let mut latch = self.lock_latch(hash);
+        match latch.get_first_req_by_hash(hash) {
+            Some(found_cid) => {
+                assert_ne!(found_cid, cid);
+                false
+            }
+            None => {
+                latch.wait_for_wake(hash, cid);
+                true
+            }
+        }
+    }
+
     /// Releases all latches owned by the `lock` of command with ID `who`, returns the wakeup list.
     ///
     /// Preconditions: the caller must ensure the command is at the front of the latches.
@@ -297,6 +311,11 @@ impl Latches {
         }
         assert!(wait_for_locks.peek().is_none());
         (cmd_wakeup_list, latch_keep_list, txn_lock_wakeup_list)
+    }
+
+    pub fn force_push_lock_waiting(&self, lock_info: WriteResultLockInfo) {
+        let mut latch = self.lock_latch(lock_info.hash_for_latch);
+        latch.push_lock_waiting(lock_info);
     }
 
     #[inline]
