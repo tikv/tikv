@@ -330,11 +330,12 @@ where
                     .with_label_values(&["region-changed"])
                     .inc();
                 let r = async {
-                    Result::Ok(self.observe_over_with_initial_data_from_checkpoint(
+                    self.observe_over_with_initial_data_from_checkpoint(
                         region,
                         self.get_last_checkpoint_of(&for_task, region).await?,
                         handle.clone(),
-                    ))
+                    );
+                    Result::Ok(())
                 }
                 .await;
                 if let Err(e) = r {
@@ -352,7 +353,7 @@ where
     }
 
     async fn try_start_observe(&self, region: &Region, handle: ObserveHandle) -> Result<()> {
-        match self.find_task_by_region(&region) {
+        match self.find_task_by_region(region) {
             None => {
                 warn!(
                     "the region {:?} is register to no task but being observed (start_key = {}; end_key = {}; task_stat = {:?}): maybe stale, aborting",
