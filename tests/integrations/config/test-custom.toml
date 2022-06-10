@@ -334,7 +334,6 @@ blob-run-mode = "fallback"
 level-merge = true
 range-merge = true
 max-sorted-runs = 100
-gc-merge-rewrite = true
 
 [rocksdb.writecf]
 block-size = "12KB"
@@ -566,7 +565,6 @@ blob-run-mode = "fallback"
 level-merge = true
 range-merge = true
 max-sorted-runs = 100
-gc-merge-rewrite = true
 
 [raft-engine]
 enable = false
