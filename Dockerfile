@@ -68,42 +68,20 @@ COPY Cargo.lock ./Cargo.lock
 
 COPY --from=prepare /output/ ./
 
-RUN mkdir -p ./cmd/tikv-ctl/src ./cmd/tikv-server/src && \
-    echo 'fn main() {}' > ./cmd/tikv-ctl/src/main.rs && \
-    echo 'fn main() {}' > ./cmd/tikv-server/src/main.rs && \
-    for cargotoml in $(find . -type f -name "Cargo.toml"); do \
-        sed -i '/fuzz/d' ${cargotoml} && \
-        sed -i '/profiler/d' ${cargotoml} ; \
-    done
-
 COPY Makefile ./
-RUN source /opt/rh/devtoolset-8/enable && make build_dist_release
-
-# Remove fingerprints for when we build the real binaries.
-RUN rm -rf ./target/release/.fingerprint/tikv-* && \
-  for i in $(find . -type f -name 'Cargo.toml' -exec dirname {} \; | sort -u); do \
-    rm -rf ./target/release/.fingerprint/$(basename ${i})-*; \
-  done
 
 # Add full source code
 COPY cmd/ ./cmd/
 COPY components/ ./components/
 COPY src/ ./src/
 
-# Build real binaries now
-ARG GIT_FALLBACK="Unknown (no git or not git repo)"
-ARG GIT_HASH=${GIT_FALLBACK}
-ARG GIT_TAG=${GIT_FALLBACK}
-ARG GIT_BRANCH=${GIT_FALLBACK}
-ENV TIKV_BUILD_GIT_HASH=${GIT_HASH}
-ENV TIKV_BUILD_GIT_TAG=${GIT_TAG}
-ENV TIKV_BUILD_GIT_BRANCH=${GIT_BRANCH}
-RUN source /opt/rh/devtoolset-8/enable && make build_dist_release
+# Build binaries now
+RUN source /opt/rh/devtoolset-8/enable && make build_dist_debug
 
 # Export to a clean image
-FROM pingcap/alpine-glibc:alpine-3.14.6-gcompat
-COPY --from=builder /tikv/target/release/tikv-server /tikv-server
-COPY --from=builder /tikv/target/release/tikv-ctl /tikv-ctl
+FROM amazonlinux:2022.0.20220504.1
+COPY --from=builder /tikv/target/debug/tikv-server /tikv-server
+COPY --from=builder /tikv/target/debug/tikv-ctl /tikv-ctl
 
 EXPOSE 20160 20180
 
