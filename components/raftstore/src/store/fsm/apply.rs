@@ -5395,6 +5395,100 @@ mod tests {
     }
 
     #[test]
+    fn test_bucket_version_change_in_try_batch() {
+        let (_path, engine) = create_tmp_engine("test-bucket");
+        let (_, importer) = create_tmp_importer("test-bucket");
+        let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = {
+            let mut cfg = Config::default();
+            cfg.apply_batch_system.pool_size = 1;
+            cfg.apply_batch_system.low_priority_pool_size = 0;
+            Arc::new(VersionTrack::new(cfg))
+        };
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engine,
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-bucket".to_owned(), builder);
+
+        let mut reg = Registration {
+            id: 1,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(1, 1));
+        reg.region.set_start_key(b"k1".to_vec());
+        reg.region.set_end_key(b"k2".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let entry1 = {
+            let mut entry = EntryBuilder::new(1, 1);
+            entry = entry.put(b"key1", b"value1");
+            entry.epoch(1, 3).build()
+        };
+
+        let entry2 = {
+            let mut entry = EntryBuilder::new(2, 1);
+            entry = entry.put(b"key2", b"value2");
+            entry.epoch(1, 3).build()
+        };
+
+        let (capture_tx, _capture_rx) = mpsc::channel();
+        let mut apply1 = apply(1, 1, 1, vec![entry1], vec![cb(1, 1, capture_tx.clone())]);
+        let bucket_meta = BucketMeta {
+            region_id: 1,
+            region_epoch: RegionEpoch::default(),
+            version: 1,
+            keys: vec![b"".to_vec(), b"".to_vec()],
+            sizes: vec![0, 0],
+        };
+        apply1.bucket_meta = Some(Arc::new(bucket_meta));
+
+        let mut apply2 = apply(1, 1, 1, vec![entry2], vec![cb(2, 1, capture_tx)]);
+        let mut bucket_meta2 = BucketMeta {
+            region_id: 1,
+            region_epoch: RegionEpoch::default(),
+            version: 2,
+            keys: vec![b"".to_vec(), b"".to_vec()],
+            sizes: vec![0, 0],
+        };
+        bucket_meta2.version = 2;
+        apply2.bucket_meta = Some(Arc::new(bucket_meta2));
+
+        router.schedule_task(1, Msg::apply(apply1));
+        router.schedule_task(1, Msg::apply(apply2));
+
+        let res = fetch_apply_res(&rx);
+        let bucket_version = res.bucket_stat.unwrap().as_ref().meta.version;
+
+        assert_eq!(bucket_version, 2);
+
+        validate(&router, 1, |delegate| {
+            let bucket_version = delegate.buckets.as_ref().unwrap().meta.version;
+            assert_eq!(bucket_version, 2);
+        });
+    }
+
+    #[test]
     fn test_cmd_observer() {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
