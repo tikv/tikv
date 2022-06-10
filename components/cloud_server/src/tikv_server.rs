@@ -898,26 +898,27 @@ struct PdIDAllocator {
     pd: Arc<dyn pd_client::PdClient>,
 }
 
+const ALLOCATE_ID_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
 impl kvengine::IDAllocator for PdIDAllocator {
-    fn alloc_id(&self, count: usize) -> std::result::Result<Vec<u64>, String> {
-        let mut futs = vec![];
-        for _ in 0..count {
-            futs.push(self.pd.get_tso());
-        }
-        let mut timestamps = vec![];
-        while !futs.is_empty() {
-            match block_on(futures::future::select_all(futs)) {
-                (Ok(val), _index, remaining) => {
-                    timestamps.push(val.into_inner());
-                    futs = remaining;
+    fn alloc_id(&self, count: usize) -> Vec<u64> {
+        let start = Instant::now();
+        loop {
+            match block_on(self.pd.batch_get_tso(count as u32)) {
+                Ok(ts) => {
+                    let last = ts.into_inner();
+                    let first = last - count as u64 + 1;
+                    return (first..=last).collect();
                 }
-                (Err(_e), _index, _remaining) => {
-                    return Err(_e.to_string());
+                Err(err) => {
+                    error!("failed to allocate file id from PD {:?}", err);
+                    std::thread::sleep(Duration::from_secs(1));
+                    if start.saturating_elapsed() > ALLOCATE_ID_TIMEOUT {
+                        panic!("allocate file id timeout");
+                    }
                 }
             }
         }
-        timestamps.sort_unstable();
-        Ok(timestamps)
     }
 }
 

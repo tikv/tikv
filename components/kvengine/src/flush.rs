@@ -163,9 +163,7 @@ impl Engine {
     }
 
     pub(crate) fn build_l0_table(&self, m: &CFTable, start: &[u8], end: &[u8]) -> L0Builder {
-        // TODO: handle alloc_id error.
-        let fid = self.id_allocator.alloc_id(1).unwrap().pop().unwrap();
-
+        let fid = self.id_allocator.alloc_id(1).pop().unwrap();
         let mut l0_builder = sstable::L0Builder::new(
             fid,
             self.opts.table_builder_options.block_size,
