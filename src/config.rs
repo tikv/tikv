@@ -164,21 +164,6 @@ impl Default for TitanCfConfig {
             gc_merge_rewrite: false,
         }
     }
-
-    fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.gc_merge_rewrite {
-            return Err(format!(
-                "gc-merge-rewrite is deprecated. The data produced when this \
-                option is enabled cannot be read by this version. Therefore, if \
-                this option has been applied to an existing node, you must downgrade \
-                it to the previous version and fully clean up the old data. See more \
-                details of how to do that in the documentation for the blob-run-mode \
-                confuguration."
-            )
-            .into());
-        }
-        Ok(())
-    }
 }
 
 impl TitanCfConfig {
@@ -197,6 +182,21 @@ impl TitanCfConfig {
         opts.set_range_merge(self.range_merge);
         opts.set_max_sorted_runs(self.max_sorted_runs);
         opts
+    }
+
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.gc_merge_rewrite {
+            return Err(format!(
+                "gc-merge-rewrite is deprecated. The data produced when this \
+                option is enabled cannot be read by this version. Therefore, if \
+                this option has been applied to an existing node, you must downgrade \
+                it to the previous version and fully clean up the old data. See more \
+                details of how to do that in the documentation for the blob-run-mode \
+                confuguration."
+            )
+            .into());
+        }
+        Ok(())
     }
 }
 
@@ -349,6 +349,7 @@ macro_rules! cf_config {
                     )
                     .into());
                 }
+                self.titan.validate()?;
                 Ok(())
             }
         }
