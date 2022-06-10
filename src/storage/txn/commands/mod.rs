@@ -410,6 +410,12 @@ pub struct WriteResultLockInfo {
     >,
 }
 
+impl Debug for WriteResultLockInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{{WriteResultLockInfo...}}")
+    }
+}
+
 impl WriteResultLockInfo {
     pub fn new(
         index_in_request: usize,

@@ -1404,8 +1404,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     )?;
                     check_key_size!(keys, self.max_key_size, callback);
                 }
-                PessimisticLockCmdInner::BatchResumedRequests(items) => {
-                    let keys = items.iter().map(|(k, ..)| k.as_encoded());
+                PessimisticLockCmdInner::BatchResumedRequests { items, .. } => {
+                    let keys = items.iter().map(|item| item.key.as_encoded());
                     Self::check_api_version(
                         self.api_version,
                         cmd.ctx().api_version,
@@ -2972,7 +2972,9 @@ pub mod test_util {
                         conflict_ts: ts2,
                     },
                 ) if value1 == value2 && ts1 == ts2 => true,
-                (PessimisticLockKeyResult::Waiting, PessimisticLockKeyResult::Waiting) => true,
+                (PessimisticLockKeyResult::Waiting(_), PessimisticLockKeyResult::Waiting(_)) => {
+                    true
+                }
                 (
                     PessimisticLockKeyResult::PrimaryWaiting(index1),
                     PessimisticLockKeyResult::PrimaryWaiting(index2),

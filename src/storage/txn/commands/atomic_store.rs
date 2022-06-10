@@ -89,7 +89,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             to_be_write,
             rows,
             pr: ProcessResult::Res,
-            encountered_locks: None,
             released_locks: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,

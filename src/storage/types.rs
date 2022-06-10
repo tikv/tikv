@@ -121,7 +121,7 @@ pub struct PrewriteResult {
     pub one_pc_commit_ts: TimeStamp,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 /// Represents the result of pessimistic lock on a single key.
 pub enum PessimisticLockKeyResult {
     Empty,
@@ -134,6 +134,27 @@ pub enum PessimisticLockKeyResult {
     Waiting(Option<WriteResultLockInfo>),
     PrimaryWaiting(usize),
     Failed(Arc<Error>),
+}
+
+impl Clone for PessimisticLockKeyResult {
+    fn clone(&self) -> Self {
+        match self {
+            PessimisticLockKeyResult::Empty => PessimisticLockKeyResult::Empty,
+            PessimisticLockKeyResult::Value(v) => PessimisticLockKeyResult::Value(v.clone()),
+            PessimisticLockKeyResult::Existence(e) => PessimisticLockKeyResult::Existence(*e),
+            PessimisticLockKeyResult::LockedWithConflict { value, conflict_ts } => {
+                PessimisticLockKeyResult::LockedWithConflict {
+                    value: value.clone(),
+                    conflict_ts: *conflict_ts,
+                }
+            }
+            PessimisticLockKeyResult::Waiting(_) => PessimisticLockKeyResult::Waiting(None),
+            PessimisticLockKeyResult::PrimaryWaiting(i) => {
+                PessimisticLockKeyResult::PrimaryWaiting(*i)
+            }
+            PessimisticLockKeyResult::Failed(e) => PessimisticLockKeyResult::Failed(e.clone()),
+        }
+    }
 }
 
 impl PessimisticLockKeyResult {
@@ -204,7 +225,7 @@ impl PessimisticLockKeyResult {
 
     #[cfg(test)]
     pub fn assert_waiting(&self) {
-        assert!(matches!(self, Self::Waiting));
+        assert!(matches!(self, Self::Waiting(_)));
     }
 }
 

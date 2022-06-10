@@ -601,7 +601,6 @@ impl<K: PrewriteKind> Prewriter<K> {
                 to_be_write,
                 rows,
                 pr,
-                encountered_locks: None,
                 released_locks: if released_locks.is_empty() {
                     None
                 } else {
@@ -624,7 +623,6 @@ impl<K: PrewriteKind> Prewriter<K> {
                 to_be_write: WriteData::default(),
                 rows,
                 pr,
-                encountered_locks: None,
                 released_locks: None,
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,

@@ -79,7 +79,7 @@ impl std::fmt::Display for PessimisticLockCmdInner {
                     f,
                     "batch resumed {} keys, scheduling another {} keys in next batch",
                     items.len(),
-                    next_batch.map(|n| n.len()).unwrap_or(0)
+                    next_batch.as_ref().map(|n| n.len()).unwrap_or(0)
                 )
             }
         }
@@ -152,7 +152,7 @@ impl CommandExt for AcquirePessimisticLock {
                 keys.iter().map(|(key, _)| key.as_encoded().len()).sum()
             }
             PessimisticLockCmdInner::BatchResumedRequests { items, .. } => {
-                items.iter().map(|item| item.0.as_encoded().len()).sum()
+                items.iter().map(|item| item.key.as_encoded().len()).sum()
             }
         }
     }
@@ -202,7 +202,13 @@ impl AcquirePessimisticLock {
         params: PessimisticLockParameters,
         keys: Vec<(Key, bool)>,
         allow_lock_with_conflict: bool,
-    ) -> Result<WriteResult> {
+    ) -> Result<WriteResult>
+    where
+        S: Snapshot,
+        L: LockManager,
+    {
+        let term = snapshot.ext().get_term();
+
         let mut txn = MvccTxn::new(params.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
             SnapshotReader::new_with_ctx(params.start_ts, snapshot, &pb_ctx),
@@ -243,7 +249,7 @@ impl AcquirePessimisticLock {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
                     if old_value.resolved() {
-                        let key = key.append_ts(txn.start_ts);
+                        let key = key.clone().append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
                         let mutation_type = None;
                         old_values.insert(key, (old_value, mutation_type));
@@ -256,7 +262,7 @@ impl AcquirePessimisticLock {
                         key.clone(),
                         *should_not_exist,
                         lock_info,
-                        snapshot.ext().get_term(),
+                        term,
                         params.clone(),
                         lock_key_ctx.lock_digest,
                         lock_key_ctx.hash_for_latch,
@@ -268,13 +274,24 @@ impl AcquirePessimisticLock {
                         lock_info.secondaries = Some(
                             keys.into_iter()
                                 .enumerate()
-                                .filter_map(
-                                    |(i, (k, s))| if i == index { None } else { Some((i, k, s)) },
-                                )
+                                .filter_map(|(i, (k, s))| {
+                                    if i == index {
+                                        None
+                                    } else {
+                                        let lock_key_ctx = PessimisticLockKeyContext::from_key(
+                                            i,
+                                            &k,
+                                            params.start_ts,
+                                        );
+                                        Some((k, s, lock_key_ctx, None))
+                                    }
+                                })
                                 .collect(),
                         );
                         txn.clear();
-                        res.0 = vec![PessimisticLockKeyResult::PrimaryWaiting(index); totak_keys];
+                        old_values.clear();
+
+                        res.0 = vec![PessimisticLockKeyResult::PrimaryWaiting(index); total_keys];
                         res.0[index] = PessimisticLockKeyResult::Waiting(Some(lock_info));
                         break;
                     } else {
@@ -379,12 +396,17 @@ impl AcquirePessimisticLock {
                     match &mut res.0[primary_index] {
                         PessimisticLockKeyResult::Waiting(lock_info) => {
                             lock_info
+                                .as_mut()
+                                .unwrap()
                                 .secondaries
+                                .as_mut()
+                                .unwrap()
                                 .push((key, should_not_exist, lock_key_ctx, None));
                             res.push(PessimisticLockKeyResult::PrimaryWaiting(primary_index));
                         }
                         PessimisticLockKeyResult::Failed(e) => {
-                            res.push(PessimisticLockKeyResult::Failed(e.clone()));
+                            let e = e.clone();
+                            res.push(PessimisticLockKeyResult::Failed(e));
                         }
                         _ => unreachable!(),
                     }
@@ -424,7 +446,7 @@ impl AcquirePessimisticLock {
                 reader,
                 key.clone(),
                 &params.primary,
-                *should_not_exist,
+                should_not_exist,
                 params.lock_ttl,
                 params.for_update_ts,
                 params.return_values,
@@ -444,10 +466,11 @@ impl AcquirePessimisticLock {
                     written_rows += 1;
                 }
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
+                    let is_primary = key.to_raw().unwrap() == params.primary;
                     let mut lock_info = WriteResultLockInfo::new(
                         lock_key_ctx.index_in_request,
                         key,
-                        *should_not_exist,
+                        should_not_exist,
                         lock_info,
                         snapshot.ext().get_term(),
                         params,
@@ -455,22 +478,22 @@ impl AcquirePessimisticLock {
                         lock_key_ctx.hash_for_latch,
                         None,
                     );
+                    if is_primary {
+                        failed_primaries_indices.insert(index);
+                        lock_info.secondaries = Some(vec![]);
+                    }
 
                     res.push(PessimisticLockKeyResult::Waiting(Some(lock_info)));
-                    if awakened_primary_index == Some(index) {
+                }
+                Err(e) => {
+                    if key.to_raw().unwrap() == params.primary {
                         // This item is a primary lock.
                         failed_primaries_indices.insert(index);
                     }
-                }
-                Err(e) => {
+
                     res.push(PessimisticLockKeyResult::Failed(Arc::new(
                         Error::from(e).into(),
                     )));
-
-                    if awakened_primary_index == Some(index) {
-                        // This item is a primary lock.
-                        failed_primaries_indices.insert(index);
-                    }
                 }
             };
         }
@@ -596,12 +619,13 @@ impl AcquirePessimisticLock {
                     lock_digest: item.lock_digest,
                     hash_for_latch: item.hash_for_latch,
                 };
-                (
-                    item.key,
-                    item.should_not_exist,
-                    item.parameters,
+                ResumedPessimisticLockItem {
+                    key: item.key,
+                    should_not_exist: item.should_not_exist,
+                    params: item.parameters,
                     lock_key_ctx,
-                )
+                    awakened_with_primary_index: None,
+                }
             })
             .chain(additional_secondaries)
             .collect();
