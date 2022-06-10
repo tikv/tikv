@@ -193,7 +193,7 @@ impl TitanCfConfig {
                 it to the previous version and fully clean up the old data. See more \
                 details of how to do that in the documentation for the blob-run-mode \
                 confuguration."
-                    .to_string(),
+                    .into(),
             );
         }
         Ok(())
