@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 
 use num::traits::Pow;
+use serde_json::de::Read;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
@@ -482,14 +483,61 @@ pub fn truncate_real_with_uint(arg0: &Real, arg1: &Int) -> Result<Option<Real>> 
 }
 
 fn truncate_real(x: Real, d: i32) -> Real {
-    let shift = 10_f64.powi(d);
-    let tmp = x * shift;
-    if *tmp == 0_f64 {
-        Real::from(0_f64)
-    } else if tmp.is_infinite() {
+    if *x == 0.00 || x.is_infinite() {
         x
     } else {
-        Real::from(tmp.trunc() / shift)
+        let hole_x = (*x).trunc();
+        // 0 == trunc function
+        if d == 0 {
+            Real::new(hole_x).unwrap()
+        }
+        // f64 max precition
+        else if d < -307 {
+            Real::new(0.0).unwrap()
+        } else if d > 307 {
+            x
+        }
+        // negative d trunc hole number
+        else if d < 0 {
+            Real::new((hole_x / 10.0.pow(-d as f64)).trunc() * 10.0.pow(-d as f64)).unwrap()
+        }
+        // positive d trunc decimal
+        else {
+            let decimal = *x - hole_x;
+            // do nothing
+            if decimal == 0.0 {
+                x
+            } else {
+                let truncated_decimal = (decimal * 10.0.pow(d as f64)).trunc() / 10.0.pow(d as f64);
+                Real::new(hole_x + truncated_decimal).unwrap()
+            }
+        }
+    }
+}
+
+#[test]
+fn test() {
+    let test_cases = [
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::MAX,
+        f64::MIN,
+        -8e307,
+        3.141592653589793,
+        2.0 / 3.0,
+        1145141919.810,
+        2.0 / 3.0 * 1e308,
+        1.23e-306,
+    ];
+    let truncate_cases = [i32::MAX, i32::MIN, 5, 2, 0, -2, -5, -307, -308, 2, 307, 308];
+    for i in 0..test_cases.len() {
+        let x = Real::new(test_cases[i]).unwrap();
+        for j in 0..truncate_cases.len() {
+            let d = truncate_cases[j];
+            print!("test truncate({:+e},{})", *x, d);
+            let y = truncate_real(x, d);
+            println!(" = {:+e}", *y);
+        }
     }
 }
 
