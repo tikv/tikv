@@ -57,7 +57,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err,
     codec::number::decode_u64,
-    debug, error, info,
+    debug, error, info, slow_log,
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt, ThreadReadId},
     warn,
@@ -2677,9 +2677,18 @@ where
                     // which was proposed in another thread while this thread receives its AppendEntriesResponse
                     // and is ready to calculate its commit-log-duration.
                     ctx.current_time.replace(monotonic_raw_now());
-                    ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                        (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
-                    ));
+                    let elapsed = (ctx.current_time.unwrap() - propose_time).to_std().unwrap();
+                    slow_log!(
+                        elapsed,
+                        "{} commit log duration is too long, term {}, index {}, last index {}",
+                        self.tag,
+                        entry.get_term(),
+                        entry.get_index(),
+                        self.get_store().last_index(),
+                    );
+                    ctx.raft_metrics
+                        .commit_log
+                        .observe(duration_to_sec(elapsed));
                     self.maybe_renew_leader_lease(propose_time, ctx, None);
                     lease_to_be_updated = false;
                 }
