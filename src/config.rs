@@ -183,9 +183,8 @@ impl TitanCfConfig {
 
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.gc_merge_rewrite {
-            warn!(
-                "titan.gc-merge-rewrite is specified but the config is deprecated. Ignored the config."
-            );
+            return Err("rocksdb.defaultcf.titan.gc-merge-rewrite is specified but the config is not supported.\
+                        Please refer to release notes about how to resolve this issue.".into());
         }
         Ok(())
     }
