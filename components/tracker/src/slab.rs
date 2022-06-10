@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use slab::Slab;
 
-use crate::Tracker;
+use crate::{metrics::*, Tracker};
 
 const SLAB_SHARD_BITS: u32 = 6;
 const SLAB_SHARD_COUNT: usize = 1 << SLAB_SHARD_BITS; // 64
@@ -113,6 +113,7 @@ impl TrackerSlab {
             });
             TrackerToken::new(self.shard_id, self.seq, key)
         } else {
+            SLAB_FULL_COUNTER.inc();
             INVALID_TRACKER_TOKEN
         }
     }

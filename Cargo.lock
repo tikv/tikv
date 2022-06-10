@@ -6614,6 +6614,7 @@ dependencies = [
  "lazy_static",
  "parking_lot 0.12.0",
  "pin-project",
+ "prometheus",
  "slab",
 ]
 

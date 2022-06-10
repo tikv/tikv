@@ -3,6 +3,7 @@
 #![feature(derive_default_enum)]
 #![feature(array_from_fn)]
 
+mod metrics;
 mod slab;
 mod tls;
 
