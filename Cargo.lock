@@ -1444,6 +1444,7 @@ dependencies = [
  "raft",
  "tikv_alloc",
  "tikv_util",
+ "tracker",
  "txn_types",
 ]
 
@@ -1482,6 +1483,7 @@ dependencies = [
  "tikv_util",
  "time",
  "toml",
+ "tracker",
  "txn_types",
 ]
 
@@ -1541,6 +1543,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "toml",
+ "tracker",
  "txn_types",
 ]
 
@@ -2745,7 +2748,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#de8310c3983a30236ea03f802ed0c2401a4908ae"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c1f668d0c85612f5fe6ec8e4351df0fc0bef1286"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2764,7 +2767,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#de8310c3983a30236ea03f802ed0c2401a4908ae"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c1f668d0c85612f5fe6ec8e4351df0fc0bef1286"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4573,7 +4576,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#de8310c3983a30236ea03f802ed0c2401a4908ae"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c1f668d0c85612f5fe6ec8e4351df0fc0bef1286"
 dependencies = [
  "libc 0.2.125",
  "librocksdb_sys",
@@ -5666,6 +5669,7 @@ dependencies = [
  "test_raftstore",
  "tikv",
  "tikv_util",
+ "tracker",
  "txn_types",
 ]
 
@@ -6081,6 +6085,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-timer",
  "toml",
+ "tracker",
  "txn_types",
  "url",
  "uuid",
@@ -6144,9 +6149,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-ctl"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb833c46ecbf8b6daeccb347cefcabf9c1beb5c9b0f853e1cec45632d9963e69"
+checksum = "e37706572f4b151dff7a0146e040804e9c26fe3a3118591112f05cf12a4216c1"
 dependencies = [
  "libc 0.2.125",
  "paste",
@@ -6155,9 +6160,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-sys"
-version = "0.4.3+5.2.1-patched.2"
+version = "0.5.0+5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1792ccb507d955b46af42c123ea8863668fae24d03721e40cad6a41773dbb49"
+checksum = "aeab4310214fe0226df8bfeb893a291a58b19682e8a07e1e1d4483ad4200d315"
 dependencies = [
  "cc",
  "fs_extra",
@@ -6166,9 +6171,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemallocator"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5b7bcecfafe4998587d636f9ae9d55eb9d0499877b88757767c346875067098"
+checksum = "20612db8a13a6c06d57ec83953694185a367e16945f66565e8028d2c0bd76979"
 dependencies = [
  "libc 0.2.125",
  "tikv-jemalloc-sys",
@@ -6229,6 +6234,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tikv_util",
+ "tracker",
  "txn_types",
 ]
 
@@ -6290,6 +6296,7 @@ dependencies = [
  "tokio-executor",
  "tokio-timer",
  "toml",
+ "tracker",
  "url",
  "utime",
  "yatp",
@@ -6596,6 +6603,19 @@ checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
 dependencies = [
  "pin-project",
  "tracing",
+]
+
+[[package]]
+name = "tracker"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "kvproto",
+ "lazy_static",
+ "parking_lot 0.12.0",
+ "pin-project",
+ "prometheus",
+ "slab",
 ]
 
 [[package]]

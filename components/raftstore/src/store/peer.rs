@@ -1306,7 +1306,7 @@ where
 
             perf_context.start_observe();
             engines.raft.consume(&mut raft_wb, true)?;
-            perf_context.report_metrics();
+            perf_context.report_metrics(&[]);
 
             if self.get_store().is_initialized() && !keep_data {
                 // If we meet panic when deleting data and raft log, the dirty data
