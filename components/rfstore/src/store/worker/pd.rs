@@ -46,24 +46,24 @@ type RecordPairVec = Vec<pdpb::RecordPair>;
 
 #[derive(Clone)]
 pub struct FlowStatsReporter {
-    scheduler: Scheduler<Task>,
+    scheduler: Scheduler<PdTask>,
 }
 
 impl FlowStatsReporter {
-    pub fn new(scheduler: Scheduler<Task>) -> Self {
+    pub fn new(scheduler: Scheduler<PdTask>) -> Self {
         Self { scheduler }
     }
 }
 
 impl raftstore::store::FlowStatsReporter for FlowStatsReporter {
     fn report_read_stats(&self, read_stats: ReadStats) {
-        if let Err(e) = self.scheduler.schedule(Task::ReadStats { read_stats }) {
+        if let Err(e) = self.scheduler.schedule(PdTask::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
         }
     }
 
     fn report_write_stats(&self, write_stats: WriteStats) {
-        if let Err(e) = self.scheduler.schedule(Task::WriteStats { write_stats }) {
+        if let Err(e) = self.scheduler.schedule(PdTask::WriteStats { write_stats }) {
             error!("Failed to send write flow statistics"; "err" => ?e);
         }
     }
@@ -84,7 +84,7 @@ pub struct HeartbeatTask {
 }
 
 /// Uses an asynchronous thread to tell PD something.
-pub enum Task {
+pub enum PdTask {
     AskBatchSplit {
         region: metapb::Region,
         split_keys: Vec<Vec<u8>>,
@@ -211,10 +211,10 @@ pub struct PeerStat {
     pub approximate_size: u64,
 }
 
-impl Display for Task {
+impl Display for PdTask {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Task::AskBatchSplit {
+            PdTask::AskBatchSplit {
                 ref region,
                 ref split_keys,
                 ..
@@ -224,41 +224,41 @@ impl Display for Task {
                 region.get_id(),
                 util::KeysInfoFormatter(split_keys.iter())
             ),
-            Task::Heartbeat(ref hb_task) => write!(
+            PdTask::Heartbeat(ref hb_task) => write!(
                 f,
                 "heartbeat for region {:?}, leader {}, replication status {:?}",
                 hb_task.region,
                 hb_task.peer.get_id(),
                 hb_task.replication_status
             ),
-            Task::StoreHeartbeat { ref stats, .. } => {
+            PdTask::StoreHeartbeat { ref stats, .. } => {
                 write!(f, "store heartbeat stats: {:?}", stats)
             }
-            Task::ReportBatchSplit { ref regions } => write!(f, "report split {:?}", regions),
-            Task::ValidatePeer {
+            PdTask::ReportBatchSplit { ref regions } => write!(f, "report split {:?}", regions),
+            PdTask::ValidatePeer {
                 ref region,
                 ref peer,
             } => write!(f, "validate peer {:?} with region {:?}", peer, region),
-            Task::ReadStats { ref read_stats } => {
+            PdTask::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
-            Task::WriteStats { ref write_stats } => {
+            PdTask::WriteStats { ref write_stats } => {
                 write!(f, "get the write statistics {:?}", write_stats)
             }
-            Task::DestroyPeer { ref region_id } => {
+            PdTask::DestroyPeer { ref region_id } => {
                 write!(f, "destroy peer of region {}", region_id)
             }
-            Task::UpdateMaxTimestamp { region_id, .. } => write!(
+            PdTask::UpdateMaxTimestamp { region_id, .. } => write!(
                 f,
                 "update the max timestamp for region {} in the concurrency manager",
                 region_id
             ),
-            Task::UpdateSafeTS => write!(f, "update safe ts"),
+            PdTask::UpdateSafeTS => write!(f, "update safe ts"),
         }
     }
 }
 
-pub struct Runner {
+pub struct PdRunner {
     store_id: u64,
     pd_client: Arc<dyn PdClient>,
     router: RaftRouter,
@@ -271,7 +271,7 @@ pub struct Runner {
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-    scheduler: Scheduler<Task>,
+    scheduler: Scheduler<PdTask>,
 
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
@@ -308,7 +308,7 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
-impl Runner {
+impl PdRunner {
     #[allow(unused)]
     const INTERVAL_DIVISOR: u32 = 2;
 
@@ -316,14 +316,14 @@ impl Runner {
         store_id: u64,
         pd_client: Arc<dyn PdClient>,
         router: RaftRouter,
-        scheduler: Scheduler<Task>,
+        scheduler: Scheduler<PdTask>,
         _store_heartbeat_interval: Duration,
         concurrency_manager: ConcurrencyManager,
         remote: Remote<yatp::task::future::TaskCell>,
         kv: kvengine::Engine,
-    ) -> Runner {
+    ) -> PdRunner {
         // TODO(x): support stats monitor.
-        Runner {
+        PdRunner {
             store_id,
             pd_client,
             router,
@@ -343,7 +343,7 @@ impl Runner {
     // be called in an asynchronous context.
     fn handle_ask_batch_split(
         router: RaftRouter,
-        _scheduler: Scheduler<Task>,
+        _scheduler: Scheduler<PdTask>,
         pd_client: Arc<dyn PdClient>,
         mut region: metapb::Region,
         split_keys: Vec<Vec<u8>>,
@@ -550,7 +550,7 @@ impl Runner {
                     // TODO(x): UpdateReplicationMode
                     if resp.get_require_detailed_report() {
                         info!("required to send detailed report in the next heartbeat");
-                        let task = Task::StoreHeartbeat {
+                        let task = PdTask::StoreHeartbeat {
                             stats: stats_copy,
                             store_info,
                             send_detailed_report: true,
@@ -890,10 +890,10 @@ impl Runner {
     }
 }
 
-impl Runnable for Runner {
-    type Task = Task;
+impl Runnable for PdRunner {
+    type Task = PdTask;
 
-    fn run(&mut self, task: Task) {
+    fn run(&mut self, task: PdTask) {
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
@@ -901,7 +901,7 @@ impl Runnable for Runner {
         }
 
         match task {
-            Task::AskBatchSplit {
+            PdTask::AskBatchSplit {
                 region,
                 split_keys,
                 peer,
@@ -920,7 +920,7 @@ impl Runnable for Runner {
                 self.remote.clone(),
             ),
 
-            Task::Heartbeat(hb_task) => {
+            PdTask::Heartbeat(hb_task) => {
                 let (
                     read_bytes_delta,
                     read_keys_delta,
@@ -1008,22 +1008,22 @@ impl Runnable for Runner {
                     hb_task.replication_status,
                 )
             }
-            Task::StoreHeartbeat {
+            PdTask::StoreHeartbeat {
                 stats,
                 store_info,
                 send_detailed_report,
             } => self.handle_store_heartbeat(stats, store_info, send_detailed_report),
-            Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
-            Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
-            Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
-            Task::WriteStats { write_stats } => self.handle_write_stats(write_stats),
-            Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
-            Task::UpdateMaxTimestamp {
+            PdTask::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
+            PdTask::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
+            PdTask::ReadStats { read_stats } => self.handle_read_stats(read_stats),
+            PdTask::WriteStats { write_stats } => self.handle_write_stats(write_stats),
+            PdTask::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
+            PdTask::UpdateMaxTimestamp {
                 region_id,
                 initial_status,
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
-            Task::UpdateSafeTS => self.handle_update_safe_ts(),
+            PdTask::UpdateSafeTS => self.handle_update_safe_ts(),
         };
     }
 

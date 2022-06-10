@@ -475,10 +475,9 @@ fn validate_checksum(data: &[u8], checksum_type: u8) -> Result<()> {
 
 const FILE_SUFFIX: &str = ".sst";
 
-#[allow(dead_code)]
-fn parse_file_id(path: &Path) -> Result<u64> {
+pub fn parse_file_id(path: &Path) -> Result<u64> {
     let name = path.file_name().unwrap().to_str().unwrap();
-    if name.as_bytes().ends_with(FILE_SUFFIX.as_bytes()) {
+    if !name.ends_with(FILE_SUFFIX) {
         return Err(table::Error::InvalidFileName);
     }
     let digit_part = &name[..name.len() - FILE_SUFFIX.len()];

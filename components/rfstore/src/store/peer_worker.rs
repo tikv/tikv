@@ -61,8 +61,8 @@ pub(crate) struct RaftWorker {
     ctx: StoreContext,
     receiver: Receiver<(u64, PeerMsg)>,
     router: RaftRouter,
-    apply_senders: Vec<Sender<ApplyBatch>>,
-    io_sender: Sender<IOTask>,
+    apply_senders: Vec<Sender<Option<ApplyBatch>>>,
+    io_sender: Sender<Option<IOTask>>,
     sync_io_worker: Option<IOWorker>,
     last_tick: Instant,
     tick_millis: u64,
@@ -77,10 +77,10 @@ impl RaftWorker {
         ctx: StoreContext,
         receiver: Receiver<(u64, PeerMsg)>,
         router: RaftRouter,
-        io_sender: Sender<IOTask>,
+        io_sender: Sender<Option<IOTask>>,
         sync_io_worker: Option<IOWorker>,
         store_fsm: StoreFSM,
-    ) -> (Self, Vec<Receiver<ApplyBatch>>) {
+    ) -> (Self, Vec<Receiver<Option<ApplyBatch>>>) {
         let apply_pool_size = ctx.cfg.apply_pool_size;
         let mut apply_senders = Vec::with_capacity(apply_pool_size);
         let mut apply_receivers = Vec::with_capacity(apply_pool_size);
@@ -110,6 +110,10 @@ impl RaftWorker {
         let mut inboxes = Inboxes::new();
         loop {
             self.handle_store_msg();
+            if self.store_fsm.stopped {
+                self.stop();
+                return;
+            }
             let loop_start = match self.receive_msgs(&mut inboxes) {
                 Ok(start_time) => start_time,
                 Err(_) => return,
@@ -127,6 +131,15 @@ impl RaftWorker {
                 .observe(duration_to_sec(loop_start.saturating_elapsed()));
             self.ctx.raft_metrics.flush();
             self.ctx.current_time = None;
+        }
+    }
+
+    pub(crate) fn stop(&mut self) {
+        self.apply_senders.iter().for_each(|sender| {
+            let _ = sender.send(None);
+        });
+        if self.sync_io_worker.is_none() {
+            let _ = self.io_sender.send(None);
         }
     }
 
@@ -263,7 +276,7 @@ impl RaftWorker {
                 .applying_cnt
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.apply_senders[peer_fsm.apply_worker_idx]
-                .send(peer_batch)
+                .send(Some(peer_batch))
                 .unwrap();
         }
     }
@@ -279,21 +292,21 @@ impl RaftWorker {
         if let Some(sync_io_worker) = self.sync_io_worker.as_mut() {
             sync_io_worker.handle_task(io_task);
         } else {
-            self.io_sender.send(io_task).unwrap();
+            self.io_sender.send(Some(io_task)).unwrap();
         }
     }
 }
 
 pub(crate) struct ApplyWorker {
     ctx: ApplyContext,
-    receiver: Receiver<ApplyBatch>,
+    receiver: Receiver<Option<ApplyBatch>>,
 }
 
 impl ApplyWorker {
     pub(crate) fn new(
         engine: kvengine::Engine,
         router: RaftRouter,
-        receiver: Receiver<ApplyBatch>,
+        receiver: Receiver<Option<ApplyBatch>>,
     ) -> Self {
         let ctx = ApplyContext::new(engine, Some(router));
         Self { ctx, receiver }
@@ -301,12 +314,7 @@ impl ApplyWorker {
 
     pub(crate) fn run(&mut self) {
         let mut loop_cnt = 0u64;
-        loop {
-            let res = self.receiver.recv();
-            if res.is_err() {
-                return;
-            }
-            let mut batch = res.unwrap();
+        while let Ok(Some(mut batch)) = self.receiver.recv() {
             let timer = tikv_util::time::Instant::now();
             self.ctx.apply_wait.observe(duration_to_sec(
                 timer.saturating_duration_since(batch.send_time),
@@ -329,7 +337,7 @@ impl ApplyWorker {
 
 pub(crate) struct IOWorker {
     engine: rfengine::RfEngine,
-    receiver: Receiver<IOTask>,
+    receiver: Receiver<Option<IOTask>>,
     router: RaftRouter,
     trans: Box<dyn Transport>,
 }
@@ -339,7 +347,7 @@ impl IOWorker {
         engine: rfengine::RfEngine,
         router: RaftRouter,
         trans: Box<dyn Transport>,
-    ) -> (Self, Sender<IOTask>) {
+    ) -> (Self, Sender<Option<IOTask>>) {
         let (sender, receiver) = tikv_util::mpsc::bounded(0);
         (
             Self {
@@ -353,13 +361,8 @@ impl IOWorker {
     }
 
     pub(crate) fn run(&mut self) {
-        loop {
-            let res = self.receiver.recv_timeout(Duration::from_secs(1));
-            match res {
-                Ok(msg) => self.handle_task(msg),
-                Err(RecvTimeoutError::Disconnected) => return,
-                Err(RecvTimeoutError::Timeout) => {}
-            }
+        while let Ok(Some(task)) = self.receiver.recv() {
+            self.handle_task(task);
         }
     }
 

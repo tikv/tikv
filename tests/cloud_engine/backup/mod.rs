@@ -18,8 +18,14 @@ use kvproto::{
 use rand::Rng;
 use tempfile::Builder;
 use test_cloud_server::ServerCluster;
-use tikv_util::{config::ReadableSize, time::Instant};
+use tikv::config::TiKvConfig;
+use tikv_util::{
+    config::{ReadableDuration, ReadableSize},
+    time::Instant,
+};
 use txn_types::TimeStamp;
+
+use crate::alloc_node_id;
 
 fn assert_same_file_name(s1: String, s2: String) {
     let tokens1: Vec<&str> = s1.split('_').collect();
@@ -63,9 +69,15 @@ fn assert_same_files(mut files1: Vec<kvproto::brpb::File>, mut files2: Vec<kvpro
 #[test]
 fn test_backup_and_import() {
     test_util::init_log_for_test();
-    let mut cluster1 = ServerCluster::new(vec![1], |_, conf| {
+    let node_id = alloc_node_id();
+    let update_conf = |_, conf: &mut TiKvConfig| {
         conf.backup.sst_max_size = ReadableSize::kb(64);
-    });
+        conf.raft_store.raft_base_tick_interval = ReadableDuration::millis(100);
+        conf.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(50);
+        conf.raft_store.local_file_gc_timeout = ReadableDuration::millis(500);
+        conf.raft_store.local_file_gc_tick_interval = ReadableDuration::millis(200);
+    };
+    let mut cluster1 = ServerCluster::new(vec![node_id], update_conf);
     // Backup file should be empty.
     let tmp = Builder::new().tempdir().unwrap();
     let backup_ts = cluster1.get_ts();
@@ -99,10 +111,9 @@ fn test_backup_and_import() {
     assert!(!resps1[0].get_files().is_empty());
     cluster1.stop();
 
-    // // Use importer to restore backup files.
-    let mut cluster2 = ServerCluster::new(vec![2], |_, conf| {
-        conf.backup.sst_max_size = ReadableSize::kb(64);
-    });
+    // Use importer to restore backup files.
+    let node2_id = alloc_node_id();
+    let mut cluster2 = ServerCluster::new(vec![node2_id], update_conf);
     let backend = make_local_backend(&storage_path);
     let storage = create_storage(&backend, Default::default()).unwrap();
     let context = cluster2.new_rpc_context(b"");
@@ -168,6 +179,10 @@ fn test_backup_and_import() {
         files2.extend_from_slice(resp.get_files());
     }
     assert_same_files(files1, files2);
+    std::thread::sleep(Duration::from_secs(2));
+    let importer = cluster2.get_sst_importer(node2_id);
+    let ssts = importer.list_ssts().unwrap();
+    assert!(ssts.is_empty());
     cluster2.stop();
 }
 

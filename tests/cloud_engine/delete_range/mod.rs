@@ -4,29 +4,32 @@ use kvproto::kvrpcpb::UnsafeDestroyRangeRequest;
 use test_cloud_server::ServerCluster;
 use tidb_query_common::util::convert_to_prefix_next;
 
+use crate::alloc_node_id;
+
 #[test]
 fn test_delete_range() {
     test_util::init_log_for_test();
-    let mut cluster = ServerCluster::new(vec![1], |_, _| {});
+    let node_id = alloc_node_id();
+    let mut cluster = ServerCluster::new(vec![node_id], |_, _| {});
     // insert "key_100".."key_500"
     cluster.put_kv(100..500, i_to_key, i_to_val);
     let store_id = cluster.get_stores()[0];
     destroy_range(&cluster, store_id, "key_20".as_bytes());
-    let snap = cluster.get_snap(1, "key_".as_bytes());
+    let snap = cluster.get_snap(node_id, "key_".as_bytes());
     assert!(!snap.has_data_in_prefix("key_200".as_bytes()));
     assert!(!snap.has_data_in_prefix("key_209".as_bytes()));
 
     assert!(snap.has_data_in_prefix("key_24".as_bytes()));
 
     destroy_range(&cluster, store_id, "key_22".as_bytes());
-    let snap = cluster.get_snap(1, "key_".as_bytes());
+    let snap = cluster.get_snap(node_id, "key_".as_bytes());
     assert!(!snap.has_data_in_prefix("key_20".as_bytes()));
     assert!(!snap.has_data_in_prefix("key_22".as_bytes()));
 
     assert!(snap.has_data_in_prefix("key_21".as_bytes()));
 
     destroy_range(&cluster, store_id, "key_2".as_bytes());
-    let snap = cluster.get_snap(1, "key_".as_bytes());
+    let snap = cluster.get_snap(node_id, "key_".as_bytes());
     assert!(!snap.has_data_in_prefix("key_20".as_bytes()));
     assert!(!snap.has_data_in_prefix("key_21".as_bytes()));
     assert!(!snap.has_data_in_prefix("key_22".as_bytes()));

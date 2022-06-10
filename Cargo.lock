@@ -6039,6 +6039,7 @@ dependencies = [
  "test_raftstore",
  "test_util",
  "tikv",
+ "tikv_util",
 ]
 
 [[package]]
@@ -6200,6 +6201,7 @@ dependencies = [
  "grpcio-health",
  "hyper",
  "keys",
+ "kvengine",
  "kvproto",
  "libc 0.2.125",
  "log_wrappers",

@@ -6,19 +6,20 @@ use cloud_server::TiKVServer;
 use futures::executor::block_on;
 use grpcio::{Channel, ChannelBuilder, EnvBuilder, Environment};
 use kvproto::{
-    kvrpcpb::{Context, Mutation, Op},
+    kvrpcpb::{Context, Mutation, Op, SplitRegionRequest},
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
 use security::SecurityManager;
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
-use tikv::{config::TiKvConfig, storage::mvcc::TimeStamp};
+use tikv::{config::TiKvConfig, import::SstImporter, storage::mvcc::TimeStamp};
+use tikv_util::thread_group::GroupProperties;
 
 #[allow(dead_code)]
 pub struct ServerCluster {
     // node_id -> server.
-    servers: HashMap<u8, TiKVServer>,
+    servers: HashMap<u16, TiKVServer>,
     tmp_dir: TempDir,
     env: Arc<Environment>,
     pd_client: Arc<TestPdClient>,
@@ -28,14 +29,15 @@ pub struct ServerCluster {
 impl ServerCluster {
     // The node id is statically assigned, the temp dir and server address are calculated by
     // the node id.
-    pub fn new<F>(nodes: Vec<u8>, update_conf: F) -> ServerCluster
+    pub fn new<F>(nodes: Vec<u16>, update_conf: F) -> ServerCluster
     where
-        F: Fn(u8, &mut TiKvConfig),
+        F: Fn(u16, &mut TiKvConfig),
     {
         let tmp_dir = TempDir::new().unwrap();
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let env = Arc::new(EnvBuilder::new().cq_count(2).build());
-        let pd_client = Arc::new(TestPdClient::new(1, true));
+        let pd_client = Arc::new(TestPdClient::new(1, false));
+        tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         let mut servers = HashMap::new();
         let mut channels = HashMap::new();
         for node_id in nodes {
@@ -121,21 +123,37 @@ impl ServerCluster {
         test_raftstore::must_kv_commit(&kv_client, ctx, keys, start_ts, commit_ts, commit_ts);
     }
 
-    pub fn get_kvengine(&self, node_id: u8) -> kvengine::Engine {
+    pub fn get_kvengine(&self, node_id: u16) -> kvengine::Engine {
         let server = self.servers.get(&node_id).unwrap();
         server.get_kv_engine()
     }
 
-    pub fn get_snap(&self, node_id: u8, key: &[u8]) -> kvengine::SnapAccess {
+    pub fn get_snap(&self, node_id: u16, key: &[u8]) -> kvengine::SnapAccess {
         let engine = self.get_kvengine(node_id);
         let ctx = self.new_rpc_context(key);
         engine.get_snap_access(ctx.region_id).unwrap()
     }
+
+    pub fn get_sst_importer(&self, node_id: u16) -> Arc<SstImporter> {
+        let server = self.servers.get(&node_id).unwrap();
+        server.get_sst_importer()
+    }
+
+    pub fn split(&self, key: &[u8]) {
+        let ctx = self.new_rpc_context(key);
+        let client = self.get_kv_client(ctx.get_peer().get_store_id());
+        let mut split_req = SplitRegionRequest::default();
+        split_req.set_context(ctx);
+        split_req.set_split_key(key.to_vec());
+        let resp = client.split_region(&split_req).unwrap();
+        assert!(!resp.has_region_error());
+    }
 }
 
-pub fn new_test_config(base_dir: &Path, node_id: u8) -> TiKvConfig {
+pub fn new_test_config(base_dir: &Path, node_id: u16) -> TiKvConfig {
     let mut config = TiKvConfig::default();
     config.storage.data_dir = format!("{}/{}", base_dir.to_str().unwrap(), node_id);
+    std::fs::create_dir_all(&config.storage.data_dir).unwrap();
     config.server.cluster_id = 1;
     config.server.addr = node_addr(node_id);
     config.server.status_addr = node_status_addr(node_id);
@@ -143,12 +161,12 @@ pub fn new_test_config(base_dir: &Path, node_id: u8) -> TiKvConfig {
     config
 }
 
-fn node_addr(node_id: u8) -> String {
-    format!("127.0.0.1:20{:03}", node_id)
+fn node_addr(node_id: u16) -> String {
+    format!("127.0.0.1:2{:04}", node_id)
 }
 
-fn node_status_addr(node_id: u8) -> String {
-    format!("127.0.0.1:21{:03}", node_id)
+fn node_status_addr(node_id: u16) -> String {
+    format!("127.0.0.1:3{:04}", node_id)
 }
 
 pub fn put_mut(key: &str, val: &str) -> Mutation {

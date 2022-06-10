@@ -14,6 +14,11 @@ name = "integrations"
 path = "integrations/mod.rs"
 required-features = ["testexport"]
 
+[[test]]
+name = "cloud_engine"
+path = "cloud_engine/mod.rs"
+required-features = ["testexport"]
+
 [[bench]]
 name = "raftstore"
 harness = false
@@ -87,6 +92,7 @@ file_system = { path = "../components/file_system" }
 futures = "0.3"
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.10", default-features = false }
+kvengine = { path = "../components/kvengine" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 libc = "0.2"
 log_wrappers = { path = "../components/log_wrappers" }

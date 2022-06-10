@@ -7,6 +7,7 @@ use std::{
         Deref, DerefMut,
     },
     sync::Arc,
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -50,6 +51,7 @@ const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 struct Workers {
     pd_worker: LazyWorker<PdTask>,
+    gc_worker: LazyWorker<GcTask>,
     coprocessor_host: CoprocessorHost<kvengine::Engine>,
 }
 
@@ -62,6 +64,7 @@ pub struct RaftBatchSystem {
     // Change to none after spawn.
     peer_receiver: Option<Receiver<(u64, PeerMsg)>>,
     store_fsm: Option<StoreFSM>,
+    join_handles: Vec<JoinHandle<()>>,
 }
 
 impl RaftBatchSystem {
@@ -75,6 +78,7 @@ impl RaftBatchSystem {
             workers: None,
             peer_receiver: Some(peer_receiver),
             store_fsm: Some(StoreFSM::new(store_receiver, conf)),
+            join_handles: vec![],
         }
     }
 
@@ -104,8 +108,18 @@ impl RaftBatchSystem {
             .registry
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
+        let mut gc_worker = LazyWorker::new("gc-worker");
+        let gc_runner = GcRunner::new(
+            engines.kv.clone(),
+            importer.clone(),
+            cfg.value().local_file_gc_timeout.0,
+        );
+        gc_worker.start(gc_runner);
+        let gc_scheduler = gc_worker.scheduler();
+
         let mut workers = Workers {
             pd_worker,
+            gc_worker,
             coprocessor_host: coprocessor_host.clone(),
         };
         let pd_scheduler = workers.pd_worker.scheduler();
@@ -117,6 +131,7 @@ impl RaftBatchSystem {
             router: self.router.clone(),
             trans,
             pd_scheduler,
+            gc_scheduler,
             coprocessor_host,
             importer,
         };
@@ -157,13 +172,14 @@ impl RaftBatchSystem {
         let mut sync_io_worker = None;
         if ctx.cfg.value().async_io {
             let props = tikv_util::thread_group::current_properties();
-            std::thread::Builder::new()
+            let handle = std::thread::Builder::new()
                 .name("raft_io".to_string())
                 .spawn(move || {
                     tikv_util::thread_group::set_properties(props);
                     io_worker.run();
                 })
                 .unwrap();
+            self.join_handles.push(handle);
         } else {
             sync_io_worker = Some(io_worker);
         }
@@ -177,25 +193,27 @@ impl RaftBatchSystem {
             store_fsm,
         );
         let props = tikv_util::thread_group::current_properties();
-        std::thread::Builder::new()
+        let handle = std::thread::Builder::new()
             .name("raftstore_0".to_string())
             .spawn(move || {
                 tikv_util::thread_group::set_properties(props);
                 rw.run();
             })
             .unwrap();
+        self.join_handles.push(handle);
 
         for (i, apply_receiver) in apply_receivers.drain(..).enumerate() {
             let props = tikv_util::thread_group::current_properties();
             let mut aw =
                 ApplyWorker::new(ctx.engines.kv.clone(), ctx.router.clone(), apply_receiver);
-            let _peer_handle = std::thread::Builder::new()
+            let handle = std::thread::Builder::new()
                 .name(format!("apply_{}", i))
                 .spawn(move || {
                     tikv_util::thread_group::set_properties(props);
                     aw.run();
                 })
                 .unwrap();
+            self.join_handles.push(handle);
         }
         self.router.send_store(StoreMsg::Start {
             store: ctx.store.clone(),
@@ -210,9 +228,13 @@ impl RaftBatchSystem {
         if self.workers.is_none() {
             return;
         }
-        // TODO(x): stop the raft and apply worker.
+        self.router.send_store(StoreMsg::Stop);
+        for handle in self.join_handles.drain(..) {
+            handle.join().unwrap();
+        }
         let mut workers = self.workers.take().unwrap();
         // Wait all workers finish.
+        workers.gc_worker.stop();
         workers.pd_worker.stop();
         fail_point!("after_shutdown_apply");
         workers.coprocessor_host.shutdown();
@@ -369,6 +391,7 @@ pub(crate) struct GlobalContext {
     pub(crate) router: RaftRouter,
     pub(crate) trans: Box<dyn Transport>,
     pub(crate) pd_scheduler: Scheduler<PdTask>,
+    pub(crate) gc_scheduler: Scheduler<GcTask>,
     pub(crate) coprocessor_host: CoprocessorHost<kvengine::Engine>,
     pub(crate) importer: Arc<SstImporter>,
 }
@@ -479,6 +502,7 @@ pub(crate) struct StoreFSM {
     pub(crate) last_tick: Instant,
     pub(crate) tick_millis: u64,
     last_unreachable_report: HashMap<u64, Instant>,
+    pub(crate) stopped: bool,
 }
 
 impl StoreFSM {
@@ -489,8 +513,9 @@ impl StoreFSM {
             receiver,
             ticker: Ticker::new_store(cfg),
             last_tick: Instant::now(),
-            tick_millis: cfg.pd_store_heartbeat_tick_interval.as_millis(),
+            tick_millis: cfg.raft_base_tick_interval.as_millis(),
             last_unreachable_report: HashMap::new(),
+            stopped: false,
         }
     }
 }
@@ -543,6 +568,9 @@ impl<'a> StoreMsgHandler<'a> {
             } => {
                 self.on_get_regions_in_range(start, end, callback);
             }
+            StoreMsg::Stop => {
+                self.store.stopped = true;
+            }
         }
         apply_region
     }
@@ -558,6 +586,9 @@ impl<'a> StoreMsgHandler<'a> {
             .is_on_store_tick(STORE_TICK_UPDATE_SAFE_TS)
         {
             self.on_update_safe_ts();
+        }
+        if self.store.ticker.is_on_store_tick(STORE_TICK_LOCAL_FILE_GC) {
+            self.on_local_file_gc();
         }
     }
 
@@ -604,6 +635,16 @@ impl<'a> StoreMsgHandler<'a> {
         self.store.ticker.schedule_store(STORE_TICK_UPDATE_SAFE_TS);
     }
 
+    fn on_local_file_gc(&mut self) {
+        if let Err(e) = self.ctx.global.gc_scheduler.schedule(GcTask {}) {
+            error!("local file gc failed";
+                "store_id" => self.store.id,
+                "err" => ?e
+            );
+        }
+        self.store.ticker.schedule_store(STORE_TICK_LOCAL_FILE_GC);
+    }
+
     fn start(&mut self, store: metapb::Store) {
         if self.store.start_time.is_some() {
             panic!("store unable to start again");
@@ -613,6 +654,7 @@ impl<'a> StoreMsgHandler<'a> {
         self.store_heartbeat_pd();
         self.store.ticker.schedule_store(STORE_TICK_PD_HEARTBEAT);
         self.store.ticker.schedule_store(STORE_TICK_UPDATE_SAFE_TS);
+        self.store.ticker.schedule_store(STORE_TICK_LOCAL_FILE_GC);
     }
 
     fn on_store_unreachable(&mut self, store_id: u64) {

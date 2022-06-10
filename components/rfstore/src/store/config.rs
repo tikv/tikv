@@ -69,6 +69,10 @@ pub struct Config {
 
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
 
+    pub local_file_gc_timeout: ReadableDuration,
+
+    pub local_file_gc_tick_interval: ReadableDuration,
+
     pub update_safe_ts_interval: ReadableDuration,
 
     pub consistency_check_interval: ReadableDuration,
@@ -111,6 +115,8 @@ impl Default for Config {
             region_split_size: ReadableSize::mb(640),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
+            local_file_gc_timeout: ReadableDuration::minutes(30),
+            local_file_gc_tick_interval: ReadableDuration::minutes(10),
             update_safe_ts_interval: ReadableDuration::secs(60),
             // Disable consistency check by default as it will hurt performance.
             // We should turn on this only in our tests.
@@ -164,6 +170,8 @@ impl Config {
         cfg.region_max_size = old_cop.region_max_size;
         cfg.apply_pool_size = old.apply_batch_system.pool_size;
         cfg.async_io = old.store_io_pool_size > 0;
+        cfg.local_file_gc_tick_interval = old.local_file_gc_tick_interval;
+        cfg.local_file_gc_timeout = old.local_file_gc_timeout;
         cfg
     }
 }

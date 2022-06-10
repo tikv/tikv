@@ -798,6 +798,10 @@ impl TiKVServer {
     pub fn get_store_id(&self) -> u64 {
         self.servers.as_ref().unwrap().node.id()
     }
+
+    pub fn get_sst_importer(&self) -> Arc<SstImporter> {
+        self.servers.as_ref().unwrap().importer.clone()
+    }
 }
 
 impl TiKVServer {
