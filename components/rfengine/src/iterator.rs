@@ -90,13 +90,16 @@ impl WALIterator {
         reader.read_exact(header_buf.as_mut_slice())?;
         let mut header_buf = header_buf.as_slice();
         let epoch_id = header_buf.get_u32_le();
-        if epoch_id != self.epoch_id {
+        if epoch_id == 0 {
             return Err(Error::EOF);
+        }
+        if epoch_id != self.epoch_id {
+            return Err(Error::Epoch);
         }
         let checksum = header_buf.get_u32_le();
         let length = header_buf.get_u32_le() as usize;
         if length > MAX_BATCH_SIZE {
-            return Err(Error::EOF);
+            return Err(Error::Length);
         }
         let aligned_length = DmaBuffer::aligned_len(BATCH_HEADER_SIZE + length);
         let remained_length = aligned_length - BATCH_HEADER_SIZE;
@@ -104,7 +107,7 @@ impl WALIterator {
         reader.read_exact(&mut self.buf[..])?;
         let batch = &self.buf[..length];
         if checksum != crc32fast::hash(batch) {
-            return Err(Error::EOF);
+            return Err(Error::Checksum);
         }
         self.offset += aligned_length as u64;
         Ok(batch)

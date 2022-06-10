@@ -170,7 +170,7 @@ impl Default for WalHeader {
 
 impl WalHeader {
     pub(crate) const fn len() -> usize {
-        4096
+        DmaBuffer::DMA_ALIGN
     }
 
     fn encode_to(&self, mut buf: &mut [u8]) {
@@ -267,11 +267,24 @@ impl WalWriter {
         batch_header.put_u32_le(checksum);
         batch_header.put_u32_le(batch_payload.len() as u32);
         self.buf.pad_to_align();
+        let aligned_len = self.buf.len();
+        if aligned_len + self.file_off as usize != self.wal_size {
+            // An empty batch header is added after each new batch to differentiate the old record.
+            self.buf.ensure_space(BATCH_HEADER_SIZE);
+            unsafe {
+                let mut buf = self.buf.chunk_mut();
+                buf.put_u32_le(0);
+                buf.put_u32_le(0);
+                buf.put_u32_le(0);
+                self.buf.advance_mut(BATCH_HEADER_SIZE);
+            }
+            self.buf.pad_to_align();
+        }
 
         let timer = Instant::now_coarse();
         self.file().write_all_at(self.buf.as_ref(), self.file_off)?;
         ENGINE_WAL_WRITE_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
-        self.file_off += self.buf.len() as u64;
+        self.file_off += aligned_len as u64;
         self.buf.truncate(BATCH_HEADER_SIZE);
 
         Ok((data_len, rotated))
@@ -313,6 +326,15 @@ pub(crate) fn get_wal_file_path(dir: &Path, epoch_id: u32) -> Result<PathBuf> {
     let filename = wal_file_name(dir, epoch_id);
     if !filename.exists() {
         if let Ok(Some(recycle_filename)) = find_recycled_file(dir) {
+            // Before using the recycle file, empty the old wal header and the first batch header.
+            let recycle_file = open_direct_file(&recycle_filename, true)?;
+            let overwrite_len = WalHeader::len() + DmaBuffer::DMA_ALIGN;
+            let mut buf = DmaBuffer::new(overwrite_len);
+            unsafe {
+                buf.advance_mut(overwrite_len);
+            }
+            buf.pad_to_align();
+            recycle_file.write_all_at(buf.as_ref(), 0)?;
             fs::rename(recycle_filename, filename.clone())?;
             file_system::sync_dir(dir.join(RECYCLE_DIR))?;
         }
