@@ -180,6 +180,15 @@ impl TitanCfConfig {
         opts.set_max_sorted_runs(self.max_sorted_runs);
         opts
     }
+
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.gc_merge_rewrite {
+            warn!(
+                "titan.gc-merge-rewrite is specified but the config is deprecated. Ignored the config."
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -331,6 +340,7 @@ macro_rules! cf_config {
                     )
                     .into());
                 }
+                self.titan.validate()?;
                 Ok(())
             }
         }

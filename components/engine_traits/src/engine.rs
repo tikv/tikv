@@ -66,19 +66,19 @@ pub trait KvEngine:
 // It should be named as `EngineFactory` for consistency, but we are about to rename
 // engine to tablet, so always use tablet for new traits/types.
 pub trait TabletFactory<EK> {
-    // loop visit all tablets by the specified function.
-    fn loop_tablet_cache(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>);
-    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> crate::Result<()>;
-    // create an tablet by id and suffix. If the tablet exists, it will fail
+    /// Create an tablet by id and suffix. If the tablet exists, it will fail.
+    /// The id is likely the region Id, the suffix could be the current raft log index.
+    /// They together could specify a unique path for a region's tablet.
+    /// The reason to have suffix is that we can keep more than one tablet for a region.
     fn create_tablet(&self, id: u64, suffix: u64) -> Result<EK>;
 
-    // open a tablet by id and suffix. If the tablet exists, it will open it.
-    // If the tablet does not exist, it will create it.
+    /// Open a tablet by id and suffix. If the tablet exists, it will open it.
+    /// If the tablet does not exist, it will create it.
     fn open_tablet(&self, id: u64, suffix: u64) -> Result<EK> {
         self.open_tablet_raw(&self.tablet_path(id, suffix), false)
     }
 
-    // open a tablet by id and suffix from cache---that means it should already be opened.
+    /// Open a tablet by id and suffix from cache---that means it should already be opened.
     fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK> {
         if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(id, suffix), false) {
             return Some(engine);
@@ -86,32 +86,54 @@ pub trait TabletFactory<EK> {
         None
     }
 
-    // open a tablet by id and any suffix from cache
+    /// Open a tablet by id and any suffix from cache
     fn open_tablet_cache_any(&self, id: u64) -> Option<EK> {
         self.open_tablet_cache(id, 0)
     }
 
-    // open tablet by path and readonly flag
+    /// Open tablet by path and readonly flag
     fn open_tablet_raw(&self, path: &Path, readonly: bool) -> Result<EK>;
 
-    // create the shared db for v1
+    /// Create the shared db for v1
     fn create_shared_db(&self) -> Result<EK>;
+
+    /// Destroy the tablet and its data
+    fn destroy_tablet(&self, id: u64, suffix: u64) -> crate::Result<()>;
+
+    /// Check if the tablet with specified id/suffix exists
     #[inline]
     fn exists(&self, id: u64, suffix: u64) -> bool {
         self.exists_raw(&self.tablet_path(id, suffix))
     }
+
+    /// Check if the tablet with specified path exists
     fn exists_raw(&self, path: &Path) -> bool;
+
+    /// Get the tablet path by id and suffix
     fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf;
+
+    /// Tablets root path
     fn tablets_path(&self) -> PathBuf;
+
+    /// Clone the tablet factory instance
+    /// Here we don't use Clone traint because it will break the trait's object safty
     fn clone(&self) -> Box<dyn TabletFactory<EK> + Send>;
 
-    // load the tablet from path for id and suffix--for scenarios such as applying snapshot
+    /// Loop visit all opened tablets cached by the specified function.
+    /// Once the tablet is opened/created, it will be cached in a hashmap
+    fn loop_tablet_cache(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>);
+
+    /// Load the tablet from path for id and suffix--for scenarios such as applying snapshot
     fn load_tablet(&self, _path: &Path, _id: u64, _suffix: u64) -> Result<EK> {
         unimplemented!();
     }
-    fn mark_tombstone(&self, _region_id: u64, _suffix: u64) {
+
+    /// Mark the tablet with specified id and suffix tombostone
+    fn mark_tombstone(&self, _id: u64, _suffix: u64) {
         unimplemented!();
     }
+
+    /// Check if the tablet with specified id and suffix tombostone
     fn is_tombstoned(&self, _region_id: u64, _suffix: u64) -> bool {
         unimplemented!();
     }
@@ -129,10 +151,6 @@ impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
     EK: KvEngine,
 {
-    fn loop_tablet_cache(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>) {}
-    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> crate::Result<()> {
-        Ok(())
-    }
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
@@ -141,6 +159,9 @@ where
     }
     fn create_shared_db(&self) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
+    }
+    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> crate::Result<()> {
+        Ok(())
     }
     fn exists_raw(&self, _path: &Path) -> bool {
         true
@@ -164,6 +185,7 @@ where
             root_path: self.root_path.clone(),
         })
     }
+    fn loop_tablet_cache(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>) {}
 }
 
 impl<EK> DummyFactory<EK>
