@@ -139,7 +139,10 @@ pub struct TitanCfConfig {
     pub range_merge: bool,
     #[online_config(skip)]
     pub max_sorted_runs: i32,
+    // deprecated.
     #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub gc_merge_rewrite: bool,
 }
 
@@ -183,8 +186,15 @@ impl TitanCfConfig {
 
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.gc_merge_rewrite {
-            return Err("rocksdb.defaultcf.titan.gc-merge-rewrite is specified but the config is not supported.\
-                        Please refer to release notes about how to resolve this issue.".into());
+            return Err(
+                "gc-merge-rewrite is deprecated. The data produced when this \
+                option is enabled cannot be read by this version. Therefore, if \
+                this option has been applied to an existing node, you must downgrade \
+                it to the previous version and fully clean up the old data. See more \
+                details of how to do that in the documentation for the blob-run-mode \
+                confuguration."
+                    .into(),
+            );
         }
         Ok(())
     }

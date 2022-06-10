@@ -525,7 +525,7 @@ where
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            self.perf_context.report_metrics();
+            self.perf_context.report_metrics(&[]); // TODO: pass in request trackers
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
