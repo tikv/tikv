@@ -19,6 +19,7 @@ use tikv::{
     },
 };
 use tikv_util::time::Instant;
+use tracker::INVALID_TRACKER_TOKEN;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
@@ -179,10 +180,11 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
                 req
             })
             .collect();
+        let trackers = keys.iter().map(|_| INVALID_TRACKER_TOKEN).collect();
         let p = GetConsumer::new();
         block_on(
             self.store
-                .batch_get_command(requests, ids, p.clone(), Instant::now()),
+                .batch_get_command(requests, ids, trackers, p.clone(), Instant::now()),
         )?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {
