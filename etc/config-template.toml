@@ -822,10 +822,15 @@
 ## default: 0.5
 # discardable-ratio = 0.5
 
-## The mode used to process blob files. In read-only mode Titan
-## stops writing value into blob log. In fallback mode Titan
-## converts blob index into real value on flush and compaction.
-## This option is especially useful for downgrading Titan.
+## The mode used to process blob files. In read-only mode Titan stops writing
+## value into blob log. In fallback mode Titan converts blob index into real
+## value on flush and compaction.
+##
+## This option can be used to disable Titan. More specifically, to disable
+## Titan, set this option to fallback and perform a full compaction using
+## tikv-ctl. Then, monitor the blob file size metrics. After the blob file size
+## decreases to 0, you can set rocksdb.titan.enabled to false and restart TiKV.
+##
 ##   default:   kNormal
 ##   read-only: kReadOnly
 ##   fallback:  kFallback
@@ -843,10 +848,6 @@
 ## Requirement: level_compaction_dynamic_level_base = true
 ## default: false
 # level-merge = false
-
-## Use merge operator to rewrite GC blob index.
-## default: false
-# gc-merge-rewrite = false
 
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]
