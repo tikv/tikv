@@ -2,6 +2,7 @@
 
 use std::{
     cell::RefCell,
+    collections::BinaryHeap,
     fmt::{self, Debug, Display, Formatter},
     pin::Pin,
     rc::Rc,
@@ -9,7 +10,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant}, mem,
 };
 
 use collections::HashMap;
@@ -118,6 +119,9 @@ pub enum Task {
     Dump {
         cb: Callback,
     },
+    DumpHistory {
+        cb: Callback,
+    },
     Deadlock {
         // Which txn causes deadlock
         start_ts: TimeStamp,
@@ -149,6 +153,7 @@ impl Display for Task {
             }
             Task::WakeUp { lock_ts, .. } => write!(f, "waking up txns waiting for {}", lock_ts),
             Task::Dump { .. } => write!(f, "dump"),
+            Task::DumpHistory { .. } => write(f, "dump history"),
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
             Task::ChangeConfig { timeout, delay } => write!(
                 f,
@@ -284,32 +289,47 @@ impl Waiter {
     }
 }
 
+impl<'a> Into<'a, WaitForEntry> for &'a Waiter {
+    fn into(self) -> WaitForEntry {
+        let mut wait_for_entry = WaitForEntry::default();
+        wait_for_entry.set_txn(self.start_ts.into_inner());
+        wait_for_entry.set_wait_for_txn(self.lock.ts.into_inner());
+        wait_for_entry.set_key_hash(self.lock.hash);
+        wait_for_entry.set_key(self.diag_ctx.key.clone());
+        wait_for_entry.set_resource_group_tag(self.diag_ctx.resource_group_tag.clone());
+        wait_for_entry.set_wait_time(self.wait_start_time.elapsed().as_millis() as u64);
+        wait_for_entry
+    }
+}
+
 // NOTE: Now we assume `Waiters` is not very long.
 // Maybe needs to use `BinaryHeap` or sorted `VecDeque` instead.
 type Waiters = Vec<Waiter>;
 
-struct WaitHistory {
-    blocked_txn: u64,
-    lock_holding_txn: u64,
-    wait_time: Duration,
-    resource_group_tag: Vec<u8>,
+#[derive(Debug)]
+struct WaitForEntryWrapper(WaitForEntry);
+
+impl cmp::Ord for WaitForEntryWrapper {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        other.0.get_wait_time().cmp(&self.0.get_wait_time());
+    }
 }
 
 struct WaitTable {
     // Map lock hash to waiters.
     wait_table: HashMap<u64, Waiters>,
     waiter_count: Arc<AtomicUsize>,
-    history: VecDeque<WaitHistory>,
-    wait_history_capacity: u64,
+    history: BinaryHeap<WaitForEntryWrapper>,
+    wait_history_capacity: usize,
 }
 
 impl WaitTable {
-    fn new(waiter_count: Arc<AtomicUsize>, wait_history_capacity: u64) -> Self {
+    fn new(waiter_count: Arc<AtomicUsize>, wait_history_capacity: usize) -> Self {
         Self {
             wait_table: HashMap::default(),
             waiter_count,
-            history: VecDeque::with_capacity(wait_history_capacity),
-            wait_history_capacity
+            history: BinaryHeap::with_capacity(wait_history_capacity),
+            wait_history_capacity,
         }
     }
 
@@ -358,13 +378,10 @@ impl WaitTable {
         if waiters.is_empty() {
             self.remove(lock);
         }
-        self.history.push(WaitHistory {
-            blocked_txn: waiter.start_ts.into_inner(),
-            lock_holding_txn: waiter.lock.ts.into_inner(),
-            wait_time: waiter.delay.get_duration(),
-            resource_group_tag: waiter.diag_ctx.resource_group_tag.clone(),
-            wait_time: waiter.wait_start_time.elapsed(),
-        });
+        self.history.push((&waiter).into());
+        if self.history.len() > self.capacity {
+            self.history.pop();
+        }
         Some(waiter)
     }
 
@@ -383,24 +400,17 @@ impl WaitTable {
         let oldest = waiters.swap_remove(oldest_idx);
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
         WAIT_TABLE_STATUS_GAUGE.txns.dec();
+        self.history.push((&oldest).into());
+        if self.history.len() > self.capacity {
+            self.history.pop();
+        }
         Some((oldest, waiters))
     }
 
     fn to_wait_for_entries(&self) -> Vec<WaitForEntry> {
         self.wait_table
             .iter()
-            .flat_map(|(_, waiters)| {
-                waiters.iter().map(|waiter| {
-                    let mut wait_for_entry = WaitForEntry::default();
-                    wait_for_entry.set_txn(waiter.start_ts.into_inner());
-                    wait_for_entry.set_wait_for_txn(waiter.lock.ts.into_inner());
-                    wait_for_entry.set_key_hash(waiter.lock.hash);
-                    wait_for_entry.set_key(waiter.diag_ctx.key.clone());
-                    wait_for_entry
-                        .set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
-                    wait_for_entry
-                })
-            })
+            .flat_map(|(_, waiters)| waiters.iter().map(|waiter| waiter.into()))
             .collect()
     }
 }
@@ -452,6 +462,10 @@ impl Scheduler {
     }
 
     pub fn dump_wait_table(&self, cb: Callback) -> bool {
+        self.notify_scheduler(Task::DumpHistory { cb })
+    }
+
+    pub fn dump_wait_history(&self, cb: Callback) -> bool {
         self.notify_scheduler(Task::Dump { cb })
     }
 
@@ -506,7 +520,10 @@ impl WaiterManager {
         cfg: &Config,
     ) -> Self {
         Self {
-            wait_table: Rc::new(RefCell::new(WaitTable::new(waiter_count, cfg.wait_history_capacity))),
+            wait_table: Rc::new(RefCell::new(WaitTable::new(
+                waiter_count,
+                cfg.wait_history_capacity,
+            ))),
             detector_scheduler,
             default_wait_for_lock_timeout: cfg.wait_for_lock_timeout,
             wake_up_delay_duration: cfg.wake_up_delay_duration,
@@ -569,6 +586,11 @@ impl WaiterManager {
 
     fn handle_dump(&self, cb: Callback) {
         cb(self.wait_table.borrow().to_wait_for_entries());
+    }
+
+    fn handle_dump_history(&self, cb: Callback) {
+        let history = mem::take(self.wait_table.borrow_mut().history.as_mut());
+        cb(history);
     }
 
     fn handle_deadlock(
@@ -637,6 +659,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 self.handle_dump(cb);
                 TASK_COUNTER_METRICS.dump.inc();
             }
+            Task::DumpHistory { cb } => self.dump_history(cb),
             Task::Deadlock {
                 start_ts,
                 lock,
