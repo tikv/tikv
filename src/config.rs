@@ -2632,6 +2632,7 @@ pub struct QuotaConfig {
     pub background_cpu_time: usize,
     pub background_write_bandwidth: ReadableSize,
     pub background_read_bandwidth: ReadableSize,
+    #[online_config(skip)]
     pub support_auto_tune: bool,
 }
 
