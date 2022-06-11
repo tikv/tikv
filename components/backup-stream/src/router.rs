@@ -56,8 +56,7 @@ use crate::{
     utils::{self, SegmentMap, Slot, SlotMap, StopWatch},
 };
 
-pub const FLUSH_STORAGE_INTERVAL: u64 = 300;
-pub const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 16;
+pub const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 60;
 
 #[derive(Debug)]
 pub struct ApplyEvent {
@@ -476,7 +475,6 @@ impl RouterInner {
                 let result = task_info.do_flush(store_id, resolve_to).await;
                 // set false to flushing whether success or fail
                 task_info.set_flushing_status(false);
-                task_info.update_flush_time();
 
                 if let Err(e) = result {
                     e.report("failed to flush task.");
@@ -490,6 +488,8 @@ impl RouterInner {
                     }
                     return None;
                 }
+                // if succeed in flushing, update flush_time. Or retry do_flush immediately.
+                task_info.update_flush_time();
                 result.ok().flatten()
             }
             _ => None,
