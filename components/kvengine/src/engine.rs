@@ -419,6 +419,7 @@ impl EngineCore {
                             atx.send(Ok(())).unwrap();
                         }
                     });
+                    break;
                 }
             }
         }
