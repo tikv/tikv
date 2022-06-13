@@ -194,7 +194,6 @@ mod profiling {
         #[allow(non_snake_case)]
         #[test]
         fn test_profiling_memory_where_MALLOC_CONF() {
-            std::env::set_var("MALLOC_CONF", "prof::true");
             // Make sure somebody has turned on profiling
             assert!(is_profiling_on(), r#"Set MALLOC_CONF=prof:true"#);
 
