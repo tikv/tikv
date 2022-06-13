@@ -43,12 +43,6 @@ pub enum Error {
     EOF,
     #[error("parse error")]
     ParseError,
-    #[error("epoch not match")]
-    Epoch,
-    #[error("checksum not match")]
-    Checksum,
-    #[error("length not match")]
-    Length,
     #[error("Open error: {0}")]
     Open(String),
     #[error("Corruption: {0}")]

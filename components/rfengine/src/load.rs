@@ -139,7 +139,7 @@ impl RfEngine {
         let checksum = LittleEndian::read_u32(&data[payload_len..]);
         data = &data[..payload_len];
         if crc32fast::hash(data) != checksum {
-            return Err(Error::Checksum);
+            return Err(Error::Corruption("checksum mismatch".to_owned()));
         }
         while !data.is_empty() {
             let region_id = LittleEndian::read_u64(data);
@@ -175,7 +175,7 @@ impl RfEngine {
         let checksum = LittleEndian::read_u32(&data[data.len() - 4..]);
         data = &data[..data.len() - 4];
         if crc32fast::hash(data) != checksum {
-            return Err(Error::Checksum);
+            return Err(Error::Corruption("checksum mismatch".to_owned()));
         }
         let new_data = RegionBatch::decode(data);
         let old_data_ref = self.get_or_init_region_data(new_data.region_id);
