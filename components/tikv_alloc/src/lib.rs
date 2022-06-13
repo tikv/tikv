@@ -134,8 +134,8 @@ mod runner {
     extern crate test;
     use test::*;
 
-    /// Check for test cases with ignore message "#ifdef <VAR_NAME>". The test
-    /// case will be un-ignored if the specific environment variable is set.
+    /// Check for ignored test cases with ignore message "#ifdef <VAR_NAME>". The test
+    /// case will be enabled if the specific environment variable is set.
     pub fn run_env_conditional_tests(cases: &[&TestDescAndFn]) {
         let cases: Vec<_> = cases
             .iter()
@@ -148,9 +148,8 @@ mod runner {
                 };
                 if let Some(msg) = desc.ignore_message {
                     let keyword = "#ifdef";
-                    if let Some(idx) = msg.find(keyword) {
-                        let v = &msg[idx + keyword.len()..].trim();
-                        if v.is_empty() || std::env::var(v).is_ok() {
+                    if let Some(var_name) = msg.strip_prefix(keyword) {
+                        if var_name.is_empty() || std::env::var(var_name).is_ok() {
                             desc.ignore = false;
                             desc.ignore_message = None;
                         }
