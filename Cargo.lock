@@ -4037,7 +4037,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/busyjay/raft-rs?branch=introduce-judge-split-vote#d5c4829db841a12750ec0284bd8c3dbcba7207de"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4093,7 +4093,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/busyjay/raft-rs?branch=introduce-judge-split-vote#d5c4829db841a12750ec0284bd8c3dbcba7207de"
 dependencies = [
  "bytes",
  "protobuf",
