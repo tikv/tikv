@@ -167,7 +167,9 @@ impl Config {
         cfg.leader_transfer_max_log_lag = old.leader_transfer_max_log_lag;
 
         cfg.region_split_size = old_cop.region_split_size;
-        cfg.region_max_size = old_cop.region_max_size;
+        if let Some(size) = old_cop.region_max_size {
+            cfg.region_max_size = size;
+        }
         cfg.apply_pool_size = old.apply_batch_system.pool_size;
         cfg.async_io = old.store_io_pool_size > 0;
         cfg.local_file_gc_tick_interval = old.local_file_gc_tick_interval;

@@ -1,6 +1,6 @@
 [package]
 name = "cloud_server"
-version = "5.4.0-alpha"
+version = "6.1.0"
 license = "Apache-2.0"
 edition = "2018"
 publish = false

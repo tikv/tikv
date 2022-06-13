@@ -128,7 +128,7 @@ fn test_single_voter_restart() {
 fn test_prompt_learner() {
     let mut cluster = new_server_cluster(0, 4);
     configure_for_hibernate(&mut cluster);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 20;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(20);
     cluster.pd_client.disable_default_operator();
     cluster.run_conf_change();
     cluster.pd_client.must_add_peer(1, new_peer(2, 2));
@@ -147,7 +147,7 @@ fn test_prompt_learner() {
     ));
     let idx = cluster.truncated_state(1, 1).get_index();
     // Trigger a log compaction.
-    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit() * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
     cluster.wait_log_truncated(1, 1, idx + 1);
@@ -237,7 +237,7 @@ fn test_transfer_leader_delay() {
 fn test_split_delay() {
     let mut cluster = new_server_cluster(0, 4);
     configure_for_hibernate(&mut cluster);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 20;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(20);
     cluster.pd_client.disable_default_operator();
     cluster.run_conf_change();
     cluster.pd_client.must_add_peer(1, new_peer(2, 2));
@@ -253,7 +253,7 @@ fn test_split_delay() {
     ));
     let idx = cluster.truncated_state(1, 1).get_index();
     // Trigger a log compaction.
-    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit() * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
     let region = cluster.get_region(b"k1");

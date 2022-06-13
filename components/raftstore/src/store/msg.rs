@@ -1,11 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{
-    borrow::Cow,
-    fmt,
-    sync::{atomic::AtomicUsize, Arc},
-};
+#[cfg(any(test, feature = "testexport"))]
+use std::sync::Arc;
+use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
@@ -14,7 +12,7 @@ use kvproto::{
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb,
     metapb::RegionEpoch,
-    pdpb::CheckPolicy,
+    pdpb::{self, CheckPolicy},
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
     replication_modepb::ReplicationStatus,
@@ -29,6 +27,10 @@ use super::{AbstractPeer, RegionSnapshot};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
+    peer::{
+        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
+    },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
     RaftlogFetchResult, SnapKey,
@@ -341,9 +343,17 @@ where
         res: Box<RaftlogFetchResult>,
     },
     EnterForceLeaderState {
+        syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
     },
     ExitForceLeaderState,
+    UnsafeRecoveryDemoteFailedVoters {
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+        failed_voters: Vec<metapb::Peer>,
+    },
+    UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
+    UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
+    UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
 }
 
 /// Message that will be sent to a peer.
@@ -426,6 +436,9 @@ pub enum CasualMessage<EK: KvEngine> {
 
     // Snapshot is applied
     SnapshotApplied,
+
+    // Trigger raft to campaign which is used after exiting force leader
+    Campaign,
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -484,6 +497,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RefreshRegionBuckets { .. } => write!(fmt, "RefreshRegionBuckets"),
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
             CasualMessage::SnapshotApplied => write!(fmt, "SnapshotApplied"),
+            CasualMessage::Campaign => write!(fmt, "Campaign"),
         }
     }
 }
@@ -573,8 +587,6 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Asks region to change replication mode.
     UpdateReplicationMode,
     Destroy(u64),
-    UpdateRegionForUnsafeRecover(metapb::Region),
-    UnsafeRecoveryWaitApply(Arc<AtomicUsize>),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -603,10 +615,6 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
-            PeerMsg::UpdateRegionForUnsafeRecover(region) => {
-                write!(fmt, "Update Region {} to {:?}", region.get_id(), region)
-            }
-            PeerMsg::UnsafeRecoveryWaitApply(counter) => write!(fmt, "WaitApply {:?}", *counter),
         }
     }
 }
@@ -651,8 +659,13 @@ where
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 
-    UnsafeRecoveryReport,
-    CreatePeer(metapb::Region),
+    UnsafeRecoveryReport(pdpb::StoreReport),
+    UnsafeRecoveryCreatePeer {
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+        create: metapb::Region,
+    },
+
+    GcSnapshotFinish,
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -681,8 +694,11 @@ where
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
-            StoreMsg::UnsafeRecoveryReport => write!(fmt, "UnsafeRecoveryReport"),
-            StoreMsg::CreatePeer(_) => write!(fmt, "CreatePeer"),
+            StoreMsg::UnsafeRecoveryReport(..) => write!(fmt, "UnsafeRecoveryReport"),
+            StoreMsg::UnsafeRecoveryCreatePeer { .. } => {
+                write!(fmt, "UnsafeRecoveryCreatePeer")
+            }
+            StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
         }
     }
 }

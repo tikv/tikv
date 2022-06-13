@@ -44,6 +44,7 @@ pub struct SstImporter {
     dir: ImportDir,
     key_manager: Option<Arc<DataKeyManager>>,
     switcher: ImportModeSwitcher,
+    // TODO: lift api_version as a type parameter.
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
     file_locks: Arc<DashMap<String, ()>>,
@@ -704,6 +705,7 @@ impl SstImporter {
             default_meta,
             write_meta,
             self.key_manager.clone(),
+            self.api_version,
         ))
     }
 
