@@ -164,6 +164,7 @@ tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 toml = "0.5"
+tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
@@ -268,6 +269,7 @@ members = [
   "components/tikv_alloc",
   "components/tikv_util",
   "components/tipb_helper",
+  "components/tracker",
   "components/txn_types",
   "fuzz",
   "fuzz/fuzzer-afl",
