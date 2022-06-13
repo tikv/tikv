@@ -520,6 +520,7 @@ where
             self.pending_ssts = vec![];
         }
         if !self.kv_wb_mut().is_empty() {
+            self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
@@ -3819,7 +3820,6 @@ where
             }
             update_cfg(&incoming.apply_batch_system);
         }
-        self.apply_ctx.perf_context.start_observe();
     }
 
     fn handle_control(&mut self, control: &mut ControlFsm) -> Option<usize> {
@@ -5635,12 +5635,11 @@ mod tests {
                 region_epoch,
                 cmd: ChangeObserver::from_cdc(2, observe_handle),
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
-                    assert!(
-                        resp.response
-                            .get_header()
-                            .get_error()
-                            .has_region_not_found()
-                    );
+                    assert!(resp
+                        .response
+                        .get_header()
+                        .get_error()
+                        .has_region_not_found());
                     assert!(resp.snapshot.is_none());
                 })),
             },
