@@ -54,10 +54,10 @@ impl RocksWriteBatch {
 }
 
 impl engine_traits::WriteBatch for RocksWriteBatch {
-    fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+    fn write_opt(&self, opts: &WriteOptions) -> Result<u64> {
         let opt: RocksWriteOptions = opts.into();
         self.get_db()
-            .write_opt(&self.wb, &opt.into_raw())
+            .write_seq_opt(&self.wb, &opt.into_raw())
             .map_err(Error::Engine)
     }
 
