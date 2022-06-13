@@ -157,7 +157,7 @@ mod runner {
                         let v = &name[idx + 7..];
                         if !v.is_empty()
                             && !v.chars().any(|c| c.is_ascii_lowercase())
-                            && !std::env::var(v).is_ok()
+                            && std::env::var(v).is_err()
                         {
                             desc.ignore = true;
                             // TODO: uncomment this on a toolchain > 2022-02-25

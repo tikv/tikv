@@ -16,7 +16,7 @@ fi
 # Re-run tests that requires specific environment variables.
 if [[ "$(uname)" == "Linux" ]]; then
     export MALLOC_CONF=prof:true
-    ./scripts/test "$@" -- where_MALLOC_CONF --nocapture
+    ./scripts/test where_MALLOC_CONF "$@" -- --nocapture
 fi
 
 if [[ "$(uname)" = "Linux" ]]; then
