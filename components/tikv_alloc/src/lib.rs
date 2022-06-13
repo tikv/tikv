@@ -134,6 +134,9 @@ mod runner {
     extern crate test;
     use test::*;
 
+    /// Test cases with name <name>_where_<ENV_VAR_NAME> will be checked for
+    /// whether the environment variable is set. Cases are ignored if its
+    /// depending variable is unset.
     pub fn run_env_conditional_tests(cases: &[&TestDescAndFn]) {
         let cases: Vec<_> = cases
             .iter()
