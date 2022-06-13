@@ -256,7 +256,7 @@ fn test_serde_custom_tikv_config() {
         level_merge: true,
         range_merge: true,
         max_sorted_runs: 100,
-        gc_merge_rewrite: true,
+        gc_merge_rewrite: false,
     };
     let titan_db_config = TitanDBConfig {
         enabled: true,
