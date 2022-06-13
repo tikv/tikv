@@ -124,6 +124,14 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         key: &Key,
         ts: TimeStamp,
     ) -> Result<Option<(Write, TimeStamp)>> {
+        if self.cloud_reader.is_some() {
+            return self
+                .cloud_reader
+                .as_mut()
+                .unwrap()
+                .seek_write(key, ts)
+                .map(|opt| opt.map(|(ts, write)| (write, ts)));
+        }
         self.reader
             .get_write_with_commit_ts(key, ts, Some(self.start_ts))
     }
