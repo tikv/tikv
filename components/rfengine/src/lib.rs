@@ -43,8 +43,6 @@ pub enum Error {
     EOF,
     #[error("parse error")]
     ParseError,
-    #[error("checksum not match")]
-    Checksum,
     #[error("Open error: {0}")]
     Open(String),
     #[error("Corruption: {0}")]
