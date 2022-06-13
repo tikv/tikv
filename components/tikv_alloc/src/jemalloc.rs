@@ -191,9 +191,9 @@ mod profiling {
         //
         // TODO: need a test for the dump_prof(None) case, but
         // the cleanup afterward is not simple.
-        #[allow(non_snake_case)]
         #[test]
-        fn test_profiling_memory_where_MALLOC_CONF() {
+        #[ignore = "#ifdef MALLOC_CONF"]
+        fn test_profiling_memory_ifdef_malloc_conf() {
             // Make sure somebody has turned on profiling
             assert!(is_profiling_on(), "set MALLOC_CONF=prof:true");
 

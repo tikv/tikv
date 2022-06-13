@@ -134,34 +134,25 @@ mod runner {
     extern crate test;
     use test::*;
 
-    /// Test cases with name <name>_where_<ENV_VAR_NAME> will be checked for
-    /// whether the environment variable is set. Cases are ignored if its
-    /// depending variable is unset.
+    /// Check for test cases with ignore message "#ifdef <VAR_NAME>". The test
+    /// case will be un-ignored if the specific environment variable is set.
     pub fn run_env_conditional_tests(cases: &[&TestDescAndFn]) {
         let cases: Vec<_> = cases
             .iter()
             .map(|case| {
                 let mut desc = case.desc.clone();
                 let testfn = match case.testfn {
-                    TestFn::StaticTestFn(f) => TestFn::DynTestFn(Box::new(move || {
-                        f();
-                    })),
-                    TestFn::StaticBenchFn(f) => TestFn::DynTestFn(Box::new(move || {
-                        bench::run_once(move |b| f(b));
-                    })),
+                    TestFn::StaticTestFn(f) => TestFn::StaticTestFn(f),
+                    TestFn::StaticBenchFn(f) => TestFn::StaticBenchFn(f),
                     ref f => panic!("unexpected testfn {:?}", f),
                 };
-                if !desc.ignore {
-                    let name = desc.name.as_slice().to_owned();
-                    if let Some(idx) = name.find("_where_") {
-                        let v = &name[idx + 7..];
-                        if !v.is_empty()
-                            && !v.chars().any(|c| c.is_ascii_lowercase())
-                            && std::env::var(v).is_err()
-                        {
-                            desc.ignore = true;
-                            // TODO: uncomment this on a toolchain > 2022-02-25
-                            // desc.ignore_message = Some("required environment variable not set");
+                if let Some(msg) = desc.ignore_message {
+                    let keyword = "#ifdef";
+                    if let Some(idx) = msg.find(keyword) {
+                        let v = &msg[idx + keyword.len()..].trim();
+                        if v.is_empty() || std::env::var(v).is_ok() {
+                            desc.ignore = false;
+                            desc.ignore_message = None;
                         }
                     }
                 }
