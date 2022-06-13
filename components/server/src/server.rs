@@ -8,7 +8,7 @@
 //! The entry point is `run_tikv`.
 //!
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
-//! We keep these components in the `TiKvServer` struct.
+//! We keep these components in the `TiKVServer` struct.
 
 use std::{
     cmp,
@@ -117,9 +117,9 @@ use crate::{memory::*, raft_engine_switch::*, setup::*, signal_handler};
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
-    let mut tikv = TiKvServer::<CER>::init(config);
+    let mut tikv = TiKVServer::<CER>::init(config);
 
-    // Must be called after `TiKvServer::init`.
+    // Must be called after `TiKVServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
     register_memory_usage_high_water(high_water);
@@ -181,7 +181,7 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
-struct TiKvServer<ER: RaftEngine> {
+struct TiKVServer<ER: RaftEngine> {
     config: TiKvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
@@ -228,8 +228,8 @@ type LocalServer<EK, ER> =
     Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
-impl<ER: RaftEngine> TiKvServer<ER> {
-    fn init(mut config: TiKvConfig) -> TiKvServer<ER> {
+impl<ER: RaftEngine> TiKVServer<ER> {
+    fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -280,7 +280,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             config.quota.max_delay_duration,
         ));
 
-        TiKvServer {
+        TiKVServer {
             config,
             cfg_controller: Some(cfg_controller),
             security_mgr,
@@ -1473,7 +1473,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
     }
 }
 
-impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
+impl<CER: ConfiguredRaftEngine> TiKVServer<CER> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
