@@ -2634,6 +2634,9 @@ pub struct QuotaConfig {
     pub background_read_bandwidth: ReadableSize,
     #[online_config(skip)]
     pub support_auto_tune: bool,
+    pub cpu_quota_pace: f64,
+    pub cpu_busy: f64,
+    pub cpu_healthy: f64,
 }
 
 impl Default for QuotaConfig {
@@ -2647,6 +2650,9 @@ impl Default for QuotaConfig {
             background_write_bandwidth: ReadableSize(0),
             background_read_bandwidth: ReadableSize(0),
             support_auto_tune: false,
+            cpu_quota_pace: 1.0,
+            cpu_busy: 0.9,
+            cpu_healthy: 0.75,
         }
     }
 }
@@ -2657,6 +2663,14 @@ impl QuotaConfig {
 
         if self.max_delay_duration > MAX_DELAY_DURATION {
             return Err(format!("quota.max-delay-duration must <= {}", MAX_DELAY_DURATION).into());
+        }
+
+        if self.cpu_quota_pace > 1.0 {
+            return Err("cpu quota tune pace must be between [0.1.0]".into());
+        }
+
+        if self.cpu_healthy >= self.cpu_busy || self.cpu_busy > 0.95 {
+            return Err("invalid cpu busy state".into());
         }
 
         Ok(())
@@ -4612,6 +4626,9 @@ mod tests {
             cfg.quota.background_read_bandwidth,
             cfg.quota.max_delay_duration,
             false,
+            1.0,
+            0.9,
+            0.75,
         ));
 
         let cfg_controller = ConfigController::new(cfg.clone());

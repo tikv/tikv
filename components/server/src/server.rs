@@ -123,13 +123,13 @@ use crate::{
 };
 
 // minimum number of core kept for background requests
-const BACKGROUND_REQUEST_CORE_LOWER_BOUND: usize = 1;
+const BACKGROUND_REQUEST_CORE_LOWER_BOUND: f64 = 1.0;
 // max number of cores kept for background requests = core_number / 2
 const BACKGROUND_REQUEST_CORE_MAX_RATIO: f64 = 0.5;
 // indication of TiKV instance is short of cpu
-const SYSTEM_BUSY_THRESHOLD: f64 = 0.90;
+//const SYSTEM_BUSY_THRESHOLD: f64 = 0.90;
 // indication of TiKV instance in healthy state when cpu usage is in [0.75, 0.9)
-const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.75;
+//const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.75;
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
@@ -304,6 +304,9 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             config.quota.background_read_bandwidth,
             config.quota.max_delay_duration,
             config.quota.support_auto_tune,
+            config.quota.cpu_quota_pace,
+            config.quota.cpu_busy,
+            config.quota.cpu_healthy,
         ));
 
         TiKvServer {
@@ -1245,17 +1248,21 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     // Only background cpu quota tuning is implemented at present. iops and frontend quota tuning is on the way
     fn init_quota_tuning_task(&self, quota_limiter: Arc<QuotaLimiter>) {
         let mut proc_stats: ProcessStat = ProcessStat::cur_proc_stat().unwrap();
+        let cpu_quota_pace = quota_limiter.cpu_quota_pace();
+        let cpu_busy = quota_limiter.cpu_busy();
+        let cpu_healthy = quota_limiter.cpu_healthy();
+
         self.background_worker.spawn_interval_task(
             DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL,
             move || {
                 // if cpu quota is not specified, try capping it to half of the core number
                 if quota_limiter.background_cputime_limiter().is_infinite() {
                     quota_limiter.set_background_cpu_time_limit(
-                        1000 * cmp::max(
-                            BACKGROUND_REQUEST_CORE_LOWER_BOUND,
-                            (SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO)
-                                as usize,
-                        ),
+                        1000_f64
+                            * f64::max(
+                                BACKGROUND_REQUEST_CORE_LOWER_BOUND,
+                                SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO,
+                            ),
                     );
 
                     info!("cpu_time_limiter tuned for backend request";
@@ -1270,33 +1277,31 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                     // Try tuning quota when cpu_usage is correctly collected.
                     // rule based tuning:
                     //      1) if instance is busy, shrink cpu quota for analyze by 1 core until lower bound is hit;
-                    //      2) if instance cpu usage is at healthy state, no op;
+                    //      2) if instance cpu usage is healthy, no op;
                     //      3) if instance is idle, increase cpu quota by 1 core until upper bound is hit.
                     if cpu_usage > 0.0f64 {
                         let cpu_util = cpu_usage / SysQuota::cpu_cores_quota();
 
                         let old_quota = quota_limiter.background_cputime_limiter();
 
-                        if cpu_util >= SYSTEM_BUSY_THRESHOLD {
+                        // if cpu_util >= SYSTEM_BUSY_THRESHOLD {
+                        if cpu_util >= cpu_busy {
                             quota_limiter.set_background_cpu_time_limit(
-                                1_000
-                                    * cmp::max(
-                                        (quota_limiter.background_cputime_limiter() / 1_000_000.0)
-                                            as usize
-                                            - 1,
+                                1_000_f64
+                                    * f64::max(
+                                        quota_limiter.background_cputime_limiter() / 1_000_000.0
+                                            - cpu_quota_pace,
                                         BACKGROUND_REQUEST_CORE_LOWER_BOUND,
                                     ),
                             );
-                        } else if cpu_util < SYSTEM_HEALTHY_THRESHOLD {
+                        } else if cpu_util < cpu_healthy {
                             quota_limiter.set_background_cpu_time_limit(
-                                1_000
-                                    * cmp::min(
-                                        (quota_limiter.background_cputime_limiter() / 1_000_000.0)
-                                            as usize
-                                            + 1,
-                                        (SysQuota::cpu_cores_quota()
-                                            * BACKGROUND_REQUEST_CORE_MAX_RATIO)
-                                            as usize,
+                                1_000_f64
+                                    * f64::min(
+                                        quota_limiter.background_cputime_limiter() / 1_000_000.0
+                                            + cpu_quota_pace,
+                                        SysQuota::cpu_cores_quota()
+                                            * BACKGROUND_REQUEST_CORE_MAX_RATIO,
                                     ),
                             );
                         }

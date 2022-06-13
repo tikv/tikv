@@ -63,6 +63,12 @@
 # max-delay-duration = "500ms"
 ## If quota auto tune for background request is supported
 # support-auto-tune = false
+## cpu quota tune pace
+# cpu-quota-pace = 1.0
+## cpu busy threshold
+# cpu-busy = 0.9
+## cpu healthy threshold
+# cpu-healthy = 0.75
 
 [log]
 ## Log levels: debug, info, warn, error, fatal.

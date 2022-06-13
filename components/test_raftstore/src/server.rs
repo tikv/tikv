@@ -386,6 +386,9 @@ impl ServerCluster {
             cfg.quota.background_read_bandwidth,
             cfg.quota.max_delay_duration,
             cfg.quota.support_auto_tune,
+            cfg.quota.cpu_quota_pace,
+            cfg.quota.cpu_busy,
+            cfg.quota.cpu_healthy,
         ));
         let store = create_raft_storage::<_, _, _, F>(
             engine,
