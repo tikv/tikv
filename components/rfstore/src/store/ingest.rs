@@ -1,7 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::Ordering,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
@@ -32,19 +31,6 @@ pub(crate) fn convert_sst(
         let sst_iter = SstIterator::new(sst_meta, reader);
         sst_iters.push(sst_iter);
     }
-    sst_iters.sort_unstable_by(|a, b| {
-        let a_start = a.meta.get_range().get_start();
-        let b_start = b.meta.get_range().get_start();
-        let cmp = a_start.cmp(b_start);
-        if !cmp.is_eq() {
-            return cmp;
-        }
-        if a.meta.get_cf_name() == CF_DEFAULT {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        }
-    });
     let ingest_id = sst_iters.first().as_ref().unwrap().meta.get_uuid().to_vec();
     let mut default_sst_iter = None;
     let mut combined_iters = vec![];
