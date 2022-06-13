@@ -1833,10 +1833,13 @@ mod tests {
 
         let cs = vec![
             // (input, expect)
-            (EnumRef::new("enum".as_bytes(), &0), Real::from(0.)),
-            (EnumRef::new("int".as_bytes(), &1), Real::from(1.)),
-            (EnumRef::new("real".as_bytes(), &2), Real::from(2.)),
-            (EnumRef::new("string".as_bytes(), &3), Real::from(3.)),
+            (EnumRef::new("enum".as_bytes(), &0), Real::new(0.).unwrap()),
+            (EnumRef::new("int".as_bytes(), &1), Real::new(1.).unwrap()),
+            (EnumRef::new("real".as_bytes(), &2), Real::new(2.).unwrap()),
+            (
+                EnumRef::new("string".as_bytes(), &3),
+                Real::new(3.).unwrap(),
+            ),
         ];
 
         for (input, expect) in cs {

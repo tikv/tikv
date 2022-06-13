@@ -29,7 +29,7 @@ command! {
     /// status being changed, a rollback may be written.
     CheckSecondaryLocks:
         cmd_ty => SecondaryLocksStatus,
-        display => "kv::command::CheckSecondaryLocks {} keys@{} | {:?}", (keys.len, start_ts, ctx),
+        display => "kv::command::CheckSecondaryLocks {:?} keys@{} | {:?}", (keys, start_ts, ctx),
         content => {
             /// The keys of secondary locks.
             keys: Vec<Key>,

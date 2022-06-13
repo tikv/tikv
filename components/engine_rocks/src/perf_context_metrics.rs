@@ -36,6 +36,18 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref STORAGE_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_storage_rocksdb_perf",
+        "Total number of RocksDB internal operations from PerfContext",
+        &["req", "metric"]
+    )
+    .unwrap();
+    pub static ref COPR_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_coprocessor_rocksdb_perf",
+        "Total number of RocksDB internal operations from PerfContext",
+        &["req", "metric"]
+    )
+    .unwrap();
     pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration =
         auto_flush_from!(APPLY_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
     pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration =

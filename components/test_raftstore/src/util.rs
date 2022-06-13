@@ -661,7 +661,7 @@ pub fn create_test_engine(
         builder = builder.compaction_filter_router(router);
     }
     let factory = builder.build();
-    let engine = factory.create_tablet().unwrap();
+    let engine = factory.create_shared_db().unwrap();
     let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir, sst_worker)
 }

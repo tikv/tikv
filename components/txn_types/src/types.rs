@@ -266,7 +266,7 @@ pub enum MutationType {
 /// (the key already exist or not exist). The assertion should pass if the mutation (in a prewrite
 /// request) is going to be finished successfully, otherwise it indicates there should be some bug
 /// causing the attempt to write wrong data.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Mutation {
     /// Put `Value` into `Key`, overwriting any existing value.
     Put((Key, Value), Assertion),
@@ -282,6 +282,42 @@ pub enum Mutation {
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     CheckNotExists(Key, Assertion),
+}
+
+impl Debug for Mutation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl Display for Mutation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Mutation::Put((key, value), assertion) => write!(
+                f,
+                "Put key:{:?} value:{:?} assertion:{:?}",
+                key,
+                &log_wrappers::Value::value(value),
+                assertion
+            ),
+            Mutation::Delete(key, assertion) => {
+                write!(f, "Delete key:{:?} assertion:{:?}", key, assertion)
+            }
+            Mutation::Lock(key, assertion) => {
+                write!(f, "Lock key:{:?} assertion:{:?}", key, assertion)
+            }
+            Mutation::Insert((key, value), assertion) => write!(
+                f,
+                "Put key:{:?} value:{:?} assertion:{:?}",
+                key,
+                &log_wrappers::Value::value(value),
+                assertion
+            ),
+            Mutation::CheckNotExists(key, assertion) => {
+                write!(f, "CheckNotExists key:{:?} assertion:{:?}", key, assertion)
+            }
+        }
+    }
 }
 
 impl Mutation {
