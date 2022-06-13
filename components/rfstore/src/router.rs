@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
-use tikv_util::{deadline::Deadline, mpsc::Sender, time::ThreadReadId};
+use tikv_util::{deadline::Deadline, mpsc::Sender, time::ThreadReadId, warn};
 
 use crate::{
     store::{
@@ -167,11 +167,15 @@ impl RaftRouter {
     }
 
     pub(crate) fn send(&self, id: u64, msg: PeerMsg) {
-        self.peer_sender.send((id, msg)).unwrap();
+        if let Err(err) = self.peer_sender.send((id, msg)) {
+            warn!("send failed {:?}", err)
+        }
     }
 
     pub(crate) fn send_store(&self, msg: StoreMsg) {
-        self.store_sender.send(msg).unwrap();
+        if let Err(err) = self.store_sender.send(msg) {
+            warn!("send store failed {:?}", err)
+        }
     }
 }
 

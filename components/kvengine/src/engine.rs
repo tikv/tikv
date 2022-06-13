@@ -3,7 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::{Debug, Formatter},
-    iter::Iterator,
+    iter::{FromIterator, Iterator},
     ops::Deref,
     path::PathBuf,
     sync::{
@@ -374,7 +374,7 @@ impl EngineCore {
         iter.rewind();
         while iter.valid() {
             if fids.is_empty() {
-                fids = self.id_allocator.alloc_id(5).unwrap();
+                fids = self.id_allocator.alloc_id(10);
             }
             let id = fids.pop().unwrap();
             builder.reset(id);
@@ -419,6 +419,7 @@ impl EngineCore {
                             atx.send(Ok(())).unwrap();
                         }
                     });
+                    break;
                 }
             }
         }
@@ -426,6 +427,42 @@ impl EngineCore {
             rx.recv().unwrap()?
         }
         Ok(cs)
+    }
+
+    // get_all_shard_id_vers collects all the id and vers of the engine.
+    // To prevent the shard change during the iteration, we iterate twice and make sure there is
+    // no change during the iteration.
+    // Use this method first, then get each shard by id to reduce lock contention.
+    pub fn get_all_shard_id_vers(&self) -> Vec<IDVer> {
+        loop {
+            let id_vers = self.collect_shard_id_vers();
+            let id_vers_set = HashSet::<_>::from_iter(id_vers.iter());
+            let recheck = self.collect_shard_id_vers();
+            if recheck.len() == id_vers_set.len()
+                && recheck.iter().all(|id_ver| id_vers_set.contains(id_ver))
+            {
+                return id_vers;
+            }
+        }
+    }
+
+    fn collect_shard_id_vers(&self) -> Vec<IDVer> {
+        self.shards
+            .iter()
+            .map(|x| IDVer::new(x.id, x.ver))
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+pub struct IDVer {
+    pub id: u64,
+    pub ver: u64,
+}
+
+impl IDVer {
+    pub fn new(id: u64, ver: u64) -> Self {
+        Self { id, ver }
     }
 }
 

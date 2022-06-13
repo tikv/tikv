@@ -276,6 +276,10 @@ pub struct Config {
     pub reactive_memory_lock_timeout_tick: usize,
     // Interval of scheduling a tick to report region buckets.
     pub report_region_buckets_tick_interval: ReadableDuration,
+
+    // cloud engine configs
+    pub local_file_gc_tick_interval: ReadableDuration,
+    pub local_file_gc_timeout: ReadableDuration,
 }
 
 impl Default for Config {
@@ -366,6 +370,10 @@ impl Default for Config {
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
+
+            // cloud engine configs
+            local_file_gc_tick_interval: ReadableDuration::minutes(10),
+            local_file_gc_timeout: ReadableDuration::minutes(30),
         }
     }
 }
@@ -622,6 +630,18 @@ impl Config {
 
         if self.renew_leader_lease_advance_duration.as_millis() == 0 && self.hibernate_regions {
             self.renew_leader_lease_advance_duration = self.raft_store_max_leader_lease / 4;
+        }
+
+        if self.local_file_gc_timeout.as_millis() < self.local_file_gc_tick_interval.as_millis() {
+            return Err(box_err!(
+                "local file gc timeout should be no less than local_file_gc_tick_interval"
+            ));
+        }
+
+        if self.local_file_gc_tick_interval.as_millis() < self.raft_base_tick_interval.as_millis() {
+            return Err(box_err!(
+                "local_file_gc_tick_interval should be at lest than raft_base_tick_interval"
+            ));
         }
 
         Ok(())

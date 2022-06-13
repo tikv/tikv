@@ -363,3 +363,26 @@ x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
 x-build-dist: export X_PACKAGE=tikv-server tikv-ctl
 x-build-dist:
 	bash scripts/run-cargo.sh
+
+# Build with debug flag as if it were for distribution, but without
+# additional sanity checks and file movement.
+build_dist_debug: export TIKV_PROFILE=dist_debug
+build_dist_debug:
+	make x-build-dist-debug
+ifeq ($(shell uname),Linux) # Macs don't have objcopy
+	# Reduce binary size by compressing binaries.
+	# FIXME: Currently errors with `Couldn't find DIE referenced by DW_AT_abstract_origin`
+	# dwz ${CARGO_TARGET_DIR}/debug/tikv-server
+	# FIXME: https://sourceware.org/bugzilla/show_bug.cgi?id=24764
+	# dwz ${CARGO_TARGET_DIR}/debug/tikv-ctl
+	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/debug/tikv-server
+	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/debug/tikv-ctl
+endif
+
+x-build-dist-debug: export X_CARGO_CMD=build
+x-build-dist-debug: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-build-dist-debug: export X_CARGO_RELEASE=0
+x-build-dist-debug: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
+x-build-dist-debug: export X_PACKAGE=tikv-server tikv-ctl
+x-build-dist-debug:
+	bash scripts/run-cargo.sh

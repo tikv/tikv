@@ -84,6 +84,7 @@ pub enum StoreMsg {
         end: Vec<u8>,
         callback: Box<dyn FnOnce(Vec<RegionIDVer>) + Send>,
     },
+    Stop,
 }
 
 #[derive(Debug)]

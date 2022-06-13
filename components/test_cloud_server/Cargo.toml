@@ -16,3 +16,4 @@ tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore" }
 test_util = { path = "../test_util" }
 tikv = { path = "../.." }
+tikv_util = { path = "../tikv_util" }

@@ -43,12 +43,10 @@ impl EngineStats {
 
 impl super::Engine {
     pub fn get_all_shard_stats(&self) -> Vec<ShardStats> {
-        let mut shard_stats = Vec::with_capacity(self.shards.len());
-        for shard in self.shards.iter() {
-            let stats = shard.get_stats();
-            shard_stats.push(stats)
-        }
-        shard_stats
+        self.get_all_shard_id_vers()
+            .into_iter()
+            .filter_map(|id_ver| self.get_shard(id_ver.id).map(|shard| shard.get_stats()))
+            .collect()
     }
 
     pub fn get_shard_stat(&self, region_id: u64) -> ShardStats {

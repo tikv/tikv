@@ -37,6 +37,7 @@ impl Ticker {
         let schedules = vec![
             TickSchedule::new(config.pd_store_heartbeat_tick_interval.as_millis() / base_interval),
             TickSchedule::new(config.update_safe_ts_interval.as_millis() / base_interval),
+            TickSchedule::new(config.local_file_gc_timeout.as_millis() / base_interval),
         ];
         Self { tick: 0, schedules }
     }
@@ -90,3 +91,4 @@ pub struct StoreTick {
 
 pub(crate) const STORE_TICK_PD_HEARTBEAT: StoreTick = StoreTick { idx: 0 };
 pub(crate) const STORE_TICK_UPDATE_SAFE_TS: StoreTick = StoreTick { idx: 1 };
+pub(crate) const STORE_TICK_LOCAL_FILE_GC: StoreTick = StoreTick { idx: 2 };
