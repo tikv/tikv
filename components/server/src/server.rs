@@ -1258,11 +1258,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 // if cpu quota is not specified, try capping it to half of the core number
                 if quota_limiter.background_cputime_limiter().is_infinite() {
                     quota_limiter.set_background_cpu_time_limit(
-                        1000_f64
+                        (1000_f64
                             * f64::max(
                                 BACKGROUND_REQUEST_CORE_LOWER_BOUND,
                                 SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO,
-                            ),
+                            )) as usize,
                     );
 
                     info!("cpu_time_limiter tuned for backend request";
@@ -1287,22 +1287,22 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                         // if cpu_util >= SYSTEM_BUSY_THRESHOLD {
                         if cpu_util >= cpu_busy {
                             quota_limiter.set_background_cpu_time_limit(
-                                1_000_f64
+                                (1_000_f64
                                     * f64::max(
                                         quota_limiter.background_cputime_limiter() / 1_000_000.0
                                             - cpu_quota_pace,
                                         BACKGROUND_REQUEST_CORE_LOWER_BOUND,
-                                    ),
+                                    )) as usize,
                             );
                         } else if cpu_util < cpu_healthy {
                             quota_limiter.set_background_cpu_time_limit(
-                                1_000_f64
+                                (1_000_f64
                                     * f64::min(
                                         quota_limiter.background_cputime_limiter() / 1_000_000.0
                                             + cpu_quota_pace,
                                         SysQuota::cpu_cores_quota()
                                             * BACKGROUND_REQUEST_CORE_MAX_RATIO,
-                                    ),
+                                    )) as usize,
                             );
                         }
 

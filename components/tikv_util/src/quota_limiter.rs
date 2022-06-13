@@ -188,7 +188,7 @@ impl QuotaLimiter {
             .set_speed_limit(Self::speed_limit(read_bandwidth.0 as f64));
     }
 
-    pub fn set_background_cpu_time_limit(&self, quota_limit: f64) {
+    pub fn set_background_cpu_time_limit(&self, quota_limit: usize) {
         self.background_cputime_limiter
             .set_speed_limit(Self::speed_limit(quota_limit as f64 * 1000_f64));
     }
@@ -519,7 +519,7 @@ mod tests {
         // ThreadTime elapsed time is not long.
         assert!(thread_start_time.elapsed() < Duration::from_millis(50));
 
-        quota_limiter.set_background_cpu_time_limit(2000.0);
+        quota_limiter.set_background_cpu_time_limit(2000);
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(200));
         let should_delay = block_on(quota_limiter.async_background_consume(sample));
@@ -545,7 +545,7 @@ mod tests {
         check_duration(should_delay, Duration::from_millis(40));
 
         // test change limiter to 0
-        quota_limiter.set_background_cpu_time_limit(0.0);
+        quota_limiter.set_background_cpu_time_limit(0);
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(100));
         let should_delay = block_on(quota_limiter.async_background_consume(sample));
