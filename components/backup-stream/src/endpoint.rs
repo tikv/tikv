@@ -47,7 +47,7 @@ use crate::{
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
-    router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL},
+    router::{ApplyEvents, Router},
     subscription_manager::RegionSubscriptionManager,
     subscription_track::SubscriptionTracer,
     try_send,
@@ -215,9 +215,9 @@ where
 
     async fn starts_flush_ticks(router: Router) {
         loop {
-            // check every 15s.
+            // check every 5s.
             // TODO: maybe use global timer handle in the `tikv_utils::timer` (instead of enabling timing in the current runtime)?
-            tokio::time::sleep(Duration::from_secs(FLUSH_STORAGE_INTERVAL / 20)).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
             debug!("backup stream trigger flush tick");
             router.tick().await;
         }
