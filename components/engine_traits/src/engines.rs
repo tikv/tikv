@@ -7,6 +7,7 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct Engines<K, R> {
+    // kv can be either global kv store, or the tablet in multirocks version.
     pub kv: K,
     pub raft: R,
 }
