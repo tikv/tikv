@@ -82,6 +82,10 @@
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
 
+#![cfg_attr(test, feature(test))]
+#![cfg_attr(test, feature(custom_test_frameworks))]
+#![cfg_attr(test, test_runner(runner::run_env_conditional_tests))]
+
 #[cfg(feature = "jemalloc")]
 #[macro_use]
 extern crate lazy_static;
@@ -124,3 +128,44 @@ pub use crate::{imp::*, trace::*};
 
 #[global_allocator]
 static ALLOC: imp::Allocator = imp::allocator();
+
+#[cfg(test)]
+mod runner {
+    extern crate test;
+    use test::*;
+
+    pub fn run_env_conditional_tests(cases: &[&TestDescAndFn]) {
+        let cases: Vec<_> = cases
+            .iter()
+            .map(|case| {
+                let mut desc = case.desc.clone();
+                let testfn = match case.testfn {
+                    TestFn::StaticTestFn(f) => TestFn::DynTestFn(Box::new(move || {
+                        f();
+                    })),
+                    TestFn::StaticBenchFn(f) => TestFn::DynTestFn(Box::new(move || {
+                        bench::run_once(move |b| f(b));
+                    })),
+                    ref f => panic!("unexpected testfn {:?}", f),
+                };
+                if !desc.ignore {
+                    let name = desc.name.as_slice().to_owned();
+                    if let Some(idx) = name.find("_where_") {
+                        let v = &name[idx + 7..];
+                        if !v.is_empty()
+                            && !v.chars().any(|c| c.is_ascii_lowercase())
+                            && !std::env::var(v).is_ok()
+                        {
+                            desc.ignore = true;
+                            // TODO: uncomment this on a toolchain > 2022-02-25
+                            // desc.ignore_message = Some("required environment variable not set");
+                        }
+                    }
+                }
+                TestDescAndFn { desc, testfn }
+            })
+            .collect();
+        let args = std::env::args().collect::<Vec<_>>();
+        test_main(&args, cases, None)
+    }
+}

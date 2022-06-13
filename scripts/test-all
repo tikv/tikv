@@ -19,8 +19,8 @@ fi
 # Fortunately rebuilding with the mem-profiling feature will only
 # rebuild starting at jemalloc-sys.
 if [[ "$(uname)" == "Linux" ]]; then
-    export MALLOC_CONF=prof:true,prof_active:false
-    ./scripts/test -p tikv -p tikv_alloc --lib "$@" -- --nocapture --ignored
+    export MALLOC_CONF=prof:true
+    ./scripts/test "$@" -- --nocapture
 fi
 
 if [[ "$(uname)" = "Linux" ]]; then
