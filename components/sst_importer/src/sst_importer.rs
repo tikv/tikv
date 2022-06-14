@@ -4,7 +4,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     fs::File,
-    io::{prelude::*, BufReader},
+    io::{self, prelude::*, BufReader},
     ops::Bound,
     path::{Path, PathBuf},
     sync::Arc,
@@ -230,16 +230,26 @@ impl SstImporter {
         dst_file: std::path::PathBuf,
         backend: &StorageBackend,
         expect_sha256: Option<Vec<u8>>,
+        support_kms: bool,
         file_crypter: Option<FileEncryptionInfo>,
         speed_limiter: &Limiter,
     ) -> Result<()> {
         let start_read = Instant::now();
+        if let Some(p) = dst_file.parent() {
+            file_system::create_dir_all(p).or_else(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })?;
+        }
         // prepare to download the file from the external_storage
         // TODO: pass a config to support hdfs
         let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
         let url = ext_storage.url()?.to_string();
 
-        let ext_storage: Box<dyn external_storage_export::ExternalStorage> =
+        let ext_storage: Box<dyn external_storage_export::ExternalStorage> = if support_kms {
             if let Some(key_manager) = &self.key_manager {
                 Box::new(external_storage_export::EncryptedExternalStorage {
                     key_manager: (*key_manager).clone(),
@@ -247,7 +257,10 @@ impl SstImporter {
                 }) as _
             } else {
                 ext_storage as _
-            };
+            }
+        } else {
+            ext_storage as _
+        };
 
         let result = ext_storage.restore(
             src_file_name,
@@ -313,6 +326,10 @@ impl SstImporter {
             path.temp.clone(),
             backend,
             expected_sha256,
+            // kv-files needn't are decrypted with KMS when download currently because these files are not encrypted when log-backup.
+            // It is different from sst-files because sst-files is encrypted when saved with rocksdb env with KMS.
+            // to do: support KMS when log-backup and restore point.
+            false,
             // don't support encrypt for now.
             None,
             speed_limiter,
@@ -321,7 +338,13 @@ impl SstImporter {
 
         if let Some(p) = path.save.parent() {
             // we have v1 prefix in file name.
-            file_system::create_dir_all(p)?;
+            file_system::create_dir_all(p).or_else(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })?;
         }
         file_system::rename(path.temp, path.save.clone())?;
 
@@ -474,6 +497,7 @@ impl SstImporter {
             path.temp.clone(),
             backend,
             None,
+            true,
             file_crypter,
             speed_limiter,
         )?;
@@ -761,7 +785,7 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
+    use std::io::{self, BufWriter};
 
     use engine_traits::{
         collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
@@ -772,7 +796,7 @@ mod tests {
     use tempfile::Builder;
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::stream::block_on_external_io;
+    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
 
@@ -926,6 +950,15 @@ mod tests {
         }
     }
 
+    fn check_file_is_same(path_a: &Path, path_b: &Path) -> bool {
+        assert!(path_a.exists());
+        assert!(path_b.exists());
+
+        let content_a = file_system::read(path_a).unwrap();
+        let content_b = file_system::read(path_b).unwrap();
+        content_a == content_b
+    }
+
     fn new_key_manager_for_test() -> (tempfile::TempDir, Arc<DataKeyManager>) {
         // test with tde
         let tmp_dir = tempfile::TempDir::new().unwrap();
@@ -979,6 +1012,41 @@ mod tests {
             writer.put(b"zt123_r13", b"www")?;
             Ok(())
         })
+    }
+
+    fn create_sample_external_kv_file() -> Result<(tempfile::TempDir, StorageBackend, KvMeta)> {
+        let ext_dir = tempfile::tempdir()?;
+        let file_name = "v1/t000001/abc.log";
+        let file_path = ext_dir.path().join(file_name);
+        std::fs::create_dir_all(file_path.parent().unwrap())?;
+        let file = File::create(file_path).unwrap();
+        let mut buff = BufWriter::new(file);
+
+        let kvs = vec![
+            (b"t1_r01".to_vec(), b"tidb".to_vec()),
+            (b"t1_r02".to_vec(), b"tikv".to_vec()),
+            (b"t1_r03".to_vec(), b"pingcap".to_vec()),
+        ];
+
+        let mut sha256 = Hasher::new(MessageDigest::sha256()).unwrap();
+        let mut len = 0;
+        for kv in kvs {
+            let encoded = EventEncoder::encode_event(&kv.0, &kv.1);
+            for slice in encoded {
+                len += buff.write(slice.as_ref()).unwrap();
+                sha256.update(slice.as_ref()).unwrap();
+            }
+        }
+
+        let mut kv_meta = KvMeta::default();
+        kv_meta.set_name(file_name.to_string());
+        kv_meta.set_cf(String::from("default"));
+        kv_meta.set_is_delete(false);
+        kv_meta.set_length(len as _);
+        kv_meta.set_sha256(sha256.finish().unwrap().to_vec());
+
+        let backend = external_storage_export::make_local_backend(ext_dir.path());
+        Ok((ext_dir, backend, kv_meta))
     }
 
     fn create_sample_external_rawkv_sst_file(
@@ -1154,6 +1222,78 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn test_download_file_from_external_storage_for_sst() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+
+        // create importer object.
+        let import_dir = tempfile::tempdir().unwrap();
+        let (_, key_manager) = new_key_manager_for_test();
+        let importer = SstImporter::new(
+            &Config::default(),
+            import_dir,
+            Some(key_manager.clone()),
+            ApiVersion::V1,
+        )
+        .unwrap();
+
+        // perform download file into .temp dir.
+        let file_name = "sample.sst";
+        let path = importer.dir.get_import_path(file_name).unwrap();
+        importer
+            .download_file_from_external_storage(
+                meta.get_length(),
+                file_name,
+                path.temp.clone(),
+                &backend,
+                None,
+                true,
+                None,
+                &Limiter::new(f64::INFINITY),
+            )
+            .unwrap();
+        check_file_exists(&path.temp, Some(&key_manager));
+        assert!(!check_file_is_same(
+            &_ext_sst_dir.path().join(file_name),
+            &path.temp,
+        ));
+    }
+
+    #[test]
+    fn test_download_file_from_external_storage_for_kv() {
+        let (_temp_dir, backend, kv_meta) = create_sample_external_kv_file().unwrap();
+        let (_, key_manager) = new_key_manager_for_test();
+
+        let import_dir = tempfile::tempdir().unwrap();
+        let importer = SstImporter::new(
+            &Config::default(),
+            import_dir,
+            Some(key_manager),
+            ApiVersion::V1,
+        )
+        .unwrap();
+
+        let path = importer.dir.get_import_path(kv_meta.get_name()).unwrap();
+        importer
+            .download_file_from_external_storage(
+                kv_meta.get_length(),
+                kv_meta.get_name(),
+                path.temp.clone(),
+                &backend,
+                Some(kv_meta.get_sha256().to_vec()),
+                false,
+                None,
+                &Limiter::new(f64::INFINITY),
+            )
+            .unwrap();
+
+        assert!(check_file_is_same(
+            &_temp_dir.path().join(kv_meta.get_name()),
+            &path.temp,
+        ));
     }
 
     #[test]
