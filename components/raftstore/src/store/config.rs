@@ -83,6 +83,9 @@ pub struct Config {
     pub raft_engine_purge_interval: ReadableDuration,
     // When a peer is not responding for this time, leader will not keep entry cache for it.
     pub raft_entry_cache_life_time: ReadableDuration,
+    // when memory insufficient, shile some peer hearbeat missing for this time,
+    // leader will not keep entry cache for it.
+    pub raft_entry_cache_reclaim_time: ReadableDuration,
     // Deprecated! The configuration has no effect.
     // They are preserved for compatibility check.
     // When a peer is newly added, reject transferring leader to the peer for a while.
@@ -303,6 +306,7 @@ impl Default for Config {
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
             raft_entry_cache_life_time: ReadableDuration::secs(30),
+            raft_entry_cache_reclaim_time: ReadableDuration::secs(5),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: None,

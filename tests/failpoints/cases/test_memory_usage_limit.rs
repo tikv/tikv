@@ -33,13 +33,19 @@ fn test_memory_usage_reaches_high_water() {
 fn test_evict_entry_cache() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
-    // Don't consider life time when clearing entry cache.
+
+    // disable the common raft log gc.
     cluster.cfg.raft_store.raft_entry_cache_life_time = ReadableDuration::secs(1000);
+
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
+    // set the lifetime when need to reclaim.
+    cluster.cfg.raft_store.raft_entry_cache_reclaim_time = ReadableDuration::millis(500);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // Don't compact raft log even if failpoint `on_raft_gc_log_tick` is disabled.
+    // This filter will generate a failed sned from the leader side, and make the
+    // progress state to probe.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 3)
             .direction(Direction::Recv)
@@ -52,7 +58,7 @@ fn test_evict_entry_cache() {
 
     let value = vec![b'x'; 1024];
     for i in 0..100 {
-        let k = format!("k{:02}", i).into_bytes();
+        let k = format!("k{:03}", i).into_bytes();
         cluster.must_put(&k, &value);
         must_get_equal(&cluster.get_engine(1), &k, &value);
     }
@@ -66,10 +72,17 @@ fn test_evict_entry_cache() {
     fail::cfg("needs_evict_entry_cache", "return").unwrap();
     fail::cfg("on_raft_gc_log_tick_1", "off").unwrap();
 
-    sleep_ms(500); // Wait to trigger a raft log compaction.
+    sleep_ms(1000); // wait to reclaim memory.
+    let k = format!("k{:03}", 100).into_bytes();
+    cluster.must_put(&k, &value);
+
     let entry_cache_size = MEMTRACE_ENTRY_CACHE.sum();
-    // Entries on store 1 will be evict even if they are still in life time.
-    assert!(entry_cache_size < 50 * 1024);
+    // 10 here is only an estimated test value.
+    assert!(
+        entry_cache_size < 10 * 1024,
+        "entry cache size = {}",
+        entry_cache_size
+    );
 
     fail::cfg("memory_usage_reaches_high_water", "off").unwrap();
     fail::cfg("needs_evict_entry_cache", "off").unwrap();
