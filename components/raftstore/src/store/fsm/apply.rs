@@ -5635,11 +5635,12 @@ mod tests {
                 region_epoch,
                 cmd: ChangeObserver::from_cdc(2, observe_handle),
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
-                    assert!(resp
-                        .response
-                        .get_header()
-                        .get_error()
-                        .has_region_not_found());
+                    assert!(
+                        resp.response
+                            .get_header()
+                            .get_error()
+                            .has_region_not_found()
+                    );
                     assert!(resp.snapshot.is_none());
                 })),
             },
