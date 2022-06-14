@@ -1235,8 +1235,6 @@ impl Initializer {
             .unwrap();
         let conn_id = self.conn_id;
         let mut done = false;
-<<<<<<< HEAD
-=======
         let start = Instant::now_coarse();
 
         let curr_state = self.downstream_state.load();
@@ -1253,7 +1251,6 @@ impl Initializer {
             Err(box_err!("scan canceled"))
         };
 
->>>>>>> b5572fcd1... cdc: don't emit resolved timestamps before scan (#12156)
         while !done {
             // When downstream_state is Stopped, it means the corresponding
             // delegate is stopped. The initialization can be safely canceled.
