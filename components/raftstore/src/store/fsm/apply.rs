@@ -520,12 +520,13 @@ where
             self.pending_ssts = vec![];
         }
         if !self.kv_wb_mut().is_empty() {
+            self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            self.perf_context.report_metrics();
+            self.perf_context.report_metrics(&[]); // TODO: pass in request trackers
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -3819,7 +3820,6 @@ where
             }
             update_cfg(&incoming.apply_batch_system);
         }
-        self.apply_ctx.perf_context.start_observe();
     }
 
     fn handle_control(&mut self, control: &mut ControlFsm) -> Option<usize> {

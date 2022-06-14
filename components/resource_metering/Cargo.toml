@@ -25,9 +25,6 @@ tikv_util = { path = "../tikv_util" }
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 
-[target.'cfg(not(target_os = "linux"))'.dependencies]
-thread-id = "4"
-
 [dev-dependencies]
 rand = "0.8"
 
