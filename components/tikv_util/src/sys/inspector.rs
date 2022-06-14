@@ -8,12 +8,12 @@ pub struct IoStat {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DiskStat {
-    pub reads: usize,
-    pub time_reading: usize,
-    pub writes: usize,
-    pub time_writing: usize,
-    pub sectors_read: usize,
-    pub sectors_write: usize,
+    pub reads: u64,
+    pub time_reading: u64,
+    pub writes: u64,
+    pub time_writing: u64,
+    pub sectors_read: u64,
+    pub sectors_write: u64,
 }
 
 /// An inspector for a thread.
