@@ -148,7 +148,8 @@ mod runner {
                 };
                 if let Some(msg) = desc.ignore_message {
                     let keyword = "#ifdef";
-                    if let Some(var_name) = msg.strip_prefix(keyword) {
+                    if let Some(s) = msg.strip_prefix(keyword) {
+                        let var_name = s.trim();
                         if var_name.is_empty() || std::env::var(var_name).is_ok() {
                             desc.ignore = false;
                             desc.ignore_message = None;
