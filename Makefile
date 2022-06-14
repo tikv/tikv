@@ -439,10 +439,16 @@ ifeq ($(shell uname),Linux) # Macs don't have objcopy
 	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/debug/tikv-ctl
 endif
 
+ifeq ($(TIKV_FRAME_POINTER),1)
+x-build-dist-debug: ENABLE_FEATURES += pprof-fp
+else
+x-build-dist-debug: ENABLE_FEATURES += pprof-dwarf
+endif
 x-build-dist-debug: export X_CARGO_CMD=build
 x-build-dist-debug: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-dist-debug: export X_CARGO_RELEASE=0
 x-build-dist-debug: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
+x-build-dist-debug: export X_CARGO_TARGET_DIR=${CARGO_TARGET_DIR}
 x-build-dist-debug: export X_PACKAGE=tikv-server tikv-ctl
 x-build-dist-debug:
 	bash scripts/run-cargo.sh
