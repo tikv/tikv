@@ -61,4 +61,6 @@ jobs:
         env:
           CARGO_INCREMENTAL: "0"
         working-directory: ./
-        run: cargo test --package cloud_server --package rfstore --package  rfengine --package kvengine --tests
+        run: |
+          cargo test -p rfstore -p rfengine -p kvengine --tests
+          cargo test -p tests --test cloud_engine

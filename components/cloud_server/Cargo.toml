@@ -63,7 +63,6 @@ openssl = "0.10"
 paste = "1.0"
 pd_client = { path = "../pd_client", default-features = false }
 pin-project = "1.0"
-pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf"] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 promptly = "0.3.0"
