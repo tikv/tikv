@@ -603,7 +603,13 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_add_peer(region_id, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(3, 3));
+
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.must_put(b"k2", b"v2");
+    for id in 1..=3 {
+        must_get_equal(&cluster.get_engine(id), b"k2", b"v2");
+    }
 
     // Any up-to-date follower can become leader.
     cluster.transfer_leader(region_id, new_peer(3, 3));
