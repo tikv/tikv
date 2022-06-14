@@ -3,6 +3,7 @@
 use std::{
     fmt,
     marker::PhantomData,
+    panic::resume_unwind,
     path::PathBuf,
     sync::{atomic::Ordering, Arc},
     time::Duration,
@@ -593,8 +594,14 @@ where
 
     fn remove_metrics_after_unregister(&self, task: &str) {
         // remove metrics of the task so it won't mislead the metrics.
-        metrics::STORE_CHECKPOINT_TS.remove_label_values(&[task]);
-        metrics::remove_task_status_metric(task);
+        metrics::STORE_CHECKPOINT_TS
+            .remove_label_values(&[task])
+            .map_err(
+                |err| info!("failed to remove checkpoint ts metric"; "task" => task, "err" => %err),
+            );
+        metrics::remove_task_status_metric(task).map_err(
+            |err| info!("failed to remove checkpoint ts metric"; "task" => task, "err" => %err),
+        );
     }
 
     /// unload a task from memory: this would stop observe the changes required by the task temporarily.
