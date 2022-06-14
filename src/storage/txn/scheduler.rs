@@ -414,8 +414,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
         let cid = self.inner.gen_id();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
         let tracker = get_tls_tracker_token();
+        debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
@@ -542,6 +542,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         debug!(
                             "process cmd with snapshot";
                             "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
+                            "trakcer" => ?task.tracker
                         );
                         sched.process(snapshot, task).await;
                     }
