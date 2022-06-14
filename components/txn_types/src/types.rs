@@ -21,8 +21,10 @@ use super::timestamp::TimeStamp;
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 
-pub fn is_short_value(value: &[u8]) -> bool {
-    value.len() <= SHORT_VALUE_MAX_LEN
+pub fn is_short_value(_value: &[u8]) -> bool {
+    // value.len() <= SHORT_VALUE_MAX_LEN
+    // Cloud storage engine always puts value in lock/write-cf.
+    true
 }
 
 /// Value type which is essentially raw bytes.
@@ -465,6 +467,26 @@ impl OldValue {
 // MutationType is the type of mutation of the current write.
 pub type OldValues = HashMap<Key, (OldValue, Option<MutationType>)>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReqType {
+    Noop,
+    PessimisticLock,
+    Prewrite,
+    Commit,
+    PessimisticRollback,
+    CheckTxnStatus,
+    CheckSecondaryLocks,
+    Rollback,
+    ResolveLock,
+    Heartbeat,
+}
+
+impl Default for ReqType {
+    fn default() -> Self {
+        ReqType::Noop
+    }
+}
+
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
 pub struct TxnExtra {
@@ -472,6 +494,7 @@ pub struct TxnExtra {
     // Marks that this transaction is a 1PC transaction. RaftKv should set this flag
     // in the raft command request.
     pub one_pc: bool,
+    pub req_type: ReqType,
 }
 
 impl TxnExtra {

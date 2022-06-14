@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, Lock, WriteType};
+use txn_types::{Key, Lock, ReqType, WriteType};
 
 use crate::storage::{
     kv::WriteData,
@@ -148,6 +148,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         }
         let pr = ProcessResult::SecondaryLocksStatus { status: result };
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_req_type(ReqType::CheckSecondaryLocks);
         write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,

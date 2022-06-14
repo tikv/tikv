@@ -5,7 +5,7 @@ use collections::HashMap;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    mvcc::CloudReader,
+    mvcc::SnapshotReader,
     txn::{
         commands::{Command, CommandExt, ReadCommand, ResolveLock, TypedCommand},
         sched_pool::tls_collect_keyread_histogram_vec,
@@ -46,14 +46,14 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag();
         let (ctx, txn_status) = (self.ctx, self.txn_status);
-        let mut reader = CloudReader::new(snapshot.get_kvengine_snap().unwrap().clone());
+        let mut reader = SnapshotReader::new_with_ctx(TimeStamp::default(), snapshot, &ctx);
         let result = reader.scan_locks(
             self.scan_key.as_ref(),
             None,
             |lock| txn_status.contains_key(&lock.ts),
             RESOLVE_LOCK_BATCH_SIZE,
         );
-        statistics.add(&reader.statistics);
+        statistics.add(&reader.take_statistics());
         let (kv_pairs, has_remain) = result?;
         tls_collect_keyread_histogram_vec(tag.get_str(), kv_pairs.len() as f64);
 

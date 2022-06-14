@@ -192,6 +192,23 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         }
         self.reader.seek_ts(ts)
     }
+
+    pub fn scan_locks<F>(
+        &mut self,
+        start: Option<&Key>,
+        end: Option<&Key>,
+        filter: F,
+        limit: usize,
+    ) -> Result<(Vec<(Key, Lock)>, bool)>
+    where
+        F: Fn(&Lock) -> bool,
+    {
+        if let Some(reader) = &mut self.cloud_reader {
+            reader.scan_locks(start, end, filter, limit)
+        } else {
+            self.reader.scan_locks(start, end, filter, limit)
+        }
+    }
 }
 
 pub struct MvccReader<S: EngineSnapshot> {

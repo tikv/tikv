@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, ReqType, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
@@ -83,6 +83,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             txn_status: TxnStatus::uncommitted(lock, false),
         };
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_req_type(ReqType::Heartbeat);
         write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,

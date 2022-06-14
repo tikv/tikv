@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::{ExtraOp, LockInfo};
-use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
+use txn_types::{Key, OldValues, ReqType, TimeStamp, TxnExtra};
 
 use crate::storage::{
     kv::WriteData,
@@ -145,6 +145,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 old_values: self.old_values,
                 // One pc status is unkown AcquirePessimisticLock stage.
                 one_pc: false,
+                req_type: ReqType::PessimisticLock,
             };
             let write_data = WriteData::new(txn.into_modifies(), extra);
             (pr, write_data, rows, ctx, None)

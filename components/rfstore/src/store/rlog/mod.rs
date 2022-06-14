@@ -3,7 +3,7 @@
 use std::mem;
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 use kvproto::raft_cmdpb::{CustomRequest, RaftCmdRequest};
 use protobuf::Message;
 
@@ -25,6 +25,7 @@ pub const TYPE_PESSIMISTIC_LOCK: CustomRaftlogType = 4;
 pub const TYPE_PESSIMISTIC_ROLLBACK: CustomRaftlogType = 5;
 pub const TYPE_ONE_PC: CustomRaftlogType = 6;
 pub const TYPE_ENGINE_META: CustomRaftlogType = 7;
+pub const TYPE_RESOLVE_LOCK: CustomRaftlogType = 8;
 
 const HEADER_SIZE: usize = 2;
 
@@ -33,21 +34,21 @@ const HEADER_SIZE: usize = 2;
 //
 // It reduces the cost of marshal/unmarshal and avoid DB lookup during apply.
 #[derive(Debug)]
-pub(crate) struct CustomRaftLog<'a> {
+pub struct CustomRaftLog<'a> {
     pub(crate) data: &'a [u8],
 }
 
 impl CustomRaftLog<'a> {
-    pub(crate) fn new_from_data(data: &'a [u8]) -> Self {
+    pub fn new_from_data(data: &'a [u8]) -> Self {
         Self { data }
     }
 
-    pub(crate) fn get_type(&self) -> CustomRaftlogType {
+    pub fn get_type(&self) -> CustomRaftlogType {
         self.data[0] as CustomRaftlogType
     }
 
     // F: (key, val)
-    pub(crate) fn iterate_lock<F>(&self, mut f: F)
+    pub fn iterate_lock<F>(&self, mut f: F)
     where
         F: FnMut(&[u8], &[u8]),
     {
@@ -66,7 +67,7 @@ impl CustomRaftLog<'a> {
     }
 
     // F: (key, commit_ts)
-    pub(crate) fn iterate_commit<F>(&self, mut f: F)
+    pub fn iterate_commit<F>(&self, mut f: F)
     where
         F: FnMut(&[u8], u64),
     {
@@ -82,8 +83,8 @@ impl CustomRaftLog<'a> {
         }
     }
 
-    // F: (key, val, is_extra, start_ts, commit_ts)
-    pub(crate) fn iterate_one_pc<F>(&self, mut f: F)
+    // F: (key, val, is_extra, del_lock, start_ts, commit_ts)
+    pub fn iterate_one_pc<F>(&self, mut f: F)
     where
         F: FnMut(&[u8], &[u8], bool, bool, u64, u64),
     {
@@ -110,7 +111,7 @@ impl CustomRaftLog<'a> {
     }
 
     // F: (key, start_ts, delete_lock)
-    pub(crate) fn iterate_rollback<F>(&self, mut f: F)
+    pub fn iterate_rollback<F>(&self, mut f: F)
     where
         F: FnMut(&[u8], u64, bool),
     {
@@ -128,7 +129,7 @@ impl CustomRaftLog<'a> {
         }
     }
 
-    pub(crate) fn iterate_del_lock<F>(&self, mut f: F)
+    pub fn iterate_del_lock<F>(&self, mut f: F)
     where
         F: FnMut(&[u8]),
     {
@@ -146,6 +147,31 @@ impl CustomRaftLog<'a> {
         let mut cs = kvenginepb::ChangeSet::new();
         cs.merge_from_bytes(&self.data[HEADER_SIZE..])?;
         Ok(cs)
+    }
+
+    pub fn iterate_resolve_lock(&self, mut f: impl FnMut(CustomRaftlogType, &[u8], u64, bool)) {
+        let mut data = &self.data[HEADER_SIZE..];
+        while !data.is_empty() {
+            let tp = data.get_u8() as CustomRaftlogType;
+            match tp {
+                TYPE_COMMIT => {
+                    let key_len = data.get_u16_le() as usize;
+                    let key = &data[..key_len];
+                    data = &data[key_len..];
+                    let commit_ts = data.get_u64_le();
+                    f(tp, key, commit_ts, true);
+                }
+                TYPE_ROLLBACK => {
+                    let key_len = data.get_u16_le() as usize;
+                    let key = &data[..key_len];
+                    data = &data[key_len..];
+                    let start_ts = data.get_u64_le();
+                    let del = data.get_u8() > 0;
+                    f(tp, key, start_ts, del);
+                }
+                _ => unreachable!("unexpected custom raft log type: {:?}", tp),
+            }
+        }
     }
 }
 
@@ -230,6 +256,12 @@ impl CustomBuilder {
 
     pub fn get_type(&self) -> CustomRaftlogType {
         self.buf[0] as CustomRaftlogType
+    }
+
+    // Some custom logs may contains multiple types of logs, e.g., resolve-lock can contain both
+    // commit and rollback. We use type to distinguish them.
+    pub fn append_type(&mut self, tp: CustomRaftlogType) {
+        self.buf.push(tp as u8);
     }
 
     pub fn build(&mut self) -> CustomRequest {

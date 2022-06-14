@@ -11,7 +11,9 @@ use std::mem;
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::{AssertionLevel, ExtraOp};
 use tikv_kv::SnapshotExt;
-use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
+use txn_types::{
+    Key, Mutation, OldValue, OldValues, ReqType, TimeStamp, TxnExtra, Write, WriteType,
+};
 
 use super::ReaderWithStats;
 use crate::storage::{
@@ -612,6 +614,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 old_values: self.old_values,
                 // Set one_pc flag in TxnExtra to let CDC skip handling the resolver.
                 one_pc: self.try_one_pc,
+                req_type: ReqType::Prewrite,
             };
             // Here the lock guards are taken and will be released after the write finishes.
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards

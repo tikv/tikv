@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::mem;
 
-use txn_types::{Key, LockType, TimeStamp};
+use txn_types::{Key, LockType, ReqType, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
@@ -83,6 +83,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
         released_locks.wake_up(context.lock_mgr);
 
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_req_type(ReqType::PessimisticRollback);
         write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,

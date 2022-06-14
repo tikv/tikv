@@ -39,7 +39,7 @@ use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape, time::ThreadReadId};
-use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
+use txn_types::{Key, PessimisticLock, ReqType, TimeStamp, TxnExtra, Value};
 
 pub use self::{
     btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot},
@@ -241,6 +241,10 @@ impl WriteData {
 
     pub fn set_disk_full_opt(&mut self, level: DiskFullOpt) {
         self.disk_full_opt = level
+    }
+
+    pub fn set_req_type(&mut self, tp: ReqType) {
+        self.extra.req_type = tp;
     }
 }
 

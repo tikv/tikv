@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use collections::HashMap;
-use txn_types::{Key, Lock, TimeStamp};
+use txn_types::{Key, Lock, ReqType, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
@@ -146,6 +146,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             }
         };
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_req_type(ReqType::ResolveLock);
         write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,

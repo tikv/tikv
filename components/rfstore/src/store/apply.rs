@@ -486,8 +486,8 @@ impl Applier {
                     wb.delete(mvcc::LOCK_CF, k, 0);
                 }
             }),
-            TYPE_ROLLBACK => cl.iterate_rollback(|k, start_ts, delete_lock| {
-                self.rollback(wb, k, start_ts, delete_lock);
+            TYPE_ROLLBACK => cl.iterate_rollback(|k, start_ts, del_lock| {
+                self.rollback(wb, k, start_ts, del_lock);
             }),
             TYPE_PESSIMISTIC_ROLLBACK => {
                 cl.iterate_del_lock(|k| {
@@ -504,6 +504,11 @@ impl Applier {
                     wb.set_property(cs.get_property_key(), cs.get_property_value());
                 }
             }
+            TYPE_RESOLVE_LOCK => cl.iterate_resolve_lock(|tp, k, ts, del_lock| match tp {
+                TYPE_COMMIT => self.commit_lock(engine, wb, k, ts, log_index),
+                TYPE_ROLLBACK => self.rollback(wb, k, ts, del_lock),
+                _ => unreachable!("unexpected custom log type: {:?}", tp),
+            }),
             _ => panic!("unknown custom log type"),
         }
         let timer = Instant::now();

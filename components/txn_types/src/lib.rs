@@ -18,7 +18,7 @@ pub use lock::{Lock, LockType, PessimisticLock};
 use thiserror::Error;
 pub use timestamp::{TimeStamp, TsSet};
 pub use types::{
-    is_short_value, Key, KvPair, Mutation, MutationType, OldValue, OldValues, TxnExtra,
+    is_short_value, Key, KvPair, Mutation, MutationType, OldValue, OldValues, ReqType, TxnExtra,
     TxnExtraScheduler, Value, WriteBatchFlags, SHORT_VALUE_MAX_LEN,
 };
 pub use write::{Write, WriteRef, WriteType};
