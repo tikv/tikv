@@ -602,12 +602,14 @@ where
 
     pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
         let info = self.unload_task(task);
-
-        // reset the checkpoint ts of the task so it won't mislead the metrics.
-        metrics::STORE_CHECKPOINT_TS
-            .with_label_values(&[task])
-            .set(0);
+        self.remove_metrics_after_unregister(task);
         info
+    }
+
+    fn remove_metrics_after_unregister(&self, task: &str) {
+        // remove metrics of the task so it won't mislead the metrics.
+        metrics::STORE_CHECKPOINT_TS.remove_label_values(&[task]);
+        metrics::remove_task_status_metric(task);
     }
 
     /// unload a task from memory: this would stop observe the changes required by the task temporarily.
