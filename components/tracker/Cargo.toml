@@ -1,0 +1,14 @@
+[package]
+name = "tracker"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+collections = { path = "../../components/collections" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+lazy_static = "1"
+parking_lot = "0.12"
+pin-project = "1"
+prometheus = "0.13"
+slab = "0.4"

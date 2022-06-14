@@ -1503,7 +1503,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         }
         let factory = builder.build();
         let kv_engine = factory
-            .create_tablet()
+            .create_shared_db()
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
         let engines = Engines::new(kv_engine, raft_engine);
 

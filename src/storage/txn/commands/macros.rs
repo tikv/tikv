@@ -79,6 +79,41 @@ macro_rules! command {
                 write!(f, "{}", self)
             }
         }
+    };
+    (
+        $(#[$outer_doc: meta])*
+        $cmd: ident:
+            cmd_ty => $cmd_ty: ty,
+            content => {
+                $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
+            }
+    ) => {
+        $(#[$outer_doc])*
+        pub struct $cmd {
+            pub ctx: crate::storage::Context,
+            pub deadline: ::tikv_util::deadline::Deadline,
+            $($(#[$inner_doc])* pub $arg: $arg_ty,)*
+        }
+
+        impl $cmd {
+            /// Return a `TypedCommand` that encapsulates the result of executing this command.
+            pub fn new(
+                $($arg: $arg_ty,)*
+                ctx: crate::storage::Context,
+            ) -> TypedCommand<$cmd_ty> {
+                let execution_duration_limit = if ctx.max_execution_duration_ms == 0 {
+                    crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT
+                } else {
+                    ::std::time::Duration::from_millis(ctx.max_execution_duration_ms)
+                };
+                let deadline = ::tikv_util::deadline::Deadline::from_now(execution_duration_limit);
+                Command::$cmd($cmd {
+                        ctx,
+                        deadline,
+                        $($arg,)*
+                }).into()
+            }
+        }
     }
 }
 
