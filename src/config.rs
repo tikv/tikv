@@ -2474,7 +2474,7 @@ pub struct CdcConfig {
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
-            min_ts_interval: ReadableDuration::secs(1),
+            min_ts_interval: ReadableDuration::millis(200),
             hibernate_regions_compatible: true,
             // 4 threads for incremental scan.
             incremental_scan_threads: 4,
