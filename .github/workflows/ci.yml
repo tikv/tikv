@@ -46,11 +46,6 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: cargo-
-      - name: Run format
-        working-directory: ./
-        run: |
-          make format
-          git diff --quiet
       - name: Run clippy
         working-directory: ./
         run: make clippy
