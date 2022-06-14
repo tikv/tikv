@@ -102,13 +102,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
             return;
         }
         // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
-<<<<<<< HEAD
-        if self.tasks.is_empty() {
-            return;
-        }
-=======
         let start = Instant::now();
->>>>>>> b0fcb5fb5... More metrics for raft log gc (#11376)
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
         });
