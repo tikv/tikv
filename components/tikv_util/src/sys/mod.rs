@@ -57,11 +57,10 @@ impl SysQuota {
     #[cfg(target_os = "linux")]
     pub fn memory_limit_in_bytes() -> u64 {
         let total_mem = Self::sysinfo_memory_limit_in_bytes();
-        let cgroup_memory_limit = SELF_CGROUP.memory_limit_in_bytes();
-        if cgroup_memory_limit <= 0 {
-            total_mem
+        if let Some(cgroup_memory_limit) = SELF_CGROUP.memory_limit_in_bytes() {
+            std::cmp::min(total_mem, cgroup_memory_limit)
         } else {
-            std::cmp::min(total_mem, cgroup_memory_limit as u64)
+            total_mem
         }
     }
 

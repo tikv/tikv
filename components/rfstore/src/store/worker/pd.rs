@@ -541,26 +541,12 @@ impl PdRunner {
         // TODO(x): set slow score
 
         let optional_report = None;
-        let scheduler = self.scheduler.clone();
-        let stats_copy = stats.clone();
         let resp = self.pd_client.store_heartbeat(stats, optional_report, None);
         let f = async move {
             match resp.await {
-                Ok(resp) => {
+                Ok(_resp) => {
                     // TODO(x): UpdateReplicationMode
-                    if resp.get_require_detailed_report() {
-                        info!("required to send detailed report in the next heartbeat");
-                        let task = PdTask::StoreHeartbeat {
-                            stats: stats_copy,
-                            store_info,
-                            send_detailed_report: true,
-                        };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!("notify pd failed"; "err" => ?e);
-                        }
-                    } else if resp.has_plan() {
-                        // TODO(x): handle recovery plan
-                    }
+                    // TODO(x): support recovery plan.
                 }
                 Err(e) => {
                     error!("store heartbeat failed"; "err" => ?e);

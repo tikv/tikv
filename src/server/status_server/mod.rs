@@ -34,7 +34,7 @@ use hyper::{
 };
 use online_config::OnlineConfig;
 use openssl::{
-    ssl::{Ssl, SslAcceptor, SslFiletype, SslMethod, SslVerifyMode},
+    ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
     x509::X509,
 };
 use pin_project::pin_project;
@@ -620,15 +620,7 @@ where
             && !self.security_config.key_path.is_empty()
             && !self.security_config.ca_path.is_empty()
         {
-            let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
-            acceptor.set_ca_file(&self.security_config.ca_path)?;
-            acceptor.set_certificate_chain_file(&self.security_config.cert_path)?;
-            acceptor.set_private_key_file(&self.security_config.key_path, SslFiletype::PEM)?;
-            if !self.security_config.cert_allowed_cn.is_empty() {
-                acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
-            }
-            let acceptor = acceptor.build();
-            let tls_incoming = tls_incoming(acceptor, incoming);
+            let tls_incoming = tls_incoming(self.security_config.clone(), incoming)?;
             let server = Server::builder(tls_incoming);
             self.start_serve(server);
         } else {
@@ -683,11 +675,41 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
     }
 }
 
+fn tls_acceptor(security_config: &SecurityConfig) -> Result<SslAcceptor> {
+    let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
+    acceptor.set_ca_file(&security_config.ca_path)?;
+    acceptor.set_certificate_chain_file(&security_config.cert_path)?;
+    acceptor.set_private_key_file(&security_config.key_path, SslFiletype::PEM)?;
+    if !security_config.cert_allowed_cn.is_empty() {
+        acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+    }
+    Ok(acceptor.build())
+}
+
 fn tls_incoming(
-    acceptor: SslAcceptor,
+    security_config: Arc<SecurityConfig>,
     mut incoming: AddrIncoming,
-) -> impl Accept<Conn = SslStream<AddrStream>, Error = std::io::Error> {
-    let context = acceptor.into_context();
+) -> Result<impl Accept<Conn = SslStream<AddrStream>, Error = std::io::Error>> {
+    let mut context = tls_acceptor(&security_config)?.into_context();
+    let mut cert_last_modified_time = None;
+    let mut handle_ssl_error = move |context: &mut SslContext| {
+        match security_config.is_modified(&mut cert_last_modified_time) {
+            Ok(true) => match tls_acceptor(&security_config) {
+                Ok(acceptor) => {
+                    *context = acceptor.into_context();
+                }
+                Err(e) => {
+                    error!("Failed to reload TLS certificate: {}", e);
+                }
+            },
+            Ok(false) => {
+                // TLS certificate is not changed, do nothing
+            }
+            Err(e) => {
+                error!("Failed to load certificate file metadata: {}", e);
+            }
+        }
+    };
     let s = stream! {
         loop {
             let stream = match poll_fn(|cx| Pin::new(&mut incoming).poll_accept(cx)).await {
@@ -702,6 +724,7 @@ fn tls_incoming(
                 Ok(ssl) => ssl,
                 Err(err) => {
                     error!("Status server error: {}", err);
+                    handle_ssl_error(&mut context);
                     continue;
                 }
             };
@@ -709,6 +732,7 @@ fn tls_incoming(
                 Ok(mut ssl_stream) => match Pin::new(&mut ssl_stream).accept().await {
                     Err(_) => {
                         error!("Status server error: TLS handshake error");
+                        handle_ssl_error(&mut context);
                         continue;
                     },
                     Ok(()) => {
@@ -717,12 +741,13 @@ fn tls_incoming(
                 }
                 Err(err) => {
                     error!("Status server error: {}", err);
+                    handle_ssl_error(&mut context);
                     continue;
                 }
             };
         }
     };
-    TlsIncoming(s)
+    Ok(TlsIncoming(s))
 }
 
 #[pin_project]

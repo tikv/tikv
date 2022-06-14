@@ -550,7 +550,7 @@ impl TiKVServer {
 
         self.config
             .raft_store
-            .validate()
+            .validate(self.config.coprocessor.region_split_size)
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(rfstore::store::Config::from_old(
             &self.config.raft_store,

@@ -24,6 +24,7 @@ use raft::{eraftpb::ConfChangeType, StateRole};
 use raftstore::{
     coprocessor::{
         split_observer::SplitObserver, BoxAdminObserver, CoprocessorHost, RegionChangeEvent,
+        RegionChangeReason,
     },
     store::{
         local_metrics::RaftMetrics,
@@ -369,14 +370,19 @@ impl StoreMeta {
     }
 
     #[inline]
-    pub(crate) fn set_region(&mut self, region: Region, peer: &mut crate::store::Peer) {
+    pub(crate) fn set_region(
+        &mut self,
+        region: Region,
+        peer: &mut crate::store::Peer,
+        reason: RegionChangeReason,
+    ) {
         let region_id = region.get_id();
         let prev = self.regions.insert(region_id, region.clone());
         if prev.map_or(true, |r| r.get_id() != region_id) {
             // TODO: may not be a good idea to panic when holding a lock.
             panic!("{} region corrupted", peer.region_id);
         }
-        peer.set_region(&self.cop_host, region);
+        peer.set_region(&self.cop_host, region, reason);
         self.readers
             .insert(region_id, ReadDelegate::from_peer(peer));
     }
@@ -986,7 +992,9 @@ impl<'a> StoreMsgHandler<'a> {
         let derived_peer = self.get_peer(derived.get_id());
         let mut peer_fsm = derived_peer.peer_fsm.lock().unwrap();
         let region_id = derived.get_id();
-        self.ctx.store_meta.set_region(derived, &mut peer_fsm.peer);
+        self.ctx
+            .store_meta
+            .set_region(derived, &mut peer_fsm.peer, RegionChangeReason::Split);
 
         let is_leader = peer_fsm.peer.is_leader();
         if is_leader {
@@ -1153,7 +1161,7 @@ impl<'a> StoreMsgHandler<'a> {
         } else {
             // Please take a look at test case test_redundant_conf_change_by_snapshot.
         }
-        self.update_region(&mut peer_fsm, cp.region);
+        self.update_region(&mut peer_fsm, cp.region, RegionChangeReason::ChangePeer);
 
         fail_point!("change_peer_after_update_region");
 
@@ -1258,10 +1266,15 @@ impl<'a> StoreMsgHandler<'a> {
         }
     }
 
-    fn update_region(&mut self, peer_fsm: &mut PeerFsm, mut region: metapb::Region) {
+    fn update_region(
+        &mut self,
+        peer_fsm: &mut PeerFsm,
+        mut region: metapb::Region,
+        reason: RegionChangeReason,
+    ) {
         self.ctx
             .store_meta
-            .set_region(region.clone(), &mut peer_fsm.peer);
+            .set_region(region.clone(), &mut peer_fsm.peer, reason);
         write_peer_state(&mut self.ctx.raft_wb, &region);
         for peer in region.take_peers().into_iter() {
             if peer_fsm.peer.peer_id() == peer.get_id() {

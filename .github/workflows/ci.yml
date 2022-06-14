@@ -46,11 +46,6 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: cargo-
-      - name: Run format
-        working-directory: ./
-        run: |
-          make format
-          git diff --quiet
       - name: Run clippy
         working-directory: ./
         run: make clippy
@@ -61,4 +56,6 @@ jobs:
         env:
           CARGO_INCREMENTAL: "0"
         working-directory: ./
-        run: cargo test --package cloud_server --package rfstore --package  rfengine --package kvengine --tests
+        run: |
+          cargo test -p rfstore -p rfengine -p kvengine --tests
+          cargo test -p tests --test cloud_engine

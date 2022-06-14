@@ -6,7 +6,7 @@ use std::{
 };
 
 use engine_rocks::RocksEngine;
-use grpcio::EnvBuilder;
+use grpcio::{EnvBuilder, ResourceQuota};
 use raft_log_engine::RaftLogEngine;
 use raftstore::store::{fsm::create_raft_batch_system, SnapManager};
 use security::SecurityManager;
@@ -54,6 +54,7 @@ fn start_server(
         Box::new(ServerConfigManager::new(
             snap_worker_scheduler,
             server_config.clone(),
+            ResourceQuota::new(None),
         )),
     );
     let snap_runner = SnapHandler::new(

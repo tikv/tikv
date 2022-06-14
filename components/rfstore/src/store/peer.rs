@@ -38,7 +38,7 @@ use raft_proto::{
 };
 use raftstore::{
     coprocessor,
-    coprocessor::RoleChange,
+    coprocessor::{RegionChangeReason, RoleChange},
     store::{
         local_metrics::*,
         metrics::*,
@@ -616,6 +616,7 @@ impl Peer {
         &mut self,
         host: &coprocessor::CoprocessorHost<kvengine::Engine>,
         region: metapb::Region,
+        reason: RegionChangeReason,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
@@ -627,7 +628,7 @@ impl Peer {
         if !self.pending_remove {
             host.on_region_changed(
                 self.region(),
-                coprocessor::RegionChangeEvent::Update,
+                coprocessor::RegionChangeEvent::Update(reason),
                 self.get_role(),
             );
         }
