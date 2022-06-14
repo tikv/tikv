@@ -2429,12 +2429,11 @@ mod tests {
         kv::{Error as KvError, ErrorInner as EngineErrorInner},
         lock_manager::{Lock, WaitTimeout},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
-        raw::ttl::current_ts,
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{util::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
@@ -4879,9 +4878,10 @@ mod tests {
         rx.recv().unwrap();
 
         for &(ref key, _, ttl) in &test_data {
-            let res = block_on(storage.raw_get_key_ttl(ctx.clone(), "".to_string(), key.clone()))
-                .unwrap()
-                .unwrap();
+            let res =
+                block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key.clone()))
+                    .unwrap()
+                    .unwrap();
             if ttl != 0 {
                 let lower_bound = before_written.saturating_add(ttl) - ttl_current_ts();
                 assert!(

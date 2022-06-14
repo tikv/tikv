@@ -11,7 +11,6 @@ use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
 use crossbeam::channel::{self, SendError};
-use fail::fail_point;
 use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
 use std::ops::{Deref, DerefMut};
@@ -333,7 +332,6 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
     handler: Handler,
     max_batch_size: usize,
     reschedule_duration: Duration,
-    before_pause_wait: Option<Duration>,
 }
 
 enum ReschedulePolicy {
