@@ -181,6 +181,7 @@ fn test_serde_custom_tikv_config() {
         raft_log_reserve_max_ticks: 100,
         raft_engine_purge_interval: ReadableDuration::minutes(20),
         raft_entry_cache_life_time: ReadableDuration::secs(12),
+        raft_entry_cache_reclaim_time: ReadableDuration::secs(5),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: Some(ReadableSize::mb(20)),
