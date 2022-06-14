@@ -1653,10 +1653,6 @@ enum Cmd {
     /// Print bad ssts related infos
     BadSsts {
         #[structopt(long)]
-        /// db directory.
-        db: String,
-
-        #[structopt(long)]
         /// specify manifest, if not set, it will look up manifest file in db path
         manifest: Option<String>,
 
@@ -1855,14 +1851,6 @@ fn main() {
         }
     };
 
-<<<<<<< HEAD
-    // Bypass the ldb and sst dump command to RocksDB.
-    if let Cmd::External(args) = cmd {
-        match args[0].as_str() {
-            "ldb" => run_ldb_command(args, &cfg),
-            "sst_dump" => run_sst_dump_command(args, &cfg),
-            _ => Opt::clap().print_help().unwrap(),
-=======
     match cmd {
         Cmd::External(args) => {
             // Bypass the ldb and sst dump command to RocksDB.
@@ -1878,15 +1866,8 @@ fn main() {
             let data_dir = data_dir.expect("--data-dir must be specified");
             let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
             print_bad_ssts(data_dir, manifest.as_deref(), pd_client, &cfg);
->>>>>>> e1fae9469... Fix logic of error string match in `bad-ssts` (#12049)
+            return;
         }
-        return;
-    }
-
-    if let Cmd::BadSsts { db, manifest, pd } = cmd {
-        let pd_client = get_pd_rpc_client(&pd, Arc::clone(&mgr));
-        print_bad_ssts(&db, manifest.as_deref(), pd_client, &cfg);
-        return;
     }
 
     // Deal with subcommand dump-snap-meta. This subcommand doesn't require other args, so process
@@ -2469,16 +2450,6 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
     let stderr = BufferRedirect::stderr().unwrap();
     let stdout = BufferRedirect::stdout().unwrap();
     let opts = cfg.rocksdb.build_opt();
-<<<<<<< HEAD
-    match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)).unwrap()
-    {
-        0 => {}
-        status => {
-            let mut err = String::new();
-            stderr.read_to_string(&mut err).unwrap();
-            println!("failed to run {}:\n{}", args.join(" "), err);
-            std::process::exit(status);
-=======
 
     match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)) {
         Ok(code) => {
@@ -2490,7 +2461,6 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
                 );
                 tikv_util::logger::exit_process_gracefully(code);
             }
->>>>>>> e1fae9469... Fix logic of error string match in `bad-ssts` (#12049)
         }
         Err(e) => {
             flush_std_buffer_to_log(
@@ -2679,7 +2649,17 @@ fn print_overlap_region_and_suggestions(
     }
 }
 
-<<<<<<< HEAD
+fn flush_std_buffer_to_log(
+    msg: &str,
+    mut err_buffer: BufferRedirect,
+    mut out_buffer: BufferRedirect,
+) {
+    let mut err = String::new();
+    let mut out = String::new();
+    err_buffer.read_to_string(&mut err).unwrap();
+    out_buffer.read_to_string(&mut out).unwrap();
+    println!("{}, err redirect:{}, out redirect:{}", msg, err, out);
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2691,16 +2671,4 @@ mod tests {
         assert_eq!(from_hex("0x74").unwrap(), result);
         assert_eq!(from_hex("0X74").unwrap(), result);
     }
-=======
-fn flush_std_buffer_to_log(
-    msg: &str,
-    mut err_buffer: BufferRedirect,
-    mut out_buffer: BufferRedirect,
-) {
-    let mut err = String::new();
-    let mut out = String::new();
-    err_buffer.read_to_string(&mut err).unwrap();
-    out_buffer.read_to_string(&mut out).unwrap();
-    println!("{}, err redirect:{}, out redirect:{}", msg, err, out);
->>>>>>> e1fae9469... Fix logic of error string match in `bad-ssts` (#12049)
 }
