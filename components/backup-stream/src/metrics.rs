@@ -25,8 +25,8 @@ pub fn update_task_status(status: TaskStatus, task: &str) {
     }
 }
 
-pub fn remove_task_status_metric(task: &str) {
-    TASK_STATUS.remove_label_values(&[task]);
+pub fn remove_task_status_metric(task: &str) -> Result<()> {
+    TASK_STATUS.remove_label_values(&[task])
 }
 
 lazy_static! {
