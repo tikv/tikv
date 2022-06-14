@@ -596,14 +596,9 @@ where
     persisted_number: u64,
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
-<<<<<<< HEAD
-=======
-    /// region buckets.
-    pub region_buckets: Buckets,
 
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
->>>>>>> 64a141516... raftstore,cdc: pass leader transferee to cdc observer (#12124)
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -714,11 +709,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
-<<<<<<< HEAD
-=======
-            region_buckets: Buckets::default(),
             lead_transferee: raft::INVALID_ID,
->>>>>>> 64a141516... raftstore,cdc: pass leader transferee to cdc observer (#12124)
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1669,14 +1660,7 @@ where
                 }
                 _ => {}
             }
-<<<<<<< HEAD
             self.on_leader_changed(ctx, ss.leader_id, self.term());
-            // TODO: it may possible that only the `leader_id` change and the role
-            // didn't change
-            ctx.coprocessor_host
-                .on_role_change(self.region(), ss.raft_state);
-=======
-            self.on_leader_changed(ss.leader_id, self.term());
             ctx.coprocessor_host.on_role_change(
                 self.region(),
                 RoleChange {
@@ -1686,7 +1670,6 @@ where
                     vote: self.raft_group.raft.vote,
                 },
             );
->>>>>>> 64a141516... raftstore,cdc: pass leader transferee to cdc observer (#12124)
             self.cmd_epoch_checker.maybe_update_term(self.term());
         } else if let Some(hs) = ready.hs() {
             if hs.get_term() != self.get_store().hard_state().get_term() {
@@ -4467,108 +4450,11 @@ where
             );
         }
     }
-<<<<<<< HEAD
-=======
-
-    fn activate_in_memory_pessimistic_locks(&mut self) {
-        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-        pessimistic_locks.status = LocksStatus::Normal;
-        pessimistic_locks.term = self.term();
-        pessimistic_locks.version = self.region().get_region_epoch().get_version();
-    }
-
-    fn clear_in_memory_pessimistic_locks(&mut self) {
-        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-        pessimistic_locks.status = LocksStatus::NotLeader;
-        pessimistic_locks.clear();
-        pessimistic_locks.term = self.term();
-        pessimistic_locks.version = self.region().get_region_epoch().get_version();
-
-        // Also clear merge related states
-        self.prepare_merge_fence = 0;
-        self.pending_prepare_merge = None;
-    }
-
-    pub fn need_renew_lease_at<T>(
-        &self,
-        ctx: &PollContext<EK, ER, T>,
-        current_time: Timespec,
-    ) -> bool {
-        let renew_bound = match self.leader_lease.need_renew(current_time) {
-            Some(ts) => ts,
-            None => return false,
-        };
-        let max_lease = ctx.cfg.raft_store_max_leader_lease();
-        let has_overlapped_reads = self.pending_reads.back().map_or(false, |read| {
-            // If there is any read index whose lease can cover till next heartbeat
-            // then we don't need to propose a new one
-            read.propose_time + max_lease > renew_bound
-        });
-        let has_overlapped_writes = self.proposals.back().map_or(false, |proposal| {
-            // If there is any write whose lease can cover till next heartbeat
-            // then we don't need to propose a new one
-            proposal
-                .propose_time
-                .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
-        });
-        !has_overlapped_reads && !has_overlapped_writes
-    }
-
-    pub fn adjust_cfg_if_changed<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
-        let raft_max_inflight_msgs = ctx.cfg.raft_max_inflight_msgs;
-        if self.is_leader() && (raft_max_inflight_msgs != self.raft_max_inflight_msgs) {
-            let peers: Vec<_> = self.region().get_peers().into();
-            for p in peers {
-                if p != self.peer {
-                    self.raft_group
-                        .raft
-                        .adjust_max_inflight_msgs(p.get_id(), raft_max_inflight_msgs);
-                }
-            }
-            self.raft_max_inflight_msgs = raft_max_inflight_msgs;
-        }
-        self.raft_group.raft.r.max_msg_size = ctx.cfg.raft_max_size_per_msg.0;
-    }
-
-    fn maybe_inject_propose_error(
-        &self,
-        #[allow(unused_variables)] req: &RaftCmdRequest,
-    ) -> Result<()> {
-        // The return value format is {req_type}:{store_id}
-        // Request matching the format will fail to be proposed.
-        // Empty `req_type` means matching all kinds of requests.
-        // ":{store_id}" can be omitted, meaning matching all stores.
-        fail_point!("raft_propose", |r| {
-            r.map_or(Ok(()), |s| {
-                let mut parts = s.splitn(2, ':');
-                let cmd_type = parts.next().unwrap();
-                let store_id = parts.next().map(|s| s.parse::<u64>().unwrap());
-                if let Some(store_id) = store_id {
-                    if store_id != self.peer.get_store_id() {
-                        return Ok(());
-                    }
-                }
-                let admin_type = req.get_admin_request().get_cmd_type();
-                let match_type = cmd_type.is_empty()
-                    || (cmd_type == "prepare_merge" && admin_type == AdminCmdType::PrepareMerge)
-                    || (cmd_type == "transfer_leader"
-                        && admin_type == AdminCmdType::TransferLeader);
-                // More matching rules can be added here.
-                if match_type {
-                    Err(box_err!("injected error"))
-                } else {
-                    Ok(())
-                }
-            })
-        });
-        Ok(())
-    }
 
     /// Update states of the peer which can be changed in the previous raft tick.
     pub fn post_raft_group_tick(&mut self) {
         self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
->>>>>>> 64a141516... raftstore,cdc: pass leader transferee to cdc observer (#12124)
 }
 
 /// `RequestPolicy` decides how we handle a request.

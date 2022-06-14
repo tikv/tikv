@@ -726,13 +726,8 @@ mod tests {
         host.post_apply(&region, &Cmd::new(0, query_req, query_resp));
         assert_all!(&[&ob.called], &[21]);
 
-<<<<<<< HEAD
-        host.on_role_change(&region, StateRole::Leader);
-        assert_all!(&[&ob.called], &[28]);
-=======
         host.on_role_change(&region, RoleChange::new(StateRole::Leader));
-        assert_all!([&ob.called], &[28]);
->>>>>>> 64a141516... raftstore,cdc: pass leader transferee to cdc observer (#12124)
+        assert_all!(&[&ob.called], &[28]);
 
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
