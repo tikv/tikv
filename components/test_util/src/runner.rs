@@ -22,7 +22,7 @@ pub trait TestHook {
 }
 
 /// A special TestHook that does nothing.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct Nope;
 
 impl TestHook for Nope {
@@ -31,42 +31,50 @@ impl TestHook for Nope {
 }
 
 struct CaseLifeWatcher<H: TestHook> {
-    name: String,
     hook: H,
 }
 
 impl<H: TestHook + Send + 'static> CaseLifeWatcher<H> {
-    fn new(name: String, mut hook: H) -> CaseLifeWatcher<H> {
-        debug!("case start"; "name" => &name);
+    fn new(mut hook: H) -> CaseLifeWatcher<H> {
         hook.setup();
-        CaseLifeWatcher { name, hook }
+        CaseLifeWatcher { hook }
     }
 }
 
 impl<H: TestHook> Drop for CaseLifeWatcher<H> {
     fn drop(&mut self) {
         self.hook.teardown();
-        debug!("case end"; "name" => &self.name);
     }
 }
 
 /// Connects std tests and custom test framework.
-pub fn run_test_with_hook(cases: &[&TestDescAndFn], hook: impl TestHook + Send + Clone + 'static) {
+pub fn run_test_with_hook(
+    cases: &[&TestDescAndFn],
+    hook: impl TestHook + Send + Sync + Copy + 'static,
+) {
     crate::setup_for_ci();
+    let bench_as_test = std::env::var("TIKV_FORCE_BENCH_AS_TEST").is_ok();
     let cases: Vec<_> = cases
         .iter()
         .map(|case| {
-            let name = case.desc.name.as_slice().to_owned();
             let h = hook.clone();
             let f = match case.testfn {
                 TestFn::StaticTestFn(f) => TestFn::DynTestFn(Box::new(move || {
-                    let _watcher = CaseLifeWatcher::new(name, h);
+                    let _watcher = CaseLifeWatcher::new(h);
                     f();
                 })),
-                TestFn::StaticBenchFn(f) => TestFn::DynTestFn(Box::new(move || {
-                    let _watcher = CaseLifeWatcher::new(name, h);
-                    bench::run_once(move |b| f(b));
-                })),
+                TestFn::StaticBenchFn(f) if bench_as_test => {
+                    TestFn::DynTestFn(Box::new(move || {
+                        let _watcher = CaseLifeWatcher::new(h);
+                        bench::run_once(move |b| f(b));
+                    }))
+                }
+                TestFn::StaticBenchFn(f) if !bench_as_test => {
+                    TestFn::DynBenchFn(Box::new(move |b| {
+                        let _watcher = CaseLifeWatcher::new(h);
+                        f(b);
+                    }))
+                }
                 ref f => panic!("unexpected testfn {:?}", f),
             };
             TestDescAndFn {
@@ -81,7 +89,7 @@ pub fn run_test_with_hook(cases: &[&TestDescAndFn], hook: impl TestHook + Send +
 
 thread_local!(static FS: RefCell<Option<fail::FailScenario<'static>>> = RefCell::new(None));
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct FailpointHook;
 
 impl TestHook for FailpointHook {
