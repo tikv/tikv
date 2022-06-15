@@ -144,8 +144,8 @@ fn capping_parse_int<T: std::str::FromStr<Err = std::num::ParseIntError> + Bound
     s: &str,
 ) -> Result<T, std::num::ParseIntError> {
     match s.parse::<T>() {
-        Err(e) if matches!(e.kind(), std::num::IntErrorKind::PosOverflow) => Ok(T::max_value()),
-        Err(e) if matches!(e.kind(), std::num::IntErrorKind::NegOverflow) => Ok(T::min_value()),
+        Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => Ok(T::max_value()),
+        Err(e) if matches!(e.kind(), IntErrorKind::NegOverflow) => Ok(T::min_value()),
         x => x,
     }
 }
