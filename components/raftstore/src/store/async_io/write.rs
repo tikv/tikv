@@ -515,10 +515,7 @@ where
 
         let mut write_raft_time = 0f64;
         if !self.batch.raft_wb.is_empty() {
-            let raft_before_save_on_store_1 = || {
-                fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
-            };
-            raft_before_save_on_store_1();
+            fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
 
             let now = Instant::now();
             self.perf_context.start_observe();
@@ -536,7 +533,7 @@ where
                         self.store_id, self.tag, e
                     );
                 });
-            self.perf_context.report_metrics();
+            self.perf_context.report_metrics(&[]); // TODO: pass in request trackers
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
         }

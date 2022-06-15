@@ -35,9 +35,11 @@ fn test_destroy_local_reader() {
 
     // add peer (2,2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), key, value);
 
     // add peer (3, 3) to region 1.
     pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), key, value);
 
     let epoch = pd_client.get_region_epoch(r1);
 
@@ -213,7 +215,7 @@ fn test_stale_peer_cache() {
 #[test]
 fn test_redundant_conf_change_by_snapshot() {
     let mut cluster = new_node_cluster(0, 4);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
     cluster.cfg.raft_store.merge_max_log_gap = 4;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
 

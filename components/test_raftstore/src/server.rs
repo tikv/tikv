@@ -9,6 +9,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
+use causal_ts::CausalTsProvider;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -147,6 +148,7 @@ pub struct ServerCluster {
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole, RocksEngine>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
+    pub causal_ts_providers: HashMap<u64, Arc<dyn CausalTsProvider>>,
 }
 
 impl ServerCluster {
@@ -188,6 +190,7 @@ impl ServerCluster {
             concurrency_managers: HashMap::default(),
             env,
             txn_extra_schedulers: HashMap::default(),
+            causal_ts_providers: HashMap::default(),
         }
     }
 
@@ -213,6 +216,10 @@ impl ServerCluster {
 
     pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
         self.concurrency_managers.get(&node_id).unwrap().clone()
+    }
+
+    pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<dyn CausalTsProvider>> {
+        self.causal_ts_providers.get(&node_id).cloned()
     }
 
     fn init_resource_metering(
@@ -342,8 +349,16 @@ impl ServerCluster {
         };
 
         if ApiVersion::V2 == F::TAG {
-            let causal_ts_provider =
-                Arc::new(causal_ts::SimpleTsoProvider::new(self.pd_client.clone()));
+            let causal_ts_provider = Arc::new(
+                block_on(causal_ts::BatchTsoProvider::new_opt(
+                    self.pd_client.clone(),
+                    cfg.causal_ts.renew_interval.0,
+                    cfg.causal_ts.renew_batch_min_size,
+                ))
+                .unwrap(),
+            );
+            self.causal_ts_providers
+                .insert(node_id, causal_ts_provider.clone());
             let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
             causal_ob.register_to(&mut coprocessor_host);
         }
@@ -447,7 +462,13 @@ impl ServerCluster {
         let apply_router = system.apply_router();
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
-        raft_store.validate().unwrap();
+        raft_store
+            .validate(
+                cfg.coprocessor.region_split_size,
+                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.region_bucket_size,
+            )
+            .unwrap();
         let health_service = HealthService::default();
         let mut node = Node::new(
             system,

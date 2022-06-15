@@ -15,6 +15,7 @@ use tikv_util::{
     sys::SysQuota,
     yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder},
 };
+use tracker::TrackedFuture;
 use yatp::{pool::Remote, queue::Extras, task::future::TaskCell};
 
 use self::metrics::*;
@@ -121,10 +122,10 @@ impl ReadPoolHandle {
                 };
                 let extras = Extras::new_multilevel(task_id, fixed_level);
                 let task_cell = TaskCell::new(
-                    async move {
+                    TrackedFuture::new(async move {
                         f.await;
                         running_tasks.dec();
-                    },
+                    }),
                     extras,
                 );
                 remote.spawn(task_cell);

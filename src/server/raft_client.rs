@@ -37,7 +37,12 @@ use kvproto::{
 use raft::SnapshotStatus;
 use raftstore::{errors::DiscardReason, router::RaftStoreRouter};
 use security::SecurityManager;
-use tikv_util::{lru::LruCache, timer::GLOBAL_TIMER_HANDLE, worker::Scheduler};
+use tikv_util::{
+    config::{Tracker, VersionTrack},
+    lru::LruCache,
+    timer::GLOBAL_TIMER_HANDLE,
+    worker::Scheduler,
+};
 use yatp::{task::future::TaskCell, ThreadPool};
 
 use crate::server::{
@@ -175,19 +180,56 @@ struct BatchMessageBuffer {
     batch: BatchRaftMessage,
     overflowing: Option<RaftMessage>,
     size: usize,
-    cfg: Arc<Config>,
+    cfg: Config,
+    cfg_tracker: Tracker<Config>,
     loads: Arc<ThreadLoadPool>,
 }
 
 impl BatchMessageBuffer {
-    fn new(cfg: Arc<Config>, loads: Arc<ThreadLoadPool>) -> BatchMessageBuffer {
+    fn new(
+        global_cfg_track: &Arc<VersionTrack<Config>>,
+        loads: Arc<ThreadLoadPool>,
+    ) -> BatchMessageBuffer {
+        let cfg_tracker = Arc::clone(global_cfg_track).tracker("raft-client-buffer".into());
+        let cfg = global_cfg_track.value().clone();
         BatchMessageBuffer {
             batch: BatchRaftMessage::default(),
             overflowing: None,
             size: 0,
             cfg,
+            cfg_tracker,
             loads,
         }
+    }
+
+    #[inline]
+    fn message_size(msg: &RaftMessage) -> usize {
+        let mut msg_size = msg.start_key.len()
+            + msg.end_key.len()
+            + msg.get_message().context.len()
+            + msg.extra_ctx.len()
+            // index: 3, term: 2, data tag and size: 3, entry tag and size: 3
+            + 11 * msg.get_message().get_entries().len();
+        for entry in msg.get_message().get_entries() {
+            msg_size += entry.data.len();
+        }
+        msg_size
+    }
+
+    #[inline]
+    fn maybe_refresh_config(&mut self) {
+        if let Some(new_cfg) = self.cfg_tracker.any_new() {
+            self.cfg = new_cfg.clone();
+        }
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.batch = BatchRaftMessage::default();
+        self.size = 0;
+        self.overflowing = None;
+        // try refresh config
+        self.maybe_refresh_config();
     }
 }
 
@@ -201,15 +243,7 @@ impl Buffer for BatchMessageBuffer {
 
     #[inline]
     fn push(&mut self, msg: RaftMessage) {
-        let mut msg_size = msg.start_key.len()
-            + msg.end_key.len()
-            + msg.get_message().context.len()
-            + msg.extra_ctx.len()
-            // index: 3, term: 2, data tag and size: 3, entry tag and size: 3
-            + 11 * msg.get_message().get_entries().len();
-        for entry in msg.get_message().get_entries() {
-            msg_size += entry.data.len();
-        }
+        let msg_size = Self::message_size(&msg);
         // To avoid building too large batch, we limit each batch's size. Since `msg_size`
         // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
@@ -241,6 +275,12 @@ impl Buffer for BatchMessageBuffer {
         if let Some(more) = self.overflowing.take() {
             self.push(more);
         }
+
+        // try refresh config after flush. `max_grpc_send_msg_len` and `raft_msg_max_batch_size`
+        // can impact the buffer push logic, but since they are soft restriction, we check config change
+        // at here to avoid affact performance since `push` is a hot path.
+        self.maybe_refresh_config();
+
         res
     }
 
@@ -549,7 +589,7 @@ where
 #[derive(Clone)]
 pub struct ConnectionBuilder<S, R> {
     env: Arc<Environment>,
-    cfg: Arc<Config>,
+    cfg: Arc<VersionTrack<Config>>,
     security_mgr: Arc<SecurityManager>,
     resolver: S,
     router: R,
@@ -560,7 +600,7 @@ pub struct ConnectionBuilder<S, R> {
 impl<S, R> ConnectionBuilder<S, R> {
     pub fn new(
         env: Arc<Environment>,
-        cfg: Arc<Config>,
+        cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
         resolver: S,
         router: R,
@@ -646,11 +686,12 @@ where
     fn connect(&self, addr: &str) -> TikvClient {
         info!("server: new connection with tikv endpoint"; "addr" => addr, "store_id" => self.store_id);
 
+        let cfg = self.builder.cfg.value();
         let cb = ChannelBuilder::new(self.builder.env.clone())
-            .stream_initial_window_size(self.builder.cfg.grpc_stream_initial_window_size.0 as i32)
-            .keepalive_time(self.builder.cfg.grpc_keepalive_time.0)
-            .keepalive_timeout(self.builder.cfg.grpc_keepalive_timeout.0)
-            .default_compression_algorithm(self.builder.cfg.grpc_compression_algorithm())
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
+            .keepalive_time(cfg.grpc_keepalive_time.0)
+            .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
+            .default_compression_algorithm(cfg.grpc_compression_algorithm())
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
@@ -667,10 +708,7 @@ where
             sender: AsyncRaftSender {
                 sender: batch_sink,
                 queue: self.queue.clone(),
-                buffer: BatchMessageBuffer::new(
-                    self.builder.cfg.clone(),
-                    self.builder.loads.clone(),
-                ),
+                buffer: BatchMessageBuffer::new(&self.builder.cfg, self.builder.loads.clone()),
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
                 addr,
@@ -713,11 +751,11 @@ where
     }
 }
 
-async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: &mut u32) {
+async fn maybe_backoff(backoff: Duration, last_wake_time: &mut Instant, retry_times: &mut u32) {
     if *retry_times == 0 {
         return;
     }
-    let timeout = cfg.raft_client_backoff_step.0 * cmp::min(*retry_times, 5);
+    let timeout = backoff * cmp::min(*retry_times, 5);
     let now = Instant::now();
     if *last_wake_time + timeout < now {
         // We have spent long enough time in last retry, no need to backoff again.
@@ -752,8 +790,9 @@ async fn start<S, R, E>(
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
+    let backoff_duration = back_end.builder.cfg.value().raft_client_backoff_step.0;
     loop {
-        maybe_backoff(&back_end.builder.cfg, &mut last_wake_time, &mut retry_times).await;
+        maybe_backoff(backoff_duration, &mut last_wake_time, &mut retry_times).await;
         retry_times += 1;
         let f = back_end.resolve();
         let addr = match f.await {
@@ -917,7 +956,7 @@ where
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
                     let queue = Arc::new(Queue::with_capacity(
-                        self.builder.cfg.raft_client_queue_size,
+                        self.builder.cfg.value().raft_client_queue_size,
                     ));
                     if need_pause {
                         queue.set_conn_state(ConnState::Paused);
@@ -954,14 +993,14 @@ where
     /// are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        let conn_id = if self.builder.cfg.grpc_raft_conn_num == 1 {
+        let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num as u64;
+        let conn_id = if grpc_raft_conn_num == 1 {
             0
         } else {
             if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
                 self.last_hash = (
                     msg.region_id,
-                    seahash::hash(&msg.region_id.to_ne_bytes())
-                        % self.builder.cfg.grpc_raft_conn_num as u64,
+                    seahash::hash(&msg.region_id.to_ne_bytes()) % grpc_raft_conn_num,
                 );
             };
             self.last_hash.1 as usize
@@ -1110,7 +1149,7 @@ mod tests {
     #[test]
     fn test_push_raft_message_with_context() {
         let mut msg_buf = BatchMessageBuffer::new(
-            Arc::new(Config::default()),
+            &Arc::new(VersionTrack::new(Config::default())),
             Arc::new(ThreadLoadPool::with_threshold(100)),
         );
         for i in 0..2 {
@@ -1137,9 +1176,10 @@ mod tests {
     #[test]
     fn test_push_raft_message_with_extra_ctx() {
         let mut msg_buf = BatchMessageBuffer::new(
-            Arc::new(Config::default()),
+            &Arc::new(VersionTrack::new(Config::default())),
             Arc::new(ThreadLoadPool::with_threshold(100)),
         );
+
         for i in 0..2 {
             let ctx_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
             let ctx = vec![0; ctx_len];
@@ -1159,5 +1199,68 @@ mod tests {
             msg_buf.push(msg);
         }
         assert!(msg_buf.full());
+    }
+
+    fn new_test_msg(size: usize) -> RaftMessage {
+        let mut msg = RaftMessage::default();
+        msg.set_region_id(1);
+        let mut region_epoch = RegionEpoch::default();
+        region_epoch.conf_ver = 1;
+        region_epoch.version = 0x123456;
+        msg.set_region_epoch(region_epoch);
+        msg.set_start_key(vec![0; size]);
+        msg.set_end_key(vec![]);
+        msg.mut_message().set_snapshot(Snapshot::default());
+        msg.mut_message().set_commit(0);
+        assert_eq!(BatchMessageBuffer::message_size(&msg), size);
+        msg
+    }
+
+    #[test]
+    fn test_push_raft_message_cfg_change() {
+        let version_track = Arc::new(VersionTrack::new(Config::default()));
+        let mut msg_buf = BatchMessageBuffer::new(
+            &version_track,
+            Arc::new(ThreadLoadPool::with_threshold(100)),
+        );
+
+        let default_grpc_msg_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
+        let max_msg_len = default_grpc_msg_len - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
+        msg_buf.push(new_test_msg(max_msg_len));
+        assert!(!msg_buf.full());
+        msg_buf.push(new_test_msg(1));
+        assert!(msg_buf.full());
+
+        // update config
+        version_track.update(|cfg| cfg.max_grpc_send_msg_len *= 2);
+        msg_buf.clear();
+
+        let new_max_msg_len =
+            default_grpc_msg_len * 2 - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
+        for _i in 0..2 {
+            msg_buf.push(new_test_msg(new_max_msg_len / 2 - 1));
+            assert!(!msg_buf.full());
+        }
+        msg_buf.push(new_test_msg(2));
+        assert!(msg_buf.full());
+    }
+
+    #[bench]
+    fn bench_client_buffer_push(b: &mut test::Bencher) {
+        let version_track = Arc::new(VersionTrack::new(Config::default()));
+        let mut msg_buf = BatchMessageBuffer::new(
+            &version_track,
+            Arc::new(ThreadLoadPool::with_threshold(100)),
+        );
+
+        b.iter(|| {
+            for _i in 0..10 {
+                msg_buf.push(test::black_box(new_test_msg(1024)));
+            }
+            // run clear to mock flush.
+            msg_buf.clear();
+
+            test::black_box(&mut msg_buf);
+        });
     }
 }

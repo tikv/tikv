@@ -83,7 +83,6 @@ pub struct Config {
     #[online_config(skip)]
     pub status_thread_pool_size: usize,
 
-    #[online_config(skip)]
     pub max_grpc_send_msg_len: i32,
 
     // When merge raft messages into a batch message, leave a buffer.
@@ -93,7 +92,6 @@ pub struct Config {
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
 
-    #[online_config(skip)]
     pub raft_msg_max_batch_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
@@ -170,6 +168,10 @@ pub struct Config {
     // * system=16G, memory_usage_limit=12G, reject_at=2.4G
     // * system=32G, memory_usage_limit=24G, reject_at=4.8G
     pub reject_messages_on_memory_ratio: f64,
+
+    // whether to compact metrics or not.
+    #[doc(hidden)]
+    pub simplify_metrics: bool,
 
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
@@ -249,6 +251,7 @@ impl Default for Config {
             end_point_slow_log_threshold: ReadableDuration::secs(1),
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
+            simplify_metrics: false,
         }
     }
 }
@@ -340,6 +343,12 @@ impl Config {
         {
             return Err(box_err!(
                 "server.end-point-request-max-handle-secs is too small."
+            ));
+        }
+
+        if self.max_grpc_send_msg_len <= 0 {
+            return Err(box_err!(
+                "server.max-grpc-send-msg-len must be bigger than 0."
             ));
         }
 
@@ -513,6 +522,10 @@ mod tests {
         invalid_cfg = Config::default();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
+        assert!(invalid_cfg.validate().is_err());
+
+        invalid_cfg = Config::default();
+        invalid_cfg.max_grpc_send_msg_len = 0;
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();

@@ -128,3 +128,29 @@ impl<'a, E> Host<'a, E> {
         self.cfg.region_bucket_size.0
     }
 }
+
+#[inline]
+pub fn calc_split_keys_count(
+    count_per_region: u64,
+    split_threshold: u64,
+    max_count_per_region: u64,
+    batch_split_limit: u64,
+) -> u64 {
+    if count_per_region < max_count_per_region {
+        return 0;
+    }
+
+    // split keys count is split count - 1
+    // e.g. when split_threshold is 60 & max_count_per_region is 90
+    //      if count_per_region is 60, return 0
+    //      if count_per_region is 90, return 1
+    //      if count_per_region is 121, return 1
+    //      if count_per_region is 183, return 2
+    std::cmp::min(
+        std::cmp::max(
+            ((count_per_region as f64 / split_threshold as f64).round() as u64).saturating_sub(1),
+            count_per_region / max_count_per_region,
+        ),
+        batch_split_limit,
+    )
+}
