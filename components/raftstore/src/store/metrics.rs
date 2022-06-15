@@ -248,9 +248,9 @@ lazy_static! {
         ).unwrap();
     pub static ref STORE_WRITE_RAFTDB_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
-            "tikv_raftstore_append_log_duration_seconds",
-            "Bucketed histogram of peer appending log duration.",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
+            "tikv_raftstore_store_write_raftdb_duration_seconds",
+            "Bucketed histogram of store write raft db duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_WRITE_SEND_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
@@ -262,6 +262,12 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_store_write_callback_duration_seconds",
             "Bucketed histogram of sending callback to store thread duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_TO_DB_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_append_log_duration_seconds",
+            "Bucketed histogram of peer appending log duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_WRITE_LOOP_DURATION_HISTOGRAM: Histogram =
