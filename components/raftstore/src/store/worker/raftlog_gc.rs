@@ -132,7 +132,6 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
         let mut cbs = Vec::new();
         let mut need_purge = false;
         for t in tasks {
-            let start = Instant::now();
             match t {
                 Task::Gc(t) => {
                     debug!("gc raft log"; "region_id" => t.region_id, "start_index" => t.start_idx, "end_index" => t.end_idx);
