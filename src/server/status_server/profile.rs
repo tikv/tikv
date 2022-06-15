@@ -176,7 +176,7 @@ where
     let on_start = || {
         let guard = pprof::ProfilerGuardBuilder::default()
             .frequency(frequency)
-            .blocklist(&["libc", "libgcc", "pthread"])
+            .blocklist(&["libc", "libgcc", "pthread", "vdso"])
             .build()
             .map_err(|e| format!("pprof::ProfilerGuardBuilder::build fail: {}", e))?;
         Ok(guard)

@@ -244,10 +244,17 @@ where
         }
         let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg });
         let event = TraceEvent::Add(heap_size);
+        let send_failed = Cell::new(true);
+
+        MEMTRACE_RAFT_MESSAGES.trace(event);
+        defer!(if send_failed.get() {
+            MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
+        });
 
         let store_msg = match self.try_send(id, peer_msg) {
             Either::Left(Ok(())) => {
-                MEMTRACE_RAFT_MESSAGES.trace(event);
+                fail_point!("memtrace_raft_messages_overflow_check_send");
+                send_failed.set(false);
                 return Ok(());
             }
             Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(im)))) => {
@@ -261,7 +268,7 @@ where
         };
         match self.send_control(store_msg) {
             Ok(()) => {
-                MEMTRACE_RAFT_MESSAGES.trace(event);
+                send_failed.set(false);
                 Ok(())
             }
             Err(TrySendError::Full(StoreMsg::RaftMessage(im))) => Err(TrySendError::Full(im.msg)),
@@ -649,7 +656,6 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     trace_event: TraceEvent,
     last_flush_time: TiInstant,
     need_flush_events: bool,
-    last_flush_msg_time: TiInstant,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
@@ -819,11 +825,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         } else {
             let now = TiInstant::now();
 
-            if self.poll_ctx.trans.need_flush()
-                && now.saturating_duration_since(self.last_flush_msg_time)
-                    >= self.poll_ctx.cfg.raft_msg_flush_interval.0
-            {
-                self.last_flush_msg_time = now;
+            if self.poll_ctx.trans.need_flush() {
                 self.poll_ctx.trans.flush();
             }
 
@@ -914,14 +916,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             if self.poll_ctx.trans.need_flush() {
                 self.poll_ctx.trans.flush();
             }
-        } else if self.poll_ctx.trans.need_flush() || self.need_flush_events {
-            let now = TiInstant::now();
+        } else {
             if self.poll_ctx.trans.need_flush() {
-                self.last_flush_msg_time = now;
                 self.poll_ctx.trans.flush();
             }
             if self.need_flush_events {
-                self.last_flush_time = now;
+                self.last_flush_time = TiInstant::now();
                 self.need_flush_events = false;
                 self.flush_events();
             }
@@ -1200,7 +1200,6 @@ where
             trace_event: TraceEvent::default(),
             last_flush_time: TiInstant::now(),
             need_flush_events: false,
-            last_flush_msg_time: TiInstant::now(),
         }
     }
 }
