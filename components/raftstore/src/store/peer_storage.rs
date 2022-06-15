@@ -423,6 +423,8 @@ pub enum HandleReadyResult {
         snap_region: metapb::Region,
         /// The regions whose range are overlapped with this region
         destroy_regions: Vec<Region>,
+        /// The first index before applying the snapshot.
+        last_first_index: u64,
     },
     NoIOTask,
 }
@@ -1210,7 +1212,18 @@ where
 
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
-            self.clear_meta(kv_wb, raft_wb)?;
+            let first_index = self.first_index();
+            // It's possible that logs between `last_compacted_idx` and `first_index` are
+            // being deleted in raftlog_gc worker. But it's OK as:
+            // 1. If the peer accepts a new snapshot, it must start with an index larger than
+            //    this `first_index`;
+            // 2. If the peer accepts new entries after this snapshot or new snapshot, it must
+            //    start with the new applied index, which is larger than `first_index`.
+            // So new logs won't be deleted by on going raftlog_gc task accidentally.
+            // It's possible that there will be some logs between `last_compacted_idx` and
+            // `first_index` are not deleted. So a cleanup task for the range should be triggered
+            // after applying the snapshot.
+            self.clear_meta(first_index, kv_wb, raft_wb)?;
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
         for r in destroy_regions {
@@ -1256,11 +1269,19 @@ where
     /// Delete all meta belong to the region. Results are stored in `wb`.
     pub fn clear_meta(
         &mut self,
+        first_index: u64,
         kv_wb: &mut EK::WriteBatch,
         raft_wb: &mut ER::LogBatch,
     ) -> Result<()> {
         let region_id = self.get_region_id();
-        clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
+        clear_meta(
+            &self.engines,
+            kv_wb,
+            raft_wb,
+            region_id,
+            first_index,
+            &self.raft_state,
+        )?;
         self.cache = EntryCache::default();
         Ok(())
     }
@@ -1465,6 +1486,7 @@ where
         let mut res = HandleReadyResult::SendIOTask;
         if !ready.snapshot().is_empty() {
             fail_point!("raft_before_apply_snap");
+            let last_first_index = self.first_index();
             let snap_region =
                 self.apply_snapshot(ready.snapshot(), &mut write_task, &destroy_regions)?;
 
@@ -1472,6 +1494,7 @@ where
                 msgs: ready.take_persisted_messages(),
                 snap_region,
                 destroy_regions,
+                last_first_index,
             };
             fail_point!("raft_after_apply_snap");
         };
@@ -1568,6 +1591,7 @@ pub fn clear_meta<EK, ER>(
     kv_wb: &mut EK::WriteBatch,
     raft_wb: &mut ER::LogBatch,
     region_id: u64,
+    first_index: u64,
     raft_state: &RaftLocalState,
 ) -> Result<()>
 where
@@ -1577,7 +1601,11 @@ where
     let t = Instant::now();
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
-    box_try!(engines.raft.clean(region_id, raft_state, raft_wb));
+    box_try!(
+        engines
+            .raft
+            .clean(region_id, first_index, raft_state, raft_wb)
+    );
 
     info!(
         "finish clear peer meta";
@@ -1941,21 +1969,26 @@ mod tests {
 
     #[test]
     fn test_storage_clear_meta() {
-        let td = Builder::new().prefix("tikv-store").tempdir().unwrap();
         let worker = Worker::new("snap-manager").lazy_build("snap-manager");
-        let sched = worker.scheduler();
-        let mut store = new_storage_from_ents(sched, &td, &[new_entry(3, 3), new_entry(4, 4)]);
-        append_ents(&mut store, &[new_entry(5, 5), new_entry(6, 6)]);
+        let cases = vec![(0, 0), (5, 1)];
+        for (first_index, left) in cases {
+            let td = Builder::new().prefix("tikv-store").tempdir().unwrap();
+            let sched = worker.scheduler();
+            let mut store = new_storage_from_ents(sched, &td, &[new_entry(3, 3), new_entry(4, 4)]);
+            append_ents(&mut store, &[new_entry(5, 5), new_entry(6, 6)]);
 
-        assert_eq!(6, get_meta_key_count(&store));
+            assert_eq!(6, get_meta_key_count(&store));
 
-        let mut kv_wb = store.engines.kv.write_batch();
-        let mut raft_wb = store.engines.raft.write_batch();
-        store.clear_meta(&mut kv_wb, &mut raft_wb).unwrap();
-        kv_wb.write().unwrap();
-        raft_wb.write().unwrap();
+            let mut kv_wb = store.engines.kv.write_batch();
+            let mut raft_wb = store.engines.raft.write_batch();
+            store
+                .clear_meta(first_index, &mut kv_wb, &mut raft_wb)
+                .unwrap();
+            kv_wb.write().unwrap();
+            raft_wb.write().unwrap();
 
-        assert_eq!(0, get_meta_key_count(&store));
+            assert_eq!(left, get_meta_key_count(&store));
+        }
     }
 
     #[test]

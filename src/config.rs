@@ -2196,6 +2196,9 @@ pub struct BackupConfig {
     pub enable_auto_tune: bool,
     pub auto_tune_remain_threads: usize,
     pub auto_tune_refresh_interval: ReadableDuration,
+    // Do not expose this config to user.
+    // It used to debug s3 503 error.
+    pub s3_multi_part_size: ReadableSize,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
@@ -2208,6 +2211,10 @@ impl BackupConfig {
         if self.batch_size == 0 {
             return Err("backup.batch_size cannot be 0".into());
         }
+        if self.s3_multi_part_size.0 > ReadableSize::gb(5).0 {
+            return Err("backup.s3_multi_part_size cannot larger than 5GB".into());
+        }
+
         Ok(())
     }
 }
@@ -2224,6 +2231,8 @@ impl Default for BackupConfig {
             enable_auto_tune: false,
             auto_tune_remain_threads: 2,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
+            // 5MB is the minimum part size that S3 allowed.
+            s3_multi_part_size: ReadableSize::mb(5),
             hadoop: Default::default(),
         }
     }
@@ -2473,6 +2482,29 @@ impl Default for TiKvConfig {
 }
 
 impl TiKvConfig {
+    pub fn infer_raft_db_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
+        if self.raft_store.raftdb_path.is_empty() {
+            let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
+            config::canonicalize_sub_path(data_dir, "raft")
+        } else {
+            config::canonicalize_path(&self.raft_store.raftdb_path)
+        }
+    }
+
+    pub fn infer_raft_engine_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
+        if self.raft_engine.config.dir.is_empty() {
+            let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
+            config::canonicalize_sub_path(data_dir, "raft-engine")
+        } else {
+            config::canonicalize_path(&self.raft_engine.config.dir)
+        }
+    }
+
+    pub fn infer_kv_engine_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
+        let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
+        config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
+    }
+
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
@@ -2486,26 +2518,14 @@ impl TiKvConfig {
                 .to_owned();
         }
 
-        let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
-        if self.raft_store.raftdb_path.is_empty() {
-            self.raft_store.raftdb_path = default_raftdb_path;
-        } else {
-            self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
-        }
+        self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
+        self.raft_engine.config.dir = self.infer_raft_engine_path(None)?;
 
-        let default_er_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
-        if self.raft_engine.config.dir.is_empty() {
-            self.raft_engine.config.dir = default_er_path;
-        } else {
-            self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
-        }
         if self.raft_engine.config.dir == self.raft_store.raftdb_path {
             return Err("raft_engine.config.dir can't be same as raft_store.raftdb_path".into());
         }
 
-        let kv_db_path =
-            config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
-
+        let kv_db_path = self.infer_kv_engine_path(None)?;
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can't be same as storage.data_dir/db".into());
         }

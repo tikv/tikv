@@ -5,17 +5,16 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam::channel;
+use engine_rocks::raw::Writable;
+use engine_rocks::Compat;
+use engine_traits::{Iterable, Peekable, RaftEngineReadOnly};
+use engine_traits::{SyncMutable, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 use raft::eraftpb::MessageType;
+use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::time::Instant;
-
-use engine_rocks::raw::Writable;
-use engine_rocks::Compat;
-use engine_traits::{Iterable, Peekable};
-use engine_traits::{SyncMutable, CF_RAFT};
-use test_raftstore::*;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -336,4 +335,68 @@ fn test_safe_tombstone_gc() {
 
     thread::sleep(base_tick_interval * tick as u32 * 3);
     must_get_equal(&cluster.get_engine(5), b"k1", b"v1");
+}
+
+/// Logs scan are now moved to raftlog gc threads. The case is to test if logs
+/// are cleaned up no mater whether log gc task has been executed.
+#[test]
+fn test_destroy_clean_up_logs_with_log_gc() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 50;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 50;
+    let pd_client = cluster.pd_client.clone();
+
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    let raft_engine = cluster.engines[&3].raft.clone();
+    let mut dest = vec![];
+    raft_engine.get_all_entries_to(1, &mut dest).unwrap();
+    assert!(!dest.is_empty());
+
+    pd_client.must_remove_peer(1, new_peer(3, 3));
+    must_get_none(&cluster.get_engine(3), b"k1");
+    dest.clear();
+    // Normally destroy peer should cleanup all logs.
+    raft_engine.get_all_entries_to(1, &mut dest).unwrap();
+    assert!(dest.is_empty(), "{:?}", dest);
+
+    pd_client.must_add_peer(1, new_peer(3, 4));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    dest.clear();
+    raft_engine.get_all_entries_to(1, &mut dest).unwrap();
+    assert!(!dest.is_empty());
+
+    pd_client.must_remove_peer(1, new_peer(3, 4));
+    must_get_none(&cluster.get_engine(3), b"k1");
+    dest.clear();
+    // Peer created by snapshot should also cleanup all logs.
+    raft_engine.get_all_entries_to(1, &mut dest).unwrap();
+    assert!(dest.is_empty(), "{:?}", dest);
+
+    pd_client.must_add_peer(1, new_peer(3, 5));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+    dest.clear();
+    raft_engine.get_all_entries_to(1, &mut dest).unwrap();
+    assert!(!dest.is_empty());
+
+    let state = cluster.truncated_state(1, 3);
+    for _ in 0..50 {
+        cluster.must_put(b"k5", b"v5");
+    }
+    cluster.wait_log_truncated(1, 3, state.get_index() + 1);
+
+    pd_client.must_remove_peer(1, new_peer(3, 5));
+    must_get_none(&cluster.get_engine(3), b"k1");
+    dest.clear();
+    // Peer destroy after log gc should also cleanup all logs.
+    raft_engine.get_all_entries_to(1, &mut dest).unwrap();
+    assert!(dest.is_empty(), "{:?}", dest);
 }
