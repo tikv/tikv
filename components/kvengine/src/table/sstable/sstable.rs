@@ -224,9 +224,10 @@ impl SSTableCore {
     }
 
     pub fn load_block(&self, pos: usize, buf: &mut Vec<u8>) -> Result<Bytes> {
-        let addr = self.idx.block_addrs[pos];
+        let addr = self.idx.get_block_addr(pos);
         let length = if pos + 1 < self.idx.num_blocks() {
-            (self.idx.block_addrs[pos + 1].curr_off - addr.curr_off) as usize
+            let next_addr = self.idx.get_block_addr(pos + 1);
+            (next_addr.curr_off - addr.curr_off) as usize
         } else {
             self.start_off as usize + self.footer.data_len() - addr.curr_off as usize
         };
@@ -303,9 +304,10 @@ impl SSTableCore {
     }
 
     pub fn load_old_block(&self, pos: usize, buf: &mut Vec<u8>) -> Result<Bytes> {
-        let addr = self.old_idx.block_addrs[pos];
+        let addr = self.old_idx.get_block_addr(pos);
         let length = if pos + 1 < self.old_idx.num_blocks() {
-            (self.old_idx.block_addrs[pos + 1].curr_off - addr.curr_off) as usize
+            let next_addr = self.old_idx.get_block_addr(pos + 1);
+            (next_addr.curr_off - addr.curr_off) as usize
         } else {
             self.footer.index_offset as usize - addr.curr_off as usize
         };
@@ -357,7 +359,7 @@ pub struct Index {
     bin: Bytes,
     common_prefix: Bytes,
     block_key_offs: &'static [u32],
-    block_addrs: &'static [BlockAddress],
+    block_addrs: &'static [u8],
     block_keys: Bytes,
     filter: Option<Arc<BinaryFuse8>>,
 }
@@ -376,12 +378,9 @@ impl Index {
             slice::from_raw_parts(ptr, num_blocks)
         };
         offset += 4 * num_blocks;
-
-        let block_addrs = unsafe {
-            let ptr = data[offset..].as_ptr() as *mut BlockAddress;
-            slice::from_raw_parts(ptr, num_blocks)
-        };
-        offset += BLOCK_ADDR_SIZE * num_blocks;
+        let block_addrs: &'static [u8] =
+            unsafe { std::mem::transmute(&data[offset..offset + num_blocks * BLOCK_ADDR_SIZE]) };
+        offset += block_addrs.len();
         let common_prefix_len = LittleEndian::read_u16(&data[offset..]) as usize;
         offset += 2;
         let common_prefix = bin.slice(offset..offset + common_prefix_len);
@@ -397,6 +396,11 @@ impl Index {
             block_keys,
             filter: None,
         })
+    }
+
+    pub(crate) fn get_block_addr(&self, pos: usize) -> BlockAddress {
+        let off = pos * BLOCK_ADDR_SIZE;
+        BlockAddress::from_slice(&self.block_addrs[off..off + BLOCK_ADDR_SIZE])
     }
 
     fn set_filter(&mut self, filter: Arc<BinaryFuse8>) {

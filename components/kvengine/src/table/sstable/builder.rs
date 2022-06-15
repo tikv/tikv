@@ -3,7 +3,7 @@
 use std::{convert::TryFrom, mem, slice};
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{BufMut, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use farmhash;
 use xorf::BinaryFuse8;
 
@@ -564,6 +564,17 @@ impl BlockAddress {
             origin_fid: fid,
             origin_off: offset,
             curr_off: offset,
+        }
+    }
+
+    pub(crate) fn from_slice(mut data: &[u8]) -> Self {
+        let origin_fid = data.get_u64_le();
+        let origin_off = data.get_u32_le();
+        let curr_off = data.get_u32_le();
+        Self {
+            origin_fid,
+            origin_off,
+            curr_off,
         }
     }
 }

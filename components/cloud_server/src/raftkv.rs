@@ -741,7 +741,7 @@ fn build_resolve_lock(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
     for (_, modifies) in grouped {
         if modifies.len() == 2 {
             if let Modify::Put(CF_WRITE, _, v) = &modifies[0] {
-                let write = WriteRef::parse(&v).unwrap();
+                let write = WriteRef::parse(v).unwrap();
                 if write.write_type != WriteType::Rollback {
                     assert!(matches!(&modifies[1], Modify::Delete(CF_LOCK, _)));
                     builder.append_type(rlog::TYPE_COMMIT);
@@ -1106,7 +1106,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::ResolveLockReadPhase::new(txn_status, None, Context::default()),
-                expect_ok_callback(tx.clone(), 1),
+                expect_ok_callback(tx, 1),
             )
             .unwrap();
         rx.recv().unwrap();
