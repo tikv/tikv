@@ -5,6 +5,7 @@ use quick_error::quick_error;
 use std::error;
 use std::result;
 
+<<<<<<< HEAD
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
@@ -37,6 +38,18 @@ quick_error! {
         }
         StoreTombstone(msg: String) {
             display("store is tombstone {:?}", msg)
+=======
+impl Error {
+    pub fn retryable(&self) -> bool {
+        match self {
+            Error::Grpc(_) | Error::ClusterNotBootstrapped(_) => true,
+            Error::Other(_)
+            | Error::RegionNotFound(_)
+            | Error::StoreTombstone(_)
+            | Error::GlobalConfigNotFound(_)
+            | Error::ClusterBootstrapped(_)
+            | Error::Incompatible => false,
+>>>>>>> 11b5d4c3d... pd_client: Do not reconnect for pd unknown error (#12827)
         }
     }
 }
