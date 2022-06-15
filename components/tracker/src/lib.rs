@@ -1,6 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(derive_default_enum)]
 #![feature(array_from_fn)]
 
 mod metrics;
