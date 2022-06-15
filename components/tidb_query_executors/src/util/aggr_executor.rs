@@ -121,6 +121,7 @@ pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Sr
     imp: I,
     is_ended: bool,
     entities: Entities<Src>,
+    paging_size: Option<u64>,
 }
 
 impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Src, I> {
@@ -130,6 +131,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         config: Arc<EvalConfig>,
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
+        paging_size: Option<u64>,
     ) -> Result<Self> {
         let aggr_fn_len = aggr_defs.len();
         let src_schema = src.schema();
@@ -185,6 +187,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             imp,
             is_ended: false,
             entities,
+            paging_size,
         })
     }
 
@@ -199,7 +202,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
 
         // When there are errors in the underlying executor, there must be no aggregate output.
         // Thus we even don't need to update the aggregate function state and can return directly.
-        let src_is_drained = src_result.is_drained?;
+        let mut src_is_drained = src_result.is_drained?;
 
         // Consume all data from the underlying executor. We directly return when there are errors
         // for the same reason as above.
@@ -209,6 +212,19 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
                 src_result.physical_columns,
                 &src_result.logical_rows,
             )?;
+        }
+
+        match self.paging_size {
+            None => {}
+            Some(paging_size) => {
+                if self.imp.groups_len() >= paging_size as usize {
+                    src_is_drained = true
+                }
+                // For StreamAgg
+                if self.imp.is_partial_results_ready() {
+                    self.paging_size = Some(paging_size - self.imp.groups_len() as u64 + 1)
+                }
+            }
         }
 
         // aggregate result is always available when source is drained

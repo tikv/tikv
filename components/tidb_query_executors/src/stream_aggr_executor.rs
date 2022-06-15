@@ -128,6 +128,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
         src: Src,
         group_by_exp_defs: Vec<Expr>,
         aggr_defs: Vec<Expr>,
+        paging_size: Option<u64>,
     ) -> Result<Self> {
         let schema_len = src.schema().len();
         let mut group_by_exps = Vec::with_capacity(group_by_exp_defs.len());
@@ -144,6 +145,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
             group_by_exps,
             aggr_defs,
             AllAggrDefinitionParser,
+            paging_size,
         )
     }
 
@@ -154,6 +156,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
         group_by_exps: Vec<RpnExpression>,
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
+        paging_size: Option<u64>,
     ) -> Result<Self> {
         let group_by_field_type: Vec<FieldType> = group_by_exps
             .iter()
@@ -186,6 +189,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
             config,
             aggr_defs,
             aggr_def_parser,
+            paging_size,
         )?))
     }
 }

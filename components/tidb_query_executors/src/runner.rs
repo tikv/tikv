@@ -288,6 +288,7 @@ pub fn build_executors<S: Storage + 'static>(
                             executor,
                             ed.mut_aggregation().take_group_by().into(),
                             ed.mut_aggregation().take_agg_func().into(),
+                            paging_size,
                         )?
                         .collect_summary(summary_slot_index),
                     )
@@ -300,6 +301,7 @@ pub fn build_executors<S: Storage + 'static>(
                             executor,
                             ed.mut_aggregation().take_group_by().into(),
                             ed.mut_aggregation().take_agg_func().into(),
+                            paging_size,
                         )?
                         .collect_summary(summary_slot_index),
                     )
@@ -314,6 +316,7 @@ pub fn build_executors<S: Storage + 'static>(
                         executor,
                         ed.mut_aggregation().take_group_by().into(),
                         ed.mut_aggregation().take_agg_func().into(),
+                        paging_size,
                     )?
                     .collect_summary(summary_slot_index),
                 )
