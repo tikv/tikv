@@ -103,7 +103,7 @@ impl Default for QuotaLimiter {
             background_read_bandwidth_limiter: Limiter::new(f64::INFINITY),
             max_delay_duration: AtomicU64::new(0),
             support_auto_tune: AtomicBool::new(false),
-            cpu_quota_pace: 1.0,
+            cpu_quota_pace: 200.0, // 0.2 vcpu
             cpu_busy: 0.9,
             cpu_healthy: 0.75,
         }

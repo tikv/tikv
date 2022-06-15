@@ -2632,7 +2632,6 @@ pub struct QuotaConfig {
     pub background_cpu_time: usize,
     pub background_write_bandwidth: ReadableSize,
     pub background_read_bandwidth: ReadableSize,
-    #[online_config(skip)]
     pub support_auto_tune: bool,
     pub cpu_quota_pace: f64,
     pub cpu_busy: f64,
@@ -4714,6 +4713,13 @@ mod tests {
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.async_background_consume(sample));
         assert_eq!(should_delay, Duration::from_millis(50));
+
+        assert_eq!(cfg.quota.support_auto_tune, false);
+        cfg_controller
+            .update_config("quota.support-auto-tune", "true")
+            .unwrap();
+        cfg.quota.support_auto_tune = true;
+        assert_eq!(cfg_controller.get_current(), cfg);
     }
 
     #[test]

@@ -103,11 +103,8 @@ lazy_static! {
         NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC,
         NonTxnCommandThrottleTimeCounterVec
     );
-    pub static ref INSTANCE_CPU_USAGE: IntGauge = register_int_gauge!(
-        "tikv_cpu_usage_snapshot",
-        "cpu usage snapshot in integer of [0,100]"
-    )
-    .unwrap();
+    pub static ref INSTANCE_BACKEND_CPU_QUOTA: IntGauge =
+        register_int_gauge!("tikv_backend_cpu_quota", "cpu quota for backend request").unwrap();
 }
 
 pub fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
