@@ -1404,9 +1404,12 @@ where
                 self.fsm.missing_ticks = 0;
             }
         }
+
+        // Tick the raft peer and update some states which can be changed in `tick`.
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;
         }
+        self.fsm.peer.post_raft_group_tick();
 
         self.fsm.peer.mut_store().flush_cache_metrics();
 
