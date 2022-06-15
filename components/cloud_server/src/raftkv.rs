@@ -13,7 +13,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, KvEngine, MvccProperties, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -590,14 +590,32 @@ fn build_pessimistic_lock(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
     }
 }
 
-fn build_prewrite(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
+fn build_prewrite(builder: &mut CustomBuilder, mut modifies: Vec<Modify>) {
     builder.set_type(rlog::TYPE_PREWRITE);
+
+    let mut default_vals = modifies
+        .iter_mut()
+        .filter_map(|m| {
+            if let Modify::Put(CF_DEFAULT, k, v) = m {
+                Some((k.to_raw().unwrap(), mem::take(v)))
+            } else {
+                None
+            }
+        })
+        .collect::<HashMap<_, _>>();
+
     for m in modifies {
         match m {
-            Modify::Put(CF_LOCK, key, val) => {
+            Modify::Put(CF_LOCK, key, mut val) => {
                 let raw_key = key.into_raw().unwrap();
+                if let Some(default_val) = default_vals.remove(&raw_key) {
+                    let mut lock = Lock::parse(&val).unwrap();
+                    lock.short_value = Some(default_val);
+                    val = lock.to_bytes();
+                }
                 builder.append_lock(&raw_key, &val);
             }
+            Modify::Put(CF_DEFAULT, ..) => {}
             _ => unreachable!("unexpected modify {:?}", m),
         }
     }
@@ -621,19 +639,29 @@ fn build_commit(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
     }
 }
 
-fn build_one_pc(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
+fn build_one_pc(builder: &mut CustomBuilder, mut modifies: Vec<Modify>) {
     builder.set_type(rlog::TYPE_ONE_PC);
 
     let deleted_lock = modifies
-        .iter()
+        .iter_mut()
         .filter_map(|m| {
             if let Modify::Delete(CF_LOCK, k) = m {
-                Some(k.clone())
+                Some(mem::replace(k, Key::from_encoded(vec![])))
             } else {
                 None
             }
         })
         .collect::<HashSet<_>>();
+    let mut default_vals = modifies
+        .iter_mut()
+        .filter_map(|m| {
+            if let Modify::Put(CF_DEFAULT, k, v) = m {
+                Some((k.to_raw().unwrap(), mem::take(v)))
+            } else {
+                None
+            }
+        })
+        .collect::<HashMap<_, _>>();
 
     for m in modifies {
         match m {
@@ -645,13 +673,15 @@ fn build_one_pc(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
                 let write = WriteRef::parse(&val).unwrap();
                 let mut value = vec![];
                 if write.write_type == WriteType::Put {
-                    value = write.short_value.unwrap().to_vec();
+                    value = default_vals
+                        .remove(&raw_key)
+                        .unwrap_or_else(|| write.short_value.unwrap().to_vec());
                 }
                 let is_extra = write.write_type == WriteType::Lock;
                 let start_ts = write.start_ts.into_inner();
                 builder.append_one_pc(&raw_key, &value, is_extra, del_lock, start_ts, commit_ts);
             }
-            Modify::Delete(CF_LOCK, _) => {}
+            Modify::Delete(CF_LOCK, _) | Modify::Put(CF_DEFAULT, ..) => {}
             _ => unreachable!("unexpected modify: {:?}", m),
         }
     }
@@ -670,14 +700,14 @@ fn build_pessimistic_rollback(builder: &mut CustomBuilder, modifies: Vec<Modify>
     }
 }
 
-fn build_rollback(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
+fn build_rollback(builder: &mut CustomBuilder, mut modifies: Vec<Modify>) {
     builder.set_type(rlog::TYPE_ROLLBACK);
 
     let deleted_lock = modifies
-        .iter()
+        .iter_mut()
         .filter_map(|m| {
             if let Modify::Delete(CF_LOCK, k) = m {
-                Some(k.clone())
+                Some(mem::replace(k, Key::from_encoded(vec![])))
             } else {
                 None
             }
@@ -1132,5 +1162,7 @@ mod tests {
             cnt += 1
         });
         assert_eq!(cnt, 2);
+
+        // TODO: test !is_short_value, 1PC fallback
     }
 }

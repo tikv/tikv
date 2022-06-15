@@ -21,10 +21,8 @@ use super::timestamp::TimeStamp;
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 
-pub fn is_short_value(_value: &[u8]) -> bool {
-    // value.len() <= SHORT_VALUE_MAX_LEN
-    // Cloud storage engine always puts value in lock/write-cf.
-    true
+pub fn is_short_value(value: &[u8]) -> bool {
+    value.len() <= SHORT_VALUE_MAX_LEN
 }
 
 /// Value type which is essentially raw bytes.
