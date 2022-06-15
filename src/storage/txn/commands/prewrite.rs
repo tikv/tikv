@@ -780,7 +780,7 @@ mod tests {
     use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
     use crate::storage::txn::actions::tests::{
         must_pessimistic_prewrite_put_async_commit, must_prewrite_put,
-        must_prewrite_put_async_commit,
+        must_prewrite_put_async_commit, must_prewrite_put_impl,
     };
     use crate::storage::{
         mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
@@ -2006,8 +2006,6 @@ mod tests {
             15.into(),
             20.into(),
             false,
-            Assertion::None,
-            AssertionLevel::Off,
         );
         must_commit(&engine, b"k1", 5, 18);
         must_commit(&engine, b"k2", 5, 18);
@@ -2017,7 +2015,7 @@ mod tests {
 
         // Retry the prewrite on non-pessimistic key.
         // (is_retry_request flag is not set, here we don't rely on it.)
-        let mutation = Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec());
+        let mutation = Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec()));
         let cmd = PrewritePessimistic::new(
             vec![(mutation, false)],
             b"k1".to_vec(),
