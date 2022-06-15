@@ -442,12 +442,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     fn on_change_cfg(&mut self, change: ConfigChange) {
         // Validate first.
         let mut validate_cfg = self.config.clone();
-        validate_cfg.update(change.clone());
+        validate_cfg.update(change);
         if let Err(e) = validate_cfg.validate() {
             warn!("cdc config update failed"; "error" => ?e);
             return;
         }
-
+        let change = self.config.diff(&validate_cfg);
         info!(
             "cdc config updated";
             "current config" => ?self.config,
@@ -1542,13 +1542,13 @@ mod tests {
             let mut updated_cfg = cfg.clone();
             {
                 // Update it to be smaller than incremental_scan_threads,
-                // which will be an invalid change and will be lost.
+                // which will be an invalid change and will modified to incremental_scan_threads.
                 updated_cfg.incremental_scan_concurrency = 2;
             }
             let diff = cfg.diff(&updated_cfg);
             ep.run(Task::ChangeConfig(diff));
-            assert_eq!(ep.config.incremental_scan_concurrency, 6);
-            assert_eq!(ep.scan_concurrency_semaphore.available_permits(), 6);
+            assert_eq!(ep.config.incremental_scan_concurrency, 4);
+            assert_eq!(ep.scan_concurrency_semaphore.available_permits(), 4);
 
             {
                 // Correct update.

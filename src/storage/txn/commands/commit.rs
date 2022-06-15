@@ -23,7 +23,7 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite).
     Commit:
         cmd_ty => TxnStatus,
-        display => "kv::command::commit {} {} -> {} | {:?}", (keys.len, lock_ts, commit_ts, ctx),
+        display => "kv::command::commit {:?} {} -> {} | {:?}", (keys, lock_ts, commit_ts, ctx),
         content => {
             /// The keys affected.
             keys: Vec<Key>,
