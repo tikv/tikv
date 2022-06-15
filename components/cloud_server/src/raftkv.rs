@@ -581,6 +581,10 @@ fn build_pessimistic_lock(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
                 let val = lock.into_lock().to_bytes();
                 builder.append_lock(&raw_key, &val);
             }
+            Modify::Put(CF_LOCK, key, val) => {
+                let raw_key = key.into_raw().unwrap();
+                builder.append_lock(&raw_key, &val);
+            }
             _ => unreachable!("unexpected modify: {:?}", m),
         }
     }
