@@ -137,13 +137,14 @@ impl Latch {
 }
 
 /// Lock required for a command.
-#[derive(Clone)]
 pub struct Lock {
     /// The hash value of the keys that a command must acquire before being able to be processed.
     pub required_hashes: Vec<u64>,
 
     /// The number of latches that the command has acquired.
     pub owned_count: usize,
+
+    pub additional_lock_waits: Option<VecDeque<WriteResultLockInfo>>,
 }
 
 impl Lock {
@@ -167,6 +168,7 @@ impl Lock {
         Lock {
             required_hashes,
             owned_count: 0,
+            additional_lock_waits: None,
         }
     }
 
@@ -175,6 +177,18 @@ impl Lock {
         Self {
             required_hashes,
             owned_count,
+            additional_lock_waits: None,
+        }
+    }
+
+    pub fn new_with_additional_lock_waits(
+        required_hashes: Vec<u64>,
+        additional_lock_waits: VecDeque<WriteResultLockInfo>,
+    ) -> Self {
+        Self {
+            required_hashes,
+            owned_count: 0,
+            additional_lock_waits: Some(additional_lock_waits),
         }
     }
 
@@ -220,6 +234,11 @@ impl Latches {
             match latch.get_first_req_by_hash(key_hash) {
                 Some(cid) => {
                     if cid == who {
+                        Self::add_lock_waits(
+                            key_hash,
+                            lock.additional_lock_waits.as_mut(),
+                            &mut latch,
+                        );
                         acquired_count += 1;
                     } else {
                         latch.wait_for_wake(key_hash, who);
@@ -227,6 +246,7 @@ impl Latches {
                     }
                 }
                 None => {
+                    Self::add_lock_waits(key_hash, lock.additional_lock_waits.as_mut(), &mut latch);
                     latch.wait_for_wake(key_hash, who);
                     acquired_count += 1;
                 }
@@ -234,6 +254,24 @@ impl Latches {
         }
         lock.owned_count += acquired_count;
         lock.acquired()
+    }
+
+    fn add_lock_waits(
+        current_hash: u64,
+        sorted_lock_waits: Option<&mut VecDeque<WriteResultLockInfo>>,
+        latch_slot: &mut Latch,
+    ) {
+        if let Some(lock_waits) = sorted_lock_waits {
+            while let Some(front) = lock_waits.front() {
+                assert_ge!(front.hash_for_latch, current_hash);
+                if front.hash_for_latch != current_hash {
+                    return;
+                }
+
+                let front = lock_waits.pop_front().unwrap();
+                latch_slot.push_lock_waiting(front);
+            }
+        }
     }
 
     pub fn try_acquire(&self, hash: u64, cid: u64) -> bool {

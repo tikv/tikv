@@ -603,32 +603,38 @@ impl AcquirePessimisticLock {
         Self::new(inner, is_first_lock, ctx)
     }
 
+    pub fn new_resumed_from_lock_info(
+        lock_info: Vec<WriteResultLockInfo>,
+        additional_secondaries: Vec<ResumedPessimisticLockItem>,
+        next_batch_secondaries: Vec<(ResumedPessimisticLockItem, PessimisticLockKeyCallback)>,
+    ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
+        let mut items = Vec::with_capacity(lock_info.len() + additional_secondaries.len());
+        items.extend(lock_info.into_iter().map(|item| {
+            assert!(item.key_cb.is_none());
+            let lock_key_ctx = PessimisticLockKeyContext {
+                index_in_request: item.index_in_request,
+                lock_digest: item.lock_digest,
+                hash_for_latch: item.hash_for_latch,
+            };
+            ResumedPessimisticLockItem {
+                key: item.key,
+                should_not_exist: item.should_not_exist,
+                params: item.parameters,
+                lock_key_ctx,
+                awakened_with_primary_index: None,
+            }
+        }));
+        Self::new_resumed(items, additional_secondaries, next_batch_secondaries)
+    }
+
     pub fn new_resumed(
-        items: Vec<WriteResultLockInfo>,
+        mut items: Vec<ResumedPessimisticLockItem>,
         additional_secondaries: Vec<ResumedPessimisticLockItem>,
         next_batch_secondaries: Vec<(ResumedPessimisticLockItem, PessimisticLockKeyCallback)>,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
         assert!(!items.is_empty());
-        let ctx = items[0].parameters.pb_ctx.clone();
-        let items = items
-            .into_iter()
-            .map(|item| {
-                assert!(item.key_cb.is_none());
-                let lock_key_ctx = PessimisticLockKeyContext {
-                    index_in_request: item.index_in_request,
-                    lock_digest: item.lock_digest,
-                    hash_for_latch: item.hash_for_latch,
-                };
-                ResumedPessimisticLockItem {
-                    key: item.key,
-                    should_not_exist: item.should_not_exist,
-                    params: item.parameters,
-                    lock_key_ctx,
-                    awakened_with_primary_index: None,
-                }
-            })
-            .chain(additional_secondaries)
-            .collect();
+        let ctx = items[0].params.pb_ctx.clone();
+        items.extend(additional_secondaries.into_iter());
         let inner = PessimisticLockCmdInner::BatchResumedRequests {
             items,
             next_batch: if next_batch_secondaries.is_empty() {
