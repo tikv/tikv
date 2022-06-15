@@ -578,6 +578,7 @@ type = "plaintext"
 [backup]
 num-threads = 456
 batch-size = 7
+s3-multi-part-size = "15MB"
 sst-max-size = "789MB"
 
 [backup.hadoop]
