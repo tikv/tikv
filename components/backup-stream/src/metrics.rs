@@ -25,6 +25,10 @@ pub fn update_task_status(status: TaskStatus, task: &str) {
     }
 }
 
+pub fn remove_task_status_metric(task: &str) -> Result<()> {
+    TASK_STATUS.remove_label_values(&[task])
+}
+
 lazy_static! {
     pub static ref INTERNAL_ACTOR_MESSAGE_HANDLE_DURATION: HistogramVec = register_histogram_vec!(
         "tikv_log_backup_interal_actor_acting_duration_sec",
