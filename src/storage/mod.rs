@@ -62,6 +62,7 @@ use std::{
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
+use causal_ts::CausalTsProvider;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
     raw_ttl::ttl_to_expire_ts, CfName, PerfContext, PerfContextExt, PerfContextKind, PerfLevel,
@@ -168,6 +169,8 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 
     api_version: ApiVersion, // TODO: remove this. Use `Api` instead.
 
+    ts_provider: Option<Arc<dyn CausalTsProvider>>,
+
     quota_limiter: Arc<QuotaLimiter>,
 
     _phantom: PhantomData<F>,
@@ -194,6 +197,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
             max_key_size: self.max_key_size,
             concurrency_manager: self.concurrency_manager.clone(),
             api_version: self.api_version,
+            ts_provider: self.ts_provider.clone(),
             resource_tag_factory: self.resource_tag_factory.clone(),
             quota_limiter: Arc::clone(&self.quota_limiter),
             _phantom: PhantomData,
@@ -273,10 +277,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             api_version: config.api_version(),
+            ts_provider: None,
             resource_tag_factory,
             quota_limiter,
             _phantom: PhantomData,
         })
+    }
+
+    pub fn set_ts_provider(&mut self, ts_provider: Arc<dyn CausalTsProvider>) {
+        self.ts_provider = Some(ts_provider)
     }
 
     fn with_perf_context<Fn, T>(cmd: CommandKind, f: Fn) -> T
@@ -507,6 +516,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
         }
         Ok(())
+    }
+
+    fn get_ts(&self) -> Result<Option<TimeStamp>> {
+        match &self.ts_provider {
+            None => Ok(None),
+            Some(provider) => {
+                let ret = provider.get_ts();
+                match ret {
+                    Ok(ts) => return Ok(Some(ts)),
+                    Err(_) => return Err(box_err!("fail to get ts")),
+                }
+            }
+        }
     }
 
     // TODO: refactor to use `Api` parameter.
@@ -1805,7 +1827,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         if !F::IS_TTL_ENABLED && ttl != 0 {
             return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
-
         let raw_value = RawValue {
             user_value: value,
             expire_ts: ttl_to_expire_ts(ttl),
@@ -1813,7 +1834,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         };
         let m = Modify::Put(
             Self::rawkv_cf(&cf, self.api_version)?,
-            F::encode_raw_key_owned(key, None),
+            F::encode_raw_key_owned(key, self.get_ts()?),
             F::encode_raw_value_owned(raw_value),
         );
 
@@ -1833,6 +1854,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         cf: CfName,
         pairs: Vec<KvPair>,
         ttls: Vec<u64>,
+        ts: Option<TimeStamp>,
     ) -> Result<Vec<Modify>> {
         if !F::IS_TTL_ENABLED {
             if ttls.iter().any(|&x| x != 0) {
@@ -1853,7 +1875,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 };
                 Modify::Put(
                     cf,
-                    F::encode_raw_key_owned(k, None),
+                    F::encode_raw_key_owned(k, ts),
                     F::encode_raw_value_owned(raw_value),
                 )
             })
@@ -1884,8 +1906,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             self.max_key_size,
             callback
         );
-
-        let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls)?;
+        let ts = self.get_ts()?;
+        let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, ts)?;
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
 
@@ -1898,8 +1920,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Ok(())
     }
 
-    fn raw_delete_request_to_modify(cf: CfName, key: Vec<u8>) -> Modify {
-        let key = F::encode_raw_key_owned(key, None);
+    fn raw_delete_request_to_modify(cf: CfName, key: Vec<u8>, ts: Option<TimeStamp>) -> Modify {
+        let key = F::encode_raw_key_owned(key, ts);
         match F::TAG {
             ApiVersion::V2 => Modify::Put(cf, key, ApiV2::ENCODED_LOGICAL_DELETE.to_vec()),
             _ => Modify::Delete(cf, key),
@@ -1923,8 +1945,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         )?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
-
-        let m = Self::raw_delete_request_to_modify(Self::rawkv_cf(&cf, self.api_version)?, key);
+        let ts = self.get_ts()?;
+        let m = Self::raw_delete_request_to_modify(Self::rawkv_cf(&cf, self.api_version)?, key, ts);
         let mut batch = WriteData::from_modifies(vec![m]);
         batch.set_allowed_on_disk_almost_full();
 
@@ -1956,6 +1978,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             [(Some(&start_key), Some(&end_key))],
         )?;
 
+        // no need to encode ts in raw_delete_range
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let start_key = F::encode_raw_key_owned(start_key, None);
         let end_key = F::encode_raw_key_owned(end_key, None);
@@ -1993,10 +2016,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
-
+        let ts = self.get_ts()?;
         let modifies = keys
             .into_iter()
-            .map(|k| Self::raw_delete_request_to_modify(cf, k))
+            .map(|k| Self::raw_delete_request_to_modify(cf, k, ts))
             .collect();
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
@@ -2423,9 +2446,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             CommandKind::raw_atomic_store,
             pairs.iter().map(|(ref k, _)| k),
         )?;
-
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls)?;
+        let ts = self.get_ts()?;
+        let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, ts)?;
         let cmd = RawAtomicStore::new(cf, modifies, ctx);
         self.sched_txn_command(cmd, callback)
     }
@@ -2443,11 +2466,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             CommandKind::raw_atomic_store,
             &keys,
         )?;
-
+        let ts = self.get_ts()?;
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let modifies = keys
             .into_iter()
-            .map(|k| Self::raw_delete_request_to_modify(cf, k))
+            .map(|k| Self::raw_delete_request_to_modify(cf, k, ts))
             .collect();
         let cmd = RawAtomicStore::new(cf, modifies, ctx);
         self.sched_txn_command(cmd, callback)
@@ -2639,6 +2662,7 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager, F: KvFormat> {
     in_memory_pessimistic_lock: Arc<AtomicBool>,
     lock_mgr: L,
     resource_tag_factory: ResourceTagFactory,
+    ts_provider: Option<Arc<dyn CausalTsProvider>>,
     _phantom: PhantomData<F>,
 }
 
@@ -2649,12 +2673,21 @@ pub type TestStorageBuilderApiV1<E, L> = TestStorageBuilder<E, L, ApiV1>;
 impl<F: KvFormat> TestStorageBuilder<RocksEngine, DummyLockManager, F> {
     /// Build `Storage<RocksEngine>`.
     pub fn new(lock_mgr: DummyLockManager) -> Self {
+        let mut ts_provider = None;
+        if F::TAG == ApiVersion::V2 {
+            ts_provider = Some(Arc::new(causal_ts::tests::TestProvider::default()));
+        }
         let engine = TestEngineBuilder::new()
             .api_version(F::TAG)
+            .causal_ts_provider(ts_provider.clone())
             .build()
             .unwrap();
 
-        Self::from_engine_and_lock_mgr(engine, lock_mgr)
+        let mut builder = Self::from_engine_and_lock_mgr(engine, lock_mgr);
+        if F::TAG == ApiVersion::V2 {
+            builder = builder.causal_ts_provider(ts_provider.unwrap());
+        }
+        builder
     }
 }
 
@@ -2787,8 +2820,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             lock_mgr,
             resource_tag_factory: ResourceTagFactory::new_for_test(),
+            ts_provider: None,
             _phantom: PhantomData,
         }
+    }
+
+    pub fn causal_ts_provider(mut self, ts_provider: Arc<dyn CausalTsProvider>) -> Self {
+        self.ts_provider = Some(ts_provider);
+        self
     }
 
     /// Customize the config of the `Storage`.
@@ -2833,7 +2872,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             self.engine.clone(),
         );
 
-        Storage::from_engine(
+        let mut storage = Storage::from_engine(
             self.engine,
             &self.config,
             ReadPool::from(read_pool).handle(),
@@ -2848,7 +2887,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             self.resource_tag_factory,
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
-        )
+        )?;
+        if self.ts_provider.is_some() {
+            storage.set_ts_provider(self.ts_provider.unwrap());
+        }
+        Ok(storage)
     }
 
     pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L, F>> {

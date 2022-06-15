@@ -671,7 +671,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage::<_, _, _, F>(
+        let mut storage = create_raft_storage::<_, _, _, F>(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -755,6 +755,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             }
             let causal_ts_provider = Arc::new(tso.unwrap());
             info!("Causal timestamp provider startup.");
+            storage.set_ts_provider(causal_ts_provider.clone());
 
             let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());

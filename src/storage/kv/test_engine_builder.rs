@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use causal_ts::tests::TestProvider;
 use engine_rocks::{raw::ColumnFamilyOptions, raw_util::CFOptions};
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IORateLimiter;
@@ -28,6 +29,7 @@ pub struct TestEngineBuilder {
     cfs: Option<Vec<CfName>>,
     io_rate_limiter: Option<Arc<IORateLimiter>>,
     api_version: ApiVersion,
+    ts_provider: Option<Arc<TestProvider>>,
 }
 
 impl TestEngineBuilder {
@@ -37,6 +39,7 @@ impl TestEngineBuilder {
             cfs: None,
             io_rate_limiter: None,
             api_version: ApiVersion::V1,
+            ts_provider: None,
         }
     }
 
@@ -66,12 +69,16 @@ impl TestEngineBuilder {
         self
     }
 
+    pub fn causal_ts_provider(mut self, ts_provider: Option<Arc<TestProvider>>) -> Self {
+        self.ts_provider = ts_provider;
+        self
+    }
+
     /// Register causal observer for RawKV API V2.
     // TODO: `RocksEngine` is coupling with RawKV features including GC (compaction filter) & CausalObserver.
     // Consider decoupling them.
-    fn register_causal_observer(engine: &mut RocksEngine) {
-        let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-        let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+    fn register_causal_observer(engine: &mut RocksEngine, provider: Arc<TestProvider>) {
+        let causal_ob = causal_ts::CausalObserver::new(provider);
         engine.register_observer(|host| {
             causal_ob.register_to(host);
         });
@@ -131,7 +138,7 @@ impl TestEngineBuilder {
         )?;
 
         if let ApiVersion::V2 = api_version {
-            Self::register_causal_observer(&mut engine);
+            Self::register_causal_observer(&mut engine, self.ts_provider.unwrap());
         }
 
         Ok(engine)
