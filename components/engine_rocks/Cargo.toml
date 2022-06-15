@@ -54,7 +54,8 @@ time = "0.1"
 txn_types = { path = "../txn_types", default-features = false }
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/cosven/rust-rocksdb.git"
+branch = "test-art"
 package = "rocksdb"
 features = ["encryption"]
 
