@@ -67,6 +67,7 @@ merge-check-tick-interval = "100ms"
 pd-heartbeat-tick-interval = "20ms"
 dev-assert = true
 hibernate-regions = true
+store-io-pool-size = 0
 
 [coprocessor]
 

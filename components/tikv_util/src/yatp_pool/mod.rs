@@ -251,8 +251,9 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     }
 
     fn create_builder(&mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
-        let mut builder =
-            yatp::Builder::new(self.name_prefix.clone().unwrap_or_else(|| "".to_string()));
+        let mut builder = yatp::Builder::new(thd_name!(
+            self.name_prefix.clone().unwrap_or_else(|| "".to_string())
+        ));
         builder
             .stack_size(self.stack_size)
             .min_thread_count(self.min_thread_count)

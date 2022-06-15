@@ -18,7 +18,8 @@ use std::vec::Drain;
 use std::{cmp, usize};
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
+    Priority,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -2832,6 +2833,8 @@ where
     pub peer_id: u64,
     pub region_id: u64,
     pub term: u64,
+    pub commit_index: u64,
+    pub commit_term: u64,
     pub entries: SmallVec<[CachedEntries; 1]>,
     pub entries_size: usize,
     pub cbs: Vec<Proposal<S>>,
@@ -2842,6 +2845,8 @@ impl<S: Snapshot> Apply<S> {
         peer_id: u64,
         region_id: u64,
         term: u64,
+        commit_index: u64,
+        commit_term: u64,
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
@@ -2854,6 +2859,8 @@ impl<S: Snapshot> Apply<S> {
             peer_id,
             region_id,
             term,
+            commit_index,
+            commit_term,
             entries: smallvec![cached_entries],
             entries_size,
             cbs,
@@ -2881,11 +2888,18 @@ impl<S: Snapshot> Apply<S> {
         assert_eq!(self.region_id, other.region_id);
         assert_eq!(self.peer_id, other.peer_id);
         if self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE {
-            self.entries.append(&mut other.entries);
-            self.cbs.append(&mut other.cbs);
             assert!(other.term >= self.term);
             self.term = other.term;
+
+            assert!(other.commit_index >= self.commit_index);
+            self.commit_index = other.commit_index;
+            assert!(other.commit_term >= self.commit_term);
+            self.commit_term = other.commit_term;
+
+            self.entries.append(&mut other.entries);
             self.entries_size += other.entries_size;
+
+            self.cbs.append(&mut other.cbs);
             true
         } else {
             false
@@ -3253,21 +3267,20 @@ where
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
-        if let Some(entry) = entries.last() {
-            let prev_state = (
-                self.delegate.apply_state.get_commit_index(),
-                self.delegate.apply_state.get_commit_term(),
+
+        let prev_state = (
+            self.delegate.apply_state.get_commit_index(),
+            self.delegate.apply_state.get_commit_term(),
+        );
+        let cur_state = (apply.commit_index, apply.commit_term);
+        if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
+            panic!(
+                "{} commit state jump backward {:?} -> {:?}",
+                self.delegate.tag, prev_state, cur_state
             );
-            let cur_state = (entry.get_index(), entry.get_term());
-            if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
-                panic!(
-                    "{} commit state jump backward {:?} -> {:?}",
-                    self.delegate.tag, prev_state, cur_state
-                );
-            }
-            self.delegate.apply_state.set_commit_index(cur_state.0);
-            self.delegate.apply_state.set_commit_term(cur_state.1);
         }
+        self.delegate.apply_state.set_commit_index(cur_state.0);
+        self.delegate.apply_state.set_commit_term(cur_state.1);
 
         self.append_proposal(apply.cbs.drain(..));
         // If there is any apply task, we change this fsm to normal-priority.
@@ -3386,7 +3399,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         catch_up_logs: CatchUpLogs,
     ) {
-        fail_point!("after_handle_catch_up_logs_for_merge");
+        fail_point!("after_handle_catch_up_logs_for_merge", |_| {});
         fail_point!(
             "after_handle_catch_up_logs_for_merge_1003",
             self.delegate.id() == 1003,
@@ -3768,48 +3781,48 @@ where
         }
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm<EK>) -> Option<usize> {
-        let mut expected_msg_count = None;
+    fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = ApplyFsm<EK>>) -> HandleResult {
+        let mut handle_result = HandleResult::KeepProcessing;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
                 // condition that new messages are queued after resuming and before
                 // query the length.
-                expected_msg_count = Some(normal.receiver.len());
+                handle_result = HandleResult::stop_at(normal.receiver.len(), false);
             }
             normal.resume_pending(&mut self.apply_ctx);
             if normal.delegate.wait_merge_state.is_some() {
                 // Yield due to applying CommitMerge, this fsm can be released if its
-                // channel msg count equals to expected_msg_count because it will receive
+                // channel msg count equals to last count because it will receive
                 // a new message if its source region has applied all needed logs.
-                return expected_msg_count;
+                return handle_result;
             } else if normal.delegate.yield_state.is_some() {
                 // Yield due to other reasons, this fsm must not be released because
                 // it's possible that no new message will be sent to itself.
                 // The remaining messages will be handled in next rounds.
-                return None;
+                return HandleResult::KeepProcessing;
             }
-            expected_msg_count = None;
+            handle_result = HandleResult::KeepProcessing;
         }
         fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
-            None
+            HandleResult::KeepProcessing
         });
         fail_point!(
             "before_handle_normal_1003",
             normal.delegate.id() == 1003,
-            |_| { None }
+            |_| { HandleResult::KeepProcessing }
         );
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
                 Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     normal.delegate.stopped = true;
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
             }
@@ -3819,17 +3832,17 @@ where
 
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
-            expected_msg_count = Some(0);
+            handle_result = HandleResult::stop_at(0, false);
         } else if normal.delegate.yield_state.is_some() {
             // Let it continue to run next time.
-            expected_msg_count = None;
+            handle_result = HandleResult::KeepProcessing;
         }
-        expected_msg_count
+        handle_result
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
+    fn end(&mut self, fsms: &mut [Option<impl DerefMut<Target = ApplyFsm<EK>>>]) {
         self.apply_ctx.flush();
-        for fsm in fsms {
+        for fsm in fsms.iter_mut().flatten() {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
             fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
@@ -4433,7 +4446,19 @@ mod tests {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        Apply::new(peer_id, region_id, term, entries, cbs)
+        let (commit_index, commit_term) = entries
+            .last()
+            .map(|e| (e.get_index(), e.get_term()))
+            .unwrap();
+        Apply::new(
+            peer_id,
+            region_id,
+            term,
+            commit_index,
+            commit_term,
+            entries,
+            cbs,
+        )
     }
 
     #[test]

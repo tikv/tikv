@@ -5,21 +5,23 @@ use std::cell::Cell;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, u64};
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
+    Priority,
 };
-use crossbeam::channel::{Sender, TryRecvError, TrySendError};
+use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
 use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
+use grpcio_health::HealthService;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -53,7 +55,7 @@ use tikv_util::{
 use crate::bytes_capacity;
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
-use crate::store::async_io::write::{StoreWriters, WriteMsg};
+use crate::store::async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg};
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -402,6 +404,7 @@ where
     /// Only contains items which is not `DiskUsage::Normal`.
     pub store_disk_usages: HashMap<u64, DiskUsage>,
     pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+    pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
 }
@@ -715,6 +718,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
+        fail_point!(
+            "on_peer_handle_control_1",
+            store.store.id == 1,
+            |_| unreachable!()
+        );
         let mut expected_msg_count = None;
         while self.store_msg_buf.len() < self.messages_per_tick {
             match store.receiver.try_recv() {
@@ -738,8 +746,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm<EK, ER>) -> Option<usize> {
-        let mut expected_msg_count = None;
+    fn handle_normal(
+        &mut self,
+        peer: &mut impl DerefMut<Target = PeerFsm<EK, ER>>,
+    ) -> HandleResult {
+        let mut handle_result = HandleResult::KeepProcessing;
 
         fail_point!(
             "pause_on_peer_collect_message",
@@ -771,41 +782,76 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     self.peer_msg_buf.push(msg);
                 }
                 Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     peer.stop();
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
             }
         }
+
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
-        expected_msg_count
+        // No readiness is generated and using sync write, skipping calling ready and release early.
+        if !delegate.collect_ready() && self.poll_ctx.sync_write_worker.is_some() {
+            if let HandleResult::StopAt { skip_end, .. } = &mut handle_result {
+                *skip_end = true;
+            }
+        }
+
+        handle_result
     }
 
-    fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
-        for peer in peers {
+    fn light_end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
+        for peer in peers.iter_mut().flatten() {
             peer.update_memory_trace(&mut self.trace_event);
         }
 
-        let now = TiInstant::now();
-        if self.poll_ctx.trans.need_flush()
-            && now.saturating_duration_since(self.last_flush_msg_time)
-                >= self.poll_ctx.cfg.raft_msg_flush_interval.0
-        {
-            self.last_flush_msg_time = now;
-            self.poll_ctx.trans.flush();
-        }
+        if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+            if self.poll_ctx.trans.need_flush() && !write_worker.is_empty() {
+                self.poll_ctx.trans.flush();
+            }
 
-        let dur = now.saturating_duration_since(self.timer);
-        if self.poll_ctx.has_ready {
+            self.flush_events();
+        } else {
+            let now = TiInstant::now();
+
+            if self.poll_ctx.trans.need_flush()
+                && now.saturating_duration_since(self.last_flush_msg_time)
+                    >= self.poll_ctx.cfg.raft_msg_flush_interval.0
+            {
+                self.last_flush_msg_time = now;
+                self.poll_ctx.trans.flush();
+            }
+
+            if now.saturating_duration_since(self.last_flush_time) >= Duration::from_millis(1) {
+                self.last_flush_time = now;
+                self.need_flush_events = false;
+                self.flush_events();
+            } else {
+                self.need_flush_events = true;
+            }
+        }
+    }
+
+    fn end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
+        let dur = if self.poll_ctx.has_ready {
             // Only enable the fail point when the store id is equal to 3, which is
             // the id of slow store in tests.
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
 
+            if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+                write_worker.write_to_db(false);
+
+                for peer in peers.iter_mut().flatten() {
+                    PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
+                }
+            }
+
+            let dur = self.timer.saturating_elapsed();
             if !self.poll_ctx.store_stat.is_busy {
                 let election_timeout = Duration::from_millis(
                     self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
@@ -827,7 +873,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.message,
                 self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.snapshot
             );
-        }
+            dur
+        } else {
+            self.timer.saturating_elapsed()
+        };
 
         self.poll_ctx.current_time = None;
         self.poll_ctx
@@ -835,40 +884,47 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .process_ready
             .observe(duration_to_sec(dur));
 
-        if now.saturating_duration_since(self.last_flush_time) >= Duration::from_millis(1) {
-            self.last_flush_time = now;
-            self.need_flush_events = false;
-            self.flush_events();
-        } else {
-            self.need_flush_events = true;
-        }
-
         if !self.poll_ctx.pending_latency_inspect.is_empty() {
-            for inspector in &mut self.poll_ctx.pending_latency_inspect {
+            let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
+            for inspector in &mut latency_inspect {
                 inspector.record_store_process(dur);
             }
-            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-            if let Err(err) =
-                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
-                    send_time: now,
-                    inspector: std::mem::take(&mut self.poll_ctx.pending_latency_inspect),
-                })
-            {
-                warn!("send latency inspecting to write workers failed"; "err" => ?err);
+            if self.poll_ctx.sync_write_worker.is_some() {
+                for mut inspector in latency_inspect {
+                    inspector.record_store_write(dur);
+                    inspector.finish();
+                }
+            } else {
+                let now = TiInstant::now();
+                let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
+                if let Err(err) =
+                    self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+                        send_time: now,
+                        inspector: latency_inspect,
+                    })
+                {
+                    warn!("send latency inspecting to write workers failed"; "err" => ?err);
+                }
             }
         }
     }
 
     fn pause(&mut self) {
-        let now = TiInstant::now();
-        if self.poll_ctx.trans.need_flush() {
-            self.last_flush_msg_time = now;
-            self.poll_ctx.trans.flush();
-        }
-        if self.need_flush_events {
-            self.last_flush_time = now;
-            self.need_flush_events = false;
-            self.flush_events();
+        if self.poll_ctx.sync_write_worker.is_some() {
+            if self.poll_ctx.trans.need_flush() {
+                self.poll_ctx.trans.flush();
+            }
+        } else if self.poll_ctx.trans.need_flush() || self.need_flush_events {
+            let now = TiInstant::now();
+            if self.poll_ctx.trans.need_flush() {
+                self.last_flush_msg_time = now;
+                self.poll_ctx.trans.flush();
+            }
+            if self.need_flush_events {
+                self.last_flush_time = now;
+                self.need_flush_events = false;
+                self.flush_events();
+            }
         }
     }
 }
@@ -1034,7 +1090,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             None => return,
             Some(value) => value,
         };
-        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, rid, &raft_state).unwrap();
+        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, rid, 0, &raft_state).unwrap();
         let key = keys::region_state_key(rid);
         kv_wb.put_msg_cf(CF_RAFT, &key, origin_state).unwrap();
     }
@@ -1075,6 +1131,20 @@ where
     type Handler = RaftPoller<EK, ER, T>;
 
     fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
+        let sync_write_worker = if self.write_senders.is_empty() {
+            let (_, rx) = unbounded();
+            Some(WriteWorker::new(
+                self.store.get_id(),
+                "sync-writer".to_string(),
+                self.engines.clone(),
+                rx,
+                self.router.clone(),
+                self.trans.clone(),
+                &self.cfg,
+            ))
+        } else {
+            None
+        };
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1112,6 +1182,7 @@ where
             self_disk_usage: DiskUsage::Normal,
             store_disk_usages: Default::default(),
             write_senders: self.write_senders.clone(),
+            sync_write_worker,
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
         };
@@ -1183,6 +1254,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1275,6 +1347,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 concurrency_manager,
                 mgr,
                 pd_client,
+                health_service,
             )?;
         } else {
             self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
@@ -1285,6 +1358,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 concurrency_manager,
                 mgr,
                 pd_client,
+                health_service,
             )?;
         }
         Ok(())
@@ -1299,6 +1373,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
         pd_client: Arc<C>,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1365,6 +1440,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             concurrency_manager,
             snap_mgr,
             workers.pd_worker.remote(),
+            health_service,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
