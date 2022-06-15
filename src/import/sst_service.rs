@@ -295,7 +295,7 @@ macro_rules! impl_write {
                     Ok(resp)
                 }
                 .await;
-                crate::send_rpc_response!(res, sink, label, timer);
+                $crate::send_rpc_response!(res, sink, label, timer);
             };
 
             self.threads.spawn_ok(buf_driver);
