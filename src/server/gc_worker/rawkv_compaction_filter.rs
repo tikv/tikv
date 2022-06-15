@@ -16,7 +16,7 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
-use prometheus::local::LocalHistogram;
+use prometheus::local::{LocalHistogram, LocalHistogramVec};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::Key;
@@ -88,7 +88,7 @@ struct RawCompactionFilter {
     total_filtered: usize,
     orphan_versions: usize,
     versions_hist: LocalHistogram,
-    filtered_hist: LocalHistogram,
+    filtered_hist: LocalHistogramVec,
 
     encountered_errors: bool,
 }
@@ -128,7 +128,9 @@ impl CompactionFilter for RawCompactionFilter {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
-                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
+                GC_COMPACTION_FAILURE
+                    .with_label_values(&["raw", "filter"])
+                    .inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }
@@ -245,10 +247,14 @@ impl RawCompactionFilter {
                 }
                 match e {
                     ScheduleError::Full(_) => {
-                        GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
+                        GC_COMPACTION_FAILURE
+                            .with_label_values(&["raw", "full"])
+                            .inc();
                     }
                     ScheduleError::Stopped(_) => {
-                        GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
+                        GC_COMPACTION_FAILURE
+                            .with_label_values(&["raw", "stopped"])
+                            .inc();
                     }
                 }
             }
@@ -269,16 +275,20 @@ impl RawCompactionFilter {
             self.versions = 0;
         }
         if self.filtered != 0 {
-            self.filtered_hist.observe(self.filtered as f64);
+            self.filtered_hist
+                .with_label_values(&["raw"])
+                .observe(self.filtered as f64);
             self.total_filtered += self.filtered;
             self.filtered = 0;
         }
     }
 
     fn flush_metrics(&self) {
-        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as u64);
+        GC_COMPACTION_FILTERED
+            .with_label_values(&["raw"])
+            .inc_by(self.total_filtered as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-            .with_label_values(&["generated"])
+            .with_label_values(&["raw", "generated"])
             .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);

@@ -205,9 +205,10 @@ lazy_static! {
     pub static ref GC_KEYS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_gcworker_gc_keys",
         "Counter of keys affected during gc",
-        &["cf", "tag"]
+        &["key_mode", "cf", "tag"]
     )
     .unwrap();
+
     pub static ref GC_KEY_FAILURES: IntCounter = register_int_counter!(
         "tikv_gcworker_gc_key_failures",
         "Counter of gc key failures"

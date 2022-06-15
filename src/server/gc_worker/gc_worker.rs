@@ -13,6 +13,7 @@ use std::{
 };
 
 use api_version::{ApiV2, KvFormat};
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
@@ -50,6 +51,7 @@ use super::{
     gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
     Callback, Error, ErrorInner, Result,
 };
+pub use crate::storage::kv::metrics::GcKeyMode;
 use crate::{
     server::metrics::*,
     storage::{
@@ -212,6 +214,7 @@ where
     cfg_tracker: Tracker<GcConfig>,
 
     stats: Statistics,
+    stats_map: HashMap<GcKeyMode, Statistics>,
 }
 
 pub const MAX_RAW_WRITE_SIZE: usize = 32 * 1024;
@@ -304,6 +307,7 @@ where
             cfg,
             cfg_tracker,
             stats: Statistics::default(),
+            stats_map: Default::default(),
         }
     }
 
@@ -336,6 +340,7 @@ where
         gc_info.is_completed = next_gc_info.is_completed;
         let stats = mem::take(&mut reader.statistics);
         self.stats.add(&stats);
+        self.update_stats_map(GcKeyMode::tidb, stats);
         Ok(())
     }
 
@@ -383,6 +388,7 @@ where
         }
 
         self.stats.add(&reader.statistics);
+        self.update_stats_map(GcKeyMode::tidb, reader.statistics);
         debug!(
             "gc has finished";
             "start_key" => log_wrappers::Value::key(start_key),
@@ -526,7 +532,7 @@ where
                     wasted_keys += 1;
                 }
 
-                gc_info.report_metrics();
+                gc_info.report_metrics("raw");
 
                 next_gc_key = keys.next();
                 gc_info = GcInfo::default();
@@ -539,7 +545,7 @@ where
         }
 
         Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
-
+        self.update_statistics_metrics(GcKeyMode::rawkv);
         Ok((handled_keys, wasted_keys))
     }
 
@@ -569,6 +575,7 @@ where
 
             if raw_modifies.write_size >= MAX_RAW_WRITE_SIZE {
                 self.stats.data.add(&statistics);
+                self.update_cf_stats_map(GcKeyMode::rawkv, statistics, CF_DEFAULT);
                 return Ok(());
             }
 
@@ -589,12 +596,55 @@ where
         gc_info.is_completed = true;
 
         self.stats.data.add(&statistics);
+        self.update_cf_stats_map(GcKeyMode::rawkv, statistics, CF_DEFAULT);
 
         if let Some(to_del_key) = latest_version_key {
             self.delete_raws(to_del_key, raw_modifies, gc_info);
         }
 
         Ok(())
+    }
+
+    fn update_cf_stats_map(&mut self, key_mode: GcKeyMode, cf_static: CfStatistics, cf: &str) {
+        match self.stats_map.get_mut(&key_mode) {
+            None => {
+                let mut cfstatistics_insert = CfStatistics::default();
+
+                cfstatistics_insert.add(&cf_static);
+
+                let mut statistics_insert = Statistics::default();
+                statistics_insert.data.add(&cfstatistics_insert);
+                self.stats_map.insert(key_mode, statistics_insert);
+            }
+            Some(stats) => {
+                stats.mut_cf_statistics(cf).add(&cf_static);
+            }
+        };
+    }
+
+    fn get_from_cf_stats_map(
+        &mut self,
+        key_mode: GcKeyMode,
+        cf: &str,
+        metric_detail: GcKeysDetail,
+    ) -> usize {
+        return match self.stats_map.get(&key_mode) {
+            None => 0,
+            Some(stats) => stats.cf_statistics(cf).get_by_enum(metric_detail),
+        };
+    }
+
+    fn update_stats_map(&mut self, key_mode: GcKeyMode, statistics: Statistics) {
+        match self.stats_map.get_mut(&key_mode) {
+            None => {
+                let mut statistics_new = Statistics::default();
+                statistics_new.add(&statistics);
+                self.stats_map.insert(key_mode, statistics_new);
+            }
+            Some(stats) => {
+                stats.add(&statistics);
+            }
+        };
     }
 
     fn delete_raws(&mut self, key: Key, raw_modifies: &mut MvccRaw, gc_info: &mut GcInfo) {
@@ -731,15 +781,20 @@ where
         Ok(lock_infos)
     }
 
-    fn update_statistics_metrics(&mut self) {
-        let stats = mem::take(&mut self.stats);
-
-        for (cf, details) in stats.details_enum().iter() {
-            for (tag, count) in details.iter() {
-                GC_KEYS_COUNTER_STATIC
-                    .get(*cf)
-                    .get(*tag)
-                    .inc_by(*count as u64);
+    fn update_statistics_metrics(&mut self, key_mode: GcKeyMode) {
+        let stats_map = self.stats_map.get_mut(&key_mode);
+        match stats_map {
+            None => {}
+            Some(stats) => {
+                for (cf, cf_details) in stats.details_enum().iter() {
+                    for (tag, count) in cf_details.iter() {
+                        GC_KEYS_COUNTER_STATIC
+                            .get(key_mode)
+                            .get(*cf)
+                            .get(*tag)
+                            .inc_by(*count as u64);
+                    }
+                }
             }
         }
     }
@@ -796,7 +851,7 @@ where
                 let res = self.gc(&start_key, &end_key, safe_point);
                 update_metrics(res.is_err());
                 callback(res);
-                self.update_statistics_metrics();
+                self.update_statistics_metrics(GcKeyMode::tidb);
                 slow_log!(
                     T timer,
                     "GC on range [{}, {}), safe_point {}",
@@ -811,11 +866,19 @@ where
                 store_id,
                 region_info_provider,
             } => {
-                let old_seek_tombstone = self.stats.write.seek_tombstone;
+                let old_seek_tombstone = self.get_from_cf_stats_map(
+                    GcKeyMode::tidb,
+                    CF_WRITE,
+                    GcKeysDetail::seek_tombstone,
+                );
                 match self.gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
                     Ok((handled, wasted)) => {
-                        GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
-                        GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
+                        GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
+                            .with_label_values(&["tidb"])
+                            .inc_by(handled as _);
+                        GC_COMPACTION_FILTER_MVCC_DELETION_WASTED
+                            .with_label_values(&["tidb"])
+                            .inc_by(wasted as _);
                         update_metrics(false);
                     }
                     Err(e) => {
@@ -826,7 +889,7 @@ where
                 let new_seek_tombstone = self.stats.write.seek_tombstone;
                 let seek_tombstone = new_seek_tombstone - old_seek_tombstone;
                 slow_log!(T timer, "GC keys, seek_tombstone {}", seek_tombstone);
-                self.update_statistics_metrics();
+                self.update_statistics_metrics(GcKeyMode::tidb);
             }
             GcTask::RawGcKeys {
                 keys,
@@ -836,8 +899,12 @@ where
             } => {
                 match self.raw_gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
                     Ok((handled, wasted)) => {
-                        GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
-                        GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
+                        GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
+                            .with_label_values(&["raw"])
+                            .inc_by(handled as _);
+                        GC_COMPACTION_FILTER_MVCC_DELETION_WASTED
+                            .with_label_values(&["raw"])
+                            .inc_by(wasted as _);
                         update_metrics(false);
                     }
                     Err(e) => {
@@ -845,7 +912,7 @@ where
                         update_metrics(true);
                     }
                 }
-                self.update_statistics_metrics();
+                self.update_statistics_metrics(GcKeyMode::rawkv);
             }
             GcTask::UnsafeDestroyRange {
                 ctx,
@@ -1271,8 +1338,8 @@ mod tests {
         config::DbConfig,
         storage::{
             kv::{
-                self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
-                SnapContext, TestEngineBuilder, WriteData,
+                self, metrics::GcKeyMode, write_modifies, Callback as EngineCallback, Modify,
+                Result as EngineResult, SnapContext, TestEngineBuilder, WriteData,
             },
             lock_manager::DummyLockManager,
             mvcc::{tests::must_get_none, MAX_TXN_WRITE_SIZE},
@@ -1900,8 +1967,16 @@ mod tests {
             .raw_gc_keys(to_gc_keys, TimeStamp::new(120), Some((1, ri_provider)))
             .unwrap();
 
-        assert_eq!(7, runner.stats.data.next);
-        assert_eq!(2, runner.stats.data.seek);
+        let stats = runner.stats_map.get(&GcKeyMode::rawkv);
+        match stats {
+            None => {
+                unreachable!();
+            }
+            Some(state) => {
+                assert_eq!(7, state.data.next);
+                assert_eq!(2, state.data.seek);
+            }
+        }
 
         let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
 

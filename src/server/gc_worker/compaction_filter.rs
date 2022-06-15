@@ -67,62 +67,69 @@ lazy_static! {
     pub static ref GC_CONTEXT: Mutex<Option<GcContext>> = Mutex::new(None);
 
     // Filtered keys in `WriteCompactionFilter::filter_v2`.
-    pub static ref GC_COMPACTION_FILTERED: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_FILTERED: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filtered",
-        "Filtered versions by compaction"
+        "Filtered versions by compaction",
+        &["key_mode"]
     )
     .unwrap();
     // A counter for errors met by `WriteCompactionFilter`.
     pub static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_failure",
         "Compaction filter meets failure",
-        &["type"]
+        &["type","key_mode"]
     )
     .unwrap();
     // A counter for skip performing GC in compactions.
-    static ref GC_COMPACTION_FILTER_SKIP: IntCounter = register_int_counter!(
+    static ref GC_COMPACTION_FILTER_SKIP: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_skip",
-        "Skip to create compaction filter for GC because of table properties"
+        "Skip to create compaction filter for GC because of table properties",
+                &["key_mode"]
     )
     .unwrap();
-    static ref GC_COMPACTION_FILTER_PERFORM: IntCounter = register_int_counter!(
+    static ref GC_COMPACTION_FILTER_PERFORM: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_perform",
-        "perfrom GC in compaction filter"
+        "perfrom GC in compaction filter",
+                &["key_mode"]
     )
     .unwrap();
 
 
     // `WriteType::Rollback` and `WriteType::Lock` are handled in different ways.
-    pub static ref GC_COMPACTION_MVCC_ROLLBACK: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_MVCC_ROLLBACK: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_mvcc_rollback",
-        "Compaction of mvcc rollbacks"
+        "Compaction of mvcc rollbacks",
+                &["key_mode"]
     )
     .unwrap();
 
     pub static ref GC_COMPACTION_FILTER_ORPHAN_VERSIONS: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_orphan_versions",
         "Compaction filter orphan versions for default CF",
-        &["tag"]
+        &["tag","key_mode"]
     ).unwrap();
 
     /// Counter of mvcc deletions met in compaction filter.
-    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_MET: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_MET: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_mvcc_deletion_met",
-        "MVCC deletion from compaction filter met"
+        "MVCC deletion from compaction filter met",
+        &["key_mode"]
     ).unwrap();
 
     /// Counter of mvcc deletions handled in gc worker.
-    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_mvcc_deletion_handled",
-        "MVCC deletion from compaction filter handled"
+        "MVCC deletion from compaction filter handled",
+        &["key_mode"]
     )
     .unwrap();
 
     /// Mvcc deletions sent to gc worker can have already been cleared, in which case resources are
     /// wasted to seek them.
-    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_WASTED: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_WASTED: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_mvcc_deletion_wasted",
-        "MVCC deletion from compaction filter wasted"
+        "MVCC deletion from compaction filter wasted",
+        &["key_mode"]
     ).unwrap();
 }
 
@@ -235,10 +242,12 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         }
         drop(gc_context_option);
 
-        GC_COMPACTION_FILTER_PERFORM.inc();
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&["tidb"])
+            .inc();
         if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
-            GC_COMPACTION_FILTER_SKIP.inc();
+            GC_COMPACTION_FILTER_SKIP.with_label_values(&["tidb"]).inc();
             return std::ptr::null_mut();
         }
 
@@ -288,7 +297,7 @@ struct WriteCompactionFilter {
     mvcc_rollback_and_locks: usize,
     orphan_versions: usize,
     versions_hist: LocalHistogram,
-    filtered_hist: LocalHistogram,
+    filtered_hist: LocalHistogramVec,
 
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
@@ -349,10 +358,14 @@ impl WriteCompactionFilter {
                 }
                 match e {
                     ScheduleError::Full(_) => {
-                        GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
+                        GC_COMPACTION_FAILURE
+                            .with_label_values(&["tidb", "full"])
+                            .inc();
                     }
                     ScheduleError::Stopped(_) => {
-                        GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
+                        GC_COMPACTION_FAILURE
+                            .with_label_values(&["tidb", "stopped"])
+                            .inc();
                     }
                 }
             }
@@ -421,7 +434,9 @@ impl WriteCompactionFilter {
                     self.remove_older = true;
                     if self.is_bottommost_level {
                         self.mvcc_deletion_overlaps = Some(0);
-                        GC_COMPACTION_FILTER_MVCC_DELETION_MET.inc();
+                        GC_COMPACTION_FILTER_MVCC_DELETION_MET
+                            .with_label_values(&["tidb"])
+                            .inc();
                     }
                 }
             }
@@ -503,15 +518,21 @@ impl WriteCompactionFilter {
             self.versions = 0;
         }
         if self.filtered != 0 {
-            self.filtered_hist.observe(self.filtered as f64);
+            self.filtered_hist
+                .with_label_values(&["tidb"])
+                .observe(self.filtered as f64);
             self.total_filtered += self.filtered;
             self.filtered = 0;
         }
     }
 
     fn flush_metrics(&self) {
-        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as u64);
-        GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as u64);
+        GC_COMPACTION_FILTERED
+            .with_label_values(&["tidb"])
+            .inc_by(self.total_filtered as u64);
+        GC_COMPACTION_MVCC_ROLLBACK
+            .with_label_values(&["tidb"])
+            .inc_by(self.mvcc_rollback_and_locks as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
             .with_label_values(&["generated"])
             .inc_by(self.orphan_versions as u64);
@@ -604,7 +625,9 @@ impl CompactionFilter for WriteCompactionFilter {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
-                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
+                GC_COMPACTION_FAILURE
+                    .with_label_values(&["tidb", "filter"])
+                    .inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }
