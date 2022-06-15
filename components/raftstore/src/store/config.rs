@@ -219,6 +219,10 @@ pub struct Config {
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
+    // Deprecated! Batch is done in raft client.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
     pub raft_msg_flush_interval: ReadableDuration,
 
     // Deprecated! These configuration has been moved to Coprocessor.
@@ -490,10 +494,6 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
-        self.store_batch_system.before_pause_wait = Some(std::cmp::min(
-            self.raft_msg_flush_interval.0,
-            Duration::from_millis(1),
-        ));
         if self.store_io_notify_capacity == 0 {
             return Err(box_err!(
                 "store-io-notify-capacity should be greater than 0"
@@ -716,9 +716,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_hotpot_duration"])
             .set(self.io_reschedule_hotpot_duration.as_secs_f64());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_msg_flush_interval"])
-            .set(self.raft_msg_flush_interval.as_secs_f64());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {
@@ -899,21 +896,5 @@ mod tests {
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
-
-        cfg = Config::new();
-        cfg.raft_msg_flush_interval = ReadableDuration::micros(888);
-        assert!(cfg.validate().is_ok());
-        assert_eq!(
-            cfg.store_batch_system.before_pause_wait,
-            Some(Duration::from_micros(888))
-        );
-
-        cfg = Config::new();
-        cfg.raft_msg_flush_interval = ReadableDuration::micros(1888);
-        assert!(cfg.validate().is_ok());
-        assert_eq!(
-            cfg.store_batch_system.before_pause_wait,
-            Some(Duration::from_millis(1))
-        );
     }
 }
