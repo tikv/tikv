@@ -29,6 +29,23 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
+<<<<<<< HEAD
+=======
+impl Error {
+    pub fn retryable(&self) -> bool {
+        match self {
+            Error::Grpc(_) | Error::ClusterNotBootstrapped(_) => true,
+            Error::Other(_)
+            | Error::RegionNotFound(_)
+            | Error::StoreTombstone(_)
+            | Error::GlobalConfigNotFound(_)
+            | Error::ClusterBootstrapped(_)
+            | Error::Incompatible => false,
+        }
+    }
+}
+
+>>>>>>> 11b5d4c3d... pd_client: Do not reconnect for pd unknown error (#12827)
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
