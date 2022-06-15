@@ -16,6 +16,7 @@ use crate::storage::txn::flow_controller::FlowController;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
+use grpcio_health::HealthService;
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
@@ -76,6 +77,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
+    health_service: Option<HealthService>,
 }
 
 impl<C, EK, ER> Node<C, EK, ER>
@@ -93,6 +95,7 @@ where
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
+        health_service: Option<HealthService>,
     ) -> Node<C, EK, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
@@ -140,6 +143,7 @@ where
             has_started: false,
             state,
             bg_worker,
+            health_service,
         }
     }
 
@@ -475,6 +479,7 @@ where
             auto_split_controller,
             self.state.clone(),
             concurrency_manager,
+            self.health_service.clone(),
         )?;
         Ok(())
     }
