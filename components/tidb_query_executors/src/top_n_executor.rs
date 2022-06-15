@@ -54,6 +54,8 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     context: EvalContext,
     src: Src,
     is_ended: bool,
+
+    paging_size: Option<u64>,
 }
 
 /// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the struct and
@@ -103,6 +105,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             context: EvalContext::default(),
             src,
             is_ended: false,
+            paging_size: None,
         }
     }
 
@@ -112,6 +115,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         order_exprs_def: Vec<Expr>,
         order_is_desc: Vec<bool>,
         n: usize,
+        paging_size: Option<u64>,
     ) -> Result<Self> {
         assert_eq!(order_exprs_def.len(), order_is_desc.len());
 
@@ -142,6 +146,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             context: EvalContext::new(config),
             src,
             is_ended: false,
+            paging_size,
         })
     }
 
@@ -296,7 +301,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
         if self.n == 0 {
@@ -307,6 +312,15 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
                 warnings: EvalWarnings::default(),
                 is_drained: Ok(true),
             };
+        }
+
+        match self.paging_size {
+            None => {}
+            Some(paging_size) => {
+                if self.n > paging_size as usize {
+                    return self.src.next_batch(scan_rows)
+                }
+            }
         }
 
         let result = self.handle_next_batch();

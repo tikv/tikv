@@ -66,6 +66,7 @@ where
                     black_box(order_by_expr.to_vec()),
                     black_box(order_is_desc.to_vec()),
                     black_box(n),
+                    None
                 )
                 .unwrap(),
             )
