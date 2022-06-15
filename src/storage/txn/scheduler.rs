@@ -1783,7 +1783,8 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
         while let Ok((index, msg)) = ctx_inner.result_rx.try_recv() {
             assert!(matches!(
                 results[index],
-                PessimisticLockKeyResult::Waiting(None) | PessimisticLockKeyResult::PrimaryWaiting(_)
+                PessimisticLockKeyResult::Waiting(None)
+                    | PessimisticLockKeyResult::PrimaryWaiting(_)
             ));
             match msg {
                 Ok(lock_key_res) => results[index] = lock_key_res,

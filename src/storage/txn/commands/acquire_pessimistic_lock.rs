@@ -271,23 +271,24 @@ impl AcquirePessimisticLock {
                     if key.to_raw().unwrap() == params.primary {
                         // If the primary meets lock waiting, cancel all writing and let the whole
                         // request wait for the lock of the primary.
-                        lock_info.secondaries = Some(
-                            keys.into_iter()
-                                .enumerate()
-                                .filter_map(|(i, (k, s))| {
-                                    if i == index {
-                                        None
-                                    } else {
-                                        let lock_key_ctx = PessimisticLockKeyContext::from_key(
-                                            i,
-                                            &k,
-                                            params.start_ts,
-                                        );
-                                        Some((k, s, lock_key_ctx, None))
-                                    }
-                                })
-                                .collect(),
-                        );
+                        let secondaries: Vec<_> = keys
+                            .into_iter()
+                            .enumerate()
+                            .filter_map(|(i, (k, s))| {
+                                if i == index {
+                                    None
+                                } else {
+                                    let lock_key_ctx =
+                                        PessimisticLockKeyContext::from_key(i, &k, params.start_ts);
+                                    Some((k, s, lock_key_ctx, None))
+                                }
+                            })
+                            .collect();
+                        lock_info.secondaries = if secondaries.is_empty() {
+                            None
+                        } else {
+                            Some(secondaries)
+                        };
                         txn.clear();
                         old_values.clear();
 
