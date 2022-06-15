@@ -88,7 +88,7 @@ impl PdMocker for NotRetry {
     fn get_region_by_id(&self, _: &GetRegionByIdRequest) -> Option<Result<GetRegionResponse>> {
         if !self.is_visited.swap(true, Ordering::Relaxed) {
             info!(
-                "[NotRetry] get_region_by_id returns Ok(_) with header has IncompatibleVersion error"
+                "[NotRetry] get_region_by_id returns Ok(_) with header has RegionNotFound error"
             );
             let mut err = Error::default();
             err.set_type(ErrorType::RegionNotFound);
@@ -104,7 +104,7 @@ impl PdMocker for NotRetry {
     fn get_store(&self, _: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
         if !self.is_visited.swap(true, Ordering::Relaxed) {
             info!(
-                "[NotRetry] get_region_by_id returns Ok(_) with header has IncompatibleVersion error"
+                "[NotRetry] get_region_by_id returns Ok(_) with header has Unknown error"
             );
             let mut err = Error::default();
             err.set_type(ErrorType::Unknown);
