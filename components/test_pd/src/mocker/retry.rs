@@ -91,7 +91,7 @@ impl PdMocker for NotRetry {
                 "[NotRetry] get_region_by_id returns Ok(_) with header has IncompatibleVersion error"
             );
             let mut err = Error::default();
-            err.set_type(ErrorType::IncompatibleVersion);
+            err.set_type(ErrorType::RegionNotFound);
             let mut resp = GetRegionResponse::default();
             resp.mut_header().set_error(err);
             Some(Ok(resp))
@@ -107,7 +107,7 @@ impl PdMocker for NotRetry {
                 "[NotRetry] get_region_by_id returns Ok(_) with header has IncompatibleVersion error"
             );
             let mut err = Error::default();
-            err.set_type(ErrorType::IncompatibleVersion);
+            err.set_type(ErrorType::Unknown);
             let mut resp = GetStoreResponse::default();
             resp.mut_header().set_error(err);
             Some(Ok(resp))
