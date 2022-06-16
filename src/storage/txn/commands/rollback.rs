@@ -35,6 +35,7 @@ command! {
 impl CommandExt for Rollback {
     ctx!();
     tag!(rollback);
+    request_type!(KvRollback);
     ts!(start_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
