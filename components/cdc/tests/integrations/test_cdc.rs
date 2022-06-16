@@ -2082,36 +2082,6 @@ fn test_resolved_ts_cluster_upgrading() {
     event_feed_wrap.replace(None);
     suite.stop();
 }
-<<<<<<< HEAD
-=======
-
-#[test]
-fn test_resolved_ts_with_learners() {
-    let cluster = new_server_cluster(0, 2);
-    cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuiteBuilder::new()
-        .cluster(cluster)
-        .build_with_cluster_runner(|cluster| {
-            let r = cluster.run_conf_change();
-            cluster.pd_client.must_add_peer(r, new_learner_peer(2, 2));
-        });
-
-    let rid = suite.cluster.get_region(&[]).id;
-    let req = suite.new_changedata_request(rid);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-
-    for _ in 0..10 {
-        let event = receive_event(true);
-        if event.has_resolved_ts() {
-            assert!(event.get_resolved_ts().regions == vec![rid]);
-            drop(receive_event);
-            suite.stop();
-            return;
-        }
-    }
-    panic!("resolved timestamp should be advanced correctly");
-}
 
 #[test]
 fn test_prewrite_without_value() {
@@ -2128,7 +2098,7 @@ fn test_prewrite_without_value() {
     muts[0].set_op(Op::Put);
     muts[0].key = b"key".to_vec();
     muts[0].value = large_value.clone();
-    try_kv_prewrite_pessimistic(&client, ctx.clone(), muts, b"key".to_vec(), 10);
+    try_kv_prewrite(&client, ctx.clone(), muts, b"key".to_vec(), 10);
 
     let req = suite.new_changedata_request(rid);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
@@ -2148,4 +2118,3 @@ fn test_prewrite_without_value() {
     let event = receive_event(false);
     assert_eq!(event.get_events()[0].get_entries().entries[0].commit_ts, 14);
 }
->>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)

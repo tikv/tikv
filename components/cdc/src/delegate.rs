@@ -4,12 +4,7 @@ use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-<<<<<<< HEAD
-use collections::HashMap;
-=======
-use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::{HashMap, HashMapEntry};
->>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
 use crossbeam::atomic::AtomicCell;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
@@ -452,66 +447,28 @@ impl Delegate {
             let (mut row, mut _has_value) = (EventRow::default(), false);
             let row_size: usize;
             match entry {
-<<<<<<< HEAD
                 Some(TxnEntry::Prewrite {
                     default,
                     lock,
                     old_value,
                 }) => {
-                    let mut row = EventRow::default();
-                    let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
-                    if skip {
+                    let l = Lock::parse(&lock.1).unwrap();
+                    if decode_lock(lock.0, l, &mut row, &mut _has_value) {
                         continue;
                     }
-                    decode_default(default.1, &mut row);
-                    let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                        rows.push(Vec::with_capacity(entries_len));
-                        current_rows_size = 0;
-                    }
-                    current_rows_size += row_size;
+                    decode_default(default.1, &mut row, &mut _has_value);
                     row.old_value = old_value.unwrap_or_default();
-                    rows.last_mut().unwrap().push(row);
+                    row_size = row.key.len() + row.value.len();
                 }
                 Some(TxnEntry::Commit {
                     default,
                     write,
                     old_value,
                 }) => {
-                    let mut row = EventRow::default();
-                    let skip = decode_write(write.0, &write.1, &mut row, false);
-                    if skip {
-                        continue;
-                    }
-                    decode_default(default.1, &mut row);
-=======
-                Some(KvEntry::RawKvEntry(kv_pair)) => {
-                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row)?;
-                    row_size = row.key.len() + row.value.len();
-                }
-                Some(KvEntry::TxnEntry(TxnEntry::Prewrite {
-                    default,
-                    lock,
-                    old_value,
-                })) => {
-                    let l = Lock::parse(&lock.1).unwrap();
-                    if decode_lock(lock.0, l, &mut row, &mut _has_value) {
-                        continue;
-                    }
-                    decode_default(default.1, &mut row, &mut _has_value);
-                    row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len();
-                }
-                Some(KvEntry::TxnEntry(TxnEntry::Commit {
-                    default,
-                    write,
-                    old_value,
-                })) => {
                     if decode_write(write.0, &write.1, &mut row, &mut _has_value, false) {
                         continue;
                     }
                     decode_default(default.1, &mut row, &mut _has_value);
->>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
 
                     // This type means the row is self-contained, it has,
                     //   1. start_ts
@@ -523,23 +480,10 @@ impl Delegate {
                         // because downstream does not needs rollback to clean
                         // prewrite as it drops all previous stashed data.
                         continue;
-<<<<<<< HEAD
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
                     row.old_value = old_value.unwrap_or_default();
-                    let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                        rows.push(Vec::with_capacity(entries_len));
-                        current_rows_size = 0;
-                    }
-                    current_rows_size += row_size;
-                    rows.last_mut().unwrap().push(row);
-=======
-                    }
-                    set_event_row_type(&mut row, EventLogType::Committed);
-                    row.old_value = old_value.finalized().unwrap_or_default();
                     row_size = row.key.len() + row.value.len();
->>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
                 }
                 None => {
                     // This type means scan has finished.
@@ -602,17 +546,11 @@ impl Delegate {
             }
         };
 
-<<<<<<< HEAD
-        let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
-=======
-        // map[key] -> (event, has_value).
         let mut txn_rows: HashMap<Vec<u8>, (EventRow, bool)> = HashMap::default();
-        let mut raw_rows: Vec<EventRow> = Vec::new();
->>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => {
-                    self.sink_put(req.take_put(), is_one_pc, &mut rows, &mut read_old_value)
+                    self.sink_put(req.take_put(), is_one_pc, &mut txn_rows, &mut read_old_value);
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete()),
                 _ => {
@@ -624,15 +562,6 @@ impl Delegate {
                 }
             }
         }
-<<<<<<< HEAD
-        // Skip broadcast if there is no Put or Delete.
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let mut entries = Vec::with_capacity(rows.len());
-        for (_, v) in rows {
-            entries.push(v);
-=======
 
         let mut rows = Vec::with_capacity(txn_rows.len());
         for (_, (v, has_value)) in txn_rows {
@@ -645,25 +574,12 @@ impl Delegate {
             }
             rows.push(v);
         }
-        self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
-
-        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
-
-        Ok(())
-    }
-
-    fn sink_downstream(
-        &mut self,
-        entries: Vec<EventRow>,
-        index: u64,
-        kv_api: ChangeDataRequestKvApi,
-    ) -> Result<()> {
-        if entries.is_empty() {
+        
+        if rows.is_empty() {
             return Ok(());
->>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
         }
         let event_entries = EventEntries {
-            entries: entries.into(),
+            entries: rows.into(),
             ..Default::default()
         };
         let change_data_event = Event {
@@ -700,53 +616,16 @@ impl Delegate {
 
     fn sink_put(
         &mut self,
-<<<<<<< HEAD
         mut put: PutRequest,
         is_one_pc: bool,
-        rows: &mut HashMap<Vec<u8>, EventRow>,
+        rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
         mut read_old_value: impl FnMut(&mut EventRow, /* read_old_ts */ TimeStamp),
     ) {
         match put.cf.as_str() {
             "write" => {
-                let mut row = EventRow::default();
-                let skip = decode_write(put.take_key(), put.get_value(), &mut row, true);
-                if skip {
-                    return;
-=======
-        put: PutRequest,
-        is_one_pc: bool,
-        txn_rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
-        raw_rows: &mut Vec<EventRow>,
-        read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
-    ) -> Result<()> {
-        let key_mode = ApiV2::parse_key_mode(put.get_key());
-        if key_mode == KeyMode::Raw {
-            self.sink_raw_put(put, raw_rows)
-        } else {
-            self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
-        }
-    }
-
-    fn sink_raw_put(&mut self, mut put: PutRequest, rows: &mut Vec<EventRow>) -> Result<()> {
-        let mut row = EventRow::default();
-        decode_rawkv(put.take_key(), put.take_value(), &mut row)?;
-        rows.push(row);
-        Ok(())
-    }
-
-    fn sink_txn_put(
-        &mut self,
-        mut put: PutRequest,
-        is_one_pc: bool,
-        rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
-        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
-    ) -> Result<()> {
-        match put.cf.as_str() {
-            "write" => {
                 let (mut row, mut has_value) = (EventRow::default(), false);
                 if decode_write(put.take_key(), &put.value, &mut row, &mut has_value, true) {
-                    return Ok(());
->>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
+                    return ;
                 }
 
                 let commit_ts = if is_one_pc {
@@ -788,29 +667,12 @@ impl Delegate {
                 let (mut row, mut has_value) = (EventRow::default(), false);
                 let lock = Lock::parse(put.get_value()).unwrap();
                 let for_update_ts = lock.for_update_ts;
-<<<<<<< HEAD
-                let skip = decode_lock(put.take_key(), lock, &mut row);
-                if skip {
+                if decode_lock(put.take_key(), lock, &mut row, &mut has_value) {
                     return;
                 }
 
                 let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
                 read_old_value(&mut row, read_old_ts);
-                let occupied = rows.entry(row.key.clone()).or_default();
-                if !occupied.value.is_empty() {
-                    assert!(row.value.is_empty());
-                    let mut value = vec![];
-                    mem::swap(&mut occupied.value, &mut value);
-                    row.value = value;
-                }
-=======
-                if decode_lock(put.take_key(), lock, &mut row, &mut has_value) {
-                    return Ok(());
-                }
-
-                let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
-                read_old_value(&mut row, read_old_ts)?;
->>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
 
                 // In order to compute resolved ts, we must track inflight txns.
                 match self.resolver {
@@ -992,33 +854,7 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut boo
     false
 }
 
-<<<<<<< HEAD
-fn decode_default(value: Vec<u8>, row: &mut EventRow) {
-=======
-fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) -> Result<()> {
-    let (decoded_key, ts) = ApiV2::decode_raw_key_owned(Key::from_encoded(key), true)?;
-    let decoded_value = ApiV2::decode_raw_value_owned(value)?;
-
-    row.start_ts = ts.unwrap().into_inner();
-    row.commit_ts = row.start_ts;
-    row.key = decoded_key;
-    row.value = decoded_value.user_value;
-
-    if let Some(expire_ts) = decoded_value.expire_ts {
-        row.expire_ts_unix_secs = expire_ts;
-    }
-
-    if decoded_value.is_delete {
-        row.op_type = EventRowOpType::Delete;
-    } else {
-        row.op_type = EventRowOpType::Put;
-    }
-    set_event_row_type(row, EventLogType::Committed);
-    Ok(())
-}
-
 fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
->>>>>>> 8a2245455... cdc: skip prewrite without value (#12612)
     if !value.is_empty() {
         row.value = value.to_vec();
     }
