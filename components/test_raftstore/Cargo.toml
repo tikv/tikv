@@ -78,7 +78,7 @@ test_util = { path = "../test_util", default-features = false }
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
-tokio-timer = "0.2"
+tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 txn_types = { path = "../txn_types", default-features = false }
 encryption_export = { path = "../encryption/export", default-features = false }
 tokio = { version = "1.5", features = ["rt-multi-thread"]}
