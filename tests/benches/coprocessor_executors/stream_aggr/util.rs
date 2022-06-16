@@ -64,7 +64,6 @@ where
                     black_box(Box::new(src)),
                     black_box(group_by_expr.to_vec()),
                     black_box(aggr_expr.to_vec()),
-                    black_box(None),
                 )
                 .unwrap(),
             ) as Box<dyn BatchExecutor<StorageStats = Statistics>>

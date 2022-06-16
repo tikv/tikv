@@ -54,8 +54,6 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     context: EvalContext,
     src: Src,
     is_ended: bool,
-
-    paging_size: Option<u64>,
 }
 
 /// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the struct and
@@ -86,7 +84,6 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         order_exprs: Vec<RpnExpression>,
         order_is_desc: Vec<bool>,
         n: usize,
-        paging_size: Option<u64>,
     ) -> Self {
         assert_eq!(order_exprs.len(), order_is_desc.len());
 
@@ -106,7 +103,35 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             context: EvalContext::default(),
             src,
             is_ended: false,
-            paging_size,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test_with_config(
+        config: Arc<EvalConfig>,
+        src: Src,
+        order_exprs: Vec<RpnExpression>,
+        order_is_desc: Vec<bool>,
+        n: usize,
+    ) -> Self {
+        assert_eq!(order_exprs.len(), order_is_desc.len());
+
+        let order_exprs_field_type: Vec<FieldType> = order_exprs
+            .iter()
+            .map(|expr| expr.ret_field_type(src.schema()).clone())
+            .collect();
+
+        Self {
+            heap: BinaryHeap::new(),
+            eval_columns_buffer_unsafe: Box::new(Vec::new()),
+            order_exprs: order_exprs.into_boxed_slice(),
+            order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
+            order_is_desc: order_is_desc.into_boxed_slice(),
+            n,
+
+            context: EvalContext::new(config),
+            src,
+            is_ended: false,
         }
     }
 
@@ -116,7 +141,6 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         order_exprs_def: Vec<Expr>,
         order_is_desc: Vec<bool>,
         n: usize,
-        paging_size: Option<u64>,
     ) -> Result<Self> {
         assert_eq!(order_exprs_def.len(), order_is_desc.len());
 
@@ -147,7 +171,6 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             context: EvalContext::new(config),
             src,
             is_ended: false,
-            paging_size,
         })
     }
 
@@ -315,7 +338,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
             };
         }
 
-        match self.paging_size {
+        match self.context.cfg.paging_size {
             None => {}
             Some(paging_size) => {
                 if self.n > paging_size as usize {
@@ -513,7 +536,6 @@ mod tests {
             ],
             vec![false],
             0,
-            None,
         );
 
         let r = exec.next_batch(1);
@@ -552,7 +574,6 @@ mod tests {
             ],
             vec![false],
             10,
-            None,
         );
 
         let r = exec.next_batch(1);
@@ -674,7 +695,6 @@ mod tests {
             ],
             vec![false],
             100,
-            None,
         );
 
         let r = exec.next_batch(1);
@@ -745,7 +765,6 @@ mod tests {
             ],
             vec![true, false],
             7,
-            None,
         );
 
         let r = exec.next_batch(1);
@@ -829,7 +848,6 @@ mod tests {
             ],
             vec![false, false, true],
             5,
-            None,
         );
 
         let r = exec.next_batch(1);
@@ -992,7 +1010,6 @@ mod tests {
             ],
             vec![true, true, false],
             5,
-            None,
         );
 
         let r = exec.next_batch(1);
@@ -1074,7 +1091,6 @@ mod tests {
             ],
             vec![false, false, false],
             5,
-            None,
         );
 
         let r = exec.next_batch(1);
@@ -1234,7 +1250,6 @@ mod tests {
                 ],
                 vec![is_desc],
                 5,
-                None,
             );
 
             let r = exec.next_batch(1);
@@ -1335,8 +1350,12 @@ mod tests {
     fn test_top_paging() {
         // Top N = 5 and PagingSize = 6, same with no-paging.
         let test_top5_paging6 = |col_index: usize, is_desc: bool, expected: &[Option<i64>]| {
+            let mut config = EvalConfig::default();
+            config.paging_size = Some(6);
+            let config = Arc::new(config);
             let src_exec = make_src_executor_unsigned();
-            let mut exec = BatchTopNExecutor::new_for_test(
+            let mut exec = BatchTopNExecutor::new_for_test_with_config(
+                config,
                 src_exec,
                 vec![
                     RpnExpressionBuilder::new_for_test()
@@ -1345,7 +1364,6 @@ mod tests {
                 ],
                 vec![is_desc],
                 5,
-                Some(6),
             );
 
             let r = exec.next_batch(1);
@@ -1443,8 +1461,12 @@ mod tests {
 
         // Top N = 5 and PagingSize = 4, return all data and do nothing.
         let test_top5_paging4 = |build_src_executor: fn() -> MockExecutor| {
+            let mut config = EvalConfig::default();
+            config.paging_size = Some(4);
+            let config = Arc::new(config);
             let src_exec = build_src_executor();
-            let mut exec = BatchTopNExecutor::new_for_test(
+            let mut exec = BatchTopNExecutor::new_for_test_with_config(
+                config,
                 src_exec,
                 vec![
                     RpnExpressionBuilder::new_for_test()
@@ -1453,7 +1475,6 @@ mod tests {
                 ],
                 vec![false],
                 5,
-                Some(4),
             );
             let mut exec2 = build_src_executor();
 

@@ -77,7 +77,6 @@ where
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(false),
-                None,
             )
             .unwrap()
         })

@@ -93,7 +93,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
         group_by_exps: Vec<RpnExpression>,
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
-        paging_size: Option<u64>,
     ) -> Self {
         Self::new_impl(
             Arc::new(EvalConfig::default()),
@@ -101,9 +100,19 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             group_by_exps,
             aggr_defs,
             aggr_def_parser,
-            paging_size,
         )
         .unwrap()
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test_with_config(
+        config: Arc<EvalConfig>,
+        src: Src,
+        group_by_exps: Vec<RpnExpression>,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(config, src, group_by_exps, aggr_defs, aggr_def_parser).unwrap()
     }
 
     pub fn new(
@@ -111,7 +120,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
         src: Src,
         group_by_exp_defs: Vec<Expr>,
         aggr_defs: Vec<Expr>,
-        paging_size: Option<u64>,
     ) -> Result<Self> {
         let schema_len = src.schema().len();
         let mut ctx = EvalContext::new(config.clone());
@@ -128,7 +136,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             group_by_exps,
             aggr_defs,
             AllAggrDefinitionParser,
-            paging_size,
         )
     }
 
@@ -139,7 +146,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
         group_by_exps: Vec<RpnExpression>,
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
-        paging_size: Option<u64>,
     ) -> Result<Self> {
         let mut group_key_offsets = Vec::with_capacity(1024);
         group_key_offsets.push(0);
@@ -182,7 +188,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             config,
             aggr_defs,
             aggr_def_parser,
-            paging_size,
         )?))
     }
 }
@@ -557,7 +562,6 @@ mod tests {
             group_by_exps,
             aggr_definitions,
             AllAggrDefinitionParser,
-            None,
         );
 
         let r = exec.next_batch(1);

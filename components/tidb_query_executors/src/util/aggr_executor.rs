@@ -131,7 +131,6 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         config: Arc<EvalConfig>,
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
-        paging_size: Option<u64>,
     ) -> Result<Self> {
         let aggr_fn_len = aggr_defs.len();
         let src_schema = src.schema();
@@ -187,7 +186,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             imp,
             is_ended: false,
             entities,
-            required_row: paging_size,
+            required_row: ctx.cfg.paging_size,
         })
     }
 
@@ -569,6 +568,9 @@ pub mod tests {
 
     #[test]
     fn test_agg_paging() {
+        use std::sync::Arc;
+
+        use tidb_query_datatype::expr::EvalConfig;
         use tidb_query_expr::RpnExpressionBuilder;
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
@@ -591,35 +593,41 @@ pub mod tests {
         ];
 
         let exec_fast = |src_exec, paging_size| {
-            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+            let mut config = EvalConfig::default();
+            config.paging_size = paging_size;
+            let config = Arc::new(config);
+            Box::new(BatchFastHashAggregationExecutor::new_for_test_with_config(
+                config,
                 src_exec,
                 group_by_exp(),
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
-                paging_size,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
         let exec_slow = |src_exec, paging_size| {
-            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+            let mut config = EvalConfig::default();
+            config.paging_size = paging_size;
+            let config = Arc::new(config);
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test_with_config(
+                config,
                 src_exec,
                 vec![group_by_exp()],
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
-                paging_size,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
         let test_paging_size = vec![2, 5, 7];
         let expect_call_num = vec![1, 3, 4];
         let expect_row_num = vec![vec![4], vec![0, 0, 5], vec![0, 0, 0, 6]];
+        let executor_builders: Vec<Box<dyn Fn(MockExecutor, Option<u64>) -> _>> =
+            vec![Box::new(exec_fast), Box::new(exec_slow)];
         for test_case in 0..test_paging_size.len() {
             let paging_size = test_paging_size[test_case];
             let call_num = expect_call_num[test_case];
             let row_num = &expect_row_num[test_case];
-            let executor_builders: Vec<Box<dyn FnOnce(MockExecutor, Option<u64>) -> _>> =
-                vec![Box::new(exec_fast), Box::new(exec_slow)];
-            for exec_builder in executor_builders {
+            for exec_builder in &executor_builders {
                 let src_exec = make_src_executor_2();
                 let mut exec = exec_builder(src_exec, Some(paging_size));
                 for nth_call in 0..call_num {
@@ -636,12 +644,15 @@ pub mod tests {
 
         let expect_row_num2 = vec![vec![4], vec![3, 0, 2], vec![3, 0, 1, 2]];
         let exec_stream = |src_exec, paging_size| {
-            Box::new(BatchStreamAggregationExecutor::new_for_test(
+            let mut config = EvalConfig::default();
+            config.paging_size = paging_size;
+            let config = Arc::new(config);
+            Box::new(BatchStreamAggregationExecutor::new_for_test_with_config(
+                config,
                 src_exec,
                 vec![group_by_exp()],
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
-                paging_size,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
         for test_case in 0..test_paging_size.len() {

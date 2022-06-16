@@ -117,7 +117,6 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
             config,
             aggr_defs,
             aggr_def_parser,
-            None,
         )?))
     }
 }

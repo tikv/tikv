@@ -172,7 +172,6 @@ pub fn build_executors<S: Storage + 'static>(
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
     is_scanned_range_aware: bool,
-    paging_size: Option<u64>,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
@@ -288,7 +287,6 @@ pub fn build_executors<S: Storage + 'static>(
                             executor,
                             ed.mut_aggregation().take_group_by().into(),
                             ed.mut_aggregation().take_agg_func().into(),
-                            paging_size,
                         )?
                         .collect_summary(summary_slot_index),
                     )
@@ -301,7 +299,6 @@ pub fn build_executors<S: Storage + 'static>(
                             executor,
                             ed.mut_aggregation().take_group_by().into(),
                             ed.mut_aggregation().take_agg_func().into(),
-                            paging_size,
                         )?
                         .collect_summary(summary_slot_index),
                     )
@@ -316,7 +313,6 @@ pub fn build_executors<S: Storage + 'static>(
                         executor,
                         ed.mut_aggregation().take_group_by().into(),
                         ed.mut_aggregation().take_agg_func().into(),
-                        paging_size,
                     )?
                     .collect_summary(summary_slot_index),
                 )
@@ -352,7 +348,6 @@ pub fn build_executors<S: Storage + 'static>(
                         order_exprs_def,
                         order_is_desc,
                         d.get_limit() as usize,
-                        paging_size,
                     )?
                     .collect_summary(summary_slot_index),
                 )
@@ -383,6 +378,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
+        let mut config = EvalConfig::from_request(&req)?;
+        config.paging_size = paging_size;
         let config = Arc::new(EvalConfig::from_request(&req)?);
 
         let out_most_executor = build_executors(
@@ -391,7 +388,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             ranges,
             config.clone(),
             is_streaming || paging_size.is_some(), // For streaming and paging request, executors will continue scan from range end where last scan is finished
-            paging_size,
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
