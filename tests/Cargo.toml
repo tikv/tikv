@@ -4,15 +4,15 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[[test]]
-name = "failpoints"
-path = "failpoints/mod.rs"
-required-features = ["failpoints", "testexport"]
-
-[[test]]
-name = "integrations"
-path = "integrations/mod.rs"
-required-features = ["testexport"]
+#[[test]]
+#name = "failpoints"
+#path = "failpoints/mod.rs"
+#required-features = ["failpoints", "testexport"]
+#
+#[[test]]
+#name = "integrations"
+#path = "integrations/mod.rs"
+#required-features = ["testexport"]
 
 [[test]]
 name = "cloud_engine"

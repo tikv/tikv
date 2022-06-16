@@ -23,7 +23,9 @@ jobs:
       LOG_LEVEL: INFO
       EXTRA_CARGO_ARGS: --no-run
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: lukka/get-cmake@latest
       - name: Configure git for private modules
         env:
@@ -37,25 +39,9 @@ jobs:
           profile: minimal
           components: clippy
       - uses: Swatinem/rust-cache@v1
-      - name: Cache cargo registry
-        uses: actions/cache@v2
-        continue-on-error: false
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: cargo-
-      - name: Run clippy
-        working-directory: ./
-        run: make clippy
-      - name: Run build
-        working-directory: ./
-        run: make build
       - name: Run tests
         env:
           CARGO_INCREMENTAL: "0"
         working-directory: ./
         run: |
-          cargo test -p rfstore -p rfengine -p kvengine --tests
-          cargo test -p tests --test cloud_engine
+          make test-cloud-engine

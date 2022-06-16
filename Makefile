@@ -452,3 +452,6 @@ x-build-dist-debug: export X_CARGO_TARGET_DIR=${CARGO_TARGET_DIR}
 x-build-dist-debug: export X_PACKAGE=tikv-server tikv-ctl
 x-build-dist-debug:
 	bash scripts/run-cargo.sh
+
+test-cloud-engine:
+	cargo test -p kvengine -p rfstore -p rfengine -p tests --tests
