@@ -1574,7 +1574,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msgs: Vec<RaftMessage>,
     ) {
-        // let now = Instant::now();
+        let now = Instant::now();
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
@@ -1610,7 +1610,7 @@ where
                     if index == *propose_idx {
                         ctx.raft_metrics
                             .proposal_send_wait
-                            .observe(instant.elapsed().as_secs_f64());
+                            .observe(now.saturating_duration_since(*instant).as_secs_f64());
                     }
                     if index >= *propose_idx {
                         self.pending_propose_instants.pop_front();
