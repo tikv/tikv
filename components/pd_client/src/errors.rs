@@ -29,7 +29,7 @@ impl Error {
     pub fn retryable(&self) -> bool {
         match self {
             Error::Grpc(_) | Error::ClusterNotBootstrapped(_) => true,
-            Error::Other(_) 
+            Error::Other(_)
             | Error::RegionNotFound(_)
             | Error::StoreTombstone(_)
             | Error::GlobalConfigNotFound(_)
