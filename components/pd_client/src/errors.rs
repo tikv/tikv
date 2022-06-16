@@ -32,7 +32,6 @@ impl Error {
             Error::Other(_)
             | Error::RegionNotFound(_)
             | Error::StoreTombstone(_)
-            | Error::GlobalConfigNotFound(_)
             | Error::ClusterBootstrapped(_)
             | Error::Incompatible => false,
         }
