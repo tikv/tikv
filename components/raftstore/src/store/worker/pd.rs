@@ -610,7 +610,7 @@ impl SlowScore {
     fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
         if self.timeout_requests == 0 {
             let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
-            if OrderedFloat(desc) > self.value {
+            if OrderedFloat(desc) > self.value - OrderedFloat(1.0) {
                 self.value = 1.0.into();
             } else {
                 self.value -= desc;
@@ -1457,9 +1457,11 @@ where
         let f = async move {
             match resp.await {
                 Ok(Some((region, leader))) => {
-                    let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
-                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                        error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                    if leader.get_store_id() != 0 {
+                        let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
+                        if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                            error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
+                        }
                     }
                 }
                 Ok(None) => {}
@@ -2129,6 +2131,13 @@ mod tests {
         assert_eq!(
             OrderedFloat(19.0),
             slow_score.update_impl(Duration::from_secs(15))
+        );
+
+        slow_score.timeout_requests = 0;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(1.0),
+            slow_score.update_impl(Duration::from_secs(57))
         );
     }
 
