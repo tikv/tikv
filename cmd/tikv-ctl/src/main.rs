@@ -1851,23 +1851,23 @@ fn main() {
         }
     };
 
-    match cmd {
-        Cmd::External(args) => {
-            // Bypass the ldb and sst dump command to RocksDB.
-            match args[0].as_str() {
-                "ldb" => run_ldb_command(args, &cfg),
-                "sst_dump" => run_sst_dump_command(args, &cfg),
-                _ => Opt::clap().print_help().unwrap(),
-            }
+    if let Cmd::External(args) = cmd {
+        // Bypass the ldb and sst dump command to RocksDB.
+        match args[0].as_str() {
+            "ldb" => run_ldb_command(args, &cfg),
+            "sst_dump" => run_sst_dump_command(args, &cfg),
+            _ => Opt::clap().print_help().unwrap(),
         }
-        Cmd::BadSsts { manifest, pd } => {
-            let data_dir = opt.data_dir.as_deref();
-            assert!(data_dir.is_some(), "--data-dir must be specified");
-            let data_dir = data_dir.expect("--data-dir must be specified");
-            let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
-            print_bad_ssts(data_dir, manifest.as_deref(), pd_client, &cfg);
-            return;
-        }
+        return;
+    }
+
+    if let Cmd::BadSsts { manifest, pd } = cmd {
+        let data_dir = opt.data_dir.as_deref();
+        assert!(data_dir.is_some(), "--data-dir must be specified");
+        let data_dir = data_dir.expect("--data-dir must be specified");
+        let pd_client = get_pd_rpc_client(&pd, Arc::clone(&mgr));
+        print_bad_ssts(data_dir, manifest.as_deref(), pd_client, &cfg);
+        return;
     }
 
     // Deal with subcommand dump-snap-meta. This subcommand doesn't require other args, so process
