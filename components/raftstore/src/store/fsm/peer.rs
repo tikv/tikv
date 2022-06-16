@@ -1541,6 +1541,11 @@ where
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
         defer!({
+            fail_point!(
+                "memtrace_raft_messages_overflow_check_peer_recv",
+                MEMTRACE_RAFT_MESSAGES.sum() < heap_size,
+                |_| {}
+            );
             MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
             if stepped.get() {
                 unsafe {
@@ -2935,10 +2940,8 @@ where
             .kv
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
-            if util::is_epoch_stale(
-                target_region.get_region_epoch(),
-                target_state.get_region().get_region_epoch(),
-            ) {
+            let state_epoch = target_state.get_region().get_region_epoch();
+            if util::is_epoch_stale(target_region.get_region_epoch(), state_epoch) {
                 return Ok(true);
             }
             // The local target region epoch is staler than target region's.
@@ -2963,6 +2966,10 @@ where
                         );
                     }
                     cmp::Ordering::Greater => {
+                        if state_epoch.get_version() == 0 && state_epoch.get_conf_ver() == 0 {
+                            // There is a new peer and it's destroyed without being initialised.
+                            return Ok(true);
+                        }
                         // The local target peer id is greater than the one in target region, but its epoch
                         // is staler than target_region's. That is contradictory.
                         panic!("{} local target peer id {} is greater than the one in target region {}, but its epoch is staler, local target region {:?},
@@ -4080,10 +4087,12 @@ where
             // |------------- entries needs to be compacted ----------|
             // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
             //             |-------------------- entries will be left ----------------------|
+            self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log += 1;
             return;
         } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
             && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
         {
+            self.ctx.raft_metrics.raft_log_gc_skipped.threshold_limit += 1;
             // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
             self.fsm.skip_gc_raft_log_ticks += 1;
             self.register_raft_gc_log_tick();
@@ -4096,6 +4105,10 @@ where
         compact_idx -= 1;
         if compact_idx < first_idx {
             // In case compact_idx == first_idx before subtraction.
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .compact_idx_too_small += 1;
             return;
         }
         total_gc_logs += compact_idx - first_idx;
