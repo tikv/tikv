@@ -121,7 +121,7 @@ pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Sr
     imp: I,
     is_ended: bool,
     entities: Entities<Src>,
-    paging_size: Option<u64>,
+    required_row: Option<u64>,
 }
 
 impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Src, I> {
@@ -187,7 +187,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             imp,
             is_ended: false,
             entities,
-            paging_size,
+            required_row: paging_size,
         })
     }
 
@@ -214,15 +214,15 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             )?;
         }
 
-        match self.paging_size {
+        match self.required_row {
             None => {}
-            Some(paging_size) => {
-                if self.imp.groups_len() >= paging_size as usize {
+            Some(required_row) => {
+                if self.imp.groups_len() >= required_row as usize {
                     src_is_drained = true
                 }
-                // For StreamAgg
+                // StreamAgg will return groups_len - 1 rows immediately
                 if self.imp.is_partial_results_ready() {
-                    self.paging_size = Some(paging_size - self.imp.groups_len() as u64 + 1)
+                    self.required_row = Some(required_row - self.imp.groups_len() as u64 + 1)
                 }
             }
         }

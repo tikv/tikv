@@ -100,6 +100,7 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             group_by_exps,
             aggr_defs,
             aggr_def_parser,
+            None,
         )
         .unwrap()
     }

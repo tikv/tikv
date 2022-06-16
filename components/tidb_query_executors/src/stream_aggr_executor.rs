@@ -119,6 +119,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
             group_by_exps,
             aggr_defs,
             aggr_def_parser,
+            None,
         )
         .unwrap()
     }

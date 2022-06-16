@@ -86,6 +86,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         order_exprs: Vec<RpnExpression>,
         order_is_desc: Vec<bool>,
         n: usize,
+        paging_size: Option<u64>,
     ) -> Self {
         assert_eq!(order_exprs.len(), order_is_desc.len());
 
@@ -105,7 +106,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             context: EvalContext::default(),
             src,
             is_ended: false,
-            paging_size: None,
+            paging_size,
         }
     }
 
@@ -318,7 +319,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
             None => {}
             Some(paging_size) => {
                 if self.n > paging_size as usize {
-                    return self.src.next_batch(scan_rows)
+                    return self.src.next_batch(scan_rows);
                 }
             }
         }
@@ -512,6 +513,7 @@ mod tests {
             ],
             vec![false],
             0,
+            None,
         );
 
         let r = exec.next_batch(1);
@@ -550,6 +552,7 @@ mod tests {
             ],
             vec![false],
             10,
+            None,
         );
 
         let r = exec.next_batch(1);
@@ -671,6 +674,7 @@ mod tests {
             ],
             vec![false],
             100,
+            None,
         );
 
         let r = exec.next_batch(1);
@@ -741,6 +745,7 @@ mod tests {
             ],
             vec![true, false],
             7,
+            None,
         );
 
         let r = exec.next_batch(1);
@@ -824,6 +829,7 @@ mod tests {
             ],
             vec![false, false, true],
             5,
+            None,
         );
 
         let r = exec.next_batch(1);
@@ -986,6 +992,7 @@ mod tests {
             ],
             vec![true, true, false],
             5,
+            None,
         );
 
         let r = exec.next_batch(1);
@@ -1067,6 +1074,7 @@ mod tests {
             ],
             vec![false, false, false],
             5,
+            None,
         );
 
         let r = exec.next_batch(1);
@@ -1226,6 +1234,7 @@ mod tests {
                 ],
                 vec![is_desc],
                 5,
+                None,
             );
 
             let r = exec.next_batch(1);
@@ -1320,5 +1329,156 @@ mod tests {
                 Some(2000_u32 as i64),
             ],
         );
+    }
+
+    #[test]
+    fn test_top_paging() {
+        // Top N = 5 and PagingSize = 6, same with no-paging.
+        let test_top5_paging6 = |col_index: usize, is_desc: bool, expected: &[Option<i64>]| {
+            let src_exec = make_src_executor_unsigned();
+            let mut exec = BatchTopNExecutor::new_for_test(
+                src_exec,
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(col_index)
+                        .build_for_test(),
+                ],
+                vec![is_desc],
+                5,
+                Some(6),
+            );
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+            assert_eq!(r.physical_columns.rows_len(), 5);
+            assert_eq!(r.physical_columns.columns_len(), 3);
+            assert_eq!(
+                r.physical_columns[col_index].decoded().to_int_vec(),
+                expected
+            );
+            assert!(r.is_drained.unwrap());
+        };
+
+        test_top5_paging6(
+            0,
+            false,
+            &[
+                None,
+                Some(300_u64 as i64),
+                Some(2000_u64 as i64),
+                Some(9_223_372_036_854_775_807_u64 as i64),
+                Some(9_223_372_036_854_775_808_u64 as i64),
+            ],
+        );
+
+        test_top5_paging6(
+            0,
+            true,
+            &[
+                Some(18_446_744_073_709_551_615_u64 as i64),
+                Some(18_446_744_073_709_551_613_u64 as i64),
+                Some(9_223_372_036_854_775_808_u64 as i64),
+                Some(9_223_372_036_854_775_807_u64 as i64),
+                Some(2000_u64 as i64),
+            ],
+        );
+
+        test_top5_paging6(
+            1,
+            false,
+            &[
+                None,
+                Some(-9_223_372_036_854_775_808),
+                Some(-3),
+                Some(-1),
+                Some(300),
+            ],
+        );
+
+        test_top5_paging6(
+            1,
+            true,
+            &[
+                Some(9_223_372_036_854_775_807),
+                Some(2000),
+                Some(300),
+                Some(-1),
+                Some(-3),
+            ],
+        );
+
+        test_top5_paging6(
+            2,
+            false,
+            &[
+                None,
+                Some(300_u32 as i64),
+                Some(2000_u32 as i64),
+                Some(2_147_483_647_u32 as i64),
+                Some(2_147_483_648_u32 as i64),
+            ],
+        );
+
+        test_top5_paging6(
+            2,
+            true,
+            &[
+                Some(4_294_967_295_u32 as i64),
+                Some(4_294_967_295_u32 as i64),
+                Some(2_147_483_648_u32 as i64),
+                Some(2_147_483_647_u32 as i64),
+                Some(2000_u32 as i64),
+            ],
+        );
+
+        // Top N = 5 and PagingSize = 4, return all data and do nothing.
+        let test_top5_paging4 = |build_src_executor: fn() -> MockExecutor| {
+            let src_exec = build_src_executor();
+            let mut exec = BatchTopNExecutor::new_for_test(
+                src_exec,
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(0)
+                        .build_for_test(),
+                ],
+                vec![false],
+                5,
+                Some(4),
+            );
+            let mut exec2 = build_src_executor();
+
+            loop {
+                let r1 = exec.next_batch(1);
+                let r2 = exec2.next_batch(1);
+                assert_eq!(r1.logical_rows, r2.logical_rows);
+                assert_eq!(
+                    r1.physical_columns.rows_len(),
+                    r2.physical_columns.rows_len()
+                );
+                assert_eq!(
+                    r1.physical_columns.columns_len(),
+                    r2.physical_columns.columns_len()
+                );
+                let r1_is_drained = r1.is_drained.unwrap();
+                assert_eq!(r1_is_drained, r2.is_drained.unwrap());
+                if r1_is_drained {
+                    break;
+                }
+            }
+        };
+
+        test_top5_paging4(make_src_executor_unsigned);
+        test_top5_paging4(make_src_executor);
+        test_top5_paging4(make_bytes_src_executor);
     }
 }

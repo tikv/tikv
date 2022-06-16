@@ -122,6 +122,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
             group_by_exp,
             aggr_defs,
             aggr_def_parser,
+            None,
         )
         .unwrap()
     }
