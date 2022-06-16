@@ -1225,7 +1225,6 @@ impl Initializer {
 
         fail_point!("cdc_incremental_scan_start");
 
-        let start = Instant::now_coarse();
         // Time range: (checkpoint_ts, current]
         let current = TimeStamp::max();
         let mut scanner = ScannerBuilder::new(snap, current)
