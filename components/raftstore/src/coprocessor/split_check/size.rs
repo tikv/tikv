@@ -15,7 +15,7 @@ use super::{
         error::Result, metrics::*, Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver,
         SplitChecker,
     },
-    Host,
+    calc_split_keys_count, Host,
 };
 use crate::store::{CasualMessage, CasualRouter};
 
@@ -91,11 +91,24 @@ where
 
     fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
         if self.batch_split_limit != 0 {
-            return Ok(box_try!(get_approximate_split_keys(
+            let region_size = get_region_approximate_size(
                 engine,
                 region,
+                self.max_size * self.batch_split_limit,
+            )?;
+            let split_keys_count = calc_split_keys_count(
+                region_size,
+                self.split_size,
+                self.max_size,
                 self.batch_split_limit,
-            )));
+            );
+            if split_keys_count >= 1 {
+                return Ok(box_try!(get_approximate_split_keys(
+                    engine,
+                    region,
+                    split_keys_count,
+                )));
+            }
         }
         Ok(vec![])
     }
@@ -169,32 +182,34 @@ where
             );
         }
 
+        let need_bucket_checker =
+            host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0;
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
-        if region_size >= host.cfg.region_max_size().0
-            || host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0
-        {
+
+        let need_split_region = region_size >= host.cfg.region_max_size().0;
+        if need_split_region || need_bucket_checker {
+            // when it's a large region use approximate way to produce split keys
+            if need_split_region {
+                if region_size >= host.cfg.region_size_threshold_for_approximate.0 {
+                    policy = CheckPolicy::Approximate;
+                }
+            } else if host.cfg.prefer_approximate_bucket {
+                // when the check is only for bucket, use approximate anyway
+                policy = CheckPolicy::Approximate;
+            }
+
             info!(
-                "approximate size over threshold, need to do split check";
+                "Run size checker";
                 "region_id" => region.get_id(),
                 "size" => region_size,
                 "threshold" => host.cfg.region_max_size().0,
+                "policy" => ?policy,
             );
-            // when meet large region use approximate way to produce split keys
-            let batch_split_limit = if region_size >= host.cfg.region_max_size().0 {
-                host.cfg.batch_split_limit
-            } else {
-                0
-            };
-            if region_size >= host.cfg.region_max_size().0 * host.cfg.batch_split_limit
-                || region_size >= host.cfg.region_size_threshold_for_approximate.0
-            {
-                policy = CheckPolicy::Approximate;
-            }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 host.cfg.region_max_size().0,
                 host.cfg.region_split_size.0,
-                batch_split_limit,
+                host.cfg.batch_split_limit,
                 policy,
             )));
         } else {
@@ -224,7 +239,7 @@ pub fn get_region_approximate_size(
 }
 
 /// Get region approximate split keys based on default, write and lock cf.
-fn get_approximate_split_keys(
+pub fn get_approximate_split_keys(
     db: &impl KvEngine,
     region: &Region,
     batch_split_limit: u64,
@@ -303,6 +318,36 @@ pub mod tests {
         exp_split_keys: Vec<Vec<u8>>,
     ) {
         must_split_at_impl(rx, exp_region, exp_split_keys, false)
+    }
+
+    pub fn must_split_with(
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        exp_region: &Region,
+        exp_split_keys_count: usize,
+    ) {
+        loop {
+            match rx.try_recv() {
+                Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
+                | Ok((region_id, CasualMessage::RegionApproximateKeys { .. })) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                }
+                Ok((
+                    region_id,
+                    CasualMessage::SplitRegion {
+                        region_epoch,
+                        split_keys,
+                        ..
+                    },
+                )) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                    assert_eq!(&region_epoch, exp_region.get_region_epoch());
+                    assert_eq!(split_keys.len(), exp_split_keys_count);
+                    break;
+                }
+                Ok((_region_id, CasualMessage::RefreshRegionBuckets { .. })) => {}
+                others => panic!("expect split check result, but got {:?}", others),
+            }
+        }
     }
 
     pub fn must_generate_buckets(
@@ -567,8 +612,8 @@ pub mod tests {
                 keys::data_key(Key::from_raw(bytes).append_ts(ts).as_encoded())
             }
         };
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        let cop_host = CoprocessorHost::new(tx.clone(), cfg);
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
         for i in 0..2000 {
             // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has about 210 keys
             // if mvcc, kv size is about 18*2 = 36, expect each bucket has about 80 keys
@@ -585,6 +630,9 @@ pub mod tests {
             CheckPolicy::Approximate,
             None,
         ));
+
+        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        assert_eq!(host.policy(), CheckPolicy::Approximate);
 
         if !mvcc {
             must_generate_buckets_approximate(&rx, None, 15000, 45000, mvcc);
@@ -612,6 +660,8 @@ pub mod tests {
             CheckPolicy::Approximate,
             Some(vec![BucketRange(start.clone(), end.clone())]),
         ));
+        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        assert_eq!(host.policy(), CheckPolicy::Approximate);
 
         if !mvcc {
             must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 150, 450, mvcc);
@@ -642,6 +692,68 @@ pub mod tests {
         for cf in LARGE_CFS {
             test_generate_bucket_impl(LARGE_CFS, cf, true);
         }
+    }
+
+    #[test]
+    fn test_check_policy_for_bucket_generation() {
+        let path = Builder::new()
+            .prefix("test_check_policy_for_bucket_generation")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::default();
+        let cfs_with_range_prop: HashSet<_> = LARGE_CFS.iter().cloned().collect();
+        let mut cf_opt = ColumnFamilyOptions::new();
+        cf_opt.set_no_range_properties(true);
+        cf_opt.set_disable_auto_compactions(true);
+
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| {
+                if cfs_with_range_prop.contains(cf) {
+                    let mut opt = ColumnFamilyOptions::new();
+                    opt.set_disable_auto_compactions(true);
+                    CFOptions::new(cf, opt)
+                } else {
+                    CFOptions::new(cf, cf_opt.clone())
+                }
+            })
+            .collect();
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let (tx, _rx) = mpsc::sync_channel(100);
+        let mut cfg = Config {
+            region_max_size: Some(ReadableSize(50000)),
+            region_split_size: ReadableSize(50000),
+            region_max_keys: Some(1000000),
+            region_split_keys: Some(1000000),
+            batch_split_limit: 5,
+            enable_region_bucket: true,
+            region_bucket_size: ReadableSize(1), // minimal bucket size
+            region_size_threshold_for_approximate: ReadableSize(500000000),
+            // follow split region's check policy, not force to use approximate
+            prefer_approximate_bucket: false,
+            ..Default::default()
+        };
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+        for i in 0..20 {
+            let s = keys::data_key(format!("{:04}00", i).as_bytes());
+            engine.put_cf(CF_WRITE, &s, &s).unwrap();
+        }
+
+        let cop_host = CoprocessorHost::new(tx.clone(), cfg.clone());
+        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        assert_eq!(host.policy(), CheckPolicy::Scan);
+
+        cfg.prefer_approximate_bucket = true;
+        let cop_host = CoprocessorHost::new(tx, cfg);
+        let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
+        assert_eq!(host.policy(), CheckPolicy::Approximate);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use std::{
     fmt::Write,
     path::Path,
+    str::FromStr,
     sync::{mpsc, Arc},
     thread,
     time::Duration,
@@ -660,7 +661,7 @@ pub fn create_test_engine(
         builder = builder.compaction_filter_router(router);
     }
     let factory = builder.build();
-    let engine = factory.create_tablet().unwrap();
+    let engine = factory.create_shared_db().unwrap();
     let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir, sst_worker)
 }
@@ -759,6 +760,16 @@ pub fn configure_for_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
             path: master_key_file.to_str().unwrap().to_owned(),
         },
     }
+}
+
+pub fn configure_for_causal_ts<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    renew_interval: &str,
+    renew_batch_min_size: u32,
+) {
+    let cfg = &mut cluster.cfg.causal_ts;
+    cfg.renew_interval = ReadableDuration::from_str(renew_interval).unwrap();
+    cfg.renew_batch_min_size = renew_batch_min_size;
 }
 
 /// Keep putting random kvs until specified size limit is reached.
@@ -1204,6 +1215,46 @@ pub fn check_compacted(
         }
     }
     true
+}
+
+pub fn must_raw_put(client: &TikvClient, ctx: Context, key: Vec<u8>, value: Vec<u8>) {
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx);
+    put_req.key = key;
+    put_req.value = value;
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(
+        !put_resp.has_region_error(),
+        "{:?}",
+        put_resp.get_region_error()
+    );
+    assert!(
+        put_resp.get_error().is_empty(),
+        "{:?}",
+        put_resp.get_error()
+    );
+}
+
+pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<Vec<u8>> {
+    let mut get_req = RawGetRequest::default();
+    get_req.set_context(ctx);
+    get_req.key = key;
+    let get_resp = client.raw_get(&get_req).unwrap();
+    assert!(
+        !get_resp.has_region_error(),
+        "{:?}",
+        get_resp.get_region_error()
+    );
+    assert!(
+        get_resp.get_error().is_empty(),
+        "{:?}",
+        get_resp.get_error()
+    );
+    if get_resp.not_found {
+        None
+    } else {
+        Some(get_resp.value)
+    }
 }
 
 // A helpful wrapper to make the test logic clear

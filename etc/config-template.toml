@@ -693,7 +693,7 @@
 ## Maximum number of level-0 files.
 ## When the number of SST files of level-0 reaches the limit of `level0-stop-writes-trigger`,
 ## RocksDB stalls the new write operation.
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 
 ## Amount of data to build up in memory (backed by an unsorted log on disk) before converting to a
 ## sorted on-disk file. It is the RocksDB MemTable size.
@@ -744,6 +744,12 @@
 ## "oldest-smallest-seq-first"
 ## "min-overlapping-ratio"
 # compaction-pri = "min-overlapping-ratio"
+
+## Refer to storage.flow-control.soft-pending-compaction-bytes-limit.
+# soft-pending-compaction-bytes-limit = "192GB"
+
+## Refer to storage.flow-control.hard-pending-compaction-bytes-limit.
+# hard-pending-compaction-bytes-limit = "1000GB"
 
 ## Indicating if we'd put index/filter blocks to the block cache.
 ## If not specified, each "table reader" object will pre-load index/filter block during table
@@ -816,10 +822,15 @@
 ## default: 0.5
 # discardable-ratio = 0.5
 
-## The mode used to process blob files. In read-only mode Titan
-## stops writing value into blob log. In fallback mode Titan
-## converts blob index into real value on flush and compaction.
-## This option is especially useful for downgrading Titan.
+## The mode used to process blob files. In read-only mode Titan stops writing
+## value into blob log. In fallback mode Titan converts blob index into real
+## value on flush and compaction.
+##
+## This option can be used to disable Titan. More specifically, to disable
+## Titan, set this option to fallback and perform a full compaction using
+## tikv-ctl. Then, monitor the blob file size metrics. After the blob file size
+## decreases to 0, you can set rocksdb.titan.enabled to false and restart TiKV.
+##
 ##   default:   kNormal
 ##   read-only: kReadOnly
 ##   fallback:  kFallback
@@ -838,10 +849,6 @@
 ## default: false
 # level-merge = false
 
-## Use merge operator to rewrite GC blob index.
-## default: false
-# gc-merge-rewrite = false
-
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -859,10 +866,12 @@
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "min-overlapping-ratio"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -880,10 +889,12 @@
 # target-file-size-base = "8MB"
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "by-compensated-size"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -937,10 +948,12 @@
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "by-compensated-size"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true

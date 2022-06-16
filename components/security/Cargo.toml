@@ -4,6 +4,9 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
+[features]
+tonic = ["dep:tonic"]
+
 [dependencies]
 collections = { path = "../collections" }
 encryption = { path = "../encryption", default-features = false }
@@ -12,6 +15,7 @@ serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }
+tonic = { version = "0.5", features = ["tls"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"

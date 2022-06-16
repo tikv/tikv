@@ -40,6 +40,7 @@ command! {
 impl CommandExt for TxnHeartBeat {
     ctx!();
     tag!(txn_heart_beat);
+    request_type!(KvTxnHeartBeat);
     ts!(start_ts);
     write_bytes!(primary_key);
     gen_lock!(primary_key);

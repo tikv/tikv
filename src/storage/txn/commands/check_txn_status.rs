@@ -29,7 +29,9 @@ command! {
     /// [`Prewrite`](Command::Prewrite).
     CheckTxnStatus:
         cmd_ty => TxnStatus,
-        display => "kv::command::check_txn_status {} @ {} curr({}, {}) | {:?}", (primary_key, lock_ts, caller_start_ts, current_ts, ctx),
+        display => "kv::command::check_txn_status {} @ {} curr({}, {}, {}, {}, {}) | {:?}",
+           (primary_key, lock_ts, caller_start_ts, current_ts, rollback_if_not_exist,
+               force_sync_commit, resolving_pessimistic_lock, ctx),
         content => {
             /// The primary key of the transaction.
             primary_key: Key,
@@ -55,6 +57,7 @@ command! {
 impl CommandExt for CheckTxnStatus {
     ctx!();
     tag!(check_txn_status);
+    request_type!(KvCheckTxnStatus);
     ts!(lock_ts);
     write_bytes!(primary_key);
     gen_lock!(primary_key);

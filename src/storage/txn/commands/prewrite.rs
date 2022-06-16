@@ -42,7 +42,6 @@ command! {
     /// or a [`Rollback`](Command::Rollback) should follow.
     Prewrite:
         cmd_ty => PrewriteResult,
-        display => "kv::command::prewrite mutations({}) @ {} | {:?}", (mutations.len, start_ts, ctx),
         content => {
             /// The set of mutations to apply.
             mutations: Vec<Mutation>,
@@ -69,6 +68,33 @@ command! {
             /// that must be satisfied as long as data is consistent.
             assertion_level: AssertionLevel,
         }
+}
+
+impl std::fmt::Display for Prewrite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "kv::command::prewrite mutations({:?}) primary({:?}) secondary_len({:?})@ {} {} {} {} {} {} {} {:?} | {:?}",
+            self.mutations,
+            log_wrappers::Value::key(self.primary.as_slice()),
+            self.secondary_keys.as_ref().map(|sk| sk.len()),
+            self.start_ts,
+            self.lock_ttl,
+            self.skip_constraint_check,
+            self.txn_size,
+            self.min_commit_ts,
+            self.max_commit_ts,
+            self.try_one_pc,
+            self.assertion_level,
+            self.ctx,
+        )
+    }
+}
+
+impl std::fmt::Debug for Prewrite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
 }
 
 impl Prewrite {
@@ -189,6 +215,7 @@ impl Prewrite {
 impl CommandExt for Prewrite {
     ctx!();
     tag!(prewrite);
+    request_type!(KvPrewrite);
     ts!(start_ts);
 
     fn write_bytes(&self) -> usize {
@@ -225,7 +252,6 @@ command! {
     /// or a [`Rollback`](Command::Rollback) should follow.
     PrewritePessimistic:
         cmd_ty => PrewriteResult,
-        display => "kv::command::prewrite_pessimistic mutations({}) @ {} | {:?}", (mutations.len, start_ts, ctx),
         content => {
             /// The set of mutations to apply; the bool = is pessimistic lock.
             mutations: Vec<(Mutation, bool)>,
@@ -252,6 +278,31 @@ command! {
             /// that must be satisfied as long as data is consistent.
             assertion_level: AssertionLevel,
         }
+}
+
+impl std::fmt::Display for PrewritePessimistic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "kv::command::pessimistic_prewrite mutations({:?}) primary({:?}) secondary_len({:?})@ {} {} {} {} {} {} {:?}| {:?}",
+            self.mutations,
+            log_wrappers::Value::key(self.primary.as_slice()),
+            self.secondary_keys.as_ref().map(|sk| sk.len()),
+            self.start_ts,
+            self.lock_ttl,
+            self.txn_size,
+            self.min_commit_ts,
+            self.max_commit_ts,
+            self.try_one_pc,
+            self.assertion_level,
+            self.ctx,
+        )
+    }
+}
+impl std::fmt::Debug for PrewritePessimistic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
 }
 
 impl PrewritePessimistic {
@@ -329,6 +380,7 @@ impl PrewritePessimistic {
 impl CommandExt for PrewritePessimistic {
     ctx!();
     tag!(prewrite);
+    request_type!(KvPrewrite);
     ts!(start_ts);
 
     fn write_bytes(&self) -> usize {
@@ -462,7 +514,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         let mut final_min_commit_ts = TimeStamp::zero();
         let mut locks = Vec::new();
 
-        // Further check whether the prewrited transaction has been committed
+        // Further check whether the prewritten transaction has been committed
         // when encountering a WriteConflict or PessimisticLockNotFound error.
         // This extra check manages to make prewrite idempotent after the transaction
         // was committed.
@@ -479,7 +531,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 TxnCommitRecord::SingleRecord { commit_ts, write }
                     if write.write_type != WriteType::Rollback =>
                 {
-                    info!("prewrited transaction has been committed";
+                    info!("prewritten transaction has been committed";
                         "start_ts" => reader.start_ts, "commit_ts" => commit_ts,
                         "key" => ?key, "write_type" => ?write.write_type);
                     txn.clear();
@@ -943,7 +995,7 @@ mod tests {
             None,
         )
         .unwrap();
-        // All keys are prewrited successful with only one seek operations.
+        // All keys are prewritten successful with only one seek operations.
         assert_eq!(1, statistic.write.seek);
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
         commit(&engine, &mut statistic, keys.clone(), 104, 105).unwrap();
