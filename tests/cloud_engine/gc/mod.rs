@@ -11,7 +11,7 @@ use tikv_util::config::ReadableDuration;
 fn test_local_file_gc() {
     test_util::init_log_for_test();
     let node_id = 3;
-    let cluster = ServerCluster::new(vec![node_id], |_, cfg| {
+    let mut cluster = ServerCluster::new(vec![node_id], |_, cfg| {
         cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(100);
         cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(50);
         cfg.raft_store.local_file_gc_timeout = ReadableDuration::secs(1);
@@ -40,6 +40,7 @@ fn test_local_file_gc() {
     }
     assert!(!new_file_path.exists());
     assert!(!new_tmp_file_path.exists());
+    cluster.stop();
 }
 
 fn gen_key(i: usize) -> Vec<u8> {

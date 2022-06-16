@@ -12,6 +12,7 @@ use bytes::Buf;
 use fail::fail_point;
 use kvengine::{DeletePrefixes, ShardMeta, DEL_PREFIXES_KEY};
 use kvproto::{
+    import_sstpb::SwitchMode,
     metapb::{self, Region, RegionEpoch},
     raft_cmdpb::{
         CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, StatusCmdType,
@@ -737,6 +738,12 @@ impl<'a> PeerMsgHandler<'a> {
                 return;
             }
             if !shard.get_initial_flushed() {
+                return;
+            }
+            // When Lightning or BR is importing data to TiKV, their ingest-request may fail because of
+            // region-epoch not matched. So we hope TiKV do not check region size and split region during
+            // importing.
+            if self.ctx.global.importer.get_mode() == SwitchMode::Import {
                 return;
             }
             let region_max_size = self.ctx.cfg.region_max_size.0;

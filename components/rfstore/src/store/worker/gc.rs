@@ -11,6 +11,7 @@ use std::{
 
 use collections::HashSet;
 use kvengine::table::sstable;
+use kvproto::import_sstpb::SwitchMode;
 use sst_importer::SstImporter;
 use tikv_util::{error, info, warn, worker::Runnable};
 
@@ -105,6 +106,9 @@ impl GcRunner {
     }
 
     fn gc_importer_files(&self) -> sst_importer::Result<()> {
+        if self.importer.get_mode() == SwitchMode::Import {
+            return Ok(());
+        }
         let ssts = self.importer.list_ssts()?;
         for sst_meta in &ssts {
             let path = self.importer.get_path(sst_meta);
