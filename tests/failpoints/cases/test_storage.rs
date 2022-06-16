@@ -33,8 +33,9 @@ use tikv::{
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         test_util::*,
         txn::{
-            commands, flow_controller::FlowController, Error as TxnError,
-            ErrorInner as TxnErrorInner,
+            commands,
+            flow_controller::{FlowController, EngineFlowController},
+            Error as TxnError, ErrorInner as TxnErrorInner,
         },
         Error as StorageError, ErrorInner as StorageErrorInner, *,
     },
@@ -253,7 +254,7 @@ fn test_scale_scheduler_pool() {
     let cfg = new_tikv_config(1);
     let kv_engine = storage.get_engine().kv_engine();
     let (_tx, rx) = std::sync::mpsc::channel();
-    let flow_controller = Arc::new(FlowController::new(
+    let flow_controller = Arc::new(EngineFlowController::new(
         &cfg.storage.flow_control,
         kv_engine.clone(),
         rx,

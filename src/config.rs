@@ -3829,8 +3829,10 @@ mod tests {
     use crate::{
         server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
-            config_manager::StorageConfigManger, lock_manager::DummyLockManager,
-            txn::flow_controller::FlowController, Storage, TestStorageBuilder,
+            config_manager::StorageConfigManger,
+            lock_manager::DummyLockManager,
+            txn::flow_controller::{FlowController, EngineFlowController},
+            Storage, TestStorageBuilder,
         },
     };
 
@@ -4192,7 +4194,7 @@ mod tests {
         Storage<RocksDBEngine, DummyLockManager, F>,
         ConfigController,
         ReceiverWrapper<TtlCheckerTask>,
-        Arc<FlowController>,
+        Arc<dyn FlowController + Send + Sync>,
     ) {
         assert_eq!(F::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
@@ -4215,7 +4217,7 @@ mod tests {
                 .unwrap();
         let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
-        let flow_controller = Arc::new(FlowController::new(
+        let flow_controller = Arc::new(EngineFlowController::new(
             &cfg.storage.flow_control,
             engine.clone(),
             rx,

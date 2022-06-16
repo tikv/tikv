@@ -192,16 +192,16 @@ impl<EK> DummyFactory<EK>
 where
     EK: KvEngine,
 {
-    pub fn new() -> DummyFactory<EK> {
+    pub fn new(engine: Option<EK>, root_path: String) -> DummyFactory<EK> {
         DummyFactory {
-            engine: None,
-            root_path: "/dummy_root".to_string(),
+            engine,
+            root_path,
         }
     }
 }
 
 impl<EK: KvEngine> Default for DummyFactory<EK> {
     fn default() -> Self {
-        Self::new()
+        Self::new(None, "/tmp".to_string())
     }
 }

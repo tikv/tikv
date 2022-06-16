@@ -23,7 +23,7 @@ pub struct StorageConfigManger<E: Engine, L: LockManager> {
     kvdb: <E as Engine>::Local,
     shared_block_cache: bool,
     ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
-    flow_controller: Arc<FlowController>,
+    flow_controller: Arc<dyn FlowController + Send + Sync>,
     scheduler: TxnScheduler<E, L>,
 }
 
@@ -35,7 +35,7 @@ impl<E: Engine, L: LockManager> StorageConfigManger<E, L> {
         kvdb: <E as Engine>::Local,
         shared_block_cache: bool,
         ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
-        flow_controller: Arc<FlowController>,
+        flow_controller: Arc<dyn FlowController + Send + Sync>,
         scheduler: TxnScheduler<E, L>,
     ) -> Self {
         StorageConfigManger {

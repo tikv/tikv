@@ -196,7 +196,7 @@ struct SchedulerInner<L: LockManager> {
     // used to control write flow
     running_write_bytes: CachePadded<AtomicUsize>,
 
-    flow_controller: Arc<FlowController>,
+    flow_controller: Arc<dyn FlowController + Send + Sync>,
 
     control_mutex: Arc<tokio::sync::Mutex<bool>>,
 
@@ -329,7 +329,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency_manager: ConcurrencyManager,
         config: &Config,
         dynamic_configs: DynamicConfigs,
-        flow_controller: Arc<FlowController>,
+        flow_controller: Arc<dyn FlowController + Send + Sync>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
@@ -833,6 +833,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // message when it finishes.
             Ok(res) => res,
         };
+        let region_id = ctx.get_region_id();
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
         if let Some(lock_info) = lock_info {
@@ -945,9 +946,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             };
 
         if self.inner.flow_controller.enabled() {
-            if self.inner.flow_controller.is_unlimited() {
+            if self.inner.flow_controller.is_unlimited(region_id) {
                 // no need to delay if unthrottled, just call consume to record write flow
-                let _ = self.inner.flow_controller.consume(write_size);
+                let _ = self.inner.flow_controller.consume(region_id, write_size);
             } else {
                 let start = Instant::now_coarse();
                 // Control mutex is used to ensure there is only one request consuming the quota.
@@ -956,16 +957,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 // without the mutex, the write flow can't throttled strictly.
                 let control_mutex = self.inner.control_mutex.clone();
                 let _guard = control_mutex.lock().await;
-                let delay = self.inner.flow_controller.consume(write_size);
+                let delay = self.inner.flow_controller.consume(region_id, write_size);
                 let delay_end = Instant::now_coarse() + delay;
-                while !self.inner.flow_controller.is_unlimited() {
+                while !self.inner.flow_controller.is_unlimited(region_id) {
                     let now = Instant::now_coarse();
                     if now >= delay_end {
                         break;
                     }
                     if now >= deadline.inner() {
                         scheduler.finish_with_err(cid, StorageErrorInner::DeadlineExceeded);
-                        self.inner.flow_controller.unconsume(write_size);
+                        self.inner.flow_controller.unconsume(region_id, write_size);
                         SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
                         return;
                     }
@@ -1060,7 +1061,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         // Only consume the quota when write succeeds, otherwise failed write requests may exhaust
                         // the quota and other write requests would be in long delay.
                         if sched.inner.flow_controller.enabled() {
-                            sched.inner.flow_controller.unconsume(write_size);
+                            sched.inner.flow_controller.unconsume(region_id, write_size);
                         }
                     }
                 })
@@ -1177,7 +1178,7 @@ mod tests {
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
-        txn::{commands, commands::TypedCommand, latch::*},
+        txn::{commands, commands::TypedCommand, flow_controller::EngineFlowController, latch::*},
         TestEngineBuilder, TxnStatus,
     };
 
@@ -1324,7 +1325,7 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             },
-            Arc::new(FlowController::empty()),
+            Arc::new(EngineFlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1382,7 +1383,7 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             },
-            Arc::new(FlowController::empty()),
+            Arc::new(EngineFlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1440,7 +1441,7 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             },
-            Arc::new(FlowController::empty()),
+            Arc::new(EngineFlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1457,7 +1458,7 @@ mod tests {
         let (cb, f) = paired_future_callback();
 
         scheduler.inner.flow_controller.enable(true);
-        scheduler.inner.flow_controller.set_speed_limit(1.0);
+        scheduler.inner.flow_controller.set_speed_limit(0, 1.0);
         scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
         // The task waits for 200ms until it locks the control_mutex, but the execution
         // time limit is 100ms. Before the mutex is locked, it should return
@@ -1468,13 +1469,13 @@ mod tests {
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
         // should unconsume if the request fails
-        assert_eq!(scheduler.inner.flow_controller.total_bytes_consumed(), 0);
+        assert_eq!(scheduler.inner.flow_controller.total_bytes_consumed(0), 0);
 
         // A new request should not be blocked without flow control.
         scheduler
             .inner
             .flow_controller
-            .set_speed_limit(f64::INFINITY);
+            .set_speed_limit(0, f64::INFINITY);
         let mut req = CheckTxnStatusRequest::default();
         req.mut_context().max_execution_duration_ms = 100;
         req.set_primary_key(b"a".to_vec());
@@ -1506,7 +1507,7 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             },
-            Arc::new(FlowController::empty()),
+            Arc::new(EngineFlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1566,7 +1567,7 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             },
-            Arc::new(FlowController::empty()),
+            Arc::new(EngineFlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
