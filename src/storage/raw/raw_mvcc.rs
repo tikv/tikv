@@ -43,10 +43,7 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
 
 impl<S: Snapshot> Snapshot for RawMvccSnapshot<S> {
     type Iter = RawMvccIterator<S::Iter>;
-    type Ext<'a>
-    where
-        S: 'a,
-    = S::Ext<'a>;
+    type Ext<'a> = S::Ext<'a> where S: 'a;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.seek_first_key_value_cf(None, None, key)

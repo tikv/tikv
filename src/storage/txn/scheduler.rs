@@ -47,6 +47,7 @@ use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
 use txn_types::TimeStamp;
 
 use crate::{
@@ -59,7 +60,7 @@ use crate::{
             SnapContext, Statistics,
         },
         lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout},
-        metrics::{self, *},
+        metrics::*,
         txn::{
             commands::{Command, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo},
             flow_controller::FlowController,
@@ -83,15 +84,17 @@ const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 /// Task is a running command.
 pub(super) struct Task {
     pub(super) cid: u64,
+    pub(super) tracker: TrackerToken,
     pub(super) cmd: Command,
     pub(super) extra_op: ExtraOp,
 }
 
 impl Task {
     /// Creates a task for a running command.
-    pub(super) fn new(cid: u64, cmd: Command) -> Task {
+    pub(super) fn new(cid: u64, tracker: TrackerToken, cmd: Command) -> Task {
         Task {
             cid,
+            tracker,
             cmd,
             extra_op: ExtraOp::Noop,
         }
@@ -99,7 +102,7 @@ impl Task {
 }
 
 struct CmdTimer {
-    tag: metrics::CommandKind,
+    tag: CommandKind,
     begin: Instant,
 }
 
@@ -122,7 +125,7 @@ struct TaskContext {
     // `cb` and `pr` safely.
     owned: AtomicBool,
     write_bytes: usize,
-    tag: metrics::CommandKind,
+    tag: CommandKind,
     // How long it waits on latches.
     // latch_timer: Option<Instant>,
     latch_timer: Instant,
@@ -411,8 +414,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
         let cid = self.inner.gen_id();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
-
+        let tracker = get_tls_tracker_token();
+        debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
@@ -421,9 +424,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .inc();
 
         let mut task_slot = self.inner.get_task_slot(cid);
-        let tctx = task_slot
-            .entry(cid)
-            .or_insert_with(|| self.inner.new_task_context(Task::new(cid, cmd), callback));
+        let tctx = task_slot.entry(cid).or_insert_with(|| {
+            self.inner
+                .new_task_context(Task::new(cid, tracker, cmd), callback)
+        });
         let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
@@ -494,6 +498,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
+        set_tls_tracker_token(task.tracker);
         let sched = self.clone();
         self.get_sched_pool(task.cmd.priority())
             .pool
@@ -537,6 +542,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         debug!(
                             "process cmd with snapshot";
                             "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
+                            "trakcer" => ?task.tracker
                         );
                         sched.process(snapshot, task).await;
                     }
@@ -575,7 +581,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     ///
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
     /// callback.
-    fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
+    fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: CommandKind) {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
@@ -599,7 +605,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock_guards: Vec<KeyHandleGuard>,
         pipelined: bool,
         async_apply_prewrite: bool,
-        tag: metrics::CommandKind,
+        tag: CommandKind,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
         if pipelined {
@@ -674,8 +680,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         cid: u64,
         cb: StorageCallback,
         pr: ProcessResult,
-        tag: metrics::CommandKind,
-        stage: metrics::CommandStageKind,
+        tag: CommandKind,
+        stage: CommandStageKind,
     ) {
         debug!("early return response"; "cid" => cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
@@ -745,10 +751,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tag = task.cmd.tag();
 
         let begin_instant = Instant::now();
-        let pr = task
-            .cmd
-            .process_read(snapshot, statistics)
-            .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() });
+        let cmd = task.cmd;
+        let pr = unsafe {
+            with_perf_context::<E, _, _>(tag, || {
+                cmd.process_read(snapshot, statistics)
+                    .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() })
+            })
+        };
         SCHED_PROCESSING_READ_HISTOGRAM_STATIC
             .get(tag)
             .observe(begin_instant.saturating_elapsed_secs());
@@ -783,10 +792,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
             };
             let begin_instant = Instant::now();
-            let res = task
-                .cmd
-                .process_write(snapshot, context)
-                .map_err(StorageError::from);
+            let res = unsafe {
+                with_perf_context::<E, _, _>(tag, || {
+                    task.cmd
+                        .process_write(snapshot, context)
+                        .map_err(StorageError::from)
+                })
+            };
             SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                 .get(tag)
                 .observe(begin_instant.saturating_elapsed_secs());
@@ -905,7 +917,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             cb.unwrap(),
                             pr.unwrap(),
                             tag,
-                            metrics::CommandStageKind::async_apply_prewrite,
+                            CommandStageKind::async_apply_prewrite,
                         );
                     });
                     is_async_apply_prewrite = true;
@@ -935,7 +947,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 cb.unwrap(),
                                 pr.unwrap(),
                                 tag,
-                                metrics::CommandStageKind::pipelined_write,
+                                CommandStageKind::pipelined_write,
                             );
                         });
                         (Some(proposed_cb), None)
