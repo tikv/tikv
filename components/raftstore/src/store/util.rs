@@ -2,13 +2,14 @@
 
 // #[PerformanceCriticalPath]
 use std::{
+    cell::RefCell,
     cmp,
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     fmt,
     fmt::Display,
     option::Option,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
         Arc, Mutex,
     },
     u64,
@@ -20,6 +21,7 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest},
     raft_serverpb::RaftMessage,
 };
+use lazy_static::*;
 use protobuf::{self, Message};
 use raft::{
     eraftpb::{self, ConfChangeType, ConfState, MessageType},
@@ -1338,6 +1340,96 @@ impl LatencyInspector {
     /// Call the callback.
     pub fn finish(self) {
         (self.cb)(self.id, self.duration);
+    }
+}
+
+lazy_static! {
+    pub static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicUsize = AtomicUsize::new(1);
+}
+
+thread_local! {
+    pub static LOCAL_MAX_SEQUENCE_NUMBER: RefCell<Option<Arc<AtomicU64>>> = RefCell::default();
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SequenceNumber {
+    pub sequence: u64,
+    pub start_counter: usize,
+    pub end_counter: usize,
+}
+
+impl SequenceNumber {
+    pub fn start() -> Self {
+        SequenceNumber {
+            sequence: 0,
+            start_counter: SEQUENCE_NUMBER_COUNTER_ALLOCATOR.fetch_add(1, AtomicOrdering::SeqCst),
+            end_counter: 0,
+        }
+    }
+
+    pub fn end(&mut self, number: u64) {
+        self.sequence = number;
+        self.end_counter = SEQUENCE_NUMBER_COUNTER_ALLOCATOR.load(AtomicOrdering::SeqCst);
+    }
+
+    pub fn set_thread_local_max(number: u64) {
+        LOCAL_MAX_SEQUENCE_NUMBER.with(|x| {
+            (*x.borrow())
+                .as_ref()
+                .unwrap()
+                .store(number, AtomicOrdering::SeqCst)
+        })
+    }
+}
+
+pub struct SequenceNumberWindow {
+    // The sequence number doesn't be received in order, we need a ordered set to
+    // store received start counters which are bigger than last_start_counter + 1.
+    pending_start_counter: BTreeSet<usize>,
+    // end_counter => sequence number
+    pending_sequence: BTreeMap<usize, u64>,
+    last_start_counter: usize,
+    last_sequence: Option<u64>,
+}
+
+impl SequenceNumberWindow {
+    pub fn push(&mut self, sn: SequenceNumber) -> Option<u64> {
+        if sn.start_counter == self.last_start_counter + 1 {
+            self.last_start_counter += 1;
+            while let Some(start_counter) = self.pending_start_counter.first().copied() {
+                if start_counter == self.last_start_counter + 1 {
+                    self.last_start_counter += 1;
+                    self.pending_start_counter.remove(&start_counter);
+                } else {
+                    break;
+                }
+            }
+
+            while let Some((end_counter, sequence)) = self
+                .pending_sequence
+                .first_key_value()
+                .map(|(k, v)| (*k, *v))
+            {
+                if end_counter <= self.last_start_counter {
+                    match self.last_sequence {
+                        Some(last_sequence) => {
+                            self.last_sequence = Some(u64::max(last_sequence, sequence));
+                        }
+                        None => self.last_sequence = Some(sequence),
+                    }
+                    self.pending_sequence.remove(&end_counter);
+                } else {
+                    break;
+                }
+            }
+            self.last_sequence
+        } else {
+            assert!(self.pending_start_counter.insert(sn.start_counter));
+            self.pending_sequence
+                .insert(sn.end_counter, sn.sequence)
+                .unwrap();
+            None
+        }
     }
 }
 

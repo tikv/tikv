@@ -11,7 +11,7 @@ use std::{
     mem,
     ops::{Deref, DerefMut},
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -87,8 +87,7 @@ use crate::{
         metrics::*,
         peer_storage,
         transport::Transport,
-        util,
-        util::{is_initial_msg, RegionReadProgressRegistry},
+        util::{self, is_initial_msg, RegionReadProgressRegistry},
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
@@ -148,6 +147,7 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
+    pub threads_sequence_numbers: Vec<Arc<AtomicU64>>,
 }
 
 impl StoreMeta {
@@ -165,6 +165,7 @@ impl StoreMeta {
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
+            threads_sequence_numbers: Vec::default(),
         }
     }
 
@@ -1031,6 +1032,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.flush_events();
             }
         }
+    }
+
+    fn on_poll_start(&mut self) {
+        util::LOCAL_MAX_SEQUENCE_NUMBER.with(|x| {
+            let atomic = Arc::new(AtomicU64::default());
+            *x.borrow_mut() = Some(atomic.clone());
+            let mut meta = self.poll_ctx.store_meta.lock().unwrap();
+            meta.threads_sequence_numbers.push(atomic);
+        })
     }
 }
 

@@ -84,7 +84,7 @@ use crate::{
         util,
         util::{
             admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
-            ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
+            ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector, SequenceNumber,
         },
         Config, RegionSnapshot, RegionTask,
     },
@@ -492,9 +492,9 @@ where
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
-            let (_, sequence) = self.write_to_db();
-            if sequence.is_some() {
-                delegate.last_sequence = sequence;
+            let (_, sequence_number) = self.write_to_db();
+            if sequence_number.is_some() {
+                delegate.last_sequence = sequence_number;
             }
             self.prepare_for(delegate);
             delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
@@ -505,9 +505,9 @@ where
 
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
-    pub fn write_to_db(&mut self) -> (bool, Option<u64>) {
+    pub fn write_to_db(&mut self) -> (bool, Option<SequenceNumber>) {
         let need_sync = self.sync_log_hint;
-        let mut sequence = None;
+        let mut sequence_number = None;
         // There may be put and delete requests after ingest request in the same fsm.
         // To guarantee the correct order, we must ingest the pending_sst first, and
         // then persist the kv write batch to engine.
@@ -527,9 +527,12 @@ where
             self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            sequence = Some(self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
+            let mut sn = SequenceNumber::start();
+            let sequence = self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
+            sn.end(sequence);
+            sequence_number = Some(sn);
             let trackers: Vec<_> = self
                 .applied_batch
                 .cb_batch
@@ -578,7 +581,7 @@ where
         }
         self.apply_time.flush();
         self.apply_wait.flush();
-        (need_sync, sequence)
+        (need_sync, sequence_number)
     }
 
     /// Finishes `Apply`s for the delegate.
@@ -911,7 +914,7 @@ where
 
     buckets: Option<BucketStat>,
 
-    last_sequence: Option<u64>,
+    last_sequence: Option<SequenceNumber>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -3246,7 +3249,7 @@ where
     pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
     pub bucket_stat: Option<Box<BucketStat>>,
-    pub last_sequence: Option<u64>,
+    pub last_sequence: Option<SequenceNumber>,
 }
 
 #[derive(Debug)]
