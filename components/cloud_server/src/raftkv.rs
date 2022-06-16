@@ -538,6 +538,7 @@ prewrite
 
 1pc
     optional modify::put cf_default
+    optional modify::del cf_lock
     | modify::put cf_write:put
     | modify::put cf_write:del
 
@@ -546,10 +547,28 @@ commit
 
 rollback
     modify:del cf_lock
-    | modify::put cf_write::put overlapped + modify:del cf_lock
-    | modify::put cf_write::rollback
-    | modify::put cf_write::rollback + modify:del cf_lock
-    | modify::put cf_lock(has rollback_ts) + modify:put cf_write:rollback
+    | modify::put cf_write::put overlapped + modify:del cf_lock + optional modify::del cf_write(collapse rollback)
+    | modify::put cf_write::rollback + optional modify::del cf_write(collapse rollback)
+    | modify::put cf_write::rollback + modify:del cf_lock + optional modify::del cf_write(collapse rollback)
+    | modify::put cf_lock(has rollback_ts) + modify:put cf_write:rollback + optional modify::del cf_write(collapse rollback)
+
+pessimistic_rollback
+    modify::del cf_lock(pessimistic)
+
+check_txn_status
+    | pessimistic_lock(push min_commit_ts)
+    | prewrite(push min_commit_ts)
+    | pessimistic_rollback
+    | rollback
+
+CheckSecondaryLocks
+    rollback
+
+ResolveLock
+    commit and rollback
+
+Heartbeat
+    modify::put cf_lock(optimistc or pessimistic)
 */
 pub fn modifies_to_requests(_ctx: &Context, data: &mut WriteData) -> CustomRequest {
     let builder = &mut rlog::CustomBuilder::new();
@@ -750,6 +769,7 @@ fn build_check_txn_status(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
                 rlog::TYPE_ROLLBACK
             }
         }
+        Modify::Put(CF_WRITE, ..) | Modify::Delete(CF_WRITE, ..) => rlog::TYPE_ROLLBACK,
         _ => unreachable!("unexpected modifies: {:?}", modifies),
     };
     match tp {
@@ -809,6 +829,7 @@ mod tests {
     };
 
     use tikv_kv::RocksEngine;
+    use txn_types::SHORT_VALUE_MAX_LEN;
     use uuid::Uuid;
 
     use super::*;
@@ -922,35 +943,109 @@ mod tests {
             _ => unreachable!("unexpected modify: {:?}", modify),
         };
 
+        let prewrite = |mutations, primary: &[_], ts: u64, one_pc, max_commit_ts: u64| {
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::new(
+                        mutations,
+                        primary.to_vec(),
+                        ts.into(),
+                        3000,
+                        false,
+                        0,
+                        (ts + 1).into(),
+                        max_commit_ts.into(),
+                        None,
+                        one_pc,
+                        AssertionLevel::Off,
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 1),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            engine.take_last_write_data().unwrap()
+        };
+        let pessimistic_prewrite =
+            |mutations, primary: &[_], ts: u64, one_pc, max_commit_ts: u64| {
+                storage
+                    .sched_txn_command(
+                        commands::PrewritePessimistic::new(
+                            mutations,
+                            primary.to_vec(),
+                            ts.into(),
+                            3000,
+                            ts.into(),
+                            0,
+                            (ts + 1).into(),
+                            max_commit_ts.into(),
+                            None,
+                            one_pc,
+                            AssertionLevel::Off,
+                            Context::default(),
+                        ),
+                        expect_ok_callback(tx.clone(), 1),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+                engine.take_last_write_data().unwrap()
+            };
+        let pessimistic_lock = |keys: Vec<_>, primary: &[_], ts: u64| {
+            storage
+                .sched_txn_command(
+                    commands::AcquirePessimisticLock::new(
+                        keys.into_iter()
+                            .map(|k| (Key::from_raw(k), false))
+                            .collect(),
+                        primary.to_vec(),
+                        ts.into(),
+                        3000,
+                        false,
+                        ts.into(),
+                        None,
+                        false,
+                        (ts + 1).into(),
+                        Default::default(),
+                        false,
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 1),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            engine.take_last_write_data().unwrap()
+        };
+
         // Prewrite
-        storage
-            .sched_txn_command(
-                commands::Prewrite::with_context(
-                    vec![
-                        Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
-                        Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
-                    ],
-                    b"k1".to_vec(),
-                    10.into(),
-                    Context::default(),
-                ),
-                expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        let mut data = engine.take_last_write_data().unwrap();
+        let mut data = prewrite(
+            vec![
+                Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
+                Mutation::make_put(Key::from_raw(b"k2"), b"v".repeat(SHORT_VALUE_MAX_LEN + 1)),
+            ],
+            b"k1",
+            10,
+            false,
+            0,
+        );
         let modifies = data.modifies.clone();
         assert_eq!(data.extra.req_type, ReqType::Prewrite);
         let custom_req = modifies_to_requests(&Context::default(), &mut data);
         let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
         assert_eq!(custom_log.get_type(), rlog::TYPE_PREWRITE);
-        let mut iter = modifies.into_iter();
-        custom_log.iterate_lock(|k, v| {
-            let modify = iter.next().unwrap();
-            assert_eq!(k, modify.key().to_raw().unwrap());
-            assert_eq!(v, &get_modify_value(&modify));
+        custom_log.iterate_lock(|k, v| match k {
+            b"k1" => {
+                assert_eq!(k, modifies[0].key().to_raw().unwrap());
+                assert_eq!(v, &get_modify_value(&modifies[0]));
+            }
+            b"k2" => {
+                assert_eq!(k, modifies[2].key().to_raw().unwrap());
+                let default_val = get_modify_value(&modifies[1]);
+                let mut lock = Lock::parse(&get_modify_value(&modifies[2])).unwrap();
+                lock.short_value = Some(default_val);
+                assert_eq!(v, lock.to_bytes());
+            }
+            _ => unreachable!(),
         });
-        assert!(iter.next().is_none());
 
         // Commit
         storage
@@ -978,65 +1073,37 @@ mod tests {
         assert!(keys.next().is_none());
 
         // 1PC
-        storage
-            .sched_txn_command(
-                commands::Prewrite::new(
-                    vec![Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec())],
-                    b"k1".to_vec(),
-                    30.into(),
-                    3000,
-                    false,
-                    0,
-                    31.into(),
-                    40.into(),
-                    None,
-                    true,
-                    AssertionLevel::Off,
-                    Context::default(),
-                ),
-                expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        let mut data = engine.take_last_write_data().unwrap();
+        let mut data = prewrite(
+            vec![
+                Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
+                Mutation::make_put(Key::from_raw(b"k2"), b"v".repeat(SHORT_VALUE_MAX_LEN + 1)),
+            ],
+            b"k1",
+            30,
+            true,
+            40,
+        );
         assert!(data.extra.one_pc);
         let custom_req = modifies_to_requests(&Context::default(), &mut data);
         let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
         assert_eq!(custom_log.get_type(), rlog::TYPE_ONE_PC);
         let mut cnt = 0;
         custom_log.iterate_one_pc(|k, v, is_extra, del_lock, start_ts, commit_ts| {
-            assert_eq!(k, b"k1");
-            assert_eq!(v, b"v1");
+            match k {
+                b"k1" => assert_eq!(v, b"v1"),
+                b"k2" => assert_eq!(v, &b"v".repeat(SHORT_VALUE_MAX_LEN + 1)),
+                _ => unreachable!(),
+            }
             assert!(!is_extra);
             assert!(!del_lock);
             assert_eq!(start_ts, 30);
             assert_eq!(commit_ts, 31);
             cnt += 1;
         });
-        assert_eq!(cnt, 1);
+        assert_eq!(cnt, 2);
 
         // PessimisticLock
-        storage
-            .sched_txn_command(
-                commands::AcquirePessimisticLock::new(
-                    vec![(Key::from_raw(b"k1"), false)],
-                    b"k1".to_vec(),
-                    40.into(),
-                    3000,
-                    true,
-                    40.into(),
-                    None,
-                    false,
-                    40.into(),
-                    Default::default(),
-                    false,
-                    Context::default(),
-                ),
-                expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        let mut data = engine.take_last_write_data().unwrap();
+        let mut data = pessimistic_lock(vec![b"k1"], b"k1", 40);
         let modifies = data.modifies.clone();
         assert_eq!(data.extra.req_type, ReqType::PessimisticLock);
         let custom_req = modifies_to_requests(&Context::default(), &mut data);
@@ -1051,33 +1118,19 @@ mod tests {
         assert_eq!(cnt, 1);
 
         // Pessimistic 1PC
-        storage
-            .sched_txn_command(
-                commands::PrewritePessimistic::new(
-                    vec![
-                        (
-                            Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
-                            true,
-                        ),
-                        (Mutation::make_lock(Key::from_raw(b"k2")), false),
-                    ],
-                    b"k1".to_vec(),
-                    40.into(),
-                    3000,
-                    40.into(),
-                    0,
-                    41.into(),
-                    50.into(),
-                    Some(vec![b"k2".to_vec()]),
+        let mut data = pessimistic_prewrite(
+            vec![
+                (
+                    Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
                     true,
-                    AssertionLevel::Off,
-                    Context::default(),
                 ),
-                expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        let mut data = engine.take_last_write_data().unwrap();
+                (Mutation::make_lock(Key::from_raw(b"k2")), false),
+            ],
+            b"k1",
+            40,
+            true,
+            50,
+        );
         assert!(data.extra.one_pc);
         let custom_req = modifies_to_requests(&Context::default(), &mut data);
         let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
@@ -1104,30 +1157,26 @@ mod tests {
         assert_eq!(cnt, 2);
 
         // ResolveLock
-        storage
-            .sched_txn_command(
-                commands::Prewrite::with_context(
-                    vec![Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec())],
-                    b"k1".to_vec(),
-                    50.into(),
-                    Context::default(),
-                ),
-                expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::Prewrite::with_context(
-                    vec![Mutation::make_put(Key::from_raw(b"k2"), b"v1".to_vec())],
-                    b"k2".to_vec(),
-                    60.into(),
-                    Context::default(),
-                ),
-                expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        prewrite(
+            vec![
+                Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
+                Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
+            ],
+            b"k1",
+            50,
+            false,
+            0,
+        );
+        prewrite(
+            vec![
+                Mutation::make_put(Key::from_raw(b"k3"), b"v3".to_vec()),
+                Mutation::make_put(Key::from_raw(b"k4"), b"v4".to_vec()),
+            ],
+            b"k3",
+            60,
+            false,
+            0,
+        );
         let txn_status = HashMap::from_iter(
             [(50.into(), 51.into()), (60.into(), 0.into())]
                 .iter()
@@ -1136,7 +1185,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::ResolveLockReadPhase::new(txn_status, None, Context::default()),
-                expect_ok_callback(tx, 1),
+                expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1145,24 +1194,265 @@ mod tests {
         let custom_req = modifies_to_requests(&Context::default(), &mut data);
         let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
         assert_eq!(custom_log.get_type(), rlog::TYPE_RESOLVE_LOCK);
-        let mut cnt = 0;
+        let mut expected = HashMap::from_iter(vec![
+            (
+                b"k1".as_slice(),
+                (rlog::TYPE_COMMIT, b"k1".as_slice(), 51, true),
+            ),
+            (
+                b"k2".as_slice(),
+                (rlog::TYPE_COMMIT, b"k2".as_slice(), 51, true),
+            ),
+            (
+                b"k3".as_slice(),
+                (rlog::TYPE_ROLLBACK, b"k3".as_slice(), 60, true),
+            ),
+            (
+                b"k4".as_slice(),
+                (rlog::TYPE_ROLLBACK, b"k4".as_slice(), 60, true),
+            ),
+        ]);
         custom_log.iterate_resolve_lock(|tp, k, ts, del_lock| {
-            match tp {
-                rlog::TYPE_COMMIT => {
-                    assert_eq!(k, b"k1");
-                    assert_eq!(ts, 51);
-                }
-                rlog::TYPE_ROLLBACK => {
-                    assert_eq!(k, b"k2");
-                    assert_eq!(ts, 60);
-                    assert!(del_lock);
-                }
-                _ => unreachable!("unexpected type: {:?}", tp),
+            assert_eq!(expected.remove(k).unwrap(), (tp, k, ts, del_lock));
+        });
+
+        // 1PC fallback
+        let mut data = prewrite(
+            vec![Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec())],
+            b"k1",
+            70,
+            true,
+            1,
+        );
+        assert_eq!(data.extra.req_type, ReqType::Prewrite);
+        let modifies = data.modifies.clone();
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_PREWRITE);
+        let mut cnt = 0;
+        custom_log.iterate_lock(|k, v| {
+            assert_eq!(k, modifies[0].key().to_raw().unwrap());
+            assert_eq!(v, &get_modify_value(&modifies[0]));
+            cnt += 1;
+        });
+        assert_eq!(cnt, 1);
+        // Rollback
+        storage
+            .sched_txn_command(
+                commands::Rollback::new(
+                    vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
+                    70.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let mut data = engine.take_last_write_data().unwrap();
+        assert_eq!(data.extra.req_type, ReqType::Rollback);
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_ROLLBACK);
+        let mut cnt = 0;
+        custom_log.iterate_rollback(|k, ts, del_lock| {
+            match k {
+                b"k1" => assert!(del_lock),
+                b"k2" => assert!(!del_lock),
+                _ => unreachable!(),
             };
+            assert_eq!(ts, 70);
             cnt += 1
         });
         assert_eq!(cnt, 2);
 
-        // TODO: test !is_short_value, 1PC fallback
+        // PessimisticRollback
+        pessimistic_lock(vec![b"k1"], b"k1", 80);
+        storage
+            .sched_txn_command(
+                commands::PessimisticRollback::new(
+                    vec![Key::from_raw(b"k1")],
+                    80.into(),
+                    80.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let mut data = engine.take_last_write_data().unwrap();
+        assert_eq!(data.extra.req_type, ReqType::PessimisticRollback);
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_PESSIMISTIC_ROLLBACK);
+        let mut cnt = 0;
+        custom_log.iterate_del_lock(|k| {
+            assert_eq!(k, b"k1");
+            cnt += 1
+        });
+        assert_eq!(cnt, 1);
+
+        // Heartbeat
+        pessimistic_lock(vec![b"k1"], b"k1", 90);
+        storage
+            .sched_txn_command(
+                commands::TxnHeartBeat::new(
+                    Key::from_raw(b"k1"),
+                    90.into(),
+                    10000,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let mut data = engine.take_last_write_data().unwrap();
+        assert_eq!(data.extra.req_type, ReqType::Heartbeat);
+        let modifies = data.modifies.clone();
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_PESSIMISTIC_LOCK);
+        let mut cnt = 0;
+        custom_log.iterate_lock(|k, v| {
+            assert_eq!(k, &modifies[0].key().to_raw().unwrap());
+            assert_eq!(v, &get_modify_value(&modifies[0]));
+            cnt += 1
+        });
+        assert_eq!(cnt, 1);
+        pessimistic_prewrite(
+            vec![(Mutation::make_delete(Key::from_raw(b"k1")), true)],
+            b"k1",
+            90,
+            false,
+            0,
+        );
+        storage
+            .sched_txn_command(
+                commands::TxnHeartBeat::new(
+                    Key::from_raw(b"k1"),
+                    90.into(),
+                    20000,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let mut data = engine.take_last_write_data().unwrap();
+        assert_eq!(data.extra.req_type, ReqType::Heartbeat);
+        let modifies = data.modifies.clone();
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_PREWRITE);
+        let mut cnt = 0;
+        custom_log.iterate_lock(|k, v| {
+            assert_eq!(k, &modifies[0].key().to_raw().unwrap());
+            assert_eq!(v, &get_modify_value(&modifies[0]));
+            cnt += 1
+        });
+        assert_eq!(cnt, 1);
+
+        // CheckTxnStatus
+        let check_txn_status =
+            |key, lock_ts: u64, caller_start_ts: u64, resolving_pessimistic_lock| {
+                storage
+                    .sched_txn_command(
+                        commands::CheckTxnStatus::new(
+                            Key::from_raw(key),
+                            lock_ts.into(),
+                            caller_start_ts.into(),
+                            caller_start_ts.into(),
+                            true,
+                            true,
+                            resolving_pessimistic_lock,
+                            Context::default(),
+                        ),
+                        expect_ok_callback(tx.clone(), 1),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+                engine.take_last_write_data().unwrap()
+            };
+        // Push lock's min_commit_ts
+        let mut data = check_txn_status(b"k1", 90, 100, false);
+        assert_eq!(data.extra.req_type, ReqType::CheckTxnStatus);
+        let modifies = data.modifies.clone();
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_PREWRITE);
+        let mut cnt = 0;
+        custom_log.iterate_lock(|k, v| {
+            assert_eq!(k, &modifies[0].key().to_raw().unwrap());
+            assert_eq!(v, &get_modify_value(&modifies[0]));
+            cnt += 1
+        });
+        assert_eq!(cnt, 1);
+        // Rollback lock
+        let mut data = check_txn_status(b"k1", 90, u64::MAX, false);
+        assert_eq!(data.extra.req_type, ReqType::CheckTxnStatus);
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_ROLLBACK);
+        let mut cnt = 0;
+        custom_log.iterate_rollback(|k, ts, del_lock| {
+            assert_eq!(k, b"k1");
+            assert!(del_lock);
+            assert_eq!(ts, 90);
+            cnt += 1
+        });
+        assert_eq!(cnt, 1);
+
+        pessimistic_lock(vec![b"k1"], b"k1", 100);
+        // Push pessimistic lock's min_commit_ts
+        let mut data = check_txn_status(b"k1", 100, 110, false);
+        assert_eq!(data.extra.req_type, ReqType::CheckTxnStatus);
+        let modifies = data.modifies.clone();
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_PESSIMISTIC_LOCK);
+        let mut cnt = 0;
+        custom_log.iterate_lock(|k, v| {
+            assert_eq!(k, &modifies[0].key().to_raw().unwrap());
+            assert_eq!(v, &get_modify_value(&modifies[0]));
+            cnt += 1
+        });
+        assert_eq!(cnt, 1);
+        // Rollback pessimistic lock
+        let mut data = check_txn_status(b"k1", 100, u64::MAX, true);
+        assert_eq!(data.extra.req_type, ReqType::CheckTxnStatus);
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_PESSIMISTIC_ROLLBACK);
+        let mut cnt = 0;
+        custom_log.iterate_del_lock(|k| {
+            assert_eq!(k, b"k1");
+            cnt += 1
+        });
+        assert_eq!(cnt, 1);
+
+        // CheckSecondaryLocks
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(
+                    vec![Key::from_raw(b"k1")],
+                    110.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let mut data = engine.take_last_write_data().unwrap();
+        assert_eq!(data.extra.req_type, ReqType::CheckSecondaryLocks);
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_ROLLBACK);
+        let mut cnt = 0;
+        custom_log.iterate_rollback(|k, ts, del_lock| {
+            assert_eq!(k, b"k1");
+            assert_eq!(ts, 110);
+            assert!(!del_lock);
+            cnt += 1
+        });
+        assert_eq!(cnt, 1);
     }
 }
