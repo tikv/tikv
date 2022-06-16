@@ -115,6 +115,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
         group_by_exp: RpnExpression,
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
+        paging_size: Option<u64>,
     ) -> Self {
         Self::new_impl(
             Arc::new(EvalConfig::default()),
@@ -122,7 +123,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
             group_by_exp,
             aggr_defs,
             aggr_def_parser,
-            None,
+            paging_size,
         )
         .unwrap()
     }
@@ -512,6 +513,7 @@ mod tests {
                 group_by_exp(),
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -521,6 +523,7 @@ mod tests {
                 vec![group_by_exp()],
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -645,6 +648,7 @@ mod tests {
                 group_by_exp(),
                 aggr_definitions(),
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -654,6 +658,7 @@ mod tests {
                 vec![group_by_exp()],
                 aggr_definitions(),
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
         let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
@@ -728,6 +733,7 @@ mod tests {
                 group_by_exp(),
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -737,6 +743,7 @@ mod tests {
                 vec![group_by_exp()],
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -847,6 +854,7 @@ mod tests {
                     .build_for_test(),
                 vec![Expr::default()],
                 MyParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -858,6 +866,7 @@ mod tests {
                     .build_for_test(),
                 vec![Expr::default()],
                 MyParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -871,6 +880,7 @@ mod tests {
                 ],
                 vec![Expr::default()],
                 MyParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -884,6 +894,7 @@ mod tests {
                 ],
                 vec![Expr::default()],
                 MyParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -900,6 +911,7 @@ mod tests {
                 ],
                 vec![Expr::default()],
                 MyParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -956,6 +968,7 @@ mod tests {
                     .build_for_test(),
                 vec![],
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -969,6 +982,7 @@ mod tests {
                 ],
                 vec![],
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -1027,6 +1041,7 @@ mod tests {
                     .build_for_test(),
                 vec![],
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -1040,6 +1055,7 @@ mod tests {
                 ],
                 vec![],
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
@@ -1098,6 +1114,7 @@ mod tests {
                 group_by_exp(),
                 aggr_definitions(),
                 AllAggrDefinitionParser,
+                None,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 

@@ -112,6 +112,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
         group_by_exps: Vec<RpnExpression>,
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
+        paging_size: Option<u64>,
     ) -> Self {
         Self::new_impl(
             Arc::new(EvalConfig::default()),
@@ -119,7 +120,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
             group_by_exps,
             aggr_defs,
             aggr_def_parser,
-            None,
+            paging_size,
         )
         .unwrap()
     }
@@ -500,6 +501,7 @@ mod tests {
             group_by_exps,
             aggr_definitions,
             AllAggrDefinitionParser,
+            None,
         );
 
         let r = exec.next_batch(1);
@@ -584,6 +586,7 @@ mod tests {
             group_by_exps,
             vec![],
             AllAggrDefinitionParser,
+            None,
         );
 
         let r = exec.next_batch(1);
