@@ -36,9 +36,6 @@ pub struct QuotaLimiter {
     max_delay_duration: AtomicU64,
     // if supports auto tune
     support_auto_tune: AtomicBool,
-    cpu_quota_pace: f64,
-    cpu_busy: f64,
-    cpu_healthy: f64,
 }
 
 // Throttle must be consumed in quota limiter.
@@ -103,9 +100,6 @@ impl Default for QuotaLimiter {
             background_read_bandwidth_limiter: Limiter::new(f64::INFINITY),
             max_delay_duration: AtomicU64::new(0),
             support_auto_tune: AtomicBool::new(false),
-            cpu_quota_pace: 200.0, // 0.2 vcpu
-            cpu_busy: 0.9,
-            cpu_healthy: 0.75,
         }
     }
 }
@@ -121,9 +115,6 @@ impl QuotaLimiter {
         background_read_bandwidth: ReadableSize,
         max_delay_duration: ReadableDuration,
         support_auto_tune: bool,
-        cpu_quota_pace: f64,
-        cpu_busy: f64,
-        cpu_healthy: f64,
     ) -> Self {
         let foreground_cputime_limiter =
             Limiter::builder(Self::speed_limit(foreground_cpu_quota as f64 * 1000_f64))
@@ -159,9 +150,6 @@ impl QuotaLimiter {
             background_read_bandwidth_limiter,
             max_delay_duration,
             support_auto_tune,
-            cpu_quota_pace,
-            cpu_busy,
-            cpu_healthy,
         }
     }
 
@@ -222,18 +210,6 @@ impl QuotaLimiter {
 
     pub fn supports_auto_tune(&self) -> bool {
         self.support_auto_tune.load(Ordering::Relaxed)
-    }
-
-    pub fn cpu_quota_pace(&self) -> f64 {
-        self.cpu_quota_pace
-    }
-
-    pub fn cpu_busy(&self) -> f64 {
-        self.cpu_busy
-    }
-
-    pub fn cpu_healthy(&self) -> f64 {
-        self.cpu_healthy
     }
 
     // To generate a sampler.
@@ -399,9 +375,6 @@ mod tests {
             ReadableSize::kb(1),
             ReadableDuration::millis(0),
             false,
-            1.0,
-            0.9,
-            0.75,
         );
 
         let thread_start_time = ThreadTime::now();
