@@ -6,6 +6,7 @@
 use std::io::{Error, ErrorKind, Result};
 
 use crate::sys::thread;
+use lazy_static::lazy_static;
 use prometheus::core::{Collector, Desc};
 use prometheus::{proto, Counter, Gauge, Opts};
 use std::sync::Mutex;

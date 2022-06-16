@@ -110,9 +110,10 @@ mod tests {
 #[cfg(target_os = "linux")]
 mod tests {
     use super::*;
-    use crate::{utils, RawRecords, TagInfos};
+    use crate::{RawRecords, TagInfos};
     use std::sync::atomic::AtomicPtr;
     use std::sync::Arc;
+    use tikv_util::sys::thread;
 
     fn heavy_job() -> u64 {
         let m: u64 = rand::random();
@@ -137,14 +138,14 @@ mod tests {
             ptr: Arc::new(AtomicPtr::new(Arc::into_raw(info) as _)),
         };
         let mut recorder = CpuRecorder::default();
-        recorder.thread_created(utils::thread_id(), shared_ptr);
-        let thread_id = utils::thread_id();
+        recorder.thread_created(thread::thread_id(), shared_ptr);
+        let thread_id = thread::thread_id();
         let prev_stat = &recorder.thread_stats.get(&thread_id).unwrap().stat;
-        let prev_cpu_ticks = prev_stat.utime.wrapping_add(prev_stat.stime);
+        let prev_cpu_ticks = prev_stat.u_time.wrapping_add(prev_stat.s_time);
         loop {
-            let stat = utils::stat_task(utils::process_id(), thread_id).unwrap();
+            let stat = thread::full_thread_stat(thread::process_id(), thread_id).unwrap();
             let cpu_ticks = stat.utime.wrapping_add(stat.stime);
-            let delta_ms = cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000 / utils::clock_tick();
+            let delta_ms = cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000 / thread::clock_tick();
             if delta_ms != 0 {
                 break;
             }
