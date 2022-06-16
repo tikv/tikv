@@ -21,6 +21,7 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
+use grpcio_health::HealthService;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -243,10 +244,17 @@ where
         }
         let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg });
         let event = TraceEvent::Add(heap_size);
+        let send_failed = Cell::new(true);
+
+        MEMTRACE_RAFT_MESSAGES.trace(event);
+        defer!(if send_failed.get() {
+            MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
+        });
 
         let store_msg = match self.try_send(id, peer_msg) {
             Either::Left(Ok(())) => {
-                MEMTRACE_RAFT_MESSAGES.trace(event);
+                fail_point!("memtrace_raft_messages_overflow_check_send");
+                send_failed.set(false);
                 return Ok(());
             }
             Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(im)))) => {
@@ -260,7 +268,7 @@ where
         };
         match self.send_control(store_msg) {
             Ok(()) => {
-                MEMTRACE_RAFT_MESSAGES.trace(event);
+                send_failed.set(false);
                 Ok(())
             }
             Err(TrySendError::Full(StoreMsg::RaftMessage(im))) => Err(TrySendError::Full(im.msg)),
@@ -648,7 +656,6 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     trace_event: TraceEvent,
     last_flush_time: TiInstant,
     need_flush_events: bool,
-    last_flush_msg_time: TiInstant,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
@@ -717,6 +724,11 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
+        fail_point!(
+            "on_peer_handle_control_1",
+            store.store.id == 1,
+            |_| unreachable!()
+        );
         let mut expected_msg_count = None;
         while self.store_msg_buf.len() < self.messages_per_tick {
             match store.receiver.try_recv() {
@@ -813,11 +825,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         } else {
             let now = TiInstant::now();
 
-            if self.poll_ctx.trans.need_flush()
-                && now.saturating_duration_since(self.last_flush_msg_time)
-                    >= self.poll_ctx.cfg.raft_msg_flush_interval.0
-            {
-                self.last_flush_msg_time = now;
+            if self.poll_ctx.trans.need_flush() {
                 self.poll_ctx.trans.flush();
             }
 
@@ -909,14 +917,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             if self.poll_ctx.trans.need_flush() {
                 self.poll_ctx.trans.flush();
             }
-        } else if self.poll_ctx.trans.need_flush() || self.need_flush_events {
-            let now = TiInstant::now();
+        } else {
             if self.poll_ctx.trans.need_flush() {
-                self.last_flush_msg_time = now;
                 self.poll_ctx.trans.flush();
             }
             if self.need_flush_events {
-                self.last_flush_time = now;
+                self.last_flush_time = TiInstant::now();
                 self.need_flush_events = false;
                 self.flush_events();
             }
@@ -1195,7 +1201,6 @@ where
             trace_event: TraceEvent::default(),
             last_flush_time: TiInstant::now(),
             need_flush_events: false,
-            last_flush_msg_time: TiInstant::now(),
         }
     }
 }
@@ -1249,6 +1254,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         auto_split_controller: AutoSplitController,
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1341,6 +1347,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 concurrency_manager,
                 mgr,
                 pd_client,
+                health_service,
             )?;
         } else {
             self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
@@ -1351,6 +1358,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 concurrency_manager,
                 mgr,
                 pd_client,
+                health_service,
             )?;
         }
         Ok(())
@@ -1365,6 +1373,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
         pd_client: Arc<C>,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1431,6 +1440,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             concurrency_manager,
             snap_mgr,
             workers.pd_worker.remote(),
+            health_service,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
@@ -1551,7 +1561,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
                 // Maybe the target is promoted from learner to voter, but the follower
                 // doesn't know it. So we only compare peer id.
-                assert_eq!(peer.get_id(), msg.get_from_peer().get_id());
+                if peer.get_id() < msg.get_from_peer().get_id() {
+                    panic!(
+                        "peer id increased after region is merged, message peer id {}, local peer id {}, region {:?}",
+                        msg.get_from_peer().get_id(),
+                        peer.get_id(),
+                        region
+                    );
+                }
                 // Let stale peer decides whether it should wait for merging or just remove
                 // itself.
                 Some(local_state.get_merge_state().get_target().to_owned())

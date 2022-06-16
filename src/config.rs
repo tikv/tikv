@@ -2196,6 +2196,9 @@ pub struct BackupConfig {
     pub enable_auto_tune: bool,
     pub auto_tune_remain_threads: usize,
     pub auto_tune_refresh_interval: ReadableDuration,
+    // Do not expose this config to user.
+    // It used to debug s3 503 error.
+    pub s3_multi_part_size: ReadableSize,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
@@ -2208,6 +2211,10 @@ impl BackupConfig {
         if self.batch_size == 0 {
             return Err("backup.batch_size cannot be 0".into());
         }
+        if self.s3_multi_part_size.0 > ReadableSize::gb(5).0 {
+            return Err("backup.s3_multi_part_size cannot larger than 5GB".into());
+        }
+
         Ok(())
     }
 }
@@ -2224,6 +2231,8 @@ impl Default for BackupConfig {
             enable_auto_tune: false,
             auto_tune_remain_threads: 2,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
+            // 5MB is the minimum part size that S3 allowed.
+            s3_multi_part_size: ReadableSize::mb(5),
             hadoop: Default::default(),
         }
     }
