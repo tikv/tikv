@@ -1101,6 +1101,8 @@ impl DbConfig {
         let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
         opts.enable_pipelined_commit(enable_pipelined_commit);
         opts.enable_unordered_write(self.enable_unordered_write);
+        // ART does not support concurrent write.
+        opts.allow_concurrent_memtable_write(false);
         opts.set_info_log(RocksdbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
