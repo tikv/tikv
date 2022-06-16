@@ -4,7 +4,6 @@
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
 #![feature(vec_into_raw_parts)]
-#![feature(vec_retain_mut)]
 
 #[cfg(test)]
 extern crate test;
