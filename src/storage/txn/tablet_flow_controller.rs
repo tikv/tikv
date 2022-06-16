@@ -20,11 +20,12 @@ use tikv_util::time::Limiter;
 use super::flow_controller::{FlowChecker, FlowController, Msg, RATIO_SCALE_FACTOR, TICK_DURATION};
 use crate::storage::config::FlowControlConfig;
 
+type Limiters = Arc<RwLock<HashMap<u64, (Arc<Limiter>, Arc<AtomicU32>)>>>;
 pub struct TabletFlowController {
     enabled: Arc<AtomicBool>,
     tx: Option<SyncSender<Msg>>,
     handle: Option<std::thread::JoinHandle<()>>,
-    limiters: Arc<RwLock<HashMap<u64, (Arc<Limiter>, Arc<AtomicU32>)>>>,
+    limiters: Limiters,
 }
 
 impl Drop for TabletFlowController {
@@ -60,8 +61,7 @@ impl TabletFlowController {
         .unwrap();
         let flow_checkers: Arc<RwLock<HashMap<u64, FlowChecker<E>>>> =
             Arc::new(RwLock::new(HashMap::default()));
-        let limiters: Arc<RwLock<HashMap<u64, (Arc<Limiter>, Arc<AtomicU32>)>>> =
-            Arc::new(RwLock::new(HashMap::default()));
+        let limiters: Limiters = Arc::new(RwLock::new(HashMap::default()));
         Self {
             enabled: Arc::new(AtomicBool::new(config.enable)),
             tx: Some(tx),
@@ -91,7 +91,7 @@ impl FlowInfoDispatcher {
         flow_info_receiver: Receiver<FlowInfo>,
         tablet_factory: Arc<dyn TabletFactory<E> + Send + Sync>,
         flow_checkers: Arc<RwLock<HashMap<u64, FlowChecker<E>>>>,
-        limiters: Arc<RwLock<HashMap<u64, (Arc<Limiter>, Arc<AtomicU32>)>>>,
+        limiters: Limiters,
         config: FlowControlConfig,
     ) -> JoinHandle<()> {
         Builder::new()
@@ -106,7 +106,7 @@ impl FlowInfoDispatcher {
                         Ok(Msg::Disable) => {
                             enabled = false;
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
-                            for (_, checker) in &mut *checkers {
+                            for checker in (*checkers).values_mut() {
                                 checker.reset_statistics();
                             }
                         }
@@ -188,7 +188,7 @@ impl FlowInfoDispatcher {
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
-                            for (_, checker) in &mut *checkers {
+                            for checker in (*checkers).values_mut() {
                                 checker.update_statistics();
                             }
                             deadline = std::time::Instant::now() + TICK_DURATION;

@@ -33,9 +33,8 @@ use tikv::{
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         test_util::*,
         txn::{
-            commands,
-            flow_controller::{EngineFlowController, FlowController},
-            Error as TxnError, ErrorInner as TxnErrorInner,
+            commands, flow_controller::EngineFlowController, Error as TxnError,
+            ErrorInner as TxnErrorInner,
         },
         Error as StorageError, ErrorInner as StorageErrorInner, *,
     },

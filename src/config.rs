@@ -4188,6 +4188,7 @@ mod tests {
         assert_eq!(res.get("raftstore.store-pool-size"), Some(&"17".to_owned()));
     }
 
+    #[allow(clippy::type_complexity)]
     fn new_engines<F: KvFormat>(
         cfg: TiKvConfig,
     ) -> (

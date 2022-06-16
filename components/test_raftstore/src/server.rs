@@ -61,12 +61,7 @@ use tikv::{
         ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
-    storage::{
-        self,
-        kv::SnapContext,
-        txn::flow_controller::{EngineFlowController, FlowController},
-        Engine,
-    },
+    storage::{self, kv::SnapContext, txn::flow_controller::EngineFlowController, Engine},
 };
 use tikv_util::{
     config::VersionTrack,
