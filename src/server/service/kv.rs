@@ -1942,12 +1942,13 @@ macro_rules! txn_command_future {
             let res = storage.sched_txn_command($req.into(), cb);
 
             async move {
-                let res: ServerResult<_> = match res {
-                    Ok(_) => f.await.map_err(|e| e.into()),
-                    Err(e) => Err(e.into())
+                defer!{{
+                    GLOBAL_TRACKERS.remove(tracker);
+                }};
+                let $v = match res {
+                    Err(e) => Err(e),
+                    Ok(_) => f.await?,
                 };
-                GLOBAL_TRACKERS.remove(tracker);
-                let $v = res?;
                 let mut $resp = $resp_ty::default();
                 if let Some(err) = extract_region_error(&$v) {
                     $resp.set_region_error(err);
