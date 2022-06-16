@@ -5,6 +5,7 @@ use std::sync::{mpsc::Sender, Arc, Mutex};
 use collections::hash_set_with_capacity;
 use rocksdb::{CompactionJobInfo, EventListener, FlushJobInfo, IngestionInfo};
 
+#[derive(Clone)]
 pub enum FlowInfo {
     L0(String, u64, u64, u64),
     L0Intra(String, u64, u64, u64),
@@ -32,7 +33,7 @@ impl FlowListener {
         }
     }
 
-    pub fn clone_with(&self,  region_id: u64, suffix_id: u64) -> Self {
+    pub fn clone_with(&self, region_id: u64, suffix_id: u64) -> Self {
         Self {
             flow_info_sender: self.flow_info_sender.clone(),
             region_id,

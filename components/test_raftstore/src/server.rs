@@ -64,7 +64,7 @@ use tikv::{
     storage::{
         self,
         kv::SnapContext,
-        txn::flow_controller::{FlowController, EngineFlowController},
+        txn::flow_controller::{EngineFlowController, FlowController},
         Engine,
     },
 };

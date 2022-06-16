@@ -3831,7 +3831,7 @@ mod tests {
         storage::{
             config_manager::StorageConfigManger,
             lock_manager::DummyLockManager,
-            txn::flow_controller::{FlowController, EngineFlowController},
+            txn::flow_controller::{EngineFlowController, FlowController},
             Storage, TestStorageBuilder,
         },
     };

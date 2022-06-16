@@ -267,10 +267,10 @@ impl<L: LockManager> SchedulerInner<L> {
         self.get_task_slot(cid).get_mut(&cid).unwrap().pr = Some(pr);
     }
 
-    fn too_busy(&self) -> bool {
+    fn too_busy(&self, region_id: u64) -> bool {
         fail_point!("txn_scheduler_busy", |_| true);
         self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
-            || self.flow_controller.should_drop()
+            || self.flow_controller.should_drop(region_id)
     }
 
     /// Tries to acquire all the required latches for a command when waken up by
@@ -391,7 +391,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
         // write flow control
-        if cmd.need_flow_control() && self.inner.too_busy() {
+        if cmd.need_flow_control() && self.inner.too_busy(cmd.ctx().region_id) {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
             callback.execute(ProcessResult::Failed {
                 err: StorageError::from(StorageErrorInner::SchedTooBusy),

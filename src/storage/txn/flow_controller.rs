@@ -68,9 +68,9 @@ pub(super) enum Trend {
 /// grpc -> check should drop(discardable ratio) -> limiter -> async write to raftstore
 
 pub trait FlowController {
-    fn should_drop(&self) -> bool;
+    fn should_drop(&self, region_id: u64) -> bool;
     #[cfg(test)]
-    fn discard_ratio(&self) -> f64;
+    fn discard_ratio(&self, region_id: u64) -> f64;
     fn consume(&self, region_id: u64, bytes: usize) -> Duration;
     fn unconsume(&self, region_id: u64, bytes: usize);
     #[cfg(test)]
@@ -158,14 +158,14 @@ impl EngineFlowController {
 }
 
 impl FlowController for EngineFlowController {
-    fn should_drop(&self) -> bool {
+    fn should_drop(&self, _region_id: u64) -> bool {
         let ratio = self.discard_ratio.load(Ordering::Relaxed);
         let mut rng = rand::thread_rng();
         rng.gen_ratio(ratio, RATIO_SCALE_FACTOR)
     }
 
     #[cfg(test)]
-    fn discard_ratio(&self) -> f64 {
+    fn discard_ratio(&self, _region_id: u64) -> f64 {
         self.discard_ratio.load(Ordering::Relaxed) as f64 / RATIO_SCALE_FACTOR as f64
     }
 
@@ -533,6 +533,87 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         self.engine = engine;
     }
 
+    pub fn on_flow_info_msg(
+        &mut self,
+        enabled: bool,
+        flow_info: Result<FlowInfo, RecvTimeoutError>,
+    ) {
+        match flow_info {
+            Ok(FlowInfo::L0(cf, l0_bytes, ..)) => {
+                self.collect_l0_consumption_stats(&cf, l0_bytes);
+                if enabled {
+                    self.on_l0_change(cf)
+                }
+            }
+            Ok(FlowInfo::L0Intra(cf, diff_bytes, ..)) => {
+                if diff_bytes > 0 {
+                    // Intra L0 merges some deletion records, so regard it as a L0 compaction.
+                    self.collect_l0_consumption_stats(&cf, diff_bytes);
+                    if enabled {
+                        self.on_l0_change(cf);
+                    }
+                }
+            }
+            Ok(FlowInfo::Flush(cf, flush_bytes, ..)) => {
+                self.collect_l0_production_stats(&cf, flush_bytes);
+                if enabled {
+                    self.on_memtable_change(&cf);
+                    self.on_l0_change(cf)
+                }
+            }
+            Ok(FlowInfo::Compaction(cf, ..)) => {
+                if enabled {
+                    self.on_pending_compaction_bytes_change(cf);
+                }
+            }
+            Ok(FlowInfo::BeforeUnsafeDestroyRange(..)) => {
+                if !enabled {
+                    return;
+                }
+                self.wait_for_destroy_range_finish = true;
+                let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
+                for cf_checker in self.cf_checkers.values_mut() {
+                    let v = cf_checker.long_term_pending_bytes.get_avg();
+                    if v <= soft {
+                        cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
+                    }
+                }
+            }
+            Ok(FlowInfo::AfterUnsafeDestroyRange(..)) => {
+                if !enabled {
+                    return;
+                }
+                self.wait_for_destroy_range_finish = false;
+                for (cf, cf_checker) in &mut self.cf_checkers {
+                    if let Some(before) = cf_checker.pending_bytes_before_unsafe_destroy_range {
+                        let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
+                        let after = (self
+                            .engine
+                            .get_cf_pending_compaction_bytes(cf)
+                            .unwrap_or(None)
+                            .unwrap_or(0) as f64)
+                            .log2();
+
+                        assert!(before < soft);
+                        if after >= soft {
+                            // there is a pending bytes jump
+                            SCHED_THROTTLE_ACTION_COUNTER
+                                .with_label_values(&[cf, "pending_bytes_jump"])
+                                .inc();
+                        } else {
+                            cf_checker.pending_bytes_before_unsafe_destroy_range = None;
+                        }
+                    }
+                }
+            }
+            Ok(FlowInfo::Created(..)) => {}
+            Ok(FlowInfo::Destroyed(..)) => {}
+            Err(e) => {
+                error!("failed to receive compaction info {:?}", e);
+            }
+        }
+    }
+
     fn start(self, rx: Receiver<Msg>, flow_info_receiver: Receiver<FlowInfo>) -> JoinHandle<()> {
         Builder::new()
             .name(thd_name!("flow-checker"))
@@ -554,87 +635,12 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                         Err(_) => {}
                     }
 
-                    match flow_info_receiver.recv_deadline(deadline) {
-                        Ok(FlowInfo::L0(cf, l0_bytes, ..)) => {
-                            checker.collect_l0_consumption_stats(&cf, l0_bytes);
-                            if enabled {
-                                checker.on_l0_change(cf)
-                            }
-                        }
-                        Ok(FlowInfo::L0Intra(cf, diff_bytes, ..)) => {
-                            if diff_bytes > 0 {
-                                // Intra L0 merges some deletion records, so regard it as a L0 compaction.
-                                checker.collect_l0_consumption_stats(&cf, diff_bytes);
-                                if enabled {
-                                    checker.on_l0_change(cf);
-                                }
-                            }
-                        }
-                        Ok(FlowInfo::Flush(cf, flush_bytes, ..)) => {
-                            checker.collect_l0_production_stats(&cf, flush_bytes);
-                            if enabled {
-                                checker.on_memtable_change(&cf);
-                                checker.on_l0_change(cf)
-                            }
-                        }
-                        Ok(FlowInfo::Compaction(cf, ..)) => {
-                            if enabled {
-                                checker.on_pending_compaction_bytes_change(cf);
-                            }
-                        }
-                        Ok(FlowInfo::BeforeUnsafeDestroyRange(..)) => {
-                            if !enabled {
-                                continue;
-                            }
-                            checker.wait_for_destroy_range_finish = true;
-                            let soft = (checker.soft_pending_compaction_bytes_limit as f64).log2();
-                            for cf_checker in checker.cf_checkers.values_mut() {
-                                let v = cf_checker.long_term_pending_bytes.get_avg();
-                                if v <= soft {
-                                    cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
-                                }
-                            }
-                        }
-                        Ok(FlowInfo::AfterUnsafeDestroyRange(..)) => {
-                            if !enabled {
-                                continue;
-                            }
-                            checker.wait_for_destroy_range_finish = false;
-                            for (cf, cf_checker) in &mut checker.cf_checkers {
-                                if let Some(before) =
-                                    cf_checker.pending_bytes_before_unsafe_destroy_range
-                                {
-                                    let soft =
-                                        (checker.soft_pending_compaction_bytes_limit as f64).log2();
-                                    let after = (checker
-                                        .engine
-                                        .get_cf_pending_compaction_bytes(cf)
-                                        .unwrap_or(None)
-                                        .unwrap_or(0)
-                                        as f64)
-                                        .log2();
-
-                                    assert!(before < soft);
-                                    if after >= soft {
-                                        // there is a pending bytes jump
-                                        SCHED_THROTTLE_ACTION_COUNTER
-                                            .with_label_values(&[cf, "pending_bytes_jump"])
-                                            .inc();
-                                    } else {
-                                        cf_checker.pending_bytes_before_unsafe_destroy_range = None;
-                                    }
-                                }
-                            }
-                        }
-                        Ok(FlowInfo::Created(..)) => {}
-                        Ok(FlowInfo::Destroyed(..)) => {}
-                        Err(RecvTimeoutError::Timeout) => {
-                            checker.update_statistics();
-                            deadline = std::time::Instant::now() + TICK_DURATION;
-                        }
-                        Err(e) => {
-                            error!("failed to receive compaction info {:?}", e);
-                        }
+                    let msg = flow_info_receiver.recv_deadline(deadline);
+                    if let Err(RecvTimeoutError::Timeout) = msg {
+                        checker.update_statistics();
+                        deadline = std::time::Instant::now() + TICK_DURATION;
+                    } else {
+                        checker.on_flow_info_msg(enabled, msg);
                     }
                 }
                 tikv_alloc::remove_thread_memory_accessor();
@@ -1000,7 +1006,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::sync::atomic::AtomicU64;
 
     use engine_traits::Result;
@@ -1008,16 +1014,16 @@ mod tests {
     use super::*;
 
     #[derive(Clone)]
-    struct EngineStub(Arc<EngineStubInner>);
+    pub struct EngineStub(pub Arc<EngineStubInner>);
 
-    struct EngineStubInner {
+    pub struct EngineStubInner {
         pub pending_compaction_bytes: AtomicU64,
         pub num_l0_files: AtomicU64,
         pub num_memtable_files: AtomicU64,
     }
 
     impl EngineStub {
-        fn new() -> Self {
+        pub fn new() -> Self {
             Self(Arc::new(EngineStubInner {
                 pending_compaction_bytes: AtomicU64::new(0),
                 num_l0_files: AtomicU64::new(0),
@@ -1056,7 +1062,7 @@ mod tests {
 
         // enable flow controller
         assert_eq!(flow_controller.enabled(), true);
-        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.should_drop(0), false);
         assert_eq!(flow_controller.is_unlimited(0), true);
         assert_eq!(flow_controller.consume(0, 0), Duration::ZERO);
         assert_eq!(flow_controller.consume(0, 1000), Duration::ZERO);
@@ -1067,7 +1073,7 @@ mod tests {
         // re-enable flow controller
         flow_controller.enable(true);
         assert_eq!(flow_controller.enabled(), true);
-        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.should_drop(0), false);
         assert_eq!(flow_controller.is_unlimited(0), true);
         assert_eq!(flow_controller.consume(0, 1), Duration::ZERO);
     }
@@ -1093,7 +1099,7 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.should_drop(0), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(0), true);
         // once falls below the threshold, pass the on start check
@@ -1108,7 +1114,7 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.should_drop(0), false);
         assert_eq!(flow_controller.is_unlimited(0), true);
 
         // the average of sliding window exceeds the threshold
@@ -1117,7 +1123,7 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.should_drop(0), false);
         assert_eq!(flow_controller.is_unlimited(0), false);
         assert_ne!(flow_controller.consume(0, 2000), Duration::ZERO);
 
@@ -1127,7 +1133,7 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.should_drop(0), false);
         assert_eq!(flow_controller.is_unlimited(0), true);
     }
 
@@ -1152,7 +1158,7 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.should_drop(0), false);
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(0), true);
         // once fall below the threshold, pass the on start check
@@ -1168,7 +1174,7 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.should_drop(0), false);
         assert_eq!(flow_controller.is_unlimited(0), false);
         assert_ne!(flow_controller.consume(0, 2000), Duration::ZERO);
     }
@@ -1189,7 +1195,7 @@ mod tests {
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
         // on start check forbids flow control
-        assert!(flow_controller.discard_ratio() < f64::EPSILON);
+        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
         // once fall below the threshold, pass the on start check
         stub.0
             .pending_compaction_bytes
@@ -1206,7 +1212,7 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert!(flow_controller.discard_ratio() > f64::EPSILON);
+        assert!(flow_controller.discard_ratio(0) > f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
@@ -1215,13 +1221,13 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert!(flow_controller.discard_ratio() < f64::EPSILON);
+        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
 
         // pending compaction bytes jump after unsafe destroy range
         tx.send(FlowInfo::BeforeUnsafeDestroyRange(0)).unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert!(flow_controller.discard_ratio() < f64::EPSILON);
+        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
 
         // during unsafe destroy range, pending compaction bytes may change
         stub.0
@@ -1231,7 +1237,7 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert!(flow_controller.discard_ratio() < f64::EPSILON);
+        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
@@ -1241,7 +1247,7 @@ mod tests {
         tx.send(FlowInfo::AfterUnsafeDestroyRange(0)).unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert!(flow_controller.discard_ratio() < f64::EPSILON);
+        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
 
         // unfreeze the control
         stub.0
@@ -1251,7 +1257,7 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert!(flow_controller.discard_ratio() < f64::EPSILON);
+        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
 
         stub.0
             .pending_compaction_bytes
@@ -1260,7 +1266,7 @@ mod tests {
             .unwrap();
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
             .unwrap();
-        assert!(flow_controller.discard_ratio() > f64::EPSILON);
+        assert!(flow_controller.discard_ratio(0) > f64::EPSILON);
     }
 
     #[test]

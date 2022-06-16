@@ -113,7 +113,7 @@ use crate::{
         mvcc::{MvccReader, PointGetterBuilder},
         txn::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
-            flow_controller::{FlowController, EngineFlowController},
+            flow_controller::{EngineFlowController, FlowController},
             scheduler::Scheduler as TxnScheduler,
             Command,
         },

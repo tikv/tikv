@@ -34,7 +34,7 @@ use tikv::{
         test_util::*,
         txn::{
             commands,
-            flow_controller::{FlowController, EngineFlowController},
+            flow_controller::{EngineFlowController, FlowController},
             Error as TxnError, ErrorInner as TxnErrorInner,
         },
         Error as StorageError, ErrorInner as StorageErrorInner, *,

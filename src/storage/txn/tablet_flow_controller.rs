@@ -13,19 +13,18 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
-use engine_traits::{KvEngine, TabletFactory};
+use engine_traits::{CFNamesExt, FlowControlFactorsExt, TabletFactory};
 use rand::Rng;
 use tikv_util::time::Limiter;
 
 use super::flow_controller::{FlowChecker, FlowController, Msg, RATIO_SCALE_FACTOR, TICK_DURATION};
-use crate::storage::{config::FlowControlConfig, metrics::*};
+use crate::storage::config::FlowControlConfig;
 
 pub struct TabletFlowController {
-    discard_ratio: Arc<AtomicU32>,
     enabled: Arc<AtomicBool>,
     tx: Option<SyncSender<Msg>>,
     handle: Option<std::thread::JoinHandle<()>>,
-    limiters: Arc<RwLock<HashMap<u64, Arc<Limiter>>>>,
+    limiters: Arc<RwLock<HashMap<u64, (Arc<Limiter>, Arc<AtomicU32>)>>>,
 }
 
 impl Drop for TabletFlowController {
@@ -47,12 +46,11 @@ impl Drop for TabletFlowController {
 }
 
 impl TabletFlowController {
-    pub fn new<E: KvEngine + Send + 'static>(
+    pub fn new<E: CFNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
         config: &FlowControlConfig,
         tablet_factory: Arc<dyn TabletFactory<E> + Send + Sync>,
         flow_info_receiver: Receiver<FlowInfo>,
     ) -> Self {
-        let discard_ratio = Arc::new(AtomicU32::new(0));
         let (tx, rx) = mpsc::sync_channel(5);
         tx.send(if config.enable {
             Msg::Enable
@@ -62,10 +60,9 @@ impl TabletFlowController {
         .unwrap();
         let flow_checkers: Arc<RwLock<HashMap<u64, FlowChecker<E>>>> =
             Arc::new(RwLock::new(HashMap::default()));
-        let limiters: Arc<RwLock<HashMap<u64, Arc<Limiter>>>> =
+        let limiters: Arc<RwLock<HashMap<u64, (Arc<Limiter>, Arc<AtomicU32>)>>> =
             Arc::new(RwLock::new(HashMap::default()));
         Self {
-            discard_ratio: discard_ratio.clone(),
             enabled: Arc::new(AtomicBool::new(config.enable)),
             tx: Some(tx),
             limiters: limiters.clone(),
@@ -76,7 +73,6 @@ impl TabletFlowController {
                 flow_checkers,
                 limiters,
                 config.clone(),
-                discard_ratio,
             )),
         }
     }
@@ -90,14 +86,13 @@ impl TabletFlowController {
 struct FlowInfoDispatcher;
 
 impl FlowInfoDispatcher {
-    fn start<E: KvEngine + Send + 'static>(
+    fn start<E: CFNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
         rx: Receiver<Msg>,
         flow_info_receiver: Receiver<FlowInfo>,
         tablet_factory: Arc<dyn TabletFactory<E> + Send + Sync>,
         flow_checkers: Arc<RwLock<HashMap<u64, FlowChecker<E>>>>,
-        limiters: Arc<RwLock<HashMap<u64, Arc<Limiter>>>>,
+        limiters: Arc<RwLock<HashMap<u64, (Arc<Limiter>, Arc<AtomicU32>)>>>,
         config: FlowControlConfig,
-        discard_ratio: Arc<AtomicU32>,
     ) -> JoinHandle<()> {
         Builder::new()
             .name(thd_name!("flow-checker"))
@@ -122,140 +117,53 @@ impl FlowInfoDispatcher {
                     }
 
                     let insert_limiter_and_checker = |region_id, suffix| -> FlowChecker<E> {
-                        println!("insert_limiter_and_checker {} {}", region_id, suffix);
                         let engine = tablet_factory.open_tablet_cache(region_id, suffix).unwrap();
                         let mut v = limiters.as_ref().write().unwrap();
-                        let limiter = v.entry(region_id).or_insert(Arc::new(
-                            <Limiter>::builder(f64::INFINITY)
-                                .refill(Duration::from_millis(1))
-                                .build(),
+                        let discard_ratio = Arc::new(AtomicU32::new(0));
+                        let limiter = v.entry(region_id).or_insert((
+                            Arc::new(
+                                <Limiter>::builder(f64::INFINITY)
+                                    .refill(Duration::from_millis(1))
+                                    .build(),
+                            ),
+                            discard_ratio,
                         ));
-                        println!("creating flow checker {}{}", region_id, suffix);
                         FlowChecker::new_with_tablet_suffix(
                             &config,
                             engine,
-                            discard_ratio.clone(),
-                            limiter.clone(),
+                            limiter.1.clone(),
+                            limiter.0.clone(),
                             suffix,
                         )
                     };
-                    match flow_info_receiver.recv_deadline(deadline) {
-                        Ok(FlowInfo::L0(cf, l0_bytes, region_id, suffix)) => {
+                    let msg = flow_info_receiver.recv_deadline(deadline);
+                    match msg.clone() {
+                        Ok(FlowInfo::L0(_cf, _, region_id, suffix))
+                        | Ok(FlowInfo::L0Intra(_cf, _, region_id, suffix))
+                        | Ok(FlowInfo::Flush(_cf, _, region_id, suffix))
+                        | Ok(FlowInfo::Compaction(_cf, region_id, suffix)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             if let Some(checker) = checkers.get_mut(&region_id) {
                                 if checker.get_tablet_suffix() != suffix {
                                     continue;
                                 }
-                                checker.collect_l0_consumption_stats(&cf, l0_bytes);
-                                if enabled {
-                                    checker.on_l0_change(cf)
-                                }
+                                checker.on_flow_info_msg(enabled, msg);
                             }
                         }
-                        Ok(FlowInfo::L0Intra(cf, diff_bytes, region_id, suffix)) => {
-                            if diff_bytes > 0 {
-                                let mut checkers = flow_checkers.as_ref().write().unwrap();
-                                if let Some(checker) = checkers.get_mut(&region_id) {
-                                    if checker.get_tablet_suffix() != suffix {
-                                        continue;
-                                    }
-                                    // Intra L0 merges some deletion records, so regard it as a L0 compaction.
-                                    checker.collect_l0_consumption_stats(&cf, diff_bytes);
-                                    if enabled {
-                                        checker.on_l0_change(cf);
-                                    }
-                                }
-                            }
-                        }
-                        Ok(FlowInfo::Flush(cf, flush_bytes, region_id, suffix)) => {
+                        Ok(FlowInfo::BeforeUnsafeDestroyRange(region_id))
+                        | Ok(FlowInfo::AfterUnsafeDestroyRange(region_id)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             if let Some(checker) = checkers.get_mut(&region_id) {
-                                if checker.get_tablet_suffix() != suffix {
-                                    continue;
-                                }
-                                checker.collect_l0_production_stats(&cf, flush_bytes);
-                                if enabled {
-                                    checker.on_memtable_change(&cf);
-                                    checker.on_l0_change(cf)
-                                }
-                            }
-                        }
-                        Ok(FlowInfo::Compaction(cf, region_id, suffix)) => {
-                            if !enabled {
-                                continue;
-                            }
-                            let mut checkers = flow_checkers.as_ref().write().unwrap();
-                            if let Some(checker) = checkers.get_mut(&region_id) {
-                                if checker.get_tablet_suffix() != suffix {
-                                    continue;
-                                }
-                                checker.on_pending_compaction_bytes_change(cf);
-                            }
-                        }
-                        Ok(FlowInfo::BeforeUnsafeDestroyRange(region_id)) => {
-                            if !enabled {
-                                continue;
-                            }
-                            let mut checkers = flow_checkers.as_ref().write().unwrap();
-                            if let Some(checker) = checkers.get_mut(&region_id) {
-                                checker.wait_for_destroy_range_finish = true;
-                                let soft =
-                                    (checker.soft_pending_compaction_bytes_limit as f64).log2();
-                                for cf_checker in checker.cf_checkers.values_mut() {
-                                    let v = cf_checker.long_term_pending_bytes.get_avg();
-                                    if v <= soft {
-                                        cf_checker.pending_bytes_before_unsafe_destroy_range =
-                                            Some(v);
-                                    }
-                                }
-                            }
-                        }
-                        Ok(FlowInfo::AfterUnsafeDestroyRange(region_id)) => {
-                            if !enabled {
-                                continue;
-                            }
-                            let mut checkers = flow_checkers.as_ref().write().unwrap();
-                            if let Some(checker) = checkers.get_mut(&region_id) {
-                                checker.wait_for_destroy_range_finish = false;
-                                for (cf, cf_checker) in &mut checker.cf_checkers {
-                                    if let Some(before) =
-                                        cf_checker.pending_bytes_before_unsafe_destroy_range
-                                    {
-                                        let soft = (checker.soft_pending_compaction_bytes_limit
-                                            as f64)
-                                            .log2();
-                                        let after = (checker
-                                            .engine
-                                            .get_cf_pending_compaction_bytes(cf)
-                                            .unwrap_or(None)
-                                            .unwrap_or(0)
-                                            as f64)
-                                            .log2();
-
-                                        assert!(before < soft);
-                                        if after >= soft {
-                                            // there is a pending bytes jump
-                                            SCHED_THROTTLE_ACTION_COUNTER
-                                                .with_label_values(&[cf, "pending_bytes_jump"])
-                                                .inc();
-                                        } else {
-                                            cf_checker.pending_bytes_before_unsafe_destroy_range =
-                                                None;
-                                        }
-                                    }
-                                }
+                                checker.on_flow_info_msg(enabled, msg);
                             }
                         }
                         Ok(FlowInfo::Created(region_id, suffix)) => {
-                            println!("FlowInfo::Created {} {}", region_id, suffix);
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
-                            println!("got the lock");
                             let checker = checkers
                                 .entry(region_id)
                                 .or_insert_with(|| insert_limiter_and_checker(region_id, suffix));
                             // check if the checker's engine is exactly (region_id, suffix)
                             // if  checker.suffix < suffix, it means its tablet is old and needs the refresh
-                            println!("Got checker");
                             if checker.get_tablet_suffix() < suffix {
                                 let engine =
                                     tablet_factory.open_tablet_cache(region_id, suffix).unwrap();
@@ -297,30 +205,38 @@ impl FlowInfoDispatcher {
 }
 
 impl FlowController for TabletFlowController {
-    fn should_drop(&self) -> bool {
-        let ratio = self.discard_ratio.load(Ordering::Relaxed);
-        let mut rng = rand::thread_rng();
-        rng.gen_ratio(ratio, RATIO_SCALE_FACTOR)
+    fn should_drop(&self, region_id: u64) -> bool {
+        let limiters = self.limiters.as_ref().read().unwrap();
+        if let Some(limiter) = limiters.get(&region_id) {
+            let ratio = limiter.1.load(Ordering::Relaxed);
+            let mut rng = rand::thread_rng();
+            return rng.gen_ratio(ratio, RATIO_SCALE_FACTOR);
+        }
+        false
     }
 
     #[cfg(test)]
-    fn discard_ratio(&self) -> f64 {
-        self.discard_ratio.load(Ordering::Relaxed) as f64 / RATIO_SCALE_FACTOR as f64
+    fn discard_ratio(&self, region_id: u64) -> f64 {
+        let limiters = self.limiters.as_ref().read().unwrap();
+        if let Some(limiter) = limiters.get(&region_id) {
+            let ratio = limiter.1.load(Ordering::Relaxed);
+            return ratio as f64 / RATIO_SCALE_FACTOR as f64;
+        }
+        0.0
     }
 
     fn consume(&self, region_id: u64, bytes: usize) -> Duration {
         let limiters = self.limiters.as_ref().read().unwrap();
         if let Some(limiter) = limiters.get(&region_id) {
-            return limiter.consume_duration(bytes);
+            return limiter.0.consume_duration(bytes);
         }
-        println!("consume {} is not found", region_id);
         Duration::ZERO
     }
 
     fn unconsume(&self, region_id: u64, bytes: usize) {
         let limiters = self.limiters.as_ref().read().unwrap();
         if let Some(limiter) = limiters.get(&region_id) {
-            limiter.unconsume(bytes);
+            limiter.0.unconsume(bytes);
         }
     }
 
@@ -328,9 +244,8 @@ impl FlowController for TabletFlowController {
     fn total_bytes_consumed(&self, region_id: u64) -> usize {
         let limiters = self.limiters.as_ref().read().unwrap();
         if let Some(limiter) = limiters.get(&region_id) {
-            return limiter.total_bytes_consumed();
+            return limiter.0.total_bytes_consumed();
         }
-        println!("total_bytes_consumed {} is not found", region_id);
         0
     }
 
@@ -353,14 +268,14 @@ impl FlowController for TabletFlowController {
     fn set_speed_limit(&self, region_id: u64, speed_limit: f64) {
         let limiters = self.limiters.as_ref().read().unwrap();
         if let Some(limiter) = limiters.get(&region_id) {
-            limiter.set_speed_limit(speed_limit);
+            limiter.0.set_speed_limit(speed_limit);
         }
     }
 
     fn is_unlimited(&self, region_id: u64) -> bool {
         let limiters = self.limiters.as_ref().read().unwrap();
         if let Some(limiter) = limiters.get(&region_id) {
-            return limiter.speed_limit() == f64::INFINITY;
+            return limiter.0.speed_limit() == f64::INFINITY;
         }
         true
     }
@@ -369,35 +284,44 @@ impl FlowController for TabletFlowController {
 #[cfg(test)]
 mod tests {
     use engine_rocks::FlowInfo;
-    use engine_test::{ctor::KvEngineConstructorExt, kv::KvTestEngine};
     use engine_traits::DummyFactory;
 
-    use super::{super::flow_controller::*, *};
+    use super::{
+        super::flow_controller::{tests::*, *},
+        *,
+    };
+
+    fn test_tablet_flow_controller()
+    -> (TabletFlowController, mpsc::SyncSender<FlowInfo>, EngineStub) {
+        let (tx, rx) = mpsc::sync_channel(0);
+        let root_path = "/tmp";
+        let stub = EngineStub::new();
+        let factory = DummyFactory::<EngineStub>::new(Some(stub.clone()), root_path.to_string());
+        let tablet_factory = Arc::new(factory);
+        (
+            TabletFlowController::new(&FlowControlConfig::default(), tablet_factory, rx),
+            tx,
+            stub,
+        )
+    }
     #[test]
     fn test_tablet_flow_controller_basic() {
-        let (tx, rx) = mpsc::channel();
-        let root_path = "/tmp";
-        let engine = Some(
-            KvTestEngine::new_kv_engine(root_path, None, engine_traits::ALL_CFS, None).unwrap(),
-        );
-        let factory = DummyFactory::<KvTestEngine>::new(engine, root_path.to_string());
-        let tablet_factory = Arc::new(factory);
-        let flow_controller =
-            TabletFlowController::new(&FlowControlConfig::default(), tablet_factory, rx);
+        let (flow_controller, tx, _) = test_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
             .unwrap();
-        for _i in 0..600 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            if flow_controller.tablet_exist(region_id) {
-                break;
-            }
-        }
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
         assert!(flow_controller.tablet_exist(region_id));
         // enable flow controller
         assert_eq!(flow_controller.enabled(), true);
-        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(0), true);
         assert_eq!(flow_controller.consume(region_id, 0), Duration::ZERO);
         assert_eq!(flow_controller.consume(region_id, 1000), Duration::ZERO);
@@ -410,8 +334,394 @@ mod tests {
         // re-enable flow controller
         flow_controller.enable(true);
         assert_eq!(flow_controller.enabled(), true);
-        assert_eq!(flow_controller.should_drop(), false);
+        assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), true);
         assert_eq!(flow_controller.consume(region_id, 1), Duration::ZERO);
+        tx.send(FlowInfo::Destroyed(region_id, tablet_suffix))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(!flow_controller.tablet_exist(region_id));
+    }
+
+    #[test]
+    fn test_tablet_flow_controller_memtable() {
+        let (flow_controller, tx, stub) = test_tablet_flow_controller();
+        let region_id = 5_u64;
+        let tablet_suffix = 5_u64;
+        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.consume(region_id, 2000), Duration::ZERO);
+        loop {
+            if flow_controller.total_bytes_consumed(region_id) == 0 {
+                break;
+            }
+            std::thread::sleep(TICK_DURATION);
+        }
+
+        // exceeds the threshold on start
+        stub.0.num_memtable_files.store(8, Ordering::Relaxed);
+        tx.send(FlowInfo::Flush(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        // on start check forbids flow control
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        // once falls below the threshold, pass the on start check
+        stub.0.num_memtable_files.store(1, Ordering::Relaxed);
+        tx.send(FlowInfo::Flush(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        // not throttle when the average of the sliding window doesn't exceeds the threshold
+        stub.0.num_memtable_files.store(6, Ordering::Relaxed);
+        tx.send(FlowInfo::Flush(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
+
+        // the average of sliding window exceeds the threshold
+        stub.0.num_memtable_files.store(6, Ordering::Relaxed);
+        tx.send(FlowInfo::Flush(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), false);
+        assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
+
+        // not throttle once the number of memtables falls below the threshold
+        stub.0.num_memtable_files.store(1, Ordering::Relaxed);
+        tx.send(FlowInfo::Flush(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
+    }
+
+    #[test]
+    fn test_tablet_flow_controller_l0() {
+        let (flow_controller, tx, stub) = test_tablet_flow_controller();
+        let region_id = 5_u64;
+        let tablet_suffix = 5_u64;
+        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+
+        assert_eq!(flow_controller.consume(region_id, 2000), Duration::ZERO);
+        loop {
+            if flow_controller.total_bytes_consumed(region_id) == 0 {
+                break;
+            }
+            std::thread::sleep(TICK_DURATION);
+        }
+
+        // exceeds the threshold
+        stub.0.num_l0_files.store(30, Ordering::Relaxed);
+        tx.send(FlowInfo::L0(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        // on start check forbids flow control
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        // once fall below the threshold, pass the on start check
+        stub.0.num_l0_files.store(10, Ordering::Relaxed);
+        tx.send(FlowInfo::L0(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+
+        // exceeds the threshold, throttle now
+        stub.0.num_l0_files.store(30, Ordering::Relaxed);
+        tx.send(FlowInfo::L0(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), false);
+        assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
+    }
+
+    #[test]
+    fn test_tablet_flow_controller_pending_compaction_bytes() {
+        let (flow_controller, tx, stub) = test_tablet_flow_controller();
+        let region_id = 5_u64;
+        let tablet_suffix = 5_u64;
+        tx.send(FlowInfo::Created(region_id, tablet_suffix))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+
+        // exceeds the threshold
+        stub.0
+            .pending_compaction_bytes
+            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        // on start check forbids flow control
+        assert!(
+            flow_controller.discard_ratio(region_id) < f64::EPSILON,
+            "discard_ratio {}",
+            flow_controller.discard_ratio(region_id)
+        );
+        // once fall below the threshold, pass the on start check
+        stub.0
+            .pending_compaction_bytes
+            .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+
+        stub.0
+            .pending_compaction_bytes
+            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // pending compaction bytes jump after unsafe destroy range
+        tx.send(FlowInfo::BeforeUnsafeDestroyRange(region_id))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id, 0))
+            .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // during unsafe destroy range, pending compaction bytes may change
+        stub.0
+            .pending_compaction_bytes
+            .store(1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(10000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::AfterUnsafeDestroyRange(region_id))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(
+            flow_controller.discard_ratio(region_id) < f64::EPSILON,
+            "discard_ratio {}",
+            flow_controller.discard_ratio(region_id)
+        );
+
+        // unfreeze the control
+        stub.0
+            .pending_compaction_bytes
+            .store(1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
 }
