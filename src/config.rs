@@ -513,9 +513,10 @@ macro_rules! build_cf_opt {
         cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
         cf_opts.set_optimize_filters_for_hits($opt.optimize_filters_for_hits);
         cf_opts.set_force_consistency_checks($opt.force_consistency_checks);
-        if $opt.enable_doubly_skiplist {
-            cf_opts.set_doubly_skiplist();
-        }
+        cf_opts.set_adaptive_radix_tree();
+        // if $opt.enable_doubly_skiplist {
+        //     cf_opts.set_doubly_skiplist();
+        // }
         if $opt.enable_compaction_guard {
             if let Some(provider) = $region_info_provider {
                 let factory = CompactionGuardGeneratorFactory::new(
