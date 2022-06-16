@@ -46,6 +46,7 @@ max-grpc-send-msg-len = 6291456
 raft-client-grpc-send-msg-buffer = 1263616
 raft-client-queue-size = 1234
 raft-msg-max-batch-size = 123
+raft-msg-flush-interval = "2333us"
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
@@ -202,7 +203,6 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
-raft-msg-flush-interval = "2333us"
 
 [coprocessor]
 split-region-on-table = false
@@ -578,6 +578,7 @@ type = "plaintext"
 [backup]
 num-threads = 456
 batch-size = 7
+s3-multi-part-size = "15MB"
 sst-max-size = "789MB"
 
 [backup.hadoop]
