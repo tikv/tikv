@@ -36,7 +36,7 @@ const MAX_THROTTLE_SPEED: f64 = 200.0 * 1024.0 * 1024.0; // 200MB
 const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
 
 #[derive(Eq, PartialEq, Debug)]
-pub(super) enum Trend {
+enum Trend {
     Increasing,
     Decreasing,
     NoTrend,
@@ -208,11 +208,11 @@ impl FlowController for EngineFlowController {
     }
 }
 
-pub(super) const SMOOTHER_STALE_RECORD_THRESHOLD: u64 = 300; // 5min
-pub(super) const SMOOTHER_TIME_RANGE_THRESHOLD: u64 = 60; // 1min
+const SMOOTHER_STALE_RECORD_THRESHOLD: u64 = 300; // 5min
+const SMOOTHER_TIME_RANGE_THRESHOLD: u64 = 60; // 1min
 
 // Smoother is a sliding window used to provide steadier flow statistics.
-pub(super) struct Smoother<T, const CAP: usize, const STALE_DUR: u64, const MIN_TIME_SPAN: u64>
+struct Smoother<T, const CAP: usize, const STALE_DUR: u64, const MIN_TIME_SPAN: u64>
 where
     T: Default
         + Add<Output = T>
