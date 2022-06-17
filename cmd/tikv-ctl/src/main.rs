@@ -51,6 +51,8 @@ use txn_types::Key;
 use crate::{cmd::*, executor::*, util::*};
 
 fn main() {
+    hex::encode_upper("test");
+
     let opt = Opt::from_args();
 
     // Initialize logger.

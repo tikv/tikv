@@ -107,6 +107,8 @@ impl<'a> Value<'a> {
     }
 }
 
+#[allow(unused_attributes)]
+#[allow(clippy::disallowed_methods)]
 impl<'a> slog::Value for Value<'a> {
     #[inline]
     fn serialize(
@@ -118,11 +120,14 @@ impl<'a> slog::Value for Value<'a> {
         if REDACT_INFO_LOG.load(Ordering::Relaxed) {
             serializer.emit_arguments(key, &format_args!("?"))
         } else {
+            #[allow(clippy::disallowed_methods)]
             serializer.emit_arguments(key, &format_args!("{}", crate::hex_encode_upper(self.0)))
         }
     }
 }
 
+#[allow(unused_attributes)]
+#[allow(clippy::disallowed_methods)]
 impl<'a> fmt::Display for Value<'a> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

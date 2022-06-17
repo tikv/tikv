@@ -31,9 +31,10 @@ CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::bool_assert_comparison \
 	-A clippy::self_named_constructors \
 	-A clippy::enum_variant_names \
-        -W clippy::dbg_macro \
-        -W clippy::todo \
-        -D rust-2018-idioms)
+	-W clippy::dbg_macro \
+	-W clippy::todo \
+	-D clippy::disallowed-methods \
+	-D rust-2018-idioms)
 
 cargo clippy --workspace \
 	--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
