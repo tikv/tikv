@@ -25,7 +25,7 @@ nom = { version = "5.1.0", default-features = false, features = ["std"] }
 num = { version = "0.3", default-features = false }
 num-derive = "0.3"
 num-traits = "0.2"
-ordered-float = "1.0"
+ordered-float = "2.0"
 protobuf = "2"
 regex = "1.1"
 serde = "1.0"
