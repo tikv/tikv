@@ -78,3 +78,4 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 rand = "0.8"
 tempfile = "3.0"
 tokio = { version = "1.5", features = ["time", "macros"] }
+causal_ts = { path = "../causal_ts"}

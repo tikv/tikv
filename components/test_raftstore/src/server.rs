@@ -348,21 +348,6 @@ impl ServerCluster {
             None
         };
 
-        if ApiVersion::V2 == F::TAG {
-            let causal_ts_provider = Arc::new(
-                block_on(causal_ts::BatchTsoProvider::new_opt(
-                    self.pd_client.clone(),
-                    cfg.causal_ts.renew_interval.0,
-                    cfg.causal_ts.renew_batch_min_size,
-                ))
-                .unwrap(),
-            );
-            self.causal_ts_providers
-                .insert(node_id, causal_ts_provider.clone());
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(&mut coprocessor_host);
-        }
-
         // Start resource metering.
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
@@ -377,7 +362,7 @@ impl ServerCluster {
             cfg.quota.foreground_read_bandwidth,
             cfg.quota.max_delay_duration,
         ));
-        let store = create_raft_storage::<_, _, _, F>(
+        let mut store = create_raft_storage::<_, _, _, F>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
@@ -391,6 +376,21 @@ impl ServerCluster {
             self.pd_client.feature_gate().clone(),
         )?;
         self.storages.insert(node_id, raft_engine);
+        if ApiVersion::V2 == F::TAG {
+            let causal_ts_provider = Arc::new(
+                block_on(causal_ts::BatchTsoProvider::new_opt(
+                    self.pd_client.clone(),
+                    cfg.causal_ts.renew_interval.0,
+                    cfg.causal_ts.renew_batch_min_size,
+                ))
+                .unwrap(),
+            );
+            self.causal_ts_providers
+                .insert(node_id, causal_ts_provider.clone());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider.clone());
+            causal_ob.register_to(&mut coprocessor_host);
+            store.set_ts_provider(causal_ts_provider);
+        }
 
         ReplicaReadLockChecker::new(concurrency_manager.clone()).register(&mut coprocessor_host);
 

@@ -1208,6 +1208,10 @@ pub mod tests {
         is_raw_kv: bool,
     ) -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
         let temp = TempDir::new().unwrap();
+        let mut ts_provider = None;
+        if api_version == ApiVersion::V2 {
+            ts_provider = Some(Arc::new(causal_ts::tests::TestProvider::default()));
+        }
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
             .cfs(&[
@@ -1217,6 +1221,7 @@ pub mod tests {
             ])
             .io_rate_limiter(limiter)
             .api_version(api_version)
+            .causal_ts_provider(ts_provider)
             .build()
             .unwrap();
         let concurrency_manager = ConcurrencyManager::new(1.into());
@@ -1602,7 +1607,7 @@ pub mod tests {
         while i < end_key_idx {
             let key_str = generate_test_raw_key(i, cur_api_ver);
             let value_str = generate_test_raw_value(i, cur_api_ver);
-            let key = generate_engine_test_key(key_str.clone(), None, cur_api_ver);
+            let key = generate_engine_test_key(key_str.clone(), Some(i.into()), cur_api_ver);
             let value = generate_engine_test_value(value_str.clone(), cur_api_ver);
             let dst_user_key = convert_test_backup_user_key(key_str, cur_api_ver, dst_api_ver);
             let dst_value = value_str.as_bytes();

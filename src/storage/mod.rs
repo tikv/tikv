@@ -520,7 +520,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     fn get_ts(&self) -> Result<Option<TimeStamp>> {
         match &self.ts_provider {
-            None => Ok(None),
+            None => {
+                if F::TAG == ApiVersion::V2 {
+                    return Err(box_err!("ts_provider should not be none in apiv2"));
+                } else {
+                    return Ok(None);
+                }
+            },
             Some(provider) => {
                 let ret = provider.get_ts();
                 match ret {
