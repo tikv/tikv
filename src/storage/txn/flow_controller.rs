@@ -696,7 +696,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         self.limiter.reset_statistics();
     }
 
-    pub fn on_pending_compaction_bytes_change(&mut self, cf: String) {
+    fn on_pending_compaction_bytes_change(&mut self, cf: String) {
         let hard = (self.hard_pending_compaction_bytes_limit as f64).log2();
         let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
 
@@ -766,7 +766,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         self.discard_ratio.store(ratio, Ordering::Relaxed);
     }
 
-    pub fn on_memtable_change(&mut self, cf: &str) {
+    fn on_memtable_change(&mut self, cf: &str) {
         let num_memtables = self
             .engine
             .get_cf_num_immutable_mem_table(cf)
@@ -848,7 +848,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         self.update_speed_limit(throttle);
     }
 
-    pub fn collect_l0_consumption_stats(&mut self, cf: &str, l0_bytes: u64) {
+    fn collect_l0_consumption_stats(&mut self, cf: &str, l0_bytes: u64) {
         let num_l0_files = self
             .engine
             .get_cf_num_files_at_level(cf, 0)
@@ -865,7 +865,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             .set(checker.long_term_num_l0_files.get_avg() as i64);
     }
 
-    pub fn collect_l0_production_stats(&mut self, cf: &str, flush_bytes: u64) {
+    fn collect_l0_production_stats(&mut self, cf: &str, flush_bytes: u64) {
         let num_l0_files = self
             .engine
             .get_cf_num_files_at_level(cf, 0)
@@ -913,7 +913,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
     }
 
     // Check the number of l0 files to decide whether need to adjust target flow
-    pub fn on_l0_change(&mut self, cf: String) {
+    fn on_l0_change(&mut self, cf: String) {
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
         let num_l0_files = checker.long_term_num_l0_files.get_recent();
 
@@ -981,7 +981,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         self.update_speed_limit(throttle)
     }
 
-    pub fn update_speed_limit(&mut self, mut throttle: f64) {
+    fn update_speed_limit(&mut self, mut throttle: f64) {
         if throttle < MIN_THROTTLE_SPEED {
             throttle = MIN_THROTTLE_SPEED;
         }
