@@ -305,6 +305,10 @@ impl<L: LockManager> SchedulerInner<L> {
         self.lock_mgr.dump_wait_for_entries(cb);
     }
 
+    fn dump_lock_wait_history(&self, cb: waiter_manager::Callback) {
+        self.lock_mgr.dump_wait_for_history(cb);
+    }
+
     fn scale_pool_size(&self, pool_size: usize) {
         self.worker_pool.pool.scale_pool_size(pool_size);
         self.high_priority_pool
@@ -386,6 +390,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     pub fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
         self.inner.dump_wait_for_entries(cb);
+    }
+
+    pub fn dump_lock_wait_history(&self, cb: waiter_manager::Callback) {
+        self.inner.dump_lock_wait_history(cb);
     }
 
     pub fn scale_pool_size(&self, pool_size: usize) {

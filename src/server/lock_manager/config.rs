@@ -9,7 +9,6 @@ use std::{
 };
 
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
-use prometheus::core::AtomicU64;
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 use tikv_util::config::ReadableDuration;
 
@@ -33,7 +32,7 @@ pub struct Config {
     /// people who disable the pipelined pessimistic lock feature.
     pub in_memory: bool,
     /// maximum lock wait information count to be stored in memory
-    pub wait_history_capacity: u64,
+    pub wait_history_capacity: usize,
 }
 
 // u64 is for backward compatibility since v3.x uses it.

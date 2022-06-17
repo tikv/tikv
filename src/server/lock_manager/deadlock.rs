@@ -1055,34 +1055,6 @@ impl Deadlock for Service {
         }
     }
 
-fn get_wait_for_history(
-        &mut self,
-        ctx: RpcContext<'_>,
-        _req: WaitForHistoryRequest,
-        sink: UnarySink<WaitForHistoryResponse>,
-    ) {
-        let (cb, f) = paired_future_callback();
-        if !self.waiter_mgr_scheduler.dump_wait_history(cb) {
-            let status = RpcStatus::with_message(
-                RpcStatusCode::RESOURCE_EXHAUSTED,
-                "waiter manager has stopped".to_owned(),
-            );
-            ctx.spawn(sink.fail(status).map(|_| ()))
-        } else {
-            ctx.spawn(
-                f.map_err(Error::from)
-                    .map_ok(|v| {
-                        let mut resp = WaitForEntriesResponse::default();
-                        resp.set_entries(v.into());
-                        resp
-                    })
-                    .and_then(|resp| sink.success(resp).map_err(Error::Grpc))
-                    .unwrap_or_else(|e| debug!("get_wait_for_entries failed"; "err" => ?e)),
-            );
-        }
-    }
-
-
     fn detect(
         &mut self,
         ctx: RpcContext<'_>,

@@ -1177,6 +1177,28 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         .map(|_| ());
         ctx.spawn(task);
     }
+
+    fn get_lock_wait_history(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _req: GetLockWaitHistoryRequest,
+        sink: UnarySink<GetLockWaitHistoryResponse>,
+    ) {
+        let (cb, f) = paired_future_callback();
+        self.storage.dump_lock_wait_history(cb);
+        let task = async move {
+            let res = f.await?;
+            let mut response = GetLockWaitHistoryResponse::default();
+            response.set_entries(RepeatedField::from_vec(res));
+            sink.success(response).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("call dump_lock_wait_history failed"; "err" => ?e);
+        })
+        .map(|_| ());
+        ctx.spawn(task);
+    }
 }
 
 fn response_batch_commands_request<F, T>(

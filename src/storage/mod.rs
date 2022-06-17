@@ -291,6 +291,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched.dump_wait_for_entries(cb);
     }
 
+    pub fn dump_lock_wait_history(&self, cb: waiter_manager::Callback) {
+        self.sched.dump_lock_wait_history(cb);
+    }
+
     /// Get a snapshot of `engine`.
     fn snapshot(
         engine: &E,
