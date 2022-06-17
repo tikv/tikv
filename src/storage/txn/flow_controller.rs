@@ -18,6 +18,7 @@ use std::{
 use collections::HashMap;
 use engine_rocks::FlowInfo;
 use engine_traits::{CFNamesExt, FlowControlFactorsExt};
+use getset::{CopyGetters, Setters};
 use num_traits::cast::{AsPrimitive, FromPrimitive};
 use rand::Rng;
 use tikv_util::time::{Instant, Limiter};
@@ -453,6 +454,7 @@ impl Default for CFFlowChecker {
     }
 }
 
+#[derive(CopyGetters, Setters)]
 pub(super) struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> {
     pub soft_pending_compaction_bytes_limit: u64,
     hard_pending_compaction_bytes_limit: u64,
@@ -469,6 +471,7 @@ pub(super) struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'st
     // drop write requests(return ServerIsBusy to TiDB) randomly.
     discard_ratio: Arc<AtomicU32>,
 
+    #[getset(set = "pub")]
     pub engine: E,
     limiter: Arc<Limiter>,
     // Records the foreground write flow at scheduler level of last few seconds.
@@ -477,6 +480,8 @@ pub(super) struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'st
     last_record_time: Instant,
     last_speed: f64,
     pub wait_for_destroy_range_finish: bool,
+
+    #[getset(get_copy = "pub", set = "pub")]
     tablet_suffix: u64,
 }
 
@@ -519,18 +524,6 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             wait_for_destroy_range_finish: false,
             tablet_suffix,
         }
-    }
-
-    pub fn get_tablet_suffix(&self) -> u64 {
-        self.tablet_suffix
-    }
-
-    pub fn set_tablet_suffix(&mut self, tablet_suffix: u64) {
-        self.tablet_suffix = tablet_suffix;
-    }
-
-    pub fn set_engine(&mut self, engine: E) {
-        self.engine = engine;
     }
 
     pub fn on_flow_info_msg(
@@ -1054,18 +1047,13 @@ pub(super) mod tests {
         }
     }
 
-    #[test]
-    fn test_flow_controller_basic() {
-        let stub = EngineStub::new();
-        let (_tx, rx) = mpsc::channel();
-        let flow_controller = EngineFlowController::new(&FlowControlConfig::default(), stub, rx);
-
+    pub fn test_flow_controller_basic_impl<E: FlowController>(flow_controller: &E, region_id: u64) {
         // enable flow controller
         assert_eq!(flow_controller.enabled(), true);
-        assert_eq!(flow_controller.should_drop(0), false);
-        assert_eq!(flow_controller.is_unlimited(0), true);
-        assert_eq!(flow_controller.consume(0, 0), Duration::ZERO);
-        assert_eq!(flow_controller.consume(0, 1000), Duration::ZERO);
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert_eq!(flow_controller.consume(region_id, 0), Duration::ZERO);
+        assert_eq!(flow_controller.consume(region_id, 1000), Duration::ZERO);
 
         // disable flow controller
         flow_controller.enable(false);
@@ -1073,18 +1061,26 @@ pub(super) mod tests {
         // re-enable flow controller
         flow_controller.enable(true);
         assert_eq!(flow_controller.enabled(), true);
-        assert_eq!(flow_controller.should_drop(0), false);
-        assert_eq!(flow_controller.is_unlimited(0), true);
-        assert_eq!(flow_controller.consume(0, 1), Duration::ZERO);
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        assert_eq!(flow_controller.consume(region_id, 1), Duration::ZERO);
     }
 
     #[test]
-    fn test_flow_controller_memtable() {
+    fn test_flow_controller_basic() {
         let stub = EngineStub::new();
-        let (tx, rx) = mpsc::sync_channel(0);
-        let flow_controller =
-            EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
+        let (_tx, rx) = mpsc::channel();
+        let flow_controller = EngineFlowController::new(&FlowControlConfig::default(), stub, rx);
+        test_flow_controller_basic_impl(&flow_controller, 0);
+    }
 
+    pub fn test_flow_controller_memtable_impl<E: FlowController>(
+        flow_controller: &E,
+        stub: &EngineStub,
+        tx: &mpsc::SyncSender<FlowInfo>,
+        region_id: u64,
+        tablet_suffix: u64,
+    ) {
         assert_eq!(flow_controller.consume(0, 2000), Duration::ZERO);
         loop {
             if flow_controller.total_bytes_consumed(0) == 0 {
@@ -1093,48 +1089,186 @@ pub(super) mod tests {
             std::thread::sleep(TICK_DURATION);
         }
 
+        assert_eq!(flow_controller.consume(region_id, 2000), Duration::ZERO);
+        loop {
+            if flow_controller.total_bytes_consumed(region_id) == 0 {
+                break;
+            }
+            std::thread::sleep(TICK_DURATION);
+        }
+
         // exceeds the threshold on start
         stub.0.num_memtable_files.store(8, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0, 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert_eq!(flow_controller.should_drop(0), false);
+        tx.send(FlowInfo::Flush(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
         // on start check forbids flow control
-        assert_eq!(flow_controller.is_unlimited(0), true);
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
         // once falls below the threshold, pass the on start check
         stub.0.num_memtable_files.store(1, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0, 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
+        tx.send(FlowInfo::Flush(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
         // not throttle when the average of the sliding window doesn't exceeds the threshold
         stub.0.num_memtable_files.store(6, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0, 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert_eq!(flow_controller.should_drop(0), false);
-        assert_eq!(flow_controller.is_unlimited(0), true);
+        tx.send(FlowInfo::Flush(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
 
         // the average of sliding window exceeds the threshold
         stub.0.num_memtable_files.store(6, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0, 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert_eq!(flow_controller.should_drop(0), false);
-        assert_eq!(flow_controller.is_unlimited(0), false);
-        assert_ne!(flow_controller.consume(0, 2000), Duration::ZERO);
+        tx.send(FlowInfo::Flush(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), false);
+        assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
 
         // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtable_files.store(1, Ordering::Relaxed);
-        tx.send(FlowInfo::Flush("default".to_string(), 0, 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert_eq!(flow_controller.should_drop(0), false);
-        assert_eq!(flow_controller.is_unlimited(0), true);
+        tx.send(FlowInfo::Flush(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
+    }
+    #[test]
+    fn test_flow_controller_memtable() {
+        let stub = EngineStub::new();
+        let (tx, rx) = mpsc::sync_channel(0);
+        let flow_controller =
+            EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
+        test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, 0, 0);
+    }
+
+    pub fn test_flow_controller_l0_impl<E: FlowController>(
+        flow_controller: &E,
+        stub: &EngineStub,
+        tx: &mpsc::SyncSender<FlowInfo>,
+        region_id: u64,
+        tablet_suffix: u64,
+    ) {
+        assert_eq!(flow_controller.consume(region_id, 2000), Duration::ZERO);
+        loop {
+            if flow_controller.total_bytes_consumed(region_id) == 0 {
+                break;
+            }
+            std::thread::sleep(TICK_DURATION);
+        }
+
+        // exceeds the threshold
+        stub.0.num_l0_files.store(30, Ordering::Relaxed);
+        tx.send(FlowInfo::L0(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        // on start check forbids flow control
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
+        // once fall below the threshold, pass the on start check
+        stub.0.num_l0_files.store(10, Ordering::Relaxed);
+        tx.send(FlowInfo::L0(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+
+        // exceeds the threshold, throttle now
+        stub.0.num_l0_files.store(30, Ordering::Relaxed);
+        tx.send(FlowInfo::L0(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), false);
+        assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
     }
 
     #[test]
@@ -1143,40 +1277,179 @@ pub(super) mod tests {
         let (tx, rx) = mpsc::sync_channel(0);
         let flow_controller =
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
+        test_flow_controller_l0_impl(&flow_controller, &stub, &tx, 0, 0);
+    }
 
-        assert_eq!(flow_controller.consume(0, 2000), Duration::ZERO);
-        loop {
-            if flow_controller.total_bytes_consumed(0) == 0 {
-                break;
-            }
-            std::thread::sleep(TICK_DURATION);
-        }
-
+    pub fn test_flow_controller_pending_compaction_bytes_impl<E: FlowController>(
+        flow_controller: &E,
+        stub: &EngineStub,
+        tx: &mpsc::SyncSender<FlowInfo>,
+        region_id: u64,
+        tablet_suffix: u64,
+    ) {
         // exceeds the threshold
-        stub.0.num_l0_files.store(30, Ordering::Relaxed);
-        tx.send(FlowInfo::L0("default".to_string(), 0, 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert_eq!(flow_controller.should_drop(0), false);
+        stub.0
+            .pending_compaction_bytes
+            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
         // on start check forbids flow control
-        assert_eq!(flow_controller.is_unlimited(0), true);
+        assert!(
+            flow_controller.discard_ratio(region_id) < f64::EPSILON,
+            "discard_ratio {}",
+            flow_controller.discard_ratio(region_id)
+        );
         // once fall below the threshold, pass the on start check
-        stub.0.num_l0_files.store(10, Ordering::Relaxed);
-        tx.send(FlowInfo::L0("default".to_string(), 0, 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
+        stub.0
+            .pending_compaction_bytes
+            .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
 
-        // exceeds the threshold, throttle now
-        stub.0.num_l0_files.store(30, Ordering::Relaxed);
-        tx.send(FlowInfo::L0("default".to_string(), 0, 0, 0))
+        stub.0
+            .pending_compaction_bytes
+            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // pending compaction bytes jump after unsafe destroy range
+        tx.send(FlowInfo::BeforeUnsafeDestroyRange(region_id))
             .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
+        tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id, 0))
             .unwrap();
-        assert_eq!(flow_controller.should_drop(0), false);
-        assert_eq!(flow_controller.is_unlimited(0), false);
-        assert_ne!(flow_controller.consume(0, 2000), Duration::ZERO);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // during unsafe destroy range, pending compaction bytes may change
+        stub.0
+            .pending_compaction_bytes
+            .store(1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(10000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::AfterUnsafeDestroyRange(region_id))
+            .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(
+            flow_controller.discard_ratio(region_id) < f64::EPSILON,
+            "discard_ratio {}",
+            flow_controller.discard_ratio(region_id)
+        );
+
+        // unfreeze the control
+        stub.0
+            .pending_compaction_bytes
+            .store(1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction(
+            "default".to_string(),
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        tx.send(FlowInfo::L0Intra(
+            "default".to_string(),
+            0,
+            region_id,
+            tablet_suffix,
+        ))
+        .unwrap();
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
     }
 
     #[test]
@@ -1185,88 +1458,7 @@ pub(super) mod tests {
         let (tx, rx) = mpsc::sync_channel(0);
         let flow_controller =
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
-
-        // exceeds the threshold
-        stub.0
-            .pending_compaction_bytes
-            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        // on start check forbids flow control
-        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
-        // once fall below the threshold, pass the on start check
-        stub.0
-            .pending_compaction_bytes
-            .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-
-        stub.0
-            .pending_compaction_bytes
-            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert!(flow_controller.discard_ratio(0) > f64::EPSILON);
-
-        stub.0
-            .pending_compaction_bytes
-            .store(1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
-
-        // pending compaction bytes jump after unsafe destroy range
-        tx.send(FlowInfo::BeforeUnsafeDestroyRange(0)).unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
-
-        // during unsafe destroy range, pending compaction bytes may change
-        stub.0
-            .pending_compaction_bytes
-            .store(1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
-
-        stub.0
-            .pending_compaction_bytes
-            .store(10000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::AfterUnsafeDestroyRange(0)).unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
-
-        // unfreeze the control
-        stub.0
-            .pending_compaction_bytes
-            .store(1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert!(flow_controller.discard_ratio(0) < f64::EPSILON);
-
-        stub.0
-            .pending_compaction_bytes
-            .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
-        tx.send(FlowInfo::Compaction("default".to_string(), 0, 0))
-            .unwrap();
-        tx.send(FlowInfo::L0Intra("default".to_string(), 0, 0, 0))
-            .unwrap();
-        assert!(flow_controller.discard_ratio(0) > f64::EPSILON);
+        test_flow_controller_pending_compaction_bytes_impl(&flow_controller, &stub, &tx, 0, 0);
     }
 
     #[test]
