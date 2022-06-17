@@ -814,6 +814,9 @@ impl TiKVServer {
         let dfs_conf = &conf.dfs;
         let dfs: Arc<dyn DFS> = if dfs_conf.s3_endpoint == "memory" {
             Arc::new(kvengine::dfs::InMemFS::new())
+        } else if dfs_conf.s3_endpoint == "local" {
+            let local_path = PathBuf::from(&conf.storage.data_dir).join(Path::new("local"));
+            Arc::new(kvengine::dfs::LocalFS::new(&local_path))
         } else {
             Arc::new(kvengine::dfs::S3FS::new(
                 dfs_conf.prefix.clone(),
