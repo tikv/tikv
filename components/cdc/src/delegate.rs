@@ -550,7 +550,12 @@ impl Delegate {
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => {
-                    self.sink_put(req.take_put(), is_one_pc, &mut txn_rows, &mut read_old_value);
+                    self.sink_put(
+                        req.take_put(),
+                        is_one_pc,
+                        &mut txn_rows,
+                        &mut read_old_value,
+                    );
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete()),
                 _ => {
@@ -574,7 +579,7 @@ impl Delegate {
             }
             rows.push(v);
         }
-        
+
         if rows.is_empty() {
             return Ok(());
         }
@@ -625,7 +630,7 @@ impl Delegate {
             "write" => {
                 let (mut row, mut has_value) = (EventRow::default(), false);
                 if decode_write(put.take_key(), &put.value, &mut row, &mut has_value, true) {
-                    return ;
+                    return;
                 }
 
                 let commit_ts = if is_one_pc {
