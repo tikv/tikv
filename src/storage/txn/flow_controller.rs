@@ -1012,7 +1012,7 @@ pub(super) mod tests {
     pub struct EngineStubInner {
         pub pending_compaction_bytes: AtomicU64,
         pub num_l0_files: AtomicU64,
-        pub num_memtable_files: AtomicU64,
+        pub num_memtables: AtomicU64,
     }
 
     impl EngineStub {
@@ -1020,7 +1020,7 @@ pub(super) mod tests {
             Self(Arc::new(EngineStubInner {
                 pending_compaction_bytes: AtomicU64::new(0),
                 num_l0_files: AtomicU64::new(0),
-                num_memtable_files: AtomicU64::new(0),
+                num_memtables: AtomicU64::new(0),
             }))
         }
     }
@@ -1037,7 +1037,7 @@ pub(super) mod tests {
         }
 
         fn get_cf_num_immutable_mem_table(&self, _cf: &str) -> Result<Option<u64>> {
-            Ok(Some(self.0.num_memtable_files.load(Ordering::Relaxed)))
+            Ok(Some(self.0.num_memtables.load(Ordering::Relaxed)))
         }
 
         fn get_cf_pending_compaction_bytes(&self, _cf: &str) -> Result<Option<u64>> {
@@ -1098,7 +1098,7 @@ pub(super) mod tests {
         }
 
         // exceeds the threshold on start
-        stub.0.num_memtable_files.store(8, Ordering::Relaxed);
+        stub.0.num_memtables.store(8, Ordering::Relaxed);
         tx.send(FlowInfo::Flush(
             "default".to_string(),
             0,
@@ -1117,7 +1117,7 @@ pub(super) mod tests {
         // on start check forbids flow control
         assert_eq!(flow_controller.is_unlimited(region_id), true);
         // once falls below the threshold, pass the on start check
-        stub.0.num_memtable_files.store(1, Ordering::Relaxed);
+        stub.0.num_memtables.store(1, Ordering::Relaxed);
         tx.send(FlowInfo::Flush(
             "default".to_string(),
             0,
@@ -1133,7 +1133,7 @@ pub(super) mod tests {
         ))
         .unwrap();
         // not throttle when the average of the sliding window doesn't exceeds the threshold
-        stub.0.num_memtable_files.store(6, Ordering::Relaxed);
+        stub.0.num_memtables.store(6, Ordering::Relaxed);
         tx.send(FlowInfo::Flush(
             "default".to_string(),
             0,
@@ -1152,7 +1152,7 @@ pub(super) mod tests {
         assert_eq!(flow_controller.is_unlimited(region_id), true);
 
         // the average of sliding window exceeds the threshold
-        stub.0.num_memtable_files.store(6, Ordering::Relaxed);
+        stub.0.num_memtables.store(6, Ordering::Relaxed);
         tx.send(FlowInfo::Flush(
             "default".to_string(),
             0,
@@ -1172,7 +1172,7 @@ pub(super) mod tests {
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
 
         // not throttle once the number of memtables falls below the threshold
-        stub.0.num_memtable_files.store(1, Ordering::Relaxed);
+        stub.0.num_memtables.store(1, Ordering::Relaxed);
         tx.send(FlowInfo::Flush(
             "default".to_string(),
             0,

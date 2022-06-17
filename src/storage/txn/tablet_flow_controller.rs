@@ -288,7 +288,7 @@ mod tests {
 
     use super::{super::flow_controller::tests::*, *};
 
-    fn test_tablet_flow_controller()
+    fn create_tablet_flow_controller()
     -> (TabletFlowController, mpsc::SyncSender<FlowInfo>, EngineStub) {
         let (tx, rx) = mpsc::sync_channel(0);
         let root_path = "/tmp";
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_tablet_flow_controller_basic() {
-        let (flow_controller, tx, _) = test_tablet_flow_controller();
+        let (flow_controller, tx, _) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_tablet_flow_controller_memtable() {
-        let (flow_controller, tx, stub) = test_tablet_flow_controller();
+        let (flow_controller, tx, stub) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_tablet_flow_controller_l0() {
-        let (flow_controller, tx, stub) = test_tablet_flow_controller();
+        let (flow_controller, tx, stub) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_tablet_flow_controller_pending_compaction_bytes() {
-        let (flow_controller, tx, stub) = test_tablet_flow_controller();
+        let (flow_controller, tx, stub) = create_tablet_flow_controller();
         let region_id = 5_u64;
         let tablet_suffix = 5_u64;
         tx.send(FlowInfo::Created(region_id, tablet_suffix))
