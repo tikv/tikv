@@ -66,7 +66,7 @@ end-point-max-concurrency = 10
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
-heavy-load-threshold = 1000
+heavy-load-threshold = 25
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
 background-thread-count = 999
@@ -202,7 +202,6 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
-raft-msg-flush-interval = "2333us"
 
 [coprocessor]
 split-region-on-table = false
@@ -578,6 +577,7 @@ type = "plaintext"
 [backup]
 num-threads = 456
 batch-size = 7
+s3-multi-part-size = "15MB"
 sst-max-size = "789MB"
 
 [backup.hadoop]

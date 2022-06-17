@@ -67,7 +67,7 @@ pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver +
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
-    grpc_thread_load: Arc<ThreadLoad>,
+    grpc_thread_load: Arc<ThreadLoadPool>,
     yatp_read_pool: Option<ReadPool>,
     debug_thread_pool: Arc<Runtime>,
     health_service: HealthService,
@@ -93,6 +93,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
+        health_service: HealthService,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -106,8 +107,9 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         } else {
             None
         };
-        let grpc_thread_load =
-            Arc::new(ThreadLoad::with_threshold(cfg.value().heavy_load_threshold));
+        let grpc_thread_load = Arc::new(ThreadLoadPool::with_threshold(
+            cfg.value().heavy_load_threshold,
+        ));
 
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
@@ -142,7 +144,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             .keepalive_time(cfg.value().grpc_keepalive_time.into())
             .keepalive_timeout(cfg.value().grpc_keepalive_timeout.into())
             .build_args();
-        let health_service = HealthService::default();
+
         let builder = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
                 .channel_args(channel_args)
@@ -159,6 +161,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             resolver,
             raft_router.clone(),
             lazy_worker.scheduler(),
+            grpc_thread_load.clone(),
         );
         let raft_client = RaftClient::new(conn_builder);
 
@@ -249,6 +252,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         grpc_server.start();
         self.builder_or_server = Some(Either::Right(grpc_server));
 
+        // Note this should be called only after grpc server is started.
         let mut grpc_load_stats = {
             let tl = Arc::clone(&self.grpc_thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
@@ -303,8 +307,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             let _ = pool.shutdown_background();
         }
         let _ = self.yatp_read_pool.take();
-        self.health_service
-            .set_serving_status("", ServingStatus::NotServing);
+        self.health_service.shutdown();
         Ok(())
     }
 
@@ -527,6 +530,7 @@ mod tests {
             env,
             None,
             debug_thread_pool,
+            HealthService::default(),
         )
         .unwrap();
 

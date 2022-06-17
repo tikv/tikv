@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::server::load_statistics::ThreadLoadPool;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
@@ -10,6 +11,7 @@ use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
 use futures::{ready, Future, Sink};
+use futures_timer::Delay;
 use grpcio::{
     ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
     WriteFlags,
@@ -27,7 +29,7 @@ use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{cmp, mem, result};
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -140,6 +142,12 @@ trait Buffer {
         &mut self,
         sender: &mut ClientCStreamSender<Self::OutputMessage>,
     ) -> grpcio::Result<()>;
+
+    /// If the buffer is not full, suggest whether sender should wait
+    /// for next message.
+    fn wait_hint(&mut self) -> Option<Duration> {
+        None
+    }
 }
 
 /// A buffer for BatchRaftMessage.
@@ -148,15 +156,17 @@ struct BatchMessageBuffer {
     overflowing: Option<RaftMessage>,
     size: usize,
     cfg: Arc<Config>,
+    loads: Arc<ThreadLoadPool>,
 }
 
 impl BatchMessageBuffer {
-    fn new(cfg: Arc<Config>) -> BatchMessageBuffer {
+    fn new(cfg: Arc<Config>, loads: Arc<ThreadLoadPool>) -> BatchMessageBuffer {
         BatchMessageBuffer {
             batch: BatchRaftMessage::default(),
             overflowing: None,
             size: 0,
             cfg,
+            loads,
         }
     }
 }
@@ -212,6 +222,19 @@ impl Buffer for BatchMessageBuffer {
             self.push(more);
         }
         res
+    }
+
+    #[inline]
+    fn wait_hint(&mut self) -> Option<Duration> {
+        if !self.cfg.heavy_load_wait_duration.0.is_zero() {
+            if self.loads.current_thread_in_heavy_load() {
+                Some(self.cfg.heavy_load_wait_duration.0)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
 
@@ -343,6 +366,7 @@ struct AsyncRaftSender<R, M, B, E> {
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
     addr: String,
+    flush_timeout: Option<Delay>,
     _engine: PhantomData<E>,
 }
 
@@ -419,11 +443,38 @@ where
         loop {
             s.fill_msg(ctx);
             if !s.buffer.empty() {
-                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
-                if let Poll::Ready(Ok(())) = res {
-                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
+                // Then it's the first time visit this block since last flush.
+                if s.flush_timeout.is_none() {
+                    ready!(Pin::new(&mut s.sender).poll_ready(ctx))?;
                 }
-                ready!(res)?;
+                // Only set up a timer if buffer is not full.
+                if !s.buffer.full() {
+                    if s.flush_timeout.is_none() {
+                        // Only set up a timer if necessary.
+                        if let Some(wait_time) = s.buffer.wait_hint() {
+                            s.flush_timeout = Some(Delay::new(wait_time));
+                        }
+                    }
+
+                    // It will be woken up again when the timer fires or new messages are enqueued.
+                    if let Some(timeout) = &mut s.flush_timeout {
+                        if Pin::new(timeout).poll(ctx).is_pending() {
+                            return Poll::Pending;
+                        } else {
+                            RAFT_MESSAGE_FLUSH_COUNTER.delay.inc_by(1);
+                        }
+                    } else {
+                        RAFT_MESSAGE_FLUSH_COUNTER.eof.inc_by(1);
+                    }
+                } else if s.flush_timeout.is_some() {
+                    RAFT_MESSAGE_FLUSH_COUNTER.full_after_delay.inc_by(1);
+                } else {
+                    RAFT_MESSAGE_FLUSH_COUNTER.full.inc_by(1);
+                }
+
+                // So either enough messages are batched up or don't need to wait or wait timeouts.
+                s.flush_timeout.take();
+                ready!(Poll::Ready(s.buffer.flush(&mut s.sender)))?;
                 continue;
             }
 
@@ -482,6 +533,7 @@ pub struct ConnectionBuilder<S, R> {
     resolver: S,
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
+    loads: Arc<ThreadLoadPool>,
 }
 
 impl<S, R> ConnectionBuilder<S, R> {
@@ -492,6 +544,7 @@ impl<S, R> ConnectionBuilder<S, R> {
         resolver: S,
         router: R,
         snap_scheduler: Scheduler<SnapTask>,
+        loads: Arc<ThreadLoadPool>,
     ) -> ConnectionBuilder<S, R> {
         ConnectionBuilder {
             env,
@@ -500,6 +553,7 @@ impl<S, R> ConnectionBuilder<S, R> {
             resolver,
             router,
             snap_scheduler,
+            loads,
         }
     }
 }
@@ -589,10 +643,14 @@ where
             sender: AsyncRaftSender {
                 sender: batch_sink,
                 queue: self.queue.clone(),
-                buffer: BatchMessageBuffer::new(self.builder.cfg.clone()),
+                buffer: BatchMessageBuffer::new(
+                    self.builder.cfg.clone(),
+                    self.builder.loads.clone(),
+                ),
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
                 addr,
+                flush_timeout: None,
                 _engine: PhantomData::<E>,
             },
             receiver: batch_stream,
@@ -617,6 +675,7 @@ where
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
                 addr,
+                flush_timeout: None,
                 _engine: PhantomData::<E>,
             },
             receiver: stream,
@@ -962,7 +1021,7 @@ where
         if self.need_flush.capacity() > 2048 {
             self.need_flush.shrink_to(512);
         }
-        RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter);
+        RAFT_MESSAGE_FLUSH_COUNTER.wake.inc_by(counter);
     }
 }
 
@@ -988,6 +1047,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::load_statistics::ThreadLoadPool;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_serverpb::RaftMessage;
     use raft::eraftpb::Snapshot;
@@ -995,7 +1055,10 @@ mod tests {
 
     #[test]
     fn test_push_raft_message_with_context() {
-        let mut msg_buf = BatchMessageBuffer::new(Arc::new(Config::default()));
+        let mut msg_buf = BatchMessageBuffer::new(
+            Arc::new(Config::default()),
+            Arc::new(ThreadLoadPool::with_threshold(100)),
+        );
         for i in 0..2 {
             let context_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
             let context = vec![0; context_len];
@@ -1019,7 +1082,10 @@ mod tests {
 
     #[test]
     fn test_push_raft_message_with_extra_ctx() {
-        let mut msg_buf = BatchMessageBuffer::new(Arc::new(Config::default()));
+        let mut msg_buf = BatchMessageBuffer::new(
+            Arc::new(Config::default()),
+            Arc::new(ThreadLoadPool::with_threshold(100)),
+        );
         for i in 0..2 {
             let ctx_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
             let ctx = vec![0; ctx_len];

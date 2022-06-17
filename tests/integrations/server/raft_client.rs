@@ -17,6 +17,7 @@ use kvproto::tikvpb::BatchRaftMessage;
 use raft::eraftpb::Entry;
 use raftstore::errors::DiscardReason;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter};
+use tikv::server::load_statistics::ThreadLoadPool;
 use tikv::server::resolve::Callback;
 use tikv::server::{
     self, resolve, Config, ConnectionBuilder, RaftClient, StoreAddrResolver, TestRaftStoreRouter,
@@ -51,8 +52,16 @@ where
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
-    let builder =
-        ConnectionBuilder::new(env, cfg, security_mgr, resolver, router, worker.scheduler());
+    let loads = Arc::new(ThreadLoadPool::with_threshold(1000));
+    let builder = ConnectionBuilder::new(
+        env,
+        cfg,
+        security_mgr,
+        resolver,
+        router,
+        worker.scheduler(),
+        loads,
+    );
     RaftClient::new(builder)
 }
 

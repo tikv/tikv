@@ -304,6 +304,8 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "kvproto",
+ "lazy_static",
+ "prometheus",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kms",
@@ -726,7 +728,9 @@ dependencies = [
  "fail",
  "futures-io",
  "kvproto",
+ "lazy_static",
  "openssl",
+ "prometheus",
  "protobuf",
  "rusoto_core",
  "thiserror",
@@ -3780,6 +3784,7 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "futures-util",
+ "grpcio-health",
  "into_other",
  "itertools 0.10.0",
  "keys",
@@ -4274,6 +4279,8 @@ dependencies = [
  "bytes 1.0.1",
  "futures 0.3.15",
  "rusoto_core",
+ "serde",
+ "serde_derive",
  "xml-rs",
 ]
 
@@ -4615,6 +4622,7 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "grpcio",
+ "grpcio-health",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -5146,6 +5154,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "grpcio",
+ "grpcio-health",
  "keys",
  "kvproto",
  "lazy_static",
@@ -5513,6 +5522,7 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "futures-executor",
+ "futures-timer",
  "futures-util",
  "grpcio",
  "grpcio-health",
@@ -5770,6 +5780,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "nix 0.19.0",
+ "num-traits",
  "num_cpus",
  "online_config",
  "openssl",
@@ -5913,8 +5924,7 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93044f2d313c95ff1cb7809ce9a7a05735b012288a888b62d4434fd58c94f296"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
 dependencies = [
  "crossbeam-utils 0.7.2",
  "futures 0.1.31",

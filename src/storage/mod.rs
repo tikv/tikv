@@ -2429,12 +2429,11 @@ mod tests {
         kv::{Error as KvError, ErrorInner as EngineErrorInner},
         lock_manager::{Lock, WaitTimeout},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
-        raw::ttl::current_ts,
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{util::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
@@ -4862,6 +4861,7 @@ mod tests {
             (b"f".to_vec(), b"ff".to_vec(), u64::MAX),
         ];
 
+        let before_written = ttl_current_ts();
         // Write key-value pairs one by one
         for &(ref key, ref value, ttl) in &test_data {
             storage
@@ -4880,15 +4880,19 @@ mod tests {
         for &(ref key, _, ttl) in &test_data {
             let res =
                 block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key.clone()))
+                    .unwrap()
                     .unwrap();
             if ttl != 0 {
-                if ttl > u64::MAX - current_ts() {
-                    assert_eq!(res, Some(u64::MAX - current_ts()));
-                } else {
-                    assert_eq!(res, Some(ttl));
-                }
+                let lower_bound = before_written.saturating_add(ttl) - ttl_current_ts();
+                assert!(
+                    res >= lower_bound && res <= ttl,
+                    "{} < {} < {}",
+                    lower_bound,
+                    res,
+                    ttl
+                );
             } else {
-                assert_eq!(res, Some(0));
+                assert_eq!(res, 0);
             }
         }
     }

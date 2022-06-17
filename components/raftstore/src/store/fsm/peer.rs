@@ -1353,6 +1353,12 @@ where
     }
 
     fn on_raft_base_tick(&mut self) {
+        fail_point!(
+            "on_raft_base_tick_idle",
+            self.fsm.hibernate_state.group_state() == GroupState::Idle,
+            |_| {}
+        );
+
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_cache_metrics();
             return;
@@ -1386,11 +1392,19 @@ where
                 // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
                 // to others. As long as the leader can wake up and broadcast hearbeats in one `raft_heartbeat_ticks`
                 // time(default 2s), no more followers will wake up and sends vote msg again.
-                if self.fsm.missing_ticks + 2 + self.ctx.cfg.raft_heartbeat_ticks
+                if self.fsm.missing_ticks + 1 /* for the next tick after the peer isn't Idle */
+                    + self.fsm.peer.raft_group.raft.election_elapsed
+                    + self.ctx.cfg.raft_heartbeat_ticks
                     < self.ctx.cfg.raft_election_timeout_ticks
                 {
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
+                } else {
+                    debug!("follower hibernates";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed,
+                        "missing_ticks" => self.fsm.missing_ticks);
                 }
                 return;
             }
@@ -1404,9 +1418,12 @@ where
                 self.fsm.missing_ticks = 0;
             }
         }
+
+        // Tick the raft peer and update some states which can be changed in `tick`.
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;
         }
+        self.fsm.peer.post_raft_group_tick();
 
         self.fsm.peer.mut_store().flush_cache_metrics();
 
@@ -1427,7 +1444,10 @@ where
             return;
         }
 
-        debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
+        debug!("stop ticking"; "res" => ?res,
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed);
         self.fsm.reset_hibernate_state(GroupState::Idle);
         // Followers will stop ticking at L789. Keep ticking for followers
         // to allow it to campaign quickly when abnormal situation is detected.
@@ -1538,6 +1558,11 @@ where
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
         defer!({
+            fail_point!(
+                "memtrace_raft_messages_overflow_check_peer_recv",
+                MEMTRACE_RAFT_MESSAGES.sum() < heap_size,
+                |_| {}
+            );
             MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
             if stepped.get() {
                 unsafe {
@@ -2455,6 +2480,7 @@ where
             &self.ctx.engines,
             &mut self.ctx.perf_context,
             merged_by_target,
+            &self.ctx.pending_create_peers,
         ) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
@@ -2479,21 +2505,6 @@ where
         }
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
-        }
-
-        if self.fsm.peer.local_first_replicate {
-            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-            if is_initialized {
-                assert!(pending_create_peers.get(&region_id).is_none());
-            } else {
-                // If this region's data in `pending_create_peers` is not equal to `(peer_id, false)`,
-                // it means this peer will be replaced by the split one.
-                if let Some(status) = pending_create_peers.get(&region_id) {
-                    if *status == (self.fsm.peer_id(), false) {
-                        pending_create_peers.remove(&region_id);
-                    }
-                }
-            }
         }
 
         // Clear merge related structures.
@@ -2532,6 +2543,8 @@ where
             }
         }
         meta.leaders.remove(&region_id);
+
+        fail_point!("raft_store_finish_destroy_peer");
 
         true
     }
@@ -2932,10 +2945,8 @@ where
             .kv
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
-            if util::is_epoch_stale(
-                target_region.get_region_epoch(),
-                target_state.get_region().get_region_epoch(),
-            ) {
+            let state_epoch = target_state.get_region().get_region_epoch();
+            if util::is_epoch_stale(target_region.get_region_epoch(), state_epoch) {
                 return Ok(true);
             }
             // The local target region epoch is staler than target region's.
@@ -2960,6 +2971,10 @@ where
                         );
                     }
                     cmp::Ordering::Greater => {
+                        if state_epoch.get_version() == 0 && state_epoch.get_conf_ver() == 0 {
+                            // There is a new peer and it's destroyed without being initialised.
+                            return Ok(true);
+                        }
                         // The local target peer id is greater than the one in target region, but its epoch
                         // is staler than target_region's. That is contradictory.
                         panic!("{} local target peer id {} is greater than the one in target region {}, but its epoch is staler, local target region {:?},
@@ -4077,10 +4092,12 @@ where
             // |------------- entries needs to be compacted ----------|
             // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
             //             |-------------------- entries will be left ----------------------|
+            self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log += 1;
             return;
         } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
             && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
         {
+            self.ctx.raft_metrics.raft_log_gc_skipped.threshold_limit += 1;
             // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
             self.fsm.skip_gc_raft_log_ticks += 1;
             self.register_raft_gc_log_tick();
@@ -4093,6 +4110,10 @@ where
         compact_idx -= 1;
         if compact_idx < first_idx {
             // In case compact_idx == first_idx before subtraction.
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .compact_idx_too_small += 1;
             return;
         }
         total_gc_logs += compact_idx - first_idx;
@@ -4412,9 +4433,13 @@ where
             if group_state == GroupState::Idle {
                 self.fsm.peer.ping();
                 if !self.fsm.peer.is_leader() {
-                    // If leader is able to receive message but can't send out any,
-                    // follower should be able to start an election.
-                    self.fsm.reset_hibernate_state(GroupState::PreChaos);
+                    // The peer will keep tick some times after its state becomes
+                    // GroupState::Idle, in which case its state shouldn't be changed.
+                    if !self.fsm.tick_registry.contains(PeerTicks::RAFT) {
+                        // If leader is able to receive message but can't send out any,
+                        // follower should be able to start an election.
+                        self.fsm.reset_hibernate_state(GroupState::PreChaos);
+                    }
                 } else {
                     self.fsm.has_ready = true;
                     // Schedule a pd heartbeat to discover down and pending peer when
