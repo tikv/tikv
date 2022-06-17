@@ -389,7 +389,7 @@ where
 //   * L0 consumption flow (compaction read flow of L0)
 //   * pending compaction bytes
 // And all of them are collected from the hook of RocksDB's event listener.
-pub(super) struct CFFlowChecker {
+struct CFFlowChecker {
     // Memtable related
     last_num_memtables: Smoother<u64, 20, SMOOTHER_STALE_RECORD_THRESHOLD, 0>,
     memtable_debt: f64,
@@ -417,9 +417,9 @@ pub(super) struct CFFlowChecker {
     // Pending compaction bytes related
     // When the write flow is about 100MB/s, we observed that the compaction ops
     // is about 2.5, it means there are 750 compaction events in 5 minutes.
-    pub long_term_pending_bytes:
+    long_term_pending_bytes:
         Smoother<f64, 1024, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD>,
-    pub pending_bytes_before_unsafe_destroy_range: Option<f64>,
+    pending_bytes_before_unsafe_destroy_range: Option<f64>,
 
     // On start related markers. Because after restart, the memtable, l0 files
     // and compaction pending bytes may be high on start. If throttle on start
@@ -462,7 +462,7 @@ pub(super) struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'st
     l0_files_threshold: u64,
 
     // CFFlowChecker for each CF.
-    pub cf_checkers: HashMap<String, CFFlowChecker>,
+    cf_checkers: HashMap<String, CFFlowChecker>,
     // Record which CF is taking control of throttling, the throttle speed is
     // decided based on the statistics of the throttle CF. If the multiple CFs
     // exceed the threshold, choose the larger one.
@@ -472,14 +472,14 @@ pub(super) struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'st
     discard_ratio: Arc<AtomicU32>,
 
     #[getset(set = "pub")]
-    pub engine: E,
+    engine: E,
     limiter: Arc<Limiter>,
     // Records the foreground write flow at scheduler level of last few seconds.
     write_flow_recorder: Smoother<u64, 30, SMOOTHER_STALE_RECORD_THRESHOLD, 0>,
 
     last_record_time: Instant,
     last_speed: f64,
-    pub wait_for_destroy_range_finish: bool,
+    wait_for_destroy_range_finish: bool,
 
     #[getset(get_copy = "pub", set = "pub")]
     tablet_suffix: u64,
