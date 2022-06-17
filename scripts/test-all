@@ -12,14 +12,14 @@ if [[ -z $MAKEFILE_RUN ]] ; then
     COMMAND="$0 $*" exec make run
 fi
 
-./scripts/test "$@" -- --nocapture  && echo
+./scripts/test "$@"  && echo
 # Re-run tests that requires specific environment variables.
 if [[ "$(uname)" == "Linux" ]]; then
     export MALLOC_CONF=prof:true
-    ./scripts/test ifdef_malloc_conf "$@" -- --nocapture && echo
+    ./scripts/test ifdef_malloc_conf "$@" && echo
 fi
 
 if [[ "$(uname)" = "Linux" ]]; then
-    CARGO_TEST_COMMAND="" EXTRA_CARGO_ARGS="" ./scripts/test --message-format=json-render-diagnostics -q --no-run -- --nocapture |
+    CARGO_TEST_COMMAND="" EXTRA_CARGO_ARGS="" ./scripts/test --message-format=json-render-diagnostics -q --no-run |
         python scripts/check-bins.py --features "${TIKV_ENABLE_FEATURES}" --check-tests
 fi
