@@ -9,6 +9,7 @@ use std::{
 };
 
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
+use prometheus::core::AtomicU64;
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 use tikv_util::config::ReadableDuration;
 
@@ -31,6 +32,7 @@ pub struct Config {
     /// we assume that the success rate of pessimistic transactions is important to
     /// people who disable the pipelined pessimistic lock feature.
     pub in_memory: bool,
+    /// maximum lock wait information count to be stored in memory
     pub wait_history_capacity: u64,
 }
 
@@ -89,7 +91,7 @@ impl LockManagerConfigManager {
         waiter_mgr_scheduler: WaiterMgrScheduler,
         detector_scheduler: DeadlockScheduler,
         pipelined: Arc<AtomicBool>,
-        in_memory: Arc<AtomicBool>,
+        in_memory: Arc<AtomicBool>
     ) -> Self {
         LockManagerConfigManager {
             waiter_mgr_scheduler,
@@ -118,6 +120,9 @@ impl ConfigManager for LockManagerConfigManager {
         }
         if let Some(p) = change.remove("in_memory").map(Into::into) {
             self.in_memory.store(p, Ordering::Relaxed);
+        }
+        if let Some(p) = change.remove("wait_history_capacity").map(Into::into) {
+            self.waiter_mgr_scheduler.change_wait_history_capacity(p);
         }
         Ok(())
     }

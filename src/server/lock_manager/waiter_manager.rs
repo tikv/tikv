@@ -122,6 +122,7 @@ pub enum Task {
     DumpHistory {
         cb: Callback,
     },
+    ChangeHistoryCapacity(u64),
     Deadlock {
         // Which txn causes deadlock
         start_ts: TimeStamp,
@@ -154,6 +155,7 @@ impl Display for Task {
             Task::WakeUp { lock_ts, .. } => write!(f, "waking up txns waiting for {}", lock_ts),
             Task::Dump { .. } => write!(f, "dump"),
             Task::DumpHistory { .. } => write(f, "dump history"),
+            Task::ChangeHistoryCapacity(capacity) => write!(f, "change history capacity to {}", capacity),
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
             Task::ChangeConfig { timeout, delay } => write!(
                 f,
@@ -306,6 +308,7 @@ impl<'a> Into<'a, WaitForEntry> for &'a Waiter {
 // Maybe needs to use `BinaryHeap` or sorted `VecDeque` instead.
 type Waiters = Vec<Waiter>;
 
+// A wrapper around `WaitForEntry` to make sure it is compared by `wait_time`.
 #[derive(Debug)]
 struct WaitForEntryWrapper(WaitForEntry);
 
@@ -319,6 +322,7 @@ struct WaitTable {
     // Map lock hash to waiters.
     wait_table: HashMap<u64, Waiters>,
     waiter_count: Arc<AtomicUsize>,
+    // The wait history entries are sorted by `wait_time`, we'll keep the largest `wait_history_capacity` entries.
     history: BinaryHeap<WaitForEntryWrapper>,
     wait_history_capacity: usize,
 }
@@ -490,6 +494,13 @@ impl Scheduler {
         delay: Option<ReadableDuration>,
     ) {
         self.notify_scheduler(Task::ChangeConfig { timeout, delay });
+    }
+
+    pub fn change_wait_history_capacity(
+        &self,
+        capacity: u64
+    ) {
+        self.notify_scheduler(Task::ChangeHistoryCapacity(capacity));
     }
 
     #[cfg(any(test, feature = "testexport"))]
@@ -674,6 +685,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 self.default_wait_for_lock_timeout,
                 self.wake_up_delay_duration,
             ),
+            Task::ChangeHistoryCapacity(capacity) => self.wait_table.borrow_mut().wait_history_capacity = capacity,
         }
     }
 }
