@@ -209,14 +209,14 @@ pub(crate) struct WalWriter {
 }
 
 impl WalWriter {
-    pub(crate) fn new(dir: &Path, epoch_id: u32, wal_size: usize) -> Result<Self> {
+    pub(crate) fn new(dir: &Path, epoch_id: u32, wal_size: usize) -> Self {
         let mut buf = DmaBuffer::new(INITIAL_BUF_SIZE);
         buf.ensure_space(BATCH_HEADER_SIZE);
         // Safety: ensured enough space and `flush` will init the header.
         unsafe {
             buf.advance_mut(BATCH_HEADER_SIZE);
         }
-        let mut writer = Self {
+        let writer = Self {
             dir: dir.to_path_buf(),
             epoch_id,
             wal_size: DmaBuffer::aligned_len(wal_size),
@@ -225,8 +225,7 @@ impl WalWriter {
             buf,
             file_off: 0,
         };
-        writer.open_file()?;
-        Ok(writer)
+        writer
     }
 
     fn file(&self) -> &File {
@@ -272,10 +271,8 @@ impl WalWriter {
             // An empty batch header is added after each new batch to differentiate the old record.
             self.buf.ensure_space(BATCH_HEADER_SIZE);
             unsafe {
-                let mut buf = self.buf.chunk_mut();
-                buf.put_u32_le(0);
-                buf.put_u32_le(0);
-                buf.put_u32_le(0);
+                let buf = self.buf.chunk_mut();
+                buf[..BATCH_HEADER_SIZE].fill(0);
                 self.buf.advance_mut(BATCH_HEADER_SIZE);
             }
             self.buf.pad_to_align();
@@ -328,9 +325,11 @@ pub(crate) fn get_wal_file_path(dir: &Path, epoch_id: u32) -> Result<PathBuf> {
         if let Ok(Some(recycle_filename)) = find_recycled_file(dir) {
             // Before using the recycle file, empty the old wal header and the first batch header.
             let recycle_file = open_direct_file(&recycle_filename, true)?;
-            let overwrite_len = WalHeader::len() + DmaBuffer::DMA_ALIGN;
+            let overwrite_len = DmaBuffer::aligned_len(WalHeader::len())
+                + DmaBuffer::aligned_len(BATCH_HEADER_SIZE);
             let mut buf = DmaBuffer::new(overwrite_len);
             unsafe {
+                buf.chunk_mut()[..overwrite_len].fill(0);
                 buf.advance_mut(overwrite_len);
             }
             buf.pad_to_align();

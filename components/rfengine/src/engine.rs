@@ -86,7 +86,7 @@ impl RfEngine {
         let epoch_id = epoches.last().map(|e| e.id).unwrap_or(1);
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1024);
-        let writer = WalWriter::new(dir, epoch_id, wal_size)?;
+        let writer = WalWriter::new(dir, epoch_id, wal_size);
         let mut en = Self {
             dir: dir.to_owned(),
             regions: Arc::default(),
@@ -105,6 +105,8 @@ impl RfEngine {
                 }
             }
         }
+        // open_file() will overwrite WAL's header, so we have to call it after loading WALs.
+        en.writer.lock().unwrap().open_file()?;
         en.writer.lock().unwrap().seek(offset);
         if !epoches.is_empty() {
             epoches.pop();

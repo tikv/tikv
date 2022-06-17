@@ -7,7 +7,6 @@ use std::{
 };
 
 use bytes::{Buf, BytesMut};
-use slog_global::warn;
 
 use crate::{
     worker::wal_file_name,
@@ -44,12 +43,10 @@ impl WALIterator {
         let mut buf_reader = BufReader::new(fd);
         let header = match self.check_wal_header(&mut buf_reader) {
             Ok(header) => header,
-            Err(e) => {
-                // FIXME(youjiali1995): Due to recycling WAL file, we can't distinguish data
-                // corruption at the tail of WAL.
-                warn!("failed to check WAL header: {}", e);
+            Err(Error::EOF) => {
                 return Ok(());
             }
+            Err(e) => return Err(e),
         };
         loop {
             match self.read_batch(&mut buf_reader, &header) {
@@ -78,7 +75,24 @@ impl WALIterator {
         let mut buf = [0u8; WalHeader::len()];
         reader.read_exact(&mut buf)?;
         self.offset += WalHeader::len() as u64;
-        WalHeader::decode(&buf)
+        match WalHeader::decode(&buf) {
+            Ok(header) => return Ok(header),
+            Err(err) => {
+                // Haven't written the header.
+                if buf.iter().all(|v| *v == 0) {
+                    return Err(Error::EOF);
+                }
+                // Header is corrupt, but the first batch header is empty which means there
+                // is no data in this WAL. Treat it like EOF and WAL writer will rewrite the
+                // header.
+                reader.read_exact(&mut buf[..BATCH_HEADER_SIZE])?;
+                if buf.iter().take(BATCH_HEADER_SIZE).all(|v| *v == 0) {
+                    return Err(Error::EOF);
+                }
+                // Header corruption.
+                return Err(err);
+            }
+        }
     }
 
     pub(crate) fn read_batch(
