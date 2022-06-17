@@ -8,11 +8,11 @@ set -euo pipefail
 # Run from the Makefile environment
 MAKEFILE_RUN=${MAKEFILE_RUN:-""}
 if [[ -z $MAKEFILE_RUN ]] ; then
-  COMMAND="$0 $*" exec make run
+    COMMAND="$0 $*" exec make run
 fi
 SHELL_DEBUG=${SHELL_DEBUG:-""}
 if [[ -n "$SHELL_DEBUG" ]] ; then
-  set -x
+    set -x
 fi
 
 DYLD_LIBRARY_PATH=${DYLD_LIBRARY_PATH:-""}
