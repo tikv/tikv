@@ -48,6 +48,7 @@ pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
 use tikv_util::deadline::Deadline;
+use tracker::RequestType;
 pub use txn_heart_beat::TxnHeartBeat;
 use txn_types::{Key, OldValues, TimeStamp, Value, Write};
 
@@ -467,6 +468,10 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 pub trait CommandExt: Display {
     fn tag(&self) -> metrics::CommandKind;
 
+    fn request_type(&self) -> RequestType {
+        RequestType::Unknown
+    }
+
     fn get_ctx(&self) -> &Context;
 
     fn get_ctx_mut(&mut self) -> &mut Context;
@@ -643,6 +648,10 @@ impl Command {
 
     pub fn tag(&self) -> metrics::CommandKind {
         self.command_ext().tag()
+    }
+
+    pub fn request_type(&self) -> RequestType {
+        self.command_ext().request_type()
     }
 
     pub fn ts(&self) -> TimeStamp {

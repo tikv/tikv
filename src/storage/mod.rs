@@ -52,7 +52,6 @@ mod types;
 
 use std::{
     borrow::Cow,
-    cell::RefCell,
     iter,
     marker::PhantomData,
     sync::{
@@ -64,10 +63,7 @@ use std::{
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
 use causal_ts::CausalTsProvider;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{
-    raw_ttl::ttl_to_expire_ts, CfName, PerfContext, PerfContextExt, PerfContextKind, PerfLevel,
-    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
-};
+use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
 use kvproto::{
     kvrpcpb::{
@@ -86,8 +82,7 @@ use tikv_util::{
     time::{duration_to_ms, Instant, ThreadReadId},
 };
 use tracker::{
-    clear_tls_tracker_token, get_tls_tracker_token, set_tls_tracker_token, TrackedFuture,
-    TrackerToken,
+    clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,
 };
 use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
 
@@ -288,42 +283,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.ts_provider = Some(ts_provider)
     }
 
-    fn with_perf_context<Fn, T>(cmd: CommandKind, f: Fn) -> T
-    where
-        Fn: FnOnce() -> T,
-    {
-        thread_local! {
-            static GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-            static BATCH_GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-            static BATCH_GET_COMMAND: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-            static SCAN: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-            static SCAN_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        }
-        let tls_cell = match cmd {
-            CommandKind::get => &GET,
-            CommandKind::batch_get => &BATCH_GET,
-            CommandKind::batch_get_command => &BATCH_GET_COMMAND,
-            CommandKind::scan => &SCAN,
-            CommandKind::scan_lock => &SCAN_LOCK,
-            _ => return f(),
-        };
-        tls_cell.with(|c| {
-            let mut c = c.borrow_mut();
-            let perf_context = c.get_or_insert_with(|| {
-                Self::with_tls_engine(|engine| {
-                    Box::new(engine.kv_engine().get_perf_context(
-                        PerfLevel::Uninitialized,
-                        PerfContextKind::Storage(cmd.get_str()),
-                    ))
-                })
-            });
-            perf_context.start_observe();
-            let res = f();
-            perf_context.report_metrics(&[get_tls_tracker_token()]);
-            res
-        })
-    }
-
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
@@ -366,6 +325,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     pub fn get_normal_pool_size(&self) -> usize {
         self.read_pool.get_normal_pool_size()
+    }
+
+    fn with_perf_context<Fn, T>(cmd: CommandKind, f: Fn) -> T
+    where
+        Fn: FnOnce() -> T,
+    {
+        // Safety: the read pools ensure that a TLS engine exists.
+        unsafe { with_perf_context::<E, _, _>(cmd, f) }
     }
 
     #[inline]
@@ -519,22 +486,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     fn get_ts(&self) -> Result<Option<TimeStamp>> {
-        match &self.ts_provider {
-            None => {
+        self.ts_provider.as_ref().map_or_else(
+            || {
                 if F::TAG == ApiVersion::V2 {
-                    return Err(box_err!("ts_provider should not be none in apiv2"));
+                    Err(box_err!("ts_provider should not be none in apiv2"))
                 } else {
-                    return Ok(None);
+                    Ok(None)
                 }
             },
-            Some(provider) => {
-                let ret = provider.get_ts();
-                match ret {
-                    Ok(ts) => return Ok(Some(ts)),
-                    Err(_) => return Err(box_err!("fail to get ts")),
-                }
-            }
-        }
+            |provider| {
+                provider
+                    .get_ts()
+                    .map_or_else(|_| Err(box_err!("fail to get ts")), |ts| Ok(Some(ts)))
+            },
+        )
     }
 
     // TODO: refactor to use `Api` parameter.
@@ -1464,6 +1429,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             _ => {}
         }
+        with_tls_tracker(|tracker| {
+            tracker.req_info.start_ts = cmd.ts().into_inner();
+            tracker.req_info.request_type = cmd.request_type();
+        });
 
         fail_point!("storage_drop_message", |_| Ok(()));
         cmd.incr_cmd_metric();
@@ -2760,10 +2729,7 @@ pub struct TxnTestSnapshot<S: Snapshot> {
 
 impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
     type Iter = S::Iter;
-    type Ext<'a>
-    where
-        S: 'a,
-    = TxnTestSnapshotExt<'a>;
+    type Ext<'a> = TxnTestSnapshotExt<'a> where S: 'a;
 
     fn get(&self, key: &Key) -> tikv_kv::Result<Option<Value>> {
         self.snapshot.get(key)

@@ -75,7 +75,7 @@ txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
+causal_ts = { path = "../causal_ts" }
 rand = "0.8"
 tempfile = "3.0"
 tokio = { version = "1.5", features = ["time", "macros"] }
-causal_ts = { path = "../causal_ts"}
