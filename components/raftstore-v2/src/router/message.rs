@@ -9,9 +9,10 @@ use kvproto::{
     metapb,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
 };
+use raftstore::store::{
+    fsm::ApplyTaskRes, metrics::RaftEventDurationType, InspectedRaftMessage, RegionSnapshot,
+};
 use tikv_util::{memory::HeapSize, time::Instant};
-
-use raftstore::store::{metrics::RaftEventDurationType, RegionSnapshot, fsm::ApplyTaskRes, InspectedRaftMessage};
 
 pub struct WriteResponseChannel;
 
@@ -278,9 +279,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
 pub enum StoreMsg {
     RaftMessage(InspectedRaftMessage),
     Tick(StoreTick),
-    Start {
-        store: metapb::Store,
-    },
+    Start { store: metapb::Store },
 }
 
 impl fmt::Debug for StoreMsg {

@@ -1,8 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::RaftEngine;
-use raft::{GetEntriesContext, RaftState};
-use raft::eraftpb::{Entry, Snapshot};
+use raft::{
+    eraftpb::{Entry, Snapshot},
+    GetEntriesContext, RaftState,
+};
 use slog::Logger;
 
 /// A storage for raft.

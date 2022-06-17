@@ -4,7 +4,7 @@ use engine_traits::RaftEngine;
 use kvproto::metapb;
 use raft::RawNode;
 use raftstore::store::Config;
-use slog::{Logger, o};
+use slog::{o, Logger};
 use tikv_util::{box_err, config::ReadableSize};
 
 use super::storage::Storage;
@@ -19,18 +19,24 @@ pub struct Peer<ER: RaftEngine> {
 }
 
 impl<ER: RaftEngine> Peer<ER> {
-    pub fn new(cfg: &Config, store_id: u64, region: metapb::Region, engine: ER, logger: Logger) -> Result<Self> {
-        let peer = region.get_peers().iter().find(|p| p.get_store_id() == store_id && p.get_id() != raft::INVALID_ID);
+    pub fn new(
+        cfg: &Config,
+        store_id: u64,
+        region: metapb::Region,
+        engine: ER,
+        logger: Logger,
+    ) -> Result<Self> {
+        let peer = region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == store_id && p.get_id() != raft::INVALID_ID);
         let peer = match peer {
             Some(p) => p,
             None => return Err(box_err!("no valid peer found in {:?}", region.get_peers())),
         };
         let l = logger.new(o!("peer_id" => peer.id));
 
-        let ps = Storage::new(
-            engine.clone(),
-            l.clone(),
-        );
+        let ps = Storage::new(engine, l.clone());
 
         let applied_index = ps.applied_index();
 

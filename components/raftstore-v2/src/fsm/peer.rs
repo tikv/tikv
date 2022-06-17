@@ -13,9 +13,7 @@ pub struct PeerFsm<ER: RaftEngine> {
 
 impl<ER: RaftEngine> PeerFsm<ER> {
     pub fn new(peer: Peer<ER>) -> Result<Self> {
-        Ok(PeerFsm {
-            peer,
-        })
+        Ok(PeerFsm { peer })
     }
 
     pub fn logger(&self) -> &Logger {
