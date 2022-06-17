@@ -49,6 +49,7 @@ use tikv::coprocessor_v2;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
+use tikv::server::load_statistics::ThreadLoadPool;
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, StoreAddrResolver};
 use tikv::server::service::DebugService;
@@ -158,6 +159,7 @@ impl ServerCluster {
             map.clone(),
             RaftStoreBlackHole,
             worker.scheduler(),
+            Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
         let raft_client = RaftClient::new(conn_builder);
         ServerCluster {

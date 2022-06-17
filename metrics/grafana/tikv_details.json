@@ -14069,10 +14069,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_server_raft_message_flush_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(tikv_server_raft_message_flush_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (instance, reason)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}",
+              "legendFormat": "{{instance}}-{{reason}}",
               "metric": "tikv_server_raft_message_flush_total",
               "refId": "A",
               "step": 4

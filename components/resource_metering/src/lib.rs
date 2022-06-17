@@ -20,7 +20,6 @@ mod localstorage;
 mod model;
 mod recorder;
 mod reporter;
-pub mod utils;
 
 pub use client::{Client, GrpcClient};
 pub use collector::Collector;
