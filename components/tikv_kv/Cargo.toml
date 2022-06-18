@@ -46,6 +46,7 @@ slog_derive = "0.2"
 tempfile = "3.0"
 thiserror = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }
+tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]

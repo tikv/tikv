@@ -30,7 +30,7 @@ command! {
     /// This should follow after a `ResolveLockReadPhase`.
     ResolveLock:
         cmd_ty => (),
-        display => "kv::resolve_lock", (),
+        display => "kv::resolve_lock {:?} scan_key({:?}) key_locks({:?})", (txn_status, scan_key, key_locks),
         content => {
             /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
             ///
@@ -57,6 +57,7 @@ command! {
 impl CommandExt for ResolveLock {
     ctx!();
     tag!(resolve_lock);
+    request_type!(KvResolveLock);
     property!(is_sys_cmd);
 
     fn write_bytes(&self) -> usize {
