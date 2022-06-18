@@ -20,6 +20,7 @@ use std::{
 };
 
 use rand::Rng;
+use tikv_util::time::Instant;
 
 pub use crate::{
     encryption::*,
@@ -54,6 +55,12 @@ pub fn setup_for_ci() {
         if env::var("LOG_FILE").is_ok() {
             logging::init_log_for_test();
         }
+
+        let timer = Instant::now();
+        // Wait for background loading in current thread for CI in case other cases meet error
+        // first.
+        ::backtrace::Backtrace::new();
+        debug!("loading backtrace"; "takes" => ?timer.saturating_elapsed());
     }
 
     if env::var("PANIC_ABORT").is_ok() {

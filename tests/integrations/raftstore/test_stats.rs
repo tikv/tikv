@@ -3,7 +3,7 @@
 use std::{
     sync::{Arc, *},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use api_version::{test_kv_format_impl, KvFormat};
@@ -156,18 +156,12 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
         req.set_context(ctx);
         req.key = start_key.clone();
         client.raw_get(&req).unwrap();
-        assert!(check_query_num_read(
-            cluster,
-            store_id,
-            region_id,
-            QueryKind::Get,
-            1
-        ));
-        assert!(check_split_key(
+        check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1, true);
+        check_split_key(
             cluster,
             F::encode_raw_key_owned(start_key, None).into_encoded(),
-            None
-        ));
+            None,
+        );
     });
     let raw_batch_get: Box<Query> =
         Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
@@ -175,18 +169,12 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
             req.set_context(ctx);
             req.set_keys(protobuf::RepeatedField::from(vec![start_key.clone()]));
             client.raw_batch_get(&req).unwrap();
-            assert!(check_query_num_read(
-                cluster,
-                store_id,
-                region_id,
-                QueryKind::Get,
-                1
-            ));
-            assert!(check_split_key(
+            check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1, true);
+            check_split_key(
                 cluster,
                 F::encode_raw_key_owned(start_key, None).into_encoded(),
-                None
-            ));
+                None,
+            );
         });
     let raw_scan: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = RawScanRequest::default();
@@ -195,18 +183,12 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
         req.start_key = start_key.clone();
         req.end_key = end_key.clone();
         client.raw_scan(&req).unwrap();
-        assert!(check_query_num_read(
-            cluster,
-            store_id,
-            region_id,
-            QueryKind::Scan,
-            1
-        ));
-        assert!(check_split_key(
+        check_query_num_read(cluster, store_id, region_id, QueryKind::Scan, 1, true);
+        check_split_key(
             cluster,
             F::encode_raw_key_owned(start_key, None).into_encoded(),
-            Some(F::encode_raw_key_owned(end_key, None).into_encoded())
-        ));
+            Some(F::encode_raw_key_owned(end_key, None).into_encoded()),
+        );
     });
     let raw_batch_scan: Box<Query> =
         Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
@@ -218,18 +200,12 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
             req.set_context(ctx);
             req.set_ranges(protobuf::RepeatedField::from(vec![key_range]));
             client.raw_batch_scan(&req).unwrap();
-            assert!(check_query_num_read(
-                cluster,
-                store_id,
-                region_id,
-                QueryKind::Scan,
-                1
-            ));
-            assert!(check_split_key(
+            check_query_num_read(cluster, store_id, region_id, QueryKind::Scan, 1, true);
+            check_split_key(
                 cluster,
                 F::encode_raw_key_owned(start_key, None).into_encoded(),
-                Some(F::encode_raw_key_owned(end_key, None).into_encoded())
-            ));
+                Some(F::encode_raw_key_owned(end_key, None).into_encoded()),
+            );
         });
     let raw_get_key_ttl: Box<Query> =
         Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
@@ -237,49 +213,31 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
             req.set_context(ctx);
             req.key = start_key.clone();
             client.raw_get_key_ttl(&req).unwrap();
-            assert!(check_query_num_read(
-                cluster,
-                store_id,
-                region_id,
-                QueryKind::Get,
-                1
-            ));
-            assert!(check_split_key(
+            check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1, true);
+            check_split_key(
                 cluster,
                 F::encode_raw_key_owned(start_key, None).into_encoded(),
-                None
-            ));
+                None,
+            );
         });
     let raw_batch_get_command: Box<Query> =
         Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
-            let mut flag = false;
-            for i in 0..3 {
-                let get_command: Box<GenRequest> = Box::new(|ctx, start_key| {
-                    let mut get_req = RawGetRequest::default();
-                    get_req.set_context(ctx.clone());
-                    get_req.key = start_key;
-                    let mut req = BatchCommandsRequestRequest::new();
-                    req.set_raw_get(get_req);
-                    req
-                });
-                batch_commands(&ctx, &client, get_command, &start_key);
-                assert!(check_split_key(
-                    cluster,
-                    F::encode_raw_key_owned(start_key.clone(), None).into_encoded(),
-                    None
-                ));
-                if check_query_num_read(
-                    cluster,
-                    store_id,
-                    region_id,
-                    QueryKind::Get,
-                    (i + 1) * 1000,
-                ) {
-                    flag = true;
-                    break;
-                }
-            }
-            assert!(flag);
+            let get_command: Box<GenRequest> = Box::new(|ctx, start_key| {
+                let mut get_req = RawGetRequest::default();
+                get_req.set_context(ctx.clone());
+                get_req.key = start_key;
+                let mut req = BatchCommandsRequestRequest::new();
+                req.set_raw_get(get_req);
+                req
+            });
+            batch_commands(&ctx, &client, get_command, &start_key);
+            check_split_key(
+                cluster,
+                F::encode_raw_key_owned(start_key, None).into_encoded(),
+                None,
+            );
+            // In batch operation, some counter may be updated in grpc thread. See #12562.
+            check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1000, false)
         });
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
@@ -304,36 +262,24 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
         req.set_context(ctx);
         req.key = start_key.clone();
         client.kv_get(&req).unwrap();
-        assert!(check_query_num_read(
-            cluster,
-            store_id,
-            region_id,
-            QueryKind::Get,
-            1
-        ));
-        assert!(check_split_key(
+        check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1, true);
+        check_split_key(
             cluster,
             Key::from_raw(&start_key).as_encoded().to_vec(),
-            None
-        ));
+            None,
+        );
     });
     let batch_get: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = BatchGetRequest::default();
         req.set_context(ctx);
         req.set_keys(protobuf::RepeatedField::from(vec![start_key.clone()]));
         client.kv_batch_get(&req).unwrap();
-        assert!(check_query_num_read(
-            cluster,
-            store_id,
-            region_id,
-            QueryKind::Get,
-            1
-        ));
-        assert!(check_split_key(
+        check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1, true);
+        check_split_key(
             cluster,
             Key::from_raw(&start_key).as_encoded().to_vec(),
-            None
-        ));
+            None,
+        );
     });
     let scan: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = ScanRequest::default();
@@ -341,18 +287,12 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
         req.start_key = start_key.clone();
         req.end_key = vec![];
         client.kv_scan(&req).unwrap();
-        assert!(check_query_num_read(
-            cluster,
-            store_id,
-            region_id,
-            QueryKind::Scan,
-            1
-        ));
-        assert!(check_split_key(
+        check_query_num_read(cluster, store_id, region_id, QueryKind::Scan, 1, true);
+        check_split_key(
             cluster,
             Key::from_raw(&start_key).as_encoded().to_vec(),
-            None
-        ));
+            None,
+        );
     });
     let scan_lock: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = ScanLockRequest::default();
@@ -360,49 +300,31 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
         req.start_key = start_key.clone();
         req.end_key = vec![];
         client.kv_scan_lock(&req).unwrap();
-        assert!(check_query_num_read(
-            cluster,
-            store_id,
-            region_id,
-            QueryKind::Scan,
-            1
-        ));
-        assert!(check_split_key(
+        check_query_num_read(cluster, store_id, region_id, QueryKind::Scan, 1, true);
+        check_split_key(
             cluster,
             Key::from_raw(&start_key).as_encoded().to_vec(),
-            None
-        ));
+            None,
+        );
     });
     let batch_get_command: Box<Query> =
         Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
-            let mut flag = false;
-            for i in 0..3 {
-                let get_command: Box<GenRequest> = Box::new(|ctx, start_key| {
-                    let mut get_req = GetRequest::default();
-                    get_req.set_context(ctx.clone());
-                    get_req.key = start_key;
-                    let mut req = BatchCommandsRequestRequest::new();
-                    req.set_get(get_req);
-                    req
-                });
-                batch_commands(&ctx, &client, get_command, &start_key);
-                assert!(check_split_key(
-                    cluster,
-                    Key::from_raw(&start_key).as_encoded().to_vec(),
-                    None
-                ));
-                if check_query_num_read(
-                    cluster,
-                    store_id,
-                    region_id,
-                    QueryKind::Get,
-                    (i + 1) * 1000,
-                ) {
-                    flag = true;
-                    break;
-                }
-            }
-            assert!(flag);
+            let get_command: Box<GenRequest> = Box::new(|ctx, start_key| {
+                let mut get_req = GetRequest::default();
+                get_req.set_context(ctx.clone());
+                get_req.key = start_key;
+                let mut req = BatchCommandsRequestRequest::new();
+                req.set_get(get_req);
+                req
+            });
+            batch_commands(&ctx, &client, get_command, &start_key);
+            check_split_key(
+                cluster,
+                Key::from_raw(&start_key).as_encoded().to_vec(),
+                None,
+            );
+            // See #12562.
+            check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1000, false);
         });
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
@@ -470,12 +392,7 @@ fn put(
             prewrite_resp.get_errors()
         );
     }
-    assert!(check_query_num_write(
-        cluster,
-        store_id,
-        QueryKind::Prewrite,
-        1
-    ));
+    check_query_num_write(cluster, store_id, QueryKind::Prewrite, 1);
     // Commit
     {
         let commit_ts = block_on(cluster.pd_client.get_tso()).unwrap();
@@ -492,12 +409,7 @@ fn put(
         );
         assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
     }
-    assert!(check_query_num_write(
-        cluster,
-        store_id,
-        QueryKind::Commit,
-        1
-    ));
+    check_query_num_write(cluster, store_id, QueryKind::Commit, 1);
 }
 
 fn test_pessimistic_lock() {
@@ -532,12 +444,7 @@ fn test_pessimistic_lock() {
         "{:?}",
         lock_resp.get_errors()
     );
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::AcquirePessimisticLock,
-        1
-    ));
+    check_query_num_write(&cluster, store_id, QueryKind::AcquirePessimisticLock, 1);
 }
 
 pub fn test_rollback() {
@@ -564,12 +471,7 @@ pub fn test_rollback() {
         "{:?}",
         rollback_resp.get_error()
     );
-    assert!(check_query_num_write(
-        &cluster,
-        store_id,
-        QueryKind::Rollback,
-        1
-    ));
+    check_query_num_write(&cluster, store_id, QueryKind::Rollback, 1);
 }
 
 fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool) {
@@ -656,8 +558,9 @@ fn check_query_num_read(
     region_id: u64,
     kind: QueryKind,
     expect: u64,
-) -> bool {
-    let start = std::time::SystemTime::now();
+    strict: bool,
+) {
+    let start = Instant::now();
     let mut num = 0;
     loop {
         sleep_ms(10);
@@ -666,12 +569,14 @@ fn check_query_num_read(
             let query_stat = peer_stat.get_query_stats();
             num = QueryStats::get_query_num(query_stat, kind);
             if num == expect {
-                return true;
+                return;
             }
         }
-        if start.elapsed().unwrap().as_secs() > 10 {
-            println!("real query {}", num);
-            return false;
+        if start.elapsed().as_secs() > 10 {
+            if !strict && num >= (expect as f64 * 0.5) as u64 {
+                return;
+            }
+            panic!("query num not match {} != {} {:?}", num, expect, kind);
         }
     }
 }
@@ -681,26 +586,27 @@ fn check_query_num_write(
     store_id: u64,
     kind: QueryKind,
     expect: u64,
-) -> bool {
+) {
     let start = std::time::SystemTime::now();
+    let mut num = 0;
     loop {
         sleep_ms(10);
         if let Some(hb) = cluster.pd_client.get_store_stats(store_id) {
-            if QueryStats::get_query_num(hb.get_query_stats(), kind) >= expect {
-                return true;
+            num = QueryStats::get_query_num(hb.get_query_stats(), kind);
+            if num >= expect {
+                return;
             }
         }
         if start.elapsed().unwrap().as_secs() > 5 {
-            return false;
+            panic!(
+                "write number is doesn't match {} != {} {:?}",
+                num, expect, kind
+            );
         }
     }
 }
 
-fn check_split_key(
-    cluster: &Cluster<ServerCluster>,
-    start_key: Vec<u8>,
-    end_key: Option<Vec<u8>>,
-) -> bool {
+fn check_split_key(cluster: &Cluster<ServerCluster>, start_key: Vec<u8>, end_key: Option<Vec<u8>>) {
     let start = std::time::SystemTime::now();
     loop {
         sleep_ms(10);
@@ -717,10 +623,10 @@ fn check_split_key(
                 start_key,
                 end_key
             );
-            return true;
+            return;
         }
         if start.elapsed().unwrap().as_secs() > 5 {
-            return false;
+            panic!("region count still not match {} != 2", region_num);
         }
     }
 }

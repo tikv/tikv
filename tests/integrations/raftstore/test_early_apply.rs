@@ -175,6 +175,7 @@ fn test_update_internal_apply_index() {
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
     configure_for_request_snapshot(&mut cluster);
+    cluster.cfg.raft_store.hibernate_regions = false;
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(3, 3));
     cluster.must_put(b"k1", b"v1");

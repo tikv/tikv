@@ -23,7 +23,10 @@ use crate::{
 pub(crate) const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 fn tick_interval() -> Duration {
-    fail_point!("mock_tick_interval", |_| { Duration::from_millis(1) });
+    fail_point!("mock_tick_interval", |s| {
+        let millis = s.map_or(0, |v| v.parse().unwrap());
+        Duration::from_millis(millis)
+    });
     TICK_INTERVAL
 }
 
