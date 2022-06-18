@@ -594,7 +594,5 @@ mod tests {
 
         let name = rx.recv().unwrap();
         assert_eq!(name, thread_name);
-
-        assert_eq!(THREAD_NAME_HASHMAP.lock().unwrap().len(), 0);
     }
 }
