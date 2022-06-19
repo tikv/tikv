@@ -1038,7 +1038,7 @@ impl Default for DbConfig {
             max_sub_compactions: bg_job_limits.max_sub_compactions as u32,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
-            enable_pipelined_write: false,
+            enable_pipelined_write: true, // Enable pipelined write and disable pipelined commit.
             enable_multi_batch_write: true, // deprecated
             enable_unordered_write: false,
             defaultcf: DefaultCfConfig::default(),
@@ -1102,7 +1102,7 @@ impl DbConfig {
         let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
         opts.enable_pipelined_commit(enable_pipelined_commit);
         opts.enable_unordered_write(self.enable_unordered_write);
-        // Enable pipelined write and disable pipelined commit.
+        // Pipelined write should be enabled.
         assert!(self.enable_pipelined_write);
         // ART does not support concurrent write.
         opts.allow_concurrent_memtable_write(false);
