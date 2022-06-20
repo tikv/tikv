@@ -668,15 +668,6 @@ impl Peer {
         self.raft_group.snap()
     }
 
-    pub fn ready_to_handle_pending_snapshot(&self) -> bool {
-        // If apply worker is still working, written apply state may be overwritten
-        // by apply worker. So we have to wait here.
-        // Please note that commit_index can't be used here. When applying a snapshot,
-        // a stale heartbeat can make the leader think follower has already applied
-        // the snapshot, and send remaining log entries, which may increase commit_index.
-        self.last_applying_idx == self.get_store().applied_index()
-    }
-
     #[allow(unused)]
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
         metrics.message += ready.messages().len() as u64;
@@ -1150,9 +1141,6 @@ impl Peer {
             return;
         }
         if self.has_pending_snapshot() {
-            if !self.ready_to_handle_pending_snapshot() {
-                return;
-            }
             if store_meta.is_none() {
                 ctx.global
                     .router
@@ -1398,11 +1386,14 @@ impl Peer {
     }
 
     pub(crate) fn post_apply(&mut self, ctx: &mut RaftContext, apply_result: &MsgApplyResult) {
-        let apply_state = apply_result.apply_state;
         if self.get_store().is_applying_snapshot() {
-            panic!("{} should not applying snapshot.", self.tag());
+            info!(
+                "{} is applying snapshot, ignore outdated apply result.",
+                self.tag()
+            );
+            return;
         }
-
+        let apply_state = apply_result.apply_state;
         let applied_index = apply_state.applied_index;
         let applied_index_term = apply_state.applied_index_term;
         self.raft_group.advance_apply_to(applied_index);
