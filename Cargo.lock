@@ -4163,6 +4163,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "raftstore-v2"
+version = "0.1.0"
+dependencies = [
+ "collections",
+ "crossbeam",
+ "engine_traits",
+ "error_code",
+ "kvproto",
+ "pd_client",
+ "raft",
+ "raft-proto",
+ "raftstore",
+ "slog",
+ "smallvec",
+ "tikv_util",
+]
+
+[[package]]
 name = "rand"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

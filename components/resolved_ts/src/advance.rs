@@ -24,7 +24,9 @@ use pd_client::PdClient;
 use protobuf::Message;
 use raftstore::store::{fsm::StoreMeta, util::RegionReadProgressRegistry};
 use security::SecurityManager;
-use tikv_util::{info, time::Instant, timer::SteadyTimer, worker::Scheduler};
+use tikv_util::{
+    info, sys::thread::ThreadBuildWrapper, time::Instant, timer::SteadyTimer, worker::Scheduler,
+};
 use tokio::{
     runtime::{Builder, Runtime},
     sync::Mutex,
@@ -65,6 +67,8 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             .thread_name("advance-ts")
             .worker_threads(1)
             .enable_time()
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         Self {

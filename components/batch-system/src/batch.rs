@@ -17,7 +17,10 @@ use std::{
 use crossbeam::channel::{self, SendError};
 use fail::fail_point;
 use file_system::{set_io_type, IOType};
-use tikv_util::{debug, error, info, mpsc, safe_panic, thd_name, time::Instant, warn};
+use tikv_util::{
+    debug, error, info, mpsc, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name,
+    time::Instant, warn,
+};
 
 use crate::{
     config::Config,
@@ -581,7 +584,7 @@ where
         let props = tikv_util::thread_group::current_properties();
         let t = thread::Builder::new()
             .name(name)
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 set_io_type(IOType::ForegroundWrite);
                 poller.poll();
