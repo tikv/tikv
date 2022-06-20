@@ -1044,16 +1044,10 @@ impl<'a> PeerMsgHandler<'a> {
                 res.unwrap_err()
             );
         }
-        let cs = res.unwrap();
-        self.peer.prepared_change_sets.insert(cs.sequence, cs);
-        while let Some(front) = self.peer.scheduled_change_sets.pop_front() {
-            if let Some(cs) = self.peer.prepared_change_sets.remove(&front) {
-                self.ctx.apply_msgs.msgs.push(ApplyMsg::ApplyChangeSet(cs));
-            } else {
-                self.peer.scheduled_change_sets.push_front(front);
-                break;
-            }
-        }
+        self.ctx
+            .apply_msgs
+            .msgs
+            .push(ApplyMsg::ApplyChangeSet(res.unwrap()));
     }
 }
 

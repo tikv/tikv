@@ -131,11 +131,11 @@ impl Shard {
         shard
     }
 
-    pub fn set_active(&self, active: bool) {
+    pub(crate) fn set_active(&self, active: bool) {
         self.active.store(active, Release);
     }
 
-    pub fn is_active(&self) -> bool {
+    pub(crate) fn is_active(&self) -> bool {
         self.active.load(Acquire)
     }
 
@@ -485,13 +485,6 @@ impl ShardDataCore {
 
     pub fn cover_full_table(&self, smallest: &[u8], biggest: &[u8]) -> bool {
         self.start <= smallest && biggest < self.end
-    }
-
-    pub fn get_last_read_only_mem_table(&self) -> Option<memtable::CFTable> {
-        if self.mem_tbls.len() < 2 {
-            return None;
-        }
-        Some(self.mem_tbls.last().unwrap().clone())
     }
 }
 

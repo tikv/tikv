@@ -2,7 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    fmt::{Debug, Formatter},
+    fmt::{Debug, Display, Formatter},
     iter::{FromIterator, Iterator},
     ops::Deref,
     path::PathBuf,
@@ -82,7 +82,7 @@ impl Engine {
         }
         let cache: SegmentedCache<BlockCacheKey, Bytes> =
             SegmentedCache::new(max_capacity as u64, 256);
-        let (flush_tx, flush_rx) = mpsc::bounded(opts.num_mem_tables);
+        let (flush_tx, flush_rx) = mpsc::unbounded();
         let (free_tx, free_rx) = mpsc::unbounded();
         let core = EngineCore {
             shards: DashMap::new(),
@@ -169,7 +169,7 @@ impl Engine {
 pub struct EngineCore {
     pub(crate) shards: DashMap<u64, Arc<Shard>>,
     pub opts: Arc<Options>,
-    pub(crate) flush_tx: mpsc::Sender<FlushTask>,
+    pub(crate) flush_tx: mpsc::Sender<FlushMsg>,
     pub(crate) fs: Arc<dyn dfs::DFS>,
     pub(crate) cache: SegmentedCache<BlockCacheKey, Bytes>,
     pub(crate) comp_client: CompactionClient,
@@ -283,30 +283,23 @@ impl EngineCore {
             .unwrap_or(0)
     }
 
-    pub fn trigger_flush(&self, shard: &Arc<Shard>) {
+    pub(crate) fn trigger_flush(&self, shard: &Arc<Shard>) {
+        if !shard.is_active() {
+            return;
+        }
         if !shard.get_initial_flushed() {
             self.trigger_initial_flush(shard);
             return;
         }
         let data = shard.get_data();
-        if let Some(mem_tbl) = data.get_last_read_only_mem_table() {
-            info!(
-                "shard {}:{} trigger flush mem-table ts {}, size {}",
-                shard.id,
-                shard.ver,
-                mem_tbl.get_version(),
-                mem_tbl.size(),
-            );
-            self.flush_tx
-                .send(FlushTask {
-                    shard_id: shard.id,
-                    shard_ver: shard.ver,
-                    start: shard.start.to_vec(),
-                    end: shard.end.to_vec(),
-                    normal: Some(mem_tbl),
-                    initial: None,
-                })
-                .unwrap();
+        let mut mem_tbls = data.mem_tbls.clone();
+        while let Some(mem_tbl) = mem_tbls.pop() {
+            // writable mem-table's version is 0.
+            if mem_tbl.get_version() != 0 {
+                self.flush_tx
+                    .send(FlushMsg::Task(FlushTask::new_normal(shard, mem_tbl)))
+                    .unwrap();
+            }
         }
     }
 
@@ -330,20 +323,16 @@ impl EngineCore {
             }
         }
         self.flush_tx
-            .send(FlushTask {
-                shard_id: shard.id,
-                shard_ver: shard.ver,
-                start: shard.start.to_vec(),
-                end: shard.end.to_vec(),
-                normal: None,
-                initial: Some(InitialFlush {
+            .send(FlushMsg::Task(FlushTask::new_initial(
+                shard,
+                InitialFlush {
                     parent_snap,
                     mem_tbls,
                     base_version: shard.base_version,
                     // A newly split shard's meta_sequence is an in-mem state until initial flush.
                     data_sequence: shard.get_meta_sequence(),
-                }),
-            })
+                },
+            )))
             .unwrap();
     }
 
@@ -452,9 +441,32 @@ impl EngineCore {
             .map(|x| IDVer::new(x.id, x.ver))
             .collect()
     }
+
+    // meta_committed should be called when a change set is committed in the raft group.
+    pub fn meta_committed(&self, cs: &kvenginepb::ChangeSet) {
+        if cs.has_flush() || cs.has_initial_flush() {
+            let table_version = change_set_table_version(cs);
+            let id_ver = IDVer::new(cs.shard_id, cs.shard_ver);
+            self.flush_tx
+                .send(FlushMsg::Committed((id_ver, table_version)))
+                .unwrap();
+        }
+    }
+
+    pub fn set_shard_active(&self, shard_id: u64, active: bool) {
+        if let Some(shard) = self.get_shard(shard_id) {
+            info!("shard {}:{} set active {}", shard_id, shard.ver, active);
+            shard.set_active(active);
+            if active {
+                self.trigger_flush(&shard);
+            } else {
+                self.flush_tx.send(FlushMsg::Clear(shard_id)).unwrap();
+            }
+        }
+    }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct IDVer {
     pub id: u64,
     pub ver: u64,
@@ -463,6 +475,12 @@ pub struct IDVer {
 impl IDVer {
     pub fn new(id: u64, ver: u64) -> Self {
         Self { id, ver }
+    }
+}
+
+impl Display for IDVer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.id, self.ver)
     }
 }
 

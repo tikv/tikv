@@ -190,6 +190,7 @@ pub(crate) struct ApplyBatch {
 /// The raft worker receives all the apply tasks of different Regions
 /// located at this store, and it will get the corresponding applier to
 /// handle the apply task to make the code logic more clear.
+#[derive(Default)]
 pub(crate) struct Applier {
     pub(crate) peer: metapb::Peer,
     pub(crate) term: u64,
@@ -220,6 +221,12 @@ pub(crate) struct Applier {
     pub(crate) paused_apply_queue: Vec<MsgApply>,
 
     pub(crate) ingest_callback: Option<Callback>,
+
+    pub(crate) scheduled_change_sets: VecDeque<u64>,
+
+    pub(crate) prepared_change_sets: HashMap<u64, kvengine::ChangeSet>,
+
+    pub(crate) role: raft::StateRole,
 }
 
 impl Applier {
@@ -233,17 +240,8 @@ impl Applier {
             peer: reg.peer,
             term: reg.term,
             region: reg.region,
-            stopped: false,
-            pending_remove: false,
-            pending_cmds: Default::default(),
             apply_state: reg.apply_state,
-            lock_cache: Default::default(),
-            snap: None,
-            metrics: ApplyMetrics::default(),
-            pending_split: Default::default(),
-            paused: false,
-            ingest_callback: None,
-            paused_apply_queue: Default::default(),
+            ..Default::default()
         }
     }
 
@@ -266,17 +264,9 @@ impl Applier {
             peer,
             term: RAFT_INIT_LOG_TERM,
             region,
-            stopped: false,
-            pending_remove: false,
-            pending_cmds: Default::default(),
             apply_state,
-            lock_cache: Default::default(),
             snap: Some(snap),
-            metrics: ApplyMetrics::default(),
-            pending_split: Default::default(),
-            paused: false,
-            ingest_callback: None,
-            paused_apply_queue: Default::default(),
+            ..Default::default()
         }
     }
 
@@ -496,10 +486,6 @@ impl Applier {
             }
             TYPE_ENGINE_META => {
                 let cs = cl.get_change_set().unwrap();
-                if cs.has_ingest_files() {
-                    self.ingest_callback = self.find_callback(log_index, ctx.exec_log_term, false);
-                    self.paused = true;
-                }
                 if !cs.get_property_key().is_empty() {
                     wb.set_property(cs.get_property_key(), cs.get_property_value());
                 }
@@ -1222,14 +1208,13 @@ impl Applier {
     }
 
     fn on_role_changed(&mut self, ctx: &mut ApplyContext, new_role: StateRole) {
-        if let Some(shard) = ctx.engine.get_shard(self.region.get_id()) {
-            info!("shard set active {} on role changed", new_role == StateRole::Leader;
-                "region" => self.tag());
-            shard.set_active(new_role == StateRole::Leader);
-            if new_role == StateRole::Leader {
-                ctx.engine.trigger_flush(&shard);
-            }
-        }
+        self.role = new_role;
+        ctx.engine
+            .set_shard_active(self.region.get_id(), self.is_leader());
+    }
+
+    fn is_leader(&self) -> bool {
+        self.role == StateRole::Leader
     }
 
     fn handle_apply(&mut self, ctx: &mut ApplyContext, mut apply: MsgApply) {
@@ -1256,26 +1241,51 @@ impl Applier {
     }
 
     fn handle_apply_change_set(&mut self, ctx: &mut ApplyContext, cs: ChangeSet) {
-        let cs_pb = cs.change_set.clone();
-        let is_ingest_files = cs.has_ingest_files();
-        let result = if cs.has_snapshot() {
-            ctx.engine.ingest(cs, false).map(|()| cs_pb)
-        } else {
-            ctx.engine.apply_change_set(cs).map(|()| cs_pb)
-        };
-        let router = ctx.router.as_ref().unwrap();
-        router.send(self.region_id(), PeerMsg::ApplyChangeSetResult(result));
-        if is_ingest_files {
-            if let Some(callback) = self.ingest_callback.take() {
-                let mut resp = RaftCmdResponse::default();
-                resp.mut_header().set_current_term(ctx.exec_log_term);
-                callback.invoke_with_response(resp);
-            }
-            self.paused = false;
-            for apply in std::mem::take(&mut self.paused_apply_queue) {
-                self.handle_apply(ctx, apply);
+        if !self
+            .scheduled_change_sets
+            .iter()
+            .any(|&seq| seq == cs.sequence)
+        {
+            info!(
+                "{} discard outdated change set {:?}",
+                self.tag(),
+                &cs.change_set
+            );
+            return;
+        }
+        self.prepared_change_sets.insert(cs.sequence, cs);
+        while let Some(cs) = self.take_prepared_change_set() {
+            let cs_pb = cs.change_set.clone();
+            let is_ingest_files = cs.has_ingest_files();
+            let result = if cs.has_snapshot() {
+                ctx.engine.ingest(cs, false).map(|()| cs_pb)
+            } else {
+                ctx.engine.apply_change_set(cs).map(|()| cs_pb)
+            };
+            let router = ctx.router.as_ref().unwrap();
+            router.send(self.region_id(), PeerMsg::ApplyChangeSetResult(result));
+            if is_ingest_files {
+                if let Some(callback) = self.ingest_callback.take() {
+                    let mut resp = RaftCmdResponse::default();
+                    resp.mut_header().set_current_term(ctx.exec_log_term);
+                    callback.invoke_with_response(resp);
+                }
+                self.paused = false;
+                for apply in std::mem::take(&mut self.paused_apply_queue) {
+                    self.handle_apply(ctx, apply);
+                }
             }
         }
+    }
+
+    fn take_prepared_change_set(&mut self) -> Option<ChangeSet> {
+        if let Some(sequence) = self.scheduled_change_sets.front() {
+            if let Some(cs) = self.prepared_change_sets.remove(sequence) {
+                self.scheduled_change_sets.pop_front();
+                return Some(cs);
+            }
+        }
+        None
     }
 
     fn clear_all_commands_as_stale(&mut self) {
@@ -1327,6 +1337,22 @@ impl Applier {
         }
     }
 
+    fn handle_prepare_change_set(&mut self, ctx: &mut ApplyContext, cs: kvenginepb::ChangeSet) {
+        if cs.has_ingest_files() {
+            self.ingest_callback = self.find_callback(cs.sequence, ctx.exec_log_term, false);
+            self.paused = true;
+        }
+        self.scheduled_change_sets.push_back(cs.sequence);
+        let engine = ctx.engine.clone();
+        let router = ctx.router.clone().unwrap();
+        let is_leader = self.is_leader();
+        std::thread::spawn(move || {
+            let id = cs.shard_id;
+            let res = engine.prepare_change_set(cs, !is_leader);
+            router.send(id, PeerMsg::PrepareChangeSetResult(res));
+        });
+    }
+
     pub(crate) fn handle_msg(&mut self, ctx: &mut ApplyContext, msg: ApplyMsg) {
         match msg {
             ApplyMsg::Apply(apply) => {
@@ -1340,6 +1366,9 @@ impl Applier {
             }
             ApplyMsg::PendingSplit(pending_split) => {
                 self.pending_split = Some(pending_split);
+            }
+            ApplyMsg::PrepareChangeSet(cs) => {
+                self.handle_prepare_change_set(ctx, cs);
             }
             ApplyMsg::ApplyChangeSet(cs) => {
                 self.handle_apply_change_set(ctx, cs);

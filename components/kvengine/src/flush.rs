@@ -1,11 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, time::Duration};
+use std::collections::{HashMap, VecDeque};
 
 use bytes::BytesMut;
 use kvenginepb as pb;
 use slog_global::info;
-use tikv_util::{mpsc, time::Instant};
+use tikv_util::{
+    mpsc,
+    time::{monotonic_raw_now, timespec_to_ns},
+};
 
 use crate::{
     table::{memtable, memtable::CFTable, sstable, sstable::L0Builder},
@@ -13,8 +16,7 @@ use crate::{
 };
 
 pub(crate) struct FlushTask {
-    pub(crate) shard_id: u64,
-    pub(crate) shard_ver: u64,
+    pub(crate) id_ver: IDVer,
     pub(crate) start: Vec<u8>,
     pub(crate) end: Vec<u8>,
     pub(crate) normal: Option<memtable::CFTable>,
@@ -22,8 +24,38 @@ pub(crate) struct FlushTask {
 }
 
 impl FlushTask {
+    fn new(
+        shard: &Shard,
+        normal: Option<memtable::CFTable>,
+        initial: Option<InitialFlush>,
+    ) -> Self {
+        Self {
+            id_ver: IDVer::new(shard.id, shard.ver),
+            start: shard.start.to_vec(),
+            end: shard.end.to_vec(),
+            normal,
+            initial,
+        }
+    }
+
+    pub(crate) fn new_normal(shard: &Shard, mem_tbl: memtable::CFTable) -> Self {
+        Self::new(shard, Some(mem_tbl), None)
+    }
+
+    pub(crate) fn new_initial(shard: &Shard, initial: InitialFlush) -> Self {
+        Self::new(shard, None, Some(initial))
+    }
+
     pub(crate) fn overlap_table(&self, start_key: &[u8], end_key: &[u8]) -> bool {
         self.start.as_slice() <= end_key && start_key < self.end.as_slice()
+    }
+
+    pub(crate) fn table_version(&self) -> u64 {
+        if self.normal.is_some() {
+            self.normal.as_ref().unwrap().get_version()
+        } else {
+            self.initial.as_ref().unwrap().table_version()
+        }
     }
 }
 
@@ -34,64 +66,29 @@ pub(crate) struct InitialFlush {
     pub(crate) data_sequence: u64,
 }
 
-#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-pub(crate) struct FlushStateKey {
-    shard_id: u64,
-    shard_ver: u64,
-    tbl_version: u64,
+impl InitialFlush {
+    fn table_version(&self) -> u64 {
+        self.base_version + self.data_sequence
+    }
 }
 
-const FLUSH_DEDUP_DURATION: Duration = Duration::from_secs(30);
-
 impl Engine {
-    pub(crate) fn run_flush_worker(&self, rx: mpsc::Receiver<FlushTask>) {
-        let mut flush_states = HashMap::new();
-        while let Ok(task) = rx.recv() {
-            let tbl_version = match task.normal.as_ref() {
-                None => 0,
-                Some(tbl) => tbl.get_version(),
-            };
-            let flush_state_key = FlushStateKey {
-                shard_id: task.shard_id,
-                shard_ver: task.shard_ver,
-                tbl_version,
-            };
-            let now = Instant::now();
-            let mut min_flush_time = now - FLUSH_DEDUP_DURATION;
-            flush_states.retain(|_, flush_time: &mut Instant| flush_time.gt(&&mut min_flush_time));
-            if flush_states.get(&flush_state_key).is_some() {
-                continue;
-            }
-            flush_states.insert(flush_state_key, now);
-            let engine = self.clone();
-            std::thread::spawn(move || {
-                let res = if task.normal.is_some() {
-                    engine.flush_normal(task)
-                } else {
-                    engine.flush_initial(task)
-                };
-                match res {
-                    Ok(cs) => {
-                        engine.meta_change_listener.on_change_set(cs);
-                    }
-                    Err(err) => {
-                        // TODO: handle DFS error by queue the failed operation and retry.
-                        panic!("{:?}", err);
-                    }
-                }
-            });
-        }
+    pub(crate) fn run_flush_worker(&self, rx: mpsc::Receiver<FlushMsg>) {
+        let mut worker = FlushWorker {
+            shards: Default::default(),
+            receiver: rx,
+            engine: self.clone(),
+        };
+        worker.run();
     }
 
     pub(crate) fn flush_normal(&self, task: FlushTask) -> Result<pb::ChangeSet> {
-        let (shard_id, shard_ver) = (task.shard_id, task.shard_ver);
-        let mut cs = new_change_set(shard_id, shard_ver);
+        let mut cs = new_change_set(task.id_ver.id, task.id_ver.ver);
         let m = task.normal.as_ref().unwrap();
         let flush_version = m.get_version();
         info!(
-            "{}:{} flush mem-table version {}, size {}",
-            shard_id,
-            shard_ver,
+            "{} flush mem-table version {}, size {}",
+            task.id_ver,
             flush_version,
             m.size(),
         );
@@ -102,24 +99,22 @@ impl Engine {
         }
         let l0_builder = self.build_l0_table(m, task.start.as_slice(), task.end.as_slice());
         let (tx, rx) = tikv_util::mpsc::bounded(1);
-        self.persist_l0_table(l0_builder, tx, shard_id, shard_ver);
+        self.persist_l0_table(l0_builder, tx, task.id_ver);
         let l0_create = rx.recv().unwrap()?;
         flush.set_l0_create(l0_create);
         Ok(cs)
     }
 
     pub(crate) fn flush_initial(&self, task: FlushTask) -> Result<pb::ChangeSet> {
-        let (shard_id, shard_ver) = (task.shard_id, task.shard_ver);
         let flush = task.initial.as_ref().unwrap();
         info!(
-            "{}:{} initial flush {} mem-tables, base_version {}, data_sequence {}",
-            shard_id,
-            shard_ver,
+            "{} initial flush {} mem-tables, base_version {}, data_sequence {}",
+            task.id_ver,
             flush.mem_tbls.len(),
             flush.base_version,
             flush.data_sequence
         );
-        let mut cs = new_change_set(shard_id, shard_ver);
+        let mut cs = new_change_set(task.id_ver.id, task.id_ver.ver);
         let initial_flush = cs.mut_initial_flush();
         initial_flush.set_start(task.start.to_vec());
         initial_flush.set_end(task.end.to_vec());
@@ -143,7 +138,7 @@ impl Engine {
         let num_mem_tables = l0_builders.len();
         let (tx, rx) = tikv_util::mpsc::bounded(num_mem_tables);
         for l0_builder in l0_builders {
-            self.persist_l0_table(l0_builder, tx.clone(), shard_id, shard_ver);
+            self.persist_l0_table(l0_builder, tx.clone(), task.id_ver);
         }
         let mut errs = vec![];
         for _ in 0..num_mem_tables {
@@ -202,8 +197,7 @@ impl Engine {
         &self,
         mut l0_builder: L0Builder,
         tx: tikv_util::mpsc::Sender<Result<pb::L0Create>>,
-        shard_id: u64,
-        shard_ver: u64,
+        id_ver: IDVer,
     ) {
         let l0_data = l0_builder.finish();
         let (smallest, biggest) = l0_builder.smallest_biggest();
@@ -213,7 +207,7 @@ impl Engine {
                 .create(
                     l0_builder.get_fid(),
                     l0_data,
-                    dfs::Options::new(shard_id, shard_ver),
+                    dfs::Options::new(id_ver.id, id_ver.ver),
                 )
                 .await;
             if let Err(e) = res {
@@ -227,4 +221,197 @@ impl Engine {
             tx.send(Ok(l0_create)).unwrap();
         });
     }
+}
+
+pub(crate) enum FlushMsg {
+    /// Task is send when trigger_flush is called.
+    Task(FlushTask),
+
+    /// Result is sent from the background flush thread when a flush task is finished.
+    Result(FlushResult),
+
+    /// Committed message is sent when a flush is committed to the raft group, so we
+    /// can notify the next finished task.
+    Committed((IDVer, u64)),
+
+    /// Clear message is sent when a shard changed its version or set to inactive.
+    /// Then all the previous tasks will be discarded.
+    /// This simplifies the logic, avoid race condition.
+    Clear(u64),
+}
+
+// FlushManager manages the flush tasks, make them concurrent and ensure the order for each shard.
+pub(crate) struct FlushWorker {
+    shards: HashMap<u64, ShardTaskManager>,
+    receiver: mpsc::Receiver<FlushMsg>,
+    engine: Engine,
+}
+
+impl FlushWorker {
+    fn run(&mut self) {
+        while let Ok(msg) = self.receiver.recv() {
+            match msg {
+                FlushMsg::Task(task) => {
+                    let task_manager = self.get_shard_task_manager(task.id_ver.id);
+                    if task_manager.enqueue_task(&task) {
+                        let term = task_manager.term;
+                        self.spawn_flush_task(task, term);
+                    }
+                }
+                FlushMsg::Result(res) => {
+                    let task_manager = self.get_shard_task_manager(res.id_ver.id);
+                    if let Some(finished) = task_manager.handle_flush_result(res) {
+                        self.engine.meta_change_listener.on_change_set(finished);
+                    }
+                }
+                FlushMsg::Committed((id_ver, table_version)) => {
+                    let task_manager = self.get_shard_task_manager(id_ver.id);
+                    if let Some(finished) = task_manager.handle_committed(table_version) {
+                        self.engine.meta_change_listener.on_change_set(finished);
+                    }
+                }
+                FlushMsg::Clear(shard_id) => {
+                    self.shards.remove(&shard_id);
+                }
+            }
+        }
+    }
+
+    fn get_shard_task_manager(&mut self, id: u64) -> &mut ShardTaskManager {
+        self.shards
+            .entry(id)
+            .or_insert_with(|| ShardTaskManager::new())
+    }
+
+    fn spawn_flush_task(&mut self, task: FlushTask, term: u64) {
+        let engine = self.engine.clone();
+        std::thread::spawn(move || {
+            let table_version = task.table_version();
+            let id_ver = task.id_ver;
+            let res = if task.normal.is_some() {
+                engine.flush_normal(task)
+            } else {
+                engine.flush_initial(task)
+            };
+            engine
+                .flush_tx
+                .send(FlushMsg::Result(FlushResult {
+                    id_ver,
+                    table_version,
+                    term,
+                    res,
+                }))
+                .unwrap();
+        });
+    }
+}
+
+/// ShardTaskManager manage flush tasks for a shard.
+#[derive(Default)]
+pub(crate) struct ShardTaskManager {
+    /// When a Shard is set to inactive, all the running tasks should be discarded, then when
+    /// it is set to active again, old result may arrive and conflict with the new tasks.
+    /// So we use term to detect and discard obsolete tasks.
+    term: u64,
+    /// task_queue contains the running tasks.
+    /// Incoming flush tasks are pushed back to the queue.
+    task_queue: VecDeque<u64>,
+    /// finished contains tasks that successfully flushed, but not yet notified to the meta listener.
+    finished: HashMap<u64, kvenginepb::ChangeSet>,
+    /// The flush notified the meta listener but not yet committed.
+    notified: Option<kvenginepb::ChangeSet>,
+    /// committed_table_version is updated when the notified change set is committed
+    /// in the raft group.
+    committed_table_version: u64,
+}
+
+impl ShardTaskManager {
+    fn new() -> Self {
+        let term = timespec_to_ns(monotonic_raw_now());
+        Self {
+            term,
+            ..Default::default()
+        }
+    }
+
+    fn enqueue_task(&mut self, task: &FlushTask) -> bool {
+        let new_table_version = task.table_version();
+        if new_table_version <= self.last_enqueued_table_version() {
+            return false;
+        }
+        self.task_queue.push_back(new_table_version);
+        true
+    }
+
+    fn last_enqueued_table_version(&self) -> u64 {
+        if !self.task_queue.is_empty() {
+            *self.task_queue.back().unwrap()
+        } else if let Some(notified) = self.notified.as_ref() {
+            change_set_table_version(notified)
+        } else {
+            self.committed_table_version
+        }
+    }
+
+    fn handle_flush_result(&mut self, res: FlushResult) -> Option<kvenginepb::ChangeSet> {
+        if self.term != res.term {
+            info!("{} discard old term flush result {:?}", res.id_ver, res.res);
+            return None;
+        }
+        match res.res {
+            Ok(cs) => {
+                self.finished.insert(res.table_version, cs);
+                if self.notified.is_none() {
+                    return self.take_finished_task_for_notify();
+                }
+            }
+            Err(err) => {
+                // TODO(x): properly handle the error.
+                panic!("flush task failed {:?}", err);
+            }
+        }
+        None
+    }
+
+    fn handle_committed(&mut self, table_version: u64) -> Option<kvenginepb::ChangeSet> {
+        if self.committed_table_version < table_version {
+            self.committed_table_version = table_version;
+        }
+        if let Some(notified) = self.notified.take() {
+            let notified_table_version = change_set_table_version(&notified);
+            if notified_table_version == table_version {
+                return self.take_finished_task_for_notify();
+            }
+            self.notified = Some(notified);
+        }
+        None
+    }
+
+    fn take_finished_task_for_notify(&mut self) -> Option<kvenginepb::ChangeSet> {
+        if let Some(table_version) = self.task_queue.front() {
+            if let Some(cs) = self.finished.remove(table_version) {
+                self.task_queue.pop_front();
+                self.notified = Some(cs.clone());
+                return Some(cs);
+            }
+        }
+        None
+    }
+}
+
+pub(crate) fn change_set_table_version(cs: &kvenginepb::ChangeSet) -> u64 {
+    if cs.has_flush() {
+        return cs.get_flush().version;
+    } else if cs.has_initial_flush() {
+        let initial_flush = cs.get_initial_flush();
+        return initial_flush.base_version + initial_flush.data_sequence;
+    }
+    unreachable!("unexpected change set {:?}", cs);
+}
+
+pub(crate) struct FlushResult {
+    id_ver: IDVer,
+    table_version: u64,
+    term: u64,
+    res: Result<kvenginepb::ChangeSet>,
 }

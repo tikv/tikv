@@ -98,9 +98,6 @@ impl EngineCore {
             self.apply_ingest_files(&shard, &cs)?;
         }
         shard.refresh_states();
-        if shard.is_active() && (cs.has_flush() || cs.has_initial_flush()) {
-            self.trigger_flush(&shard);
-        }
         Ok(())
     }
 

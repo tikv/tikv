@@ -446,9 +446,6 @@ pub(crate) struct Peer {
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker,
 
-    pub(crate) scheduled_change_sets: VecDeque<u64>,
-    pub(crate) prepared_change_sets: HashMap<u64, kvengine::ChangeSet>,
-
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
 }
@@ -521,8 +518,6 @@ impl Peer {
             max_ts_sync_status: Arc::new(Default::default()),
             cmd_epoch_checker: Default::default(),
             need_campaign: false,
-            scheduled_change_sets: Default::default(),
-            prepared_change_sets: Default::default(),
             lead_transferee: raft::INVALID_ID,
         };
         // If this region has only one peer and I am the one, campaign directly.
@@ -535,13 +530,6 @@ impl Peer {
 
     pub(crate) fn tag(&self) -> RegionIDVer {
         self.get_store().tag()
-    }
-
-    /// Register self to apply_scheduler so that the peer is then usable.
-    /// Also trigger `RegionChangeEvent::Create` here.
-    pub fn activate(&self, msgs: &mut ApplyMsgs) {
-        let msg = ApplyMsg::Registration(MsgRegistration::new(self));
-        msgs.msgs.push(msg);
     }
 
     pub(crate) fn term(&self) -> u64 {
@@ -1216,7 +1204,6 @@ impl Peer {
             if !self.update_store_meta_for_snap(ctx, snap_res, store_meta.unwrap()) {
                 return;
             }
-            self.activate(&mut ctx.apply_msgs);
         }
         if let Some(ss) = ready.ss() {
             if ss.raft_state == raft::StateRole::Leader {
@@ -1340,6 +1327,7 @@ impl Peer {
         let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
         let mut cs = custom_log.get_change_set().unwrap();
         cs.set_sequence(entry.get_index());
+        ctx.global.engines.kv.meta_committed(&cs);
         let region_id = self.region_id;
         let tag = self.tag();
         let shard_meta = self.mut_store().mut_engine_meta();
@@ -1370,7 +1358,7 @@ impl Peer {
         );
         ctx.raft_wb
             .set_state(region_id, KV_ENGINE_META_KEY, &shard_meta.marshal());
-        self.schedule_prepare_change_set(ctx, cs);
+        ctx.apply_msgs.msgs.push(ApplyMsg::PrepareChangeSet(cs))
     }
 
     pub(crate) fn preprocess_pending_splits(
@@ -1741,20 +1729,13 @@ impl Peer {
         }
         let prev = meta.regions.insert(region.get_id(), region);
         assert_eq!(prev, Some(prev_region));
-        self.schedule_prepare_change_set(ctx, apply_result.change_set);
+        ctx.apply_msgs
+            .msgs
+            .push(ApplyMsg::Registration(MsgRegistration::new(self)));
+        ctx.apply_msgs
+            .msgs
+            .push(ApplyMsg::PrepareChangeSet(apply_result.change_set));
         true
-    }
-
-    fn schedule_prepare_change_set(&mut self, ctx: &mut RaftContext, cs: kvenginepb::ChangeSet) {
-        let kv = ctx.global.engines.kv.clone();
-        let router = ctx.global.router.clone();
-        self.scheduled_change_sets.push_back(cs.sequence);
-        let is_leader = self.is_leader();
-        std::thread::spawn(move || {
-            let id = cs.shard_id;
-            let res = kv.prepare_change_set(cs, !is_leader);
-            router.send(id, PeerMsg::PrepareChangeSetResult(res));
-        });
     }
 
     fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {

@@ -1137,11 +1137,6 @@ impl<'a> StoreMsgHandler<'a> {
         for new_peer in new_peers {
             self.register(new_peer);
         }
-        if is_leader {
-            if let Some(shard) = self.ctx.global.engines.kv.get_shard(region_id) {
-                self.ctx.global.engines.kv.trigger_flush(&shard);
-            }
-        }
         fail_point!("after_split", self.ctx.store_id() == 3, |_| { None });
         self.maybe_apply(region_id)
     }

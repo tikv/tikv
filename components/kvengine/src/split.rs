@@ -21,6 +21,7 @@ impl Engine {
         // Switch the old shard mem-table, so the first mem-table is always empty.
         // ignore the read-only mem-table to be flushed. let the new shard handle it.
         self.switch_mem_table(&old_shard, version);
+        self.flush_tx.send(FlushMsg::Clear(cs.shard_id)).unwrap();
 
         let mut new_shards = vec![];
         let new_shard_props = split.get_new_shards();
@@ -126,6 +127,8 @@ impl Engine {
                 shard.id, shard.ver, shard.start, shard.end, version, all_files
             );
         }
+        let new_shard = self.get_shard(cs.shard_id).unwrap();
+        self.trigger_flush(&new_shard);
         Ok(())
     }
 }

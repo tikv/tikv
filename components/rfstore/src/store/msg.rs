@@ -61,6 +61,7 @@ pub(crate) enum ApplyMsg {
     Registration(MsgRegistration),
     PendingSplit(kvenginepb::ChangeSet),
     ApplyChangeSet(kvengine::ChangeSet),
+    PrepareChangeSet(kvenginepb::ChangeSet),
     UnsafeDestroy { region_id: u64 },
 }
 

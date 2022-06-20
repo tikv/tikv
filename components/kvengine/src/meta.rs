@@ -141,6 +141,16 @@ impl ShardMeta {
             info!("{}:{} skip duplicated change {:?}", self.id, self.ver, cs);
             return true;
         }
+        if cs.has_flush() {
+            let flush = cs.get_flush();
+            if flush.get_version() <= self.data_version() {
+                info!(
+                    "{}:{} skip duplicated flush {:?} for old version",
+                    self.id, self.ver, cs
+                );
+                return true;
+            }
+        }
         if cs.has_compaction() {
             let comp = cs.mut_compaction();
             if is_move_down(comp) {
@@ -419,6 +429,10 @@ impl ShardMeta {
         } else {
             0
         }
+    }
+
+    pub(crate) fn data_version(&self) -> u64 {
+        self.base_version + self.data_sequence
     }
 }
 
