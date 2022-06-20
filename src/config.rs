@@ -334,11 +334,12 @@ macro_rules! cf_config {
             pub bottommost_zstd_compression_dict_size: i32,
             #[online_config(skip)]
             pub bottommost_zstd_compression_sample_size: i32,
+            #[serde(with = "rocks_config::prepopulate_block_cache_serde")]
             #[online_config(skip)]
-            pub prepopulate_block_cache: bool,
+            pub prepopulate_block_cache: PrepopulateBlockCache,
             #[online_config(skip)]
             pub format_version: u32,
-            #[serde(with = "rocks_config::checksum_type_serde")]
+            #[serde(with = "rocks_config::checksum_serde")]
             #[online_config(skip)]
             pub checksum: ChecksumType,
             #[online_config(submodule)]
@@ -515,9 +516,7 @@ macro_rules! build_cf_opt {
             block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
         }
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
-        if $opt.prepopulate_block_cache {
-            block_base_opts.set_prepopulate_block_cache(PrepopulateBlockCache::FlushOnly);
-        }
+        block_base_opts.set_prepopulate_block_cache($opt.prepopulate_block_cache);
         block_base_opts.set_format_version($opt.format_version);
         block_base_opts.set_checksum($opt.checksum);
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -644,7 +643,7 @@ impl Default for DefaultCfConfig {
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
-            prepopulate_block_cache: false,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             titan: TitanCfConfig::default(),
@@ -756,7 +755,7 @@ impl Default for WriteCfConfig {
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
-            prepopulate_block_cache: false,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             titan,
@@ -854,7 +853,7 @@ impl Default for LockCfConfig {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
-            prepopulate_block_cache: false,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             titan,
@@ -930,7 +929,7 @@ impl Default for RaftCfConfig {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
-            prepopulate_block_cache: false,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             titan,
@@ -1296,7 +1295,7 @@ impl Default for RaftDefaultCfConfig {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
-            prepopulate_block_cache: false,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             titan: TitanCfConfig::default(),

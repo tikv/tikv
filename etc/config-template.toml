@@ -794,6 +794,12 @@
 ## for the same CF.
 # compaction-guard-max-output-file-size = "128M"
 
+# format-version = 4
+
+# prepopulate-block-cache = "disabled"
+
+# checksum = "crc32c"
+
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
@@ -878,6 +884,9 @@
 # enable-compaction-guard = true
 # compaction-guard-min-output-file-size = "8M"
 # compaction-guard-max-output-file-size = "128M"
+# format-version = 4
+# prepopulate-block-cache = "disabled"
+# checksum = "crc32c"
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -899,6 +908,9 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
 # enable-compaction-guard = false
+# format-version = 4
+# prepopulate-block-cache = "disabled"
+# checksum = "crc32c"
 
 [raftdb]
 # max-background-jobs = 4
@@ -958,6 +970,9 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
 # enable-compaction-guard = false
+# format-version = 4
+# prepopulate-block-cache = "disabled"
+# checksum = "crc32c"
 
 [raft-engine]
 ## Determines whether to use Raft Engine to store raft logs. When it is

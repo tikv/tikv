@@ -215,7 +215,7 @@ pub mod compression_type_serde {
     }
 }
 
-pub mod checksum_type_serde {
+pub mod checksum_serde {
     use std::fmt;
 
     use rocksdb::ChecksumType;
@@ -263,6 +263,60 @@ pub mod checksum_type_serde {
                     _ => {
                         return Err(E::invalid_value(
                             Unexpected::Other("invalid checksum type"),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(str)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
+    }
+}
+
+pub mod prepopulate_block_cache_serde {
+    use std::fmt;
+
+    use rocksdb::PrepopulateBlockCache;
+    use serde::{
+        de::{Error, Unexpected, Visitor},
+        Deserializer, Serializer,
+    };
+
+    pub fn serialize<S>(t: &PrepopulateBlockCache, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let name = match *t {
+            PrepopulateBlockCache::Disabled => "disabled",
+            PrepopulateBlockCache::FlushOnly => "flush-only",
+        };
+        serializer.serialize_str(name)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<PrepopulateBlockCache, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = PrepopulateBlockCache;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a prepopulate block cache mode")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<PrepopulateBlockCache, E>
+            where
+                E: Error,
+            {
+                let str = match &*value.trim().to_lowercase() {
+                    "disabled" => PrepopulateBlockCache::Disabled,
+                    "flush-only" => PrepopulateBlockCache::FlushOnly,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other("invalid prepopulate block cache mode"),
                             &self,
                         ));
                     }
