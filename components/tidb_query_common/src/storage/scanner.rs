@@ -65,6 +65,15 @@ impl<T: Storage> RangesScanner<T> {
     // Note: This is not implemented over `Iterator` since it can fail.
     // TODO: Change to use reference to avoid allocation and copy.
     pub fn next(&mut self) -> Result<Option<OwnedKvPair>, StorageError> {
+        self.next_row(true)
+    }
+
+    /// Fetches next row.
+    /// Note: `update_scanned_range` can control whether update the scanned range when `is_scanned_range_aware`.
+    pub fn next_row(
+        &mut self,
+        update_scanned_range: bool,
+    ) -> Result<Option<OwnedKvPair>, StorageError> {
         loop {
             let range = self.ranges_iter.next();
             let some_row = match range {
@@ -93,7 +102,7 @@ impl<T: Storage> RangesScanner<T> {
                     return Ok(None); // drained
                 }
             };
-            if self.is_scanned_range_aware {
+            if self.is_scanned_range_aware && update_scanned_range {
                 self.update_scanned_range_from_scanned_row(&some_row);
             }
             if some_row.is_some() {
