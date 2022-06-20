@@ -567,6 +567,7 @@ pub mod tests {
     }
 
     #[test]
+    #[allow(clippy::type_complexity)]
     fn test_agg_paging() {
         use std::sync::Arc;
 
