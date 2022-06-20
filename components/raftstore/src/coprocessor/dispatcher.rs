@@ -406,7 +406,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn post_exec(&self, region: &Region, cmd: &Cmd, apply_state: &RaftApplyState, region_state: &RegionState) -> bool {
+    pub fn post_exec(
+        &self,
+        region: &Region,
+        cmd: &Cmd,
+        apply_state: &RaftApplyState,
+        region_state: &RegionState,
+    ) -> bool {
         let mut ctx = ObserverContext::new(region);
         if !cmd.response.has_admin_response() {
             for observer in &self.registry.query_observers {

@@ -71,7 +71,9 @@ use self::memtrace::*;
 use super::metrics::*;
 use crate::{
     bytes_capacity,
-    coprocessor::{Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel, RegionState},
+    coprocessor::{
+        Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel, RegionState,
+    },
     store::{
         cmd_resp,
         fsm::RaftPollerBuilder,
@@ -1274,30 +1276,25 @@ where
         self.applied_index_term = term;
 
         let cmd = Cmd::new(index, term, req.clone(), resp.clone());
-        let should_write = ctx.host.post_exec(&self.region, &cmd, &self.apply_state, &RegionState {
-            peer_id: self.id(),
-            pending_remove: self.pending_remove,
-            modified_region: match exec_result {
-                ApplyResult::Res(ref e) => {
-                    match e {
-                        ExecResult::SplitRegion { ref derived, .. } => {
-                            Some(derived.clone())
-                        },
-                        ExecResult::PrepareMerge { ref region, .. } => {
-                            Some(region.clone())
-                        },
-                        ExecResult::CommitMerge { ref region, .. } => {
-                            Some(region.clone())
-                        },
-                        ExecResult::RollbackMerge { ref region, .. } => {
-                            Some(region.clone())
-                        },
+        let should_write = ctx.host.post_exec(
+            &self.region,
+            &cmd,
+            &self.apply_state,
+            &RegionState {
+                peer_id: self.id(),
+                pending_remove: self.pending_remove,
+                modified_region: match exec_result {
+                    ApplyResult::Res(ref e) => match e {
+                        ExecResult::SplitRegion { ref derived, .. } => Some(derived.clone()),
+                        ExecResult::PrepareMerge { ref region, .. } => Some(region.clone()),
+                        ExecResult::CommitMerge { ref region, .. } => Some(region.clone()),
+                        ExecResult::RollbackMerge { ref region, .. } => Some(region.clone()),
                         _ => None,
-                    }
+                    },
+                    _ => None,
                 },
-                _ => None,
-            }
-        });
+            },
+        );
 
         if let ApplyResult::Res(ref exec_result) = exec_result {
             match *exec_result {

@@ -96,7 +96,15 @@ pub trait AdminObserver: Coprocessor {
 
     /// Hook to call immediately after exec command
     /// Will be a special persistence after this exec if a observer returns true.
-    fn post_exec_admin(&self, _: &mut ObserverContext<'_>, _: &Cmd, apply_state: &RaftApplyState, region_state: &RegionState) -> bool { false }
+    fn post_exec_admin(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &Cmd,
+        apply_state: &RaftApplyState,
+        region_state: &RegionState,
+    ) -> bool {
+        false
+    }
 }
 
 pub trait QueryObserver: Coprocessor {
@@ -116,7 +124,15 @@ pub trait QueryObserver: Coprocessor {
 
     /// Hook to call immediately after exec command.
     /// Will be a special persistence after this exec if a observer returns true.
-    fn post_exec_query(&self, _: &mut ObserverContext<'_>, _: &Cmd, apply_state: &RaftApplyState, region_state: &RegionState) -> bool { false }
+    fn post_exec_query(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &Cmd,
+        apply_state: &RaftApplyState,
+        region_state: &RegionState,
+    ) -> bool {
+        false
+    }
 }
 
 pub trait ApplySnapshotObserver: Coprocessor {
