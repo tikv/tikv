@@ -15,7 +15,7 @@ use collections::HashMap;
 use engine_rocks::FlowInfo;
 use engine_traits::{CFNamesExt, FlowControlFactorsExt, TabletFactory};
 use rand::Rng;
-use tikv_util::time::Limiter;
+use tikv_util::{sys::thread::StdThreadBuildWrapper, time::Limiter};
 
 use super::flow_controller::{FlowChecker, FlowController, Msg, RATIO_SCALE_FACTOR, TICK_DURATION};
 use crate::storage::config::FlowControlConfig;
@@ -96,7 +96,7 @@ impl FlowInfoDispatcher {
     ) -> JoinHandle<()> {
         Builder::new()
             .name(thd_name!("flow-checker"))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_alloc::add_thread_memory_accessor();
                 let mut deadline = std::time::Instant::now();
                 let mut enabled = true;
