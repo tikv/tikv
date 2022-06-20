@@ -121,6 +121,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
         if self.tasks.is_empty() {
             return;
         }
+        fail::fail_point!("worker_gc_raft_log_flush");
         // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
         let start = Instant::now();
         self.engines.kv.sync().unwrap_or_else(|e| {
