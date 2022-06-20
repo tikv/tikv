@@ -338,12 +338,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
             };
         }
 
-        match self.context.cfg.paging_size {
-            None => {}
-            Some(paging_size) => {
-                if self.n > paging_size as usize {
-                    return self.src.next_batch(scan_rows);
-                }
+        if let Some(paging_size) = self.context.cfg.paging_size {
+            if self.n > paging_size as usize {
+                return self.src.next_batch(scan_rows);
             }
         }
 

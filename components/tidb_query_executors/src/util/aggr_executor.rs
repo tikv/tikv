@@ -213,16 +213,13 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             )?;
         }
 
-        match self.required_row {
-            None => {}
-            Some(required_row) => {
-                if self.imp.groups_len() >= required_row as usize {
-                    src_is_drained = true
-                }
-                // StreamAgg will return groups_len - 1 rows immediately
-                if !src_is_drained && self.imp.is_partial_results_ready() {
-                    self.required_row = Some(required_row + 1 - self.imp.groups_len() as u64)
-                }
+        if let Some(required_row) = self.required_row {
+            if self.imp.groups_len() >= required_row as usize {
+                src_is_drained = true
+            }
+            // StreamAgg will return groups_len - 1 rows immediately
+            if !src_is_drained && self.imp.is_partial_results_ready() {
+                self.required_row = Some(required_row + 1 - self.imp.groups_len() as u64)
             }
         }
 
