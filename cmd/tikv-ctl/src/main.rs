@@ -45,7 +45,7 @@ use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
 use tikv::{config::TiKvConfig, server::debug::BottommostLevelCompaction};
-use tikv_util::{escape, run_and_wait_child_process, unescape};
+use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
 use txn_types::Key;
 
 use crate::{cmd::*, executor::*, util::*};
@@ -604,7 +604,7 @@ fn compact_whole_cluster(
         let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string()).collect();
         let h = thread::Builder::new()
             .name(format!("compact-{}", addr))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_alloc::add_thread_memory_accessor();
                 let debug_executor = new_debug_executor(&cfg, None, false, Some(&addr), mgr);
                 for cf in cfs {
