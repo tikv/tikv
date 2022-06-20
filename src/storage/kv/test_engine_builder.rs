@@ -10,6 +10,7 @@ use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IORateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::config::ReadableSize;
+use txn_types::TimeStamp;
 
 use crate::storage::{
     config::BlockCacheConfig,
@@ -28,6 +29,20 @@ pub struct TestEngineBuilder {
     cfs: Option<Vec<CfName>>,
     io_rate_limiter: Option<Arc<IORateLimiter>>,
     api_version: ApiVersion,
+}
+
+#[derive(Clone)]
+struct DummyTsTracker{}
+
+impl causal_ts::TsTracker for DummyTsTracker {
+    fn track_ts(&self, _region_id: u64, _key: Vec<u8>, _ts: TimeStamp) {
+    }
+}
+
+impl DummyTsTracker {
+    fn default() -> Self {
+        Self{}
+    }
 }
 
 impl TestEngineBuilder {
@@ -71,7 +86,7 @@ impl TestEngineBuilder {
     // Consider decoupling them.
     fn register_causal_observer(engine: &mut RocksEngine) {
         let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-        let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider, Arc::new(DummyTsTracker::default()));
         engine.register_observer(|host| {
             causal_ob.register_to(host);
         });

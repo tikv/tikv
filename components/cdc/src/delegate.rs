@@ -614,7 +614,9 @@ impl Delegate {
         }
         self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
 
-        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
+        if !raw_rows.is_empty() {
+            self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
+        }
 
         Ok(())
     }
@@ -677,6 +679,9 @@ impl Delegate {
 
     fn sink_raw_put(&mut self, mut put: PutRequest, rows: &mut Vec<EventRow>) -> Result<()> {
         let mut row = EventRow::default();
+        self.resolver.as_mut().map(|resolver| {
+            resolver.untrack_lock(put.get_key(), None);
+        });
         decode_rawkv(put.take_key(), put.take_value(), &mut row)?;
         rows.push(row);
         Ok(())

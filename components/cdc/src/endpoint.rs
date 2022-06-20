@@ -17,7 +17,7 @@ use futures::compat::Future01CompatExt;
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
-        ChangeDataRequest, ChangeDataRequestKvApi, ClusterIdMismatch as ErrorClusterIdMismatch,
+        ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
         Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
         Error as EventError, Event, Event_oneof_event, ResolvedTs,
     },
@@ -60,6 +60,7 @@ use crate::{
     old_value::{OldValueCache, OldValueCallback},
     service::{Conn, ConnID, FeatureGate},
     CdcObserver, Error,
+    RawKvTsTracker,
 };
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
@@ -168,6 +169,11 @@ pub enum Task {
     TxnExtra(TxnExtra),
     Validate(Validate),
     ChangeConfig(ConfigChange),
+    RawTrackTs {
+        region_id: u64,
+        key: Vec<u8>,
+        ts: TimeStamp,
+    },
 }
 
 impl_display_as_debug!(Task);
@@ -233,6 +239,16 @@ impl fmt::Debug for Task {
                 .field("type", &"change_config")
                 .field("change", change)
                 .finish(),
+            Task::RawTrackTs {
+                    ref region_id,
+                    ref key,
+                    ref ts,
+                } => de
+                    .field("type", &"track_ts")
+                    .field("region_id", &region_id)
+                    .field("key", &key)
+                    .field("ts", &ts)
+                    .finish(),
         }
     }
 }
@@ -316,6 +332,7 @@ pub struct Endpoint<T, E> {
     raft_router: T,
     engine: E,
     observer: CdcObserver,
+    raw_ts_tracker: Option<Arc<RawKvTsTracker>>,
 
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
@@ -364,6 +381,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         raft_router: T,
         engine: E,
         observer: CdcObserver,
+        raw_ts_tracker: Option<Arc<RawKvTsTracker>>,
         store_meta: Arc<StdMutex<StoreMeta>>,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
@@ -419,6 +437,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             raft_router,
             engine,
             observer,
+            raw_ts_tracker,
             store_meta,
             concurrency_manager,
             min_resolved_ts: TimeStamp::max(),
@@ -679,7 +698,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
         // Now resolver is only used by tidb downstream.
         // Resolver is created when the first tidb cdc request arrive.
-        let is_build_resolver = kv_api == ChangeDataRequestKvApi::TiDb && !delegate.has_resolver();
+        let is_build_resolver = !delegate.has_resolver();
 
         let downstream_ = downstream.clone();
         if let Err(err) = delegate.subscribe(downstream) {
@@ -1117,6 +1136,14 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.get_id(), conn);
     }
+
+    fn on_raw_track_ts(&mut self, region_id: u64, key: Vec<u8>, ts: TimeStamp) {
+        if let Some(ref mut delegate) = self.capture_regions.get_mut(&region_id) {
+            delegate.resolver.as_mut().map(|resolver| {
+                resolver.track_lock(ts, key, None);
+            });
+        }
+    }
 }
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
@@ -1184,6 +1211,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                 }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
+            Task::RawTrackTs { region_id, key, ts } => self.on_raw_track_ts(region_id, key, ts),
         }
     }
 }

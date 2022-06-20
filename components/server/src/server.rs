@@ -112,6 +112,7 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
 use tokio::runtime::Builder;
+use cdc::RawKvTsTracker;
 
 use crate::{memory::*, raft_engine_switch::*, setup::*, signal_handler};
 
@@ -744,6 +745,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
 
         // Register causal observer for RawKV API V2
+        let rawkv_ts_tracker = Arc::new(RawKvTsTracker::new(cdc_scheduler.clone()));
         if let ApiVersion::V2 = F::TAG {
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
                 self.pd_client.clone(),
@@ -756,7 +758,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             let causal_ts_provider = Arc::new(tso.unwrap());
             info!("Causal timestamp provider startup.");
 
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider, rawkv_ts_tracker.clone());
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         }
 
@@ -997,6 +999,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.router.clone(),
             self.engines.as_ref().unwrap().engines.kv.clone(),
             cdc_ob,
+            Some(rawkv_ts_tracker),
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
             server.env(),

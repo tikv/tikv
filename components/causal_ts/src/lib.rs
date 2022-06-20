@@ -28,6 +28,10 @@ pub trait CausalTsProvider: Send + Sync {
     }
 }
 
+pub trait TsTracker : Send + Sync {
+    fn track_ts(&self, region_id: u64, key: Vec<u8>, ts: TimeStamp);
+}
+
 pub mod tests {
     use std::sync::{
         atomic::{AtomicU64, Ordering},
