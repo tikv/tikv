@@ -100,8 +100,8 @@ pub trait AdminObserver: Coprocessor {
         &self,
         _: &mut ObserverContext<'_>,
         _: &Cmd,
-        apply_state: &RaftApplyState,
-        region_state: &RegionState,
+        _: &RaftApplyState,
+        _: &RegionState,
     ) -> bool {
         false
     }
@@ -128,8 +128,8 @@ pub trait QueryObserver: Coprocessor {
         &self,
         _: &mut ObserverContext<'_>,
         _: &Cmd,
-        apply_state: &RaftApplyState,
-        region_state: &RegionState,
+        _: &RaftApplyState,
+        _: &RegionState,
     ) -> bool {
         false
     }
