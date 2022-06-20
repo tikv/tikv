@@ -406,21 +406,24 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn address_apply_result(&self, region: &Region, cmd: &Cmd) {
+    pub fn post_exec(&self, region: &Region, cmd: &Cmd, apply_state: &RaftApplyState, region_state: &RegionState) -> bool {
+        let mut ctx = ObserverContext::new(region);
         if !cmd.response.has_admin_response() {
-            loop_ob!(
-                region,
-                &self.registry.query_observers,
-                address_apply_result,
-                cmd,
-            );
+            for observer in &self.registry.query_observers {
+                let observer = observer.observer.inner();
+                if observer.post_exec_query(&mut ctx, cmd, apply_state, region_state) {
+                    return true;
+                }
+            }
+            false
         } else {
-            loop_ob!(
-                region,
-                &self.registry.admin_observers,
-                address_apply_result,
-                cmd
-            );
+            for observer in &self.registry.admin_observers {
+                let observer = observer.observer.inner();
+                if observer.post_exec_admin(&mut ctx, cmd, apply_state, region_state) {
+                    return true;
+                }
+            }
+            false
         }
     }
 

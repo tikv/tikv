@@ -14,6 +14,7 @@ use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_serverpb::RaftApplyState,
 };
 use raft::{eraftpb, StateRole};
 
@@ -74,6 +75,12 @@ impl<'a> ObserverContext<'a> {
     }
 }
 
+pub struct RegionState {
+    pub peer_id: u64,
+    pub pending_remove: bool,
+    pub modified_region: Option<Region>,
+}
+
 pub trait AdminObserver: Coprocessor {
     /// Hook to call before proposing admin request.
     fn pre_propose_admin(&self, _: &mut ObserverContext<'_>, _: &mut AdminRequest) -> Result<()> {
@@ -88,7 +95,8 @@ pub trait AdminObserver: Coprocessor {
     fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminResponse) {}
 
     /// Hook to call immediately after exec command
-    fn address_apply_result(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
+    /// Will be a special persistence after this exec if a observer returns true.
+    fn post_exec_admin(&self, _: &mut ObserverContext<'_>, _: &Cmd, apply_state: &RaftApplyState, region_state: &RegionState) -> bool { false }
 }
 
 pub trait QueryObserver: Coprocessor {
@@ -106,8 +114,9 @@ pub trait QueryObserver: Coprocessor {
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
 
-    /// Hook to call immediately after exec command
-    fn address_apply_result(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
+    /// Hook to call immediately after exec command.
+    /// Will be a special persistence after this exec if a observer returns true.
+    fn post_exec_query(&self, _: &mut ObserverContext<'_>, _: &Cmd, apply_state: &RaftApplyState, region_state: &RegionState) -> bool { false }
 }
 
 pub trait ApplySnapshotObserver: Coprocessor {
