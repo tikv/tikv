@@ -13,16 +13,12 @@ use futures::{executor::block_on, AsyncReadExt, StreamExt};
 use kvproto::{
     brpb::{BackupClient, BackupRequest, BackupResponse},
     import_sstpb::{DownloadRequest, ImportSstClient, MultiIngestRequest, SstMeta},
-    kvrpcpb::{CommitRequest, Mutation, PrewriteRequest},
 };
 use rand::Rng;
 use tempfile::Builder;
 use test_cloud_server::ServerCluster;
 use tikv::config::TiKvConfig;
-use tikv_util::{
-    config::{ReadableDuration, ReadableSize},
-    time::Instant,
-};
+use tikv_util::config::{ReadableDuration, ReadableSize};
 use txn_types::TimeStamp;
 
 use crate::alloc_node_id;
@@ -186,83 +182,6 @@ fn test_backup_and_import() {
     cluster2.stop();
 }
 
-// Retry if encounter error
-macro_rules! retry_req {
-    ($call_req: expr, $check_resp: expr, $resp:ident, $retry:literal, $timeout:literal) => {
-        let start = Instant::now();
-        let timeout = Duration::from_millis($timeout);
-        let mut tried_times = 0;
-        while tried_times < $retry || start.saturating_elapsed() < timeout {
-            if $check_resp {
-                break;
-            } else {
-                std::thread::sleep(Duration::from_millis(200));
-                tried_times += 1;
-                $resp = $call_req;
-                continue;
-            }
-        }
-    };
-}
-
-pub fn must_kv_prewrite(cluster: &ServerCluster, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
-    let mut prewrite_req = PrewriteRequest::default();
-    let context = cluster.new_rpc_context(&pk);
-    prewrite_req.set_context(context.clone());
-    prewrite_req.set_mutations(muts.into_iter().collect());
-    prewrite_req.primary_lock = pk;
-    prewrite_req.start_version = ts.into_inner();
-    prewrite_req.lock_ttl = prewrite_req.start_version + 1;
-    let tikv_cli = cluster.get_kv_client(context.get_peer().get_store_id());
-    let mut prewrite_resp = tikv_cli.kv_prewrite(&prewrite_req).unwrap();
-    retry_req!(
-        tikv_cli.kv_prewrite(&prewrite_req).unwrap(),
-        !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
-        prewrite_resp,
-        10,   // retry 10 times
-        3000  // 3s timeout
-    );
-    assert!(
-        !prewrite_resp.has_region_error(),
-        "{:?}",
-        prewrite_resp.get_region_error()
-    );
-    assert!(
-        prewrite_resp.errors.is_empty(),
-        "{:?}",
-        prewrite_resp.get_errors()
-    );
-}
-
-pub fn must_kv_commit(
-    cluster: &ServerCluster,
-    keys: Vec<Vec<u8>>,
-    start_ts: TimeStamp,
-    commit_ts: TimeStamp,
-) {
-    let mut commit_req = CommitRequest::default();
-    let context = cluster.new_rpc_context(keys.first().unwrap());
-    commit_req.set_context(context.clone());
-    commit_req.start_version = start_ts.into_inner();
-    commit_req.set_keys(keys.into_iter().collect());
-    commit_req.commit_version = commit_ts.into_inner();
-    let kv_cli = cluster.get_kv_client(context.get_peer().get_store_id());
-    let mut commit_resp = kv_cli.kv_commit(&commit_req).unwrap();
-    retry_req!(
-        kv_cli.kv_commit(&commit_req).unwrap(),
-        !commit_resp.has_region_error() && !commit_resp.has_error(),
-        commit_resp,
-        10,   // retry 10 times
-        3000  // 3s timeout
-    );
-    assert!(
-        !commit_resp.has_region_error(),
-        "{:?}",
-        commit_resp.get_region_error()
-    );
-    assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
-}
-
 pub fn must_kv_put(cluster: &ServerCluster, key_count: usize, versions: usize) {
     let mut batch = Vec::with_capacity(1024);
     let mut keys = Vec::with_capacity(1024);
@@ -281,10 +200,10 @@ pub fn must_kv_put(cluster: &ServerCluster, key_count: usize, versions: usize) {
                 let mutation = test_cloud_server::put_mut(&k, &v.repeat(50));
                 batch.push(mutation);
             }
-            must_kv_prewrite(cluster, batch.split_off(0), keys[0].clone(), start_ts);
+            cluster.kv_prewrite(batch.split_off(0), keys[0].clone(), start_ts);
             // Commit
             let commit_ts = cluster.get_ts();
-            must_kv_commit(cluster, keys.split_off(0), start_ts, commit_ts);
+            cluster.kv_commit(keys.split_off(0), start_ts, commit_ts);
             j = limit;
         }
     }

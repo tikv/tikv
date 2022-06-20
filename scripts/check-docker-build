@@ -9,7 +9,7 @@ for i in $(find . -type f -name 'Cargo.toml'); do
   fi
   for target in "test" "bench" "bin" "example"; do
     matches=$(sed -n "/\[\[$target\]\]/,/^$/ p" $i)
-    if [ $(echo "$matches" | grep -c "[[$target]]") != $(echo "$matches" | grep -c "^path =") ]; then
+    if [ $(echo "$matches" | grep -c "[[$target]]") != $(echo "$matches" | grep -c "path =") ]; then
       echo "Path has not been specified for a $target target in $i, this will break docker build."
       exit 1
     fi

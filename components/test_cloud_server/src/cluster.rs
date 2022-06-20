@@ -1,12 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, ops::Range, path::Path, sync::Arc};
+use std::{collections::HashMap, ops::Range, path::Path, sync::Arc, time::Duration};
 
 use cloud_server::TiKVServer;
 use futures::executor::block_on;
 use grpcio::{Channel, ChannelBuilder, EnvBuilder, Environment};
 use kvproto::{
-    kvrpcpb::{Context, Mutation, Op, SplitRegionRequest},
+    kvrpcpb::{CommitRequest, Context, Mutation, Op, PrewriteRequest, SplitRegionRequest},
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
@@ -14,7 +14,26 @@ use security::SecurityManager;
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv::{config::TiKvConfig, import::SstImporter, storage::mvcc::TimeStamp};
-use tikv_util::thread_group::GroupProperties;
+use tikv_util::{thread_group::GroupProperties, time::Instant};
+
+// Retry if encounter error
+macro_rules! retry_req {
+    ($call_req: expr, $check_resp: expr, $resp:ident, $retry:literal, $timeout:literal) => {
+        let start = Instant::now();
+        let timeout = Duration::from_millis($timeout);
+        let mut tried_times = 0;
+        while tried_times < $retry || start.saturating_elapsed() < timeout {
+            if $check_resp {
+                break;
+            } else {
+                std::thread::sleep(Duration::from_millis(200));
+                tried_times += 1;
+                $resp = $call_req;
+                continue;
+            }
+        }
+    };
+}
 
 #[allow(dead_code)]
 pub struct ServerCluster {
@@ -96,15 +115,69 @@ impl ServerCluster {
         block_on(self.pd_client.get_tso()).unwrap()
     }
 
+    pub fn kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
+        let ctx = self.new_rpc_context(&pk);
+        let kv_client = self.get_kv_client(ctx.get_peer().get_store_id());
+
+        let mut prewrite_req = PrewriteRequest::default();
+        prewrite_req.set_context(ctx);
+        prewrite_req.set_mutations(muts.into());
+        prewrite_req.primary_lock = pk;
+        prewrite_req.start_version = ts.into_inner();
+        prewrite_req.lock_ttl = 3000;
+        prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
+        let mut prewrite_resp = kv_client.kv_prewrite(&prewrite_req).unwrap();
+        retry_req!(
+            kv_client.kv_prewrite(&prewrite_req).unwrap(),
+            !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
+            prewrite_resp,
+            10,   // retry 10 times
+            3000  // 3s timeout
+        );
+        assert!(
+            !prewrite_resp.has_region_error(),
+            "{:?}",
+            prewrite_resp.get_region_error()
+        );
+        assert!(
+            prewrite_resp.errors.is_empty(),
+            "{:?}",
+            prewrite_resp.get_errors()
+        );
+    }
+
+    pub fn kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
+        let ctx = self.new_rpc_context(keys.first().unwrap());
+        let kv_client = self.get_kv_client(ctx.get_peer().get_store_id());
+
+        let mut commit_req = CommitRequest::default();
+        commit_req.set_context(ctx);
+        commit_req.start_version = start_ts.into_inner();
+        commit_req.set_keys(keys.into());
+        commit_req.commit_version = commit_ts.into_inner();
+        let mut commit_resp = kv_client.kv_commit(&commit_req).unwrap();
+        retry_req!(
+            kv_client.kv_commit(&commit_req).unwrap(),
+            !commit_resp.has_region_error() && !commit_resp.has_error(),
+            commit_resp,
+            10,   // retry 10 times
+            3000  // 3s timeout
+        );
+        assert!(
+            !commit_resp.has_region_error(),
+            "{:?}",
+            commit_resp.get_region_error()
+        );
+        assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
+    }
+
     pub fn put_kv<F, G>(&self, rng: Range<usize>, gen_key: F, gen_val: G)
     where
         F: Fn(usize) -> Vec<u8>,
         G: Fn(usize) -> Vec<u8>,
     {
         let start_key = gen_key(rng.start);
-        let ctx = self.new_rpc_context(&start_key);
-        let kv_client = self.get_kv_client(ctx.get_peer().get_store_id());
-        let start_ts = self.get_ts().into_inner();
+        let start_ts = self.get_ts();
 
         let mut mutations = vec![];
         for i in rng.clone() {
@@ -114,13 +187,10 @@ impl ServerCluster {
             m.set_value(gen_val(i));
             mutations.push(m)
         }
-        test_raftstore::must_kv_prewrite(&kv_client, ctx.clone(), mutations, start_key, start_ts);
-        let mut keys = vec![];
-        for i in rng {
-            keys.push(gen_key(i))
-        }
-        let commit_ts = self.get_ts().into_inner();
-        test_raftstore::must_kv_commit(&kv_client, ctx, keys, start_ts, commit_ts, commit_ts);
+        let keys = mutations.iter().map(|m| m.get_key().to_vec()).collect();
+        self.kv_prewrite(mutations, start_key, start_ts);
+        let commit_ts = self.get_ts();
+        self.kv_commit(keys, start_ts, commit_ts);
     }
 
     pub fn get_kvengine(&self, node_id: u16) -> kvengine::Engine {
