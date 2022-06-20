@@ -60,7 +60,6 @@ use crate::{
     old_value::{OldValueCache, OldValueCallback},
     service::{Conn, ConnID, FeatureGate},
     CdcObserver, Error,
-    RawKvTsTracker,
 };
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
@@ -240,15 +239,15 @@ impl fmt::Debug for Task {
                 .field("change", change)
                 .finish(),
             Task::RawTrackTs {
-                    ref region_id,
-                    ref key,
-                    ref ts,
-                } => de
-                    .field("type", &"track_ts")
-                    .field("region_id", &region_id)
-                    .field("key", &key)
-                    .field("ts", &ts)
-                    .finish(),
+                ref region_id,
+                ref key,
+                ref ts,
+            } => de
+                .field("type", &"track_key_ts")
+                .field("region_id", &region_id)
+                .field("key", &key)
+                .field("ts", &ts)
+                .finish(),
         }
     }
 }
@@ -332,7 +331,6 @@ pub struct Endpoint<T, E> {
     raft_router: T,
     engine: E,
     observer: CdcObserver,
-    raw_ts_tracker: Option<Arc<RawKvTsTracker>>,
 
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
@@ -381,7 +379,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         raft_router: T,
         engine: E,
         observer: CdcObserver,
-        raw_ts_tracker: Option<Arc<RawKvTsTracker>>,
         store_meta: Arc<StdMutex<StoreMeta>>,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
@@ -437,7 +434,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             raft_router,
             engine,
             observer,
-            raw_ts_tracker,
             store_meta,
             concurrency_manager,
             min_resolved_ts: TimeStamp::max(),
@@ -696,10 +692,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
 
-        // Now resolver is only used by tidb downstream.
-        // Resolver is created when the first tidb cdc request arrive.
-        let is_build_resolver = !delegate.has_resolver();
-
         let downstream_ = downstream.clone();
         if let Err(err) = delegate.subscribe(downstream) {
             let error_event = err.into_error_event(region_id);
@@ -741,7 +733,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
             checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: is_build_resolver,
+            build_resolver: is_new_delegate,
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
             kv_api,
         };
@@ -1137,11 +1129,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         self.connections.insert(conn.get_id(), conn);
     }
 
-    fn on_raw_track_ts(&mut self, region_id: u64, key: Vec<u8>, ts: TimeStamp) {
+    fn on_raw_track_key_ts(&mut self, region_id: u64, key: Vec<u8>, ts: TimeStamp) {
         if let Some(ref mut delegate) = self.capture_regions.get_mut(&region_id) {
-            delegate.resolver.as_mut().map(|resolver| {
+            if let Some(resolver) = delegate.resolver.as_mut() {
                 resolver.track_lock(ts, key, None);
-            });
+            }
         }
     }
 }
@@ -1211,7 +1203,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                 }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
-            Task::RawTrackTs { region_id, key, ts } => self.on_raw_track_ts(region_id, key, ts),
+            Task::RawTrackTs { region_id, key, ts } => self.on_raw_track_key_ts(region_id, key, ts),
         }
     }
 }
@@ -1855,6 +1847,77 @@ mod tests {
             }
             other => panic!("unexpected task {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_raw_track_ts() {
+        test_util::init_log_for_test();
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V2);
+        suite.add_region(1, 100);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (tx, _) = channel::channel(1, quota);
+
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        let mut req_header = Header::default();
+        req_header.set_cluster_id(0);
+        let mut req = ChangeDataRequest::default();
+        let region_id = 1;
+        req.set_region_id(region_id);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::RawKv,
+        );
+        // Enable batch resolved ts in the test.
+        let version = FeatureGate::batch_resolved_ts();
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version,
+        });
+        assert_eq!(suite.endpoint.capture_regions.len(), 1);
+        let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+        // Schedule resolver ready (resolver is built by conn a).
+        let mut region = Region::default();
+        region.id = region_id;
+        region.set_region_epoch(region_epoch);
+        let resolver = Resolver::new(region_id);
+        suite.run(Task::ResolverReady {
+            observe_id,
+            region,
+            resolver,
+        });
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+
+        let ts = TimeStamp::from(10);
+        let test_key = vec![0, 1, 2];
+        suite.run(Task::RawTrackTs {
+            region_id,
+            key: test_key,
+            ts,
+        });
+        let delegate = &suite.endpoint.capture_regions[&region_id];
+        let resolver = delegate.resolver.as_ref().unwrap();
+        let resolver_locks = resolver.locks();
+        assert_eq!(resolver_locks.len(), 1);
+        assert_eq!(resolver_locks.get(&ts).unwrap().len(), 1);
     }
 
     #[test]

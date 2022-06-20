@@ -13,7 +13,6 @@ pub mod metrics;
 mod observer;
 mod old_value;
 mod service;
-mod raw_ts_tracker;
 
 pub use channel::{recv_timeout, CdcEvent, MemoryQuota};
 pub use config::CdcConfigManager;
@@ -23,4 +22,3 @@ pub use errors::{Error, Result};
 pub use observer::CdcObserver;
 pub use old_value::OldValueCache;
 pub use service::{FeatureGate, Service};
-pub use raw_ts_tracker::RawKvTsTracker;

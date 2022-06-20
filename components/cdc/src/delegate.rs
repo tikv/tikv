@@ -244,7 +244,6 @@ pub struct Delegate {
     pending: Option<Pending>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
-    has_resolver: bool,
 }
 
 impl Delegate {
@@ -259,12 +258,7 @@ impl Delegate {
             pending: Some(Pending::default()),
             txn_extra_op,
             failed: false,
-            has_resolver: false,
         }
-    }
-
-    pub fn has_resolver(&self) -> bool {
-        self.has_resolver
     }
 
     /// Let downstream subscribe the delegate.
@@ -273,9 +267,6 @@ impl Delegate {
         if self.region.is_some() {
             // Check if the downstream is out dated.
             self.check_epoch_on_ready(&downstream)?;
-        }
-        if downstream.kv_api == ChangeDataRequestKvApi::TiDb {
-            self.has_resolver = true;
         }
         self.add_downstream(downstream);
         Ok(())
@@ -679,9 +670,9 @@ impl Delegate {
 
     fn sink_raw_put(&mut self, mut put: PutRequest, rows: &mut Vec<EventRow>) -> Result<()> {
         let mut row = EventRow::default();
-        self.resolver.as_mut().map(|resolver| {
+        if let Some(resolver) = self.resolver.as_mut() {
             resolver.untrack_lock(put.get_key(), None);
-        });
+        }
         decode_rawkv(put.take_key(), put.take_value(), &mut row)?;
         rows.push(row);
         Ok(())

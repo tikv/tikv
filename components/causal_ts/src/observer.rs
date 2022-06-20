@@ -18,17 +18,17 @@ use raftstore::{
     },
 };
 
-use crate::{CausalTsProvider, TsTracker};
+use crate::{CausalTsProvider, RawTsTracker};
 
 /// CausalObserver appends timestamp for RawKV V2 data,
 /// and invoke causal_ts_provider.flush() on specified event, e.g. leader transfer, snapshot apply.
 /// Should be used ONLY when API v2 is enabled.
-pub struct CausalObserver<Ts: CausalTsProvider, Tk: TsTracker> {
+pub struct CausalObserver<Ts: CausalTsProvider, Tk: RawTsTracker> {
     causal_ts_provider: Arc<Ts>,
-    ts_tracker: Arc<Tk>,
+    ts_tracker: Tk,
 }
 
-impl<Ts: CausalTsProvider, Tk: TsTracker> Clone for CausalObserver<Ts, Tk> {
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> Clone for CausalObserver<Ts, Tk> {
     fn clone(&self) -> Self {
         Self {
             causal_ts_provider: self.causal_ts_provider.clone(),
@@ -40,9 +40,12 @@ impl<Ts: CausalTsProvider, Tk: TsTracker> Clone for CausalObserver<Ts, Tk> {
 // Causal observer's priority should be higher than all other observers, to avoid being bypassed.
 const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
 
-impl<Ts: CausalTsProvider + 'static, Tk: TsTracker + 'static> CausalObserver<Ts, Tk> {
-    pub fn new(causal_ts_provider: Arc<Ts>, ts_tracker: Arc<Tk>) -> Self {
-        Self { causal_ts_provider, ts_tracker }
+impl<Ts: CausalTsProvider + 'static, Tk: RawTsTracker + 'static> CausalObserver<Ts, Tk> {
+    pub fn new(causal_ts_provider: Arc<Ts>, ts_tracker: Tk) -> Self {
+        Self {
+            causal_ts_provider,
+            ts_tracker,
+        }
     }
 
     pub fn register_to<E: KvEngine>(&self, coprocessor_host: &mut CoprocessorHost<E>) {
@@ -63,7 +66,7 @@ impl<Ts: CausalTsProvider + 'static, Tk: TsTracker + 'static> CausalObserver<Ts,
 const REASON_LEADER_TRANSFER: &str = "leader_transfer";
 const REASON_REGION_MERGE: &str = "region_merge";
 
-impl<Ts: CausalTsProvider, Tk: TsTracker> CausalObserver<Ts, Tk> {
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> CausalObserver<Ts, Tk> {
     fn flush_timestamp(&self, region: &Region, reason: &'static str) {
         fail::fail_point!("causal_observer_flush_timestamp", |_| ());
 
@@ -75,9 +78,9 @@ impl<Ts: CausalTsProvider, Tk: TsTracker> CausalObserver<Ts, Tk> {
     }
 }
 
-impl<Ts: CausalTsProvider, Tk: TsTracker> Coprocessor for CausalObserver<Ts, Tk> {}
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> Coprocessor for CausalObserver<Ts, Tk> {}
 
-impl<Ts: CausalTsProvider, Tk: TsTracker> QueryObserver for CausalObserver<Ts, Tk> {
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> QueryObserver for CausalObserver<Ts, Tk> {
     fn pre_propose_query(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -97,7 +100,9 @@ impl<Ts: CausalTsProvider, Tk: TsTracker> QueryObserver for CausalObserver<Ts, T
             }
 
             ApiV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
-            self.ts_tracker.track_ts(region_id, req.get_put().get_key().to_vec(), ts.unwrap());
+            self.ts_tracker
+                .track_key_ts(region_id, req.get_put().get_key(), ts.unwrap())
+                .map_err(|err| coprocessor::Error::Other(box_err!("track key err: {:?}", err)))?;
             trace!("CausalObserver::pre_propose_query, append_ts"; "region_id" => region_id,
                 "key" => &log_wrappers::Value::key(req.get_put().get_key()), "ts" => ?ts.unwrap());
         }
@@ -105,7 +110,7 @@ impl<Ts: CausalTsProvider, Tk: TsTracker> QueryObserver for CausalObserver<Ts, T
     }
 }
 
-impl<Ts: CausalTsProvider, Tk: TsTracker> RoleObserver for CausalObserver<Ts, Tk> {
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> RoleObserver for CausalObserver<Ts, Tk> {
     /// Observe becoming leader, to flush CausalTsProvider.
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         // In scenario of frequent leader transfer, the observing of change from
@@ -122,7 +127,7 @@ impl<Ts: CausalTsProvider, Tk: TsTracker> RoleObserver for CausalObserver<Ts, Tk
     }
 }
 
-impl<Ts: CausalTsProvider, Tk: TsTracker> RegionChangeObserver for CausalObserver<Ts, Tk> {
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> RegionChangeObserver for CausalObserver<Ts, Tk> {
     fn on_region_changed(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -158,14 +163,14 @@ pub mod tests {
     use txn_types::{Key, TimeStamp};
 
     use super::*;
-    use crate::BatchTsoProvider;
+    use crate::{tests::TestRawTsTracker, BatchTsoProvider};
 
-    fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>> {
+    fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>, TestRawTsTracker> {
         let pd_cli = Arc::new(TestPdClient::new(0, true));
         pd_cli.set_tso(100.into());
         let causal_ts_provider =
             Arc::new(block_on(BatchTsoProvider::new_opt(pd_cli, Duration::ZERO, 100)).unwrap());
-        CausalObserver::new(causal_ts_provider, None)
+        CausalObserver::new(causal_ts_provider, TestRawTsTracker::default())
     }
 
     #[test]

@@ -15,7 +15,7 @@ mod observer;
 pub use observer::*;
 use txn_types::TimeStamp;
 
-use crate::errors::Result;
+pub use crate::errors::Result;
 
 /// Trait of causal timestamp provider.
 pub trait CausalTsProvider: Send + Sync {
@@ -28,8 +28,8 @@ pub trait CausalTsProvider: Send + Sync {
     }
 }
 
-pub trait TsTracker : Send + Sync {
-    fn track_ts(&self, region_id: u64, key: Vec<u8>, ts: TimeStamp);
+pub trait RawTsTracker: Send + Sync + Clone {
+    fn track_key_ts(&self, region_id: u64, key: &[u8], ts: TimeStamp) -> Result<()>;
 }
 
 pub mod tests {
@@ -57,6 +57,21 @@ pub mod tests {
     impl CausalTsProvider for TestProvider {
         fn get_ts(&self) -> Result<TimeStamp> {
             Ok(self.ts.fetch_add(1, Ordering::Relaxed).into())
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct TestRawTsTracker {}
+
+    impl RawTsTracker for TestRawTsTracker {
+        fn track_key_ts(&self, _region_id: u64, _key: &[u8], _ts: TimeStamp) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    impl TestRawTsTracker {
+        pub fn default() -> Self {
+            Self {}
         }
     }
 }
