@@ -633,6 +633,11 @@ mod tests {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
+
+        fn on_empty_cmd(&self, _: &mut ObserverContext<'_>, _index: u64, _term: u64) {
+            self.called.fetch_add(14, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
     }
 
     impl RoleObserver for TestCoprocessor {
@@ -762,7 +767,7 @@ mod tests {
         let mut empty_req = RaftCmdRequest::default();
         empty_req.set_requests(vec![Request::default()].into());
         host.on_empty_cmd(&region, 0, 0);
-        assert_all!([&ob.called], &[94]);
+        assert_all!([&ob.called], &[88]);
     }
 
     #[test]
