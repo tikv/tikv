@@ -90,7 +90,7 @@ pub trait AdminObserver: Coprocessor {
 
 pub trait QueryObserver: Coprocessor {
     /// Hook when observe applying empty cmd, probably caused by leadership change.
-    fn on_empty_cmd(&self, _: &mut ObserverContext<'_>, index: u64, term: u64) {}
+    fn on_empty_cmd(&self, _: &mut ObserverContext<'_>, _index: u64, _term: u64) {}
 
     /// Hook to call before proposing write request.
     ///
