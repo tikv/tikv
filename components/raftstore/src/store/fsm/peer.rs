@@ -2315,6 +2315,14 @@ where
             return Some(DelayReason::UnPersistedReady);
         }
 
+        let is_initialized = self.fsm.peer.is_initialized();
+        if !is_initialized {
+            // If the peer is uninitialized, then it can't receive any logs from leader. So
+            // no need to gc. If there was a peer with same region id on the store, and it had
+            // logs written, then it must be initialized, hence its log should be gc either
+            // before it's destroyed or during node restarts.
+            self.fsm.logs_gc_flushed = true;
+        }
         if !self.fsm.logs_gc_flushed {
             let start_index = self.fsm.peer.last_compacted_idx;
             let mut end_index = start_index;
