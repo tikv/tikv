@@ -20,7 +20,10 @@ use engine_rocks::FlowInfo;
 use engine_traits::{CFNamesExt, FlowControlFactorsExt};
 use num_traits::cast::{AsPrimitive, FromPrimitive};
 use rand::Rng;
-use tikv_util::time::{Instant, Limiter};
+use tikv_util::{
+    sys::thread::StdThreadBuildWrapper,
+    time::{Instant, Limiter},
+};
 
 use crate::storage::{config::FlowControlConfig, metrics::*};
 
@@ -494,7 +497,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
     fn start(self, rx: Receiver<Msg>, flow_info_receiver: Receiver<FlowInfo>) -> JoinHandle<()> {
         Builder::new()
             .name(thd_name!("flow-checker"))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_alloc::add_thread_memory_accessor();
                 let mut checker = self;
                 let mut deadline = std::time::Instant::now();

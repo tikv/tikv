@@ -53,6 +53,7 @@ command! {
 impl CommandExt for AcquirePessimisticLock {
     ctx!();
     tag!(acquire_pessimistic_lock);
+    request_type!(KvPessimisticLock);
     ts!(start_ts);
     property!(can_be_pipelined);
 

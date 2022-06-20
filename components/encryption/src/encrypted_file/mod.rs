@@ -127,7 +127,6 @@ mod tests {
 
         let content = b"test content";
         file.write(content, &PlaintextBackend::default()).unwrap();
-        drop(file);
 
         let file = EncryptedFile::new(tmp.path(), "encrypted");
         assert_eq!(file.read(&PlaintextBackend::default()).unwrap(), content);
