@@ -109,7 +109,8 @@ use crate::{
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
-const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
+#[doc(hidden)]
+pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]

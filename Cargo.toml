@@ -247,6 +247,7 @@ members = [
   "components/panic_hook",
   "components/pd_client",
   "components/raftstore",
+  "components/raftstore-v2",
   "components/resolved_ts",
   "components/resource_metering",
   "components/server",
