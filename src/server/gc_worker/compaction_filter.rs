@@ -534,7 +534,7 @@ impl WriteCompactionFilter {
             .with_label_values(&["tidb"])
             .inc_by(self.mvcc_rollback_and_locks as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-            .with_label_values(&["tidb","generated"])
+            .with_label_values(&["tidb", "generated"])
             .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
