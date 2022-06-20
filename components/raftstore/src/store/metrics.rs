@@ -360,6 +360,12 @@ lazy_static! {
             "Bucketed histogram of proposals' commit but not persist duration",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    pub static ref PROPOSAL_SEND_WAIT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_send_wait_duration_seconds",
+            "Bucketed histogram of proposals' send wait duration",
+            exponential_buckets(1e-6, 2.0, 26).unwrap()
+        ).unwrap();
 
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
