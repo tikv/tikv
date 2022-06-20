@@ -105,6 +105,13 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     }
 
     fn flush(&mut self) {
+<<<<<<< HEAD
+=======
+        if self.tasks.is_empty() {
+            return;
+        }
+        fail::fail_point!("worker_gc_raft_log_flush");
+>>>>>>> 90a1aa11e... raftstore: skip flushing raft logs for uninitialized peer (#12847)
         // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
