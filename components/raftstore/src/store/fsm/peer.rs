@@ -2108,6 +2108,7 @@ where
 
     /// Check if destroy can be executed immediately. If it can't, the reason is returned.
     fn maybe_delay_destroy(&mut self) -> Option<DelayReason> {
+<<<<<<< HEAD
         if self.fsm.logs_gc_flushed {
             return None;
         }
@@ -2125,6 +2126,65 @@ where
         let mb = match self.ctx.router.mailbox(region_id) {
             Some(mb) => mb,
             None => {
+=======
+        if self.fsm.peer.has_unpersisted_ready() {
+            assert!(self.ctx.sync_write_worker.is_none());
+            // The destroy must be delayed if there are some unpersisted readies.
+            // Otherwise there is a race of writting kv db and raft db between here
+            // and write worker.
+            return Some(DelayReason::UnPersistedReady);
+        }
+
+        let is_initialized = self.fsm.peer.is_initialized();
+        if !is_initialized {
+            // If the peer is uninitialized, then it can't receive any logs from leader. So
+            // no need to gc. If there was a peer with same region id on the store, and it had
+            // logs written, then it must be initialized, hence its log should be gc either
+            // before it's destroyed or during node restarts.
+            self.fsm.logs_gc_flushed = true;
+        }
+        if !self.fsm.logs_gc_flushed {
+            let start_index = self.fsm.peer.last_compacted_idx;
+            let mut end_index = start_index;
+            if end_index == 0 {
+                // Technically, all logs between first index and last index should be accessible
+                // before being destroyed.
+                end_index = self.fsm.peer.get_store().first_index();
+                self.fsm.peer.last_compacted_idx = end_index;
+            }
+            let region_id = self.region_id();
+            let peer_id = self.fsm.peer.peer_id();
+            let mb = match self.ctx.router.mailbox(region_id) {
+                Some(mb) => mb,
+                None => {
+                    if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                        // It's shutting down, nothing we can do.
+                        return Some(DelayReason::Shutdown);
+                    }
+                    panic!("{} failed to get mailbox", self.fsm.peer.tag);
+                }
+            };
+            let task = RaftlogGcTask::gc(
+                self.fsm.peer.get_store().get_region_id(),
+                start_index,
+                end_index,
+            )
+            .flush()
+            .when_done(move || {
+                if let Err(e) =
+                    mb.force_send(PeerMsg::SignificantMsg(SignificantMsg::RaftLogGcFlushed))
+                {
+                    if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                        return;
+                    }
+                    panic!(
+                        "[region {}] {} failed to respond flush message {:?}",
+                        region_id, peer_id, e
+                    );
+                }
+            });
+            if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
+>>>>>>> 90a1aa11e... raftstore: skip flushing raft logs for uninitialized peer (#12847)
                 if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                     // It's shutting down, nothing we can do.
                     return Some(DelayReason::Shutdown);
