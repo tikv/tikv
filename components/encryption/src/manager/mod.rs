@@ -17,7 +17,7 @@ use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
-use tikv_util::{box_err, debug, error, info, thd_name, warn};
+use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper, thd_name, warn};
 
 use crate::{
     config::EncryptionConfig,
@@ -557,7 +557,7 @@ impl DataKeyManager {
         let (rotate_terminal, rx) = channel::bounded(1);
         let background_worker = std::thread::Builder::new()
             .name(thd_name!("enc:key"))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 run_background_rotate_work(dict_clone, method, &*master_key, rx);
             })?;
 
