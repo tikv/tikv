@@ -380,7 +380,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let collect_exec_summary = req.get_collect_execution_summaries();
         let mut config = EvalConfig::from_request(&req)?;
         config.paging_size = paging_size;
-        let config = Arc::new(EvalConfig::from_request(&req)?);
+        let config = Arc::new(config);
 
         let out_most_executor = build_executors(
             req.take_executors().into(),
