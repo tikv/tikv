@@ -56,7 +56,7 @@ use crate::{
     utils::{self, SegmentMap, Slot, SlotMap, StopWatch},
 };
 
-pub const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 60;
+pub const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
 
 #[derive(Debug)]
 pub struct ApplyEvent {
@@ -877,10 +877,15 @@ impl StreamTaskInfo {
         // if failed to write storage, we should retry write flushing_files.
         let storage = self.storage.clone();
         let files = self.flushing_files.write().await;
-        let futs = files
-            .iter()
-            .map(|(_, v)| Self::flush_log_file_to(storage.clone(), v));
-        futures::future::try_join_all(futs).await?;
+        let batch_count = 128;
+
+        for batch_files in files.chunks(batch_count) {
+            let futs = batch_files
+                .iter()
+                .map(|(_, v)| Self::flush_log_file_to(storage.clone(), v));
+            futures::future::try_join_all(futs).await?;
+        }
+
         Ok(())
     }
 
