@@ -5528,7 +5528,7 @@ mod tests {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
         let mut host = CoprocessorHost::<KvTestEngine>::default();
-        let mut obs = ApplyObserver::default();
+        let obs = ApplyObserver::default();
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
 
@@ -5562,7 +5562,6 @@ mod tests {
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_conf_ver(1);
         reg.region.mut_region_epoch().set_version(3);
-        let region_epoch = reg.region.get_region_epoch().clone();
         router.schedule_task(1, Msg::Registration(reg));
 
         let put_entry = EntryBuilder::new(1, 1)
