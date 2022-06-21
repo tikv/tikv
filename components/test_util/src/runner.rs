@@ -22,7 +22,7 @@ pub trait TestHook {
 }
 
 /// A special TestHook that does nothing.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Nope;
 
 impl TestHook for Nope {
@@ -31,39 +31,40 @@ impl TestHook for Nope {
 }
 
 struct CaseLifeWatcher<H: TestHook> {
+    name: String,
     hook: H,
 }
 
 impl<H: TestHook + Send + 'static> CaseLifeWatcher<H> {
-    fn new(mut hook: H) -> CaseLifeWatcher<H> {
+    fn new(name: String, mut hook: H) -> CaseLifeWatcher<H> {
+        debug!("case start"; "name" => &name);
         hook.setup();
-        CaseLifeWatcher { hook }
+        CaseLifeWatcher { name, hook }
     }
 }
 
 impl<H: TestHook> Drop for CaseLifeWatcher<H> {
     fn drop(&mut self) {
         self.hook.teardown();
+        debug!("case end"; "name" => &self.name);
     }
 }
 
 /// Connects std tests and custom test framework.
-pub fn run_test_with_hook(
-    cases: &[&TestDescAndFn],
-    hook: impl TestHook + Send + Sync + Copy + 'static,
-) {
+pub fn run_test_with_hook(cases: &[&TestDescAndFn], hook: impl TestHook + Send + Clone + 'static) {
     crate::setup_for_ci();
     let cases: Vec<_> = cases
         .iter()
         .map(|case| {
-            let h = hook;
+            let name = case.desc.name.as_slice().to_owned();
+            let hook = hook.clone();
             let f = match case.testfn {
                 TestFn::StaticTestFn(f) => TestFn::DynTestFn(Box::new(move || {
-                    let _watcher = CaseLifeWatcher::new(h);
+                    let _watcher = CaseLifeWatcher::new(name.clone(), hook.clone());
                     f();
                 })),
                 TestFn::StaticBenchFn(f) => TestFn::DynBenchFn(Box::new(move |b| {
-                    let _watcher = CaseLifeWatcher::new(h);
+                    let _watcher = CaseLifeWatcher::new(name.clone(), hook.clone());
                     f(b);
                 })),
                 ref f => panic!("unexpected testfn {:?}", f),
@@ -80,7 +81,7 @@ pub fn run_test_with_hook(
 
 thread_local!(static FS: RefCell<Option<fail::FailScenario<'static>>> = RefCell::new(None));
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct FailpointHook;
 
 impl TestHook for FailpointHook {
