@@ -82,10 +82,10 @@ Alternatively, you can use [nextest](https://github.com/nextest-rs/nextest) to r
 ```bash
 # Change the default test runner.
 export CARGO_TEST_COMMAND="nextest run"
-# Nextest doesn't support benches currently.
-export TIKV_FORCE_BENCH_AS_TEST=1
-# And doc tests.
+# Nextest requires doc tests compiled as binaries.
 export RUSTDOCFLAGS="-Z unstable-options --persist-doctests"
+# Some arguments are different in nextest.
+./scripts/test $TESTNAME --no-capture
 ```
 
 TiKV follows the Rust community coding style. We use Rustfmt and [Clippy](https://github.com/Manishearth/rust-clippy) to automatically format and lint our code. Using these tools is checked in our CI. These are as part of `make dev`, you can also run them alone:
