@@ -4,7 +4,6 @@ use std::{
     cmp::Ordering,
     ops::Deref,
     path::{Path, PathBuf},
-    slice,
     sync::Arc,
 };
 
@@ -358,7 +357,7 @@ impl SSTableCore {
 pub struct Index {
     bin: Bytes,
     common_prefix: Bytes,
-    block_key_offs: &'static [u32],
+    block_key_offs: &'static [u8],
     block_addrs: &'static [u8],
     block_keys: Bytes,
     filter: Option<Arc<BinaryFuse8>>,
@@ -373,10 +372,7 @@ impl Index {
         offset += 4;
         let num_blocks = LittleEndian::read_u32(&data[offset..]) as usize;
         offset += 4;
-        let block_key_offs = unsafe {
-            let ptr = data[offset..].as_ptr() as *mut u32;
-            slice::from_raw_parts(ptr, num_blocks)
-        };
+        let block_key_offs = unsafe { std::mem::transmute(&data[offset..offset + num_blocks * 4]) };
         offset += 4 * num_blocks;
         let block_addrs: &'static [u8] =
             unsafe { std::mem::transmute(&data[offset..offset + num_blocks * BLOCK_ADDR_SIZE]) };
@@ -408,7 +404,7 @@ impl Index {
     }
 
     pub fn num_blocks(&self) -> usize {
-        self.block_key_offs.len()
+        self.block_key_offs.len() / 4
     }
 
     pub fn seek_block(&self, key: &[u8]) -> usize {
@@ -430,13 +426,17 @@ impl Index {
     }
 
     fn block_diff_key(&self, i: usize) -> &[u8] {
-        let off = self.block_key_offs[i] as usize;
+        let off = self.get_block_key_off(i);
         let end_off = if i + 1 < self.num_blocks() {
-            self.block_key_offs[i + 1] as usize
+            self.get_block_key_off(i + 1)
         } else {
             self.block_keys.len()
         };
         &self.block_keys[off..end_off]
+    }
+
+    fn get_block_key_off(&self, i: usize) -> usize {
+        LittleEndian::read_u32(&self.block_key_offs[i * 4..]) as usize
     }
 }
 
