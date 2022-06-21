@@ -53,28 +53,19 @@ pub fn run_test_with_hook(
     hook: impl TestHook + Send + Sync + Copy + 'static,
 ) {
     crate::setup_for_ci();
-    let bench_as_test = std::env::var("TIKV_FORCE_BENCH_AS_TEST").is_ok();
     let cases: Vec<_> = cases
         .iter()
         .map(|case| {
-            let h = hook.clone();
+            let h = hook;
             let f = match case.testfn {
                 TestFn::StaticTestFn(f) => TestFn::DynTestFn(Box::new(move || {
                     let _watcher = CaseLifeWatcher::new(h);
                     f();
                 })),
-                TestFn::StaticBenchFn(f) if bench_as_test => {
-                    TestFn::DynTestFn(Box::new(move || {
-                        let _watcher = CaseLifeWatcher::new(h);
-                        bench::run_once(move |b| f(b));
-                    }))
-                }
-                TestFn::StaticBenchFn(f) if !bench_as_test => {
-                    TestFn::DynBenchFn(Box::new(move |b| {
-                        let _watcher = CaseLifeWatcher::new(h);
-                        f(b);
-                    }))
-                }
+                TestFn::StaticBenchFn(f) => TestFn::DynBenchFn(Box::new(move |b| {
+                    let _watcher = CaseLifeWatcher::new(h);
+                    f(b);
+                })),
                 ref f => panic!("unexpected testfn {:?}", f),
             };
             TestDescAndFn {
