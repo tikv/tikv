@@ -15,7 +15,7 @@ use prometheus::{
 };
 
 use crate::{
-    sys::thread::{self, Pid},
+    sys::thread::{self, Pid, THREAD_NAME_HASHMAP},
     time::Instant,
 };
 
@@ -150,7 +150,12 @@ impl Collector for ThreadsCollector {
                 // Threads CPU time.
                 let total = thread::linux::cpu_total(&stat);
                 // sanitize thread name before push metrics.
-                let name = sanitize_thread_name(tid, &stat.command);
+                let name = if let Some(thread_name) = THREAD_NAME_HASHMAP.lock().unwrap().get(&tid)
+                {
+                    sanitize_thread_name(tid, thread_name)
+                } else {
+                    sanitize_thread_name(tid, &stat.command)
+                };
                 let cpu_total = metrics
                     .cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
@@ -471,6 +476,7 @@ mod tests {
     use std::{env::temp_dir, fs, io::Write, sync, time::Duration};
 
     use super::*;
+    use crate::sys::thread::StdThreadBuildWrapper;
 
     #[test]
     fn test_thread_stat_io() {
@@ -479,7 +485,7 @@ mod tests {
         let (tx1, rx1) = sync::mpsc::channel();
         let h = std::thread::Builder::new()
             .name(name.to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 // Make `io::write_bytes` > 0
                 let mut tmp = temp_dir();
                 tmp.push(name);
@@ -528,7 +534,7 @@ mod tests {
         let (tx1, rx1) = sync::mpsc::channel();
         std::thread::Builder::new()
             .name(str1.to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tx1.send(()).unwrap();
 
                 // Make `io::write_bytes` > 0
@@ -614,7 +620,7 @@ mod tests {
         let (tx1, rx1) = sync::mpsc::channel();
         std::thread::Builder::new()
             .name(name)
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tx1.send(()).unwrap();
 
                 let start = Instant::now();
