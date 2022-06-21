@@ -545,7 +545,6 @@ where
         }
 
         Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
-        self.update_statistics_metrics(GcKeyMode::rawkv);
         Ok((handled_keys, wasted_keys))
     }
 
