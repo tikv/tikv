@@ -5613,7 +5613,7 @@ mod tests {
         let (sink, cmdbatch_rx) = mpsc::channel();
         obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));
         host.registry
-            .register_cmd_observer(1, BoxCmdObserver::new(obs.clone()));
+            .register_cmd_observer(1, BoxCmdObserver::new(obs));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
