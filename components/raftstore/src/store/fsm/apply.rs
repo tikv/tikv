@@ -1239,32 +1239,44 @@ where
         let mut origin_epoch = None;
         // Remember if the raft cmd fails to be applied, it must have no side effects.
         // E.g. `RaftApplyState` must not be changed.
-        let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
-            Ok(a) => {
-                ctx.kv_wb_mut().pop_save_point().unwrap();
-                if req.has_admin_request() {
-                    origin_epoch = Some(self.region.get_region_epoch().clone());
-                }
-                a
+
+        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req) {
+            // One of the observers want to filter execution of the command.
+            let mut resp = RaftCmdResponse::default();
+            if !req.get_header().get_uuid().is_empty() {
+                let uuid = req.get_header().get_uuid().to_vec();
+                resp.mut_header().set_uuid(uuid);
             }
-            Err(e) => {
-                // clear dirty values.
-                ctx.kv_wb_mut().rollback_to_save_point().unwrap();
-                match e {
-                    Error::EpochNotMatch(..) => debug!(
-                        "epoch not match";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "err" => ?e
-                    ),
-                    _ => error!(?e;
-                        "execute raft command";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                    ),
+            (resp, ApplyResult::None)
+        } else {
+            let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
+                Ok(a) => {
+                    ctx.kv_wb_mut().pop_save_point().unwrap();
+                    if req.has_admin_request() {
+                        origin_epoch = Some(self.region.get_region_epoch().clone());
+                    }
+                    a
                 }
-                (cmd_resp::new_error(e), ApplyResult::None)
-            }
+                Err(e) => {
+                    // clear dirty values.
+                    ctx.kv_wb_mut().rollback_to_save_point().unwrap();
+                    match e {
+                        Error::EpochNotMatch(..) => debug!(
+                            "epoch not match";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "err" => ?e
+                        ),
+                        _ => error!(?e;
+                            "execute raft command";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                        ),
+                    }
+                    (cmd_resp::new_error(e), ApplyResult::None)
+                }
+            };
+            (resp, exec_result)
         };
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return (resp, exec_result);
@@ -4276,6 +4288,7 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
     use tikv_util::{config::VersionTrack, worker::dummy_scheduler};
+    use tokio::io::AsyncWriteExt;
     use uuid::Uuid;
 
     use super::*;
@@ -4828,6 +4841,15 @@ mod tests {
             self
         }
 
+        fn compact_log(mut self, index: u64, term: u64) -> EntryBuilder {
+            let mut req = AdminRequest::default();
+            req.set_cmd_type(AdminCmdType::CompactLog);
+            req.mut_compact_log().set_compact_index(index);
+            req.mut_compact_log().set_compact_term(term);
+            self.req.set_admin_request(req);
+            self
+        }
+
         fn build(mut self) -> Entry {
             self.entry
                 .set_data(self.req.write_to_bytes().unwrap().into());
@@ -4840,6 +4862,7 @@ mod tests {
         pre_query_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
+        filter_compact_log: Arc<AtomicBool>,
     }
 
     impl Coprocessor for ApplyObserver {}
@@ -4851,6 +4874,18 @@ mod tests {
 
         fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl AdminObserver for ApplyObserver {
+        fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, req: &AdminRequest) -> bool {
+            let cmd_type = req.get_cmd_type();
+            if cmd_type == AdminCmdType::CompactLog
+                && self.filter_compact_log.deref().load(Ordering::SeqCst)
+            {
+                return true;
+            };
+            false
         }
     }
 
@@ -5489,6 +5524,100 @@ mod tests {
     }
 
     #[test]
+    fn test_exec_observer() {
+        let (_path, engine) = create_tmp_engine("test-delegate");
+        let (_import_dir, importer) = create_tmp_importer("test-delegate");
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        let mut obs = ApplyObserver::default();
+        host.registry
+            .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = Config::default();
+        let (router, mut system) = create_apply_batch_system(&cfg);
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg: Arc::new(VersionTrack::new(cfg)),
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engine,
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-handle-raft".to_owned(), builder);
+
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(2, peer_id));
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        let region_epoch = reg.region.get_region_epoch().clone();
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let put_entry = EntryBuilder::new(1, 1)
+            .put(b"k1", b"v1")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
+        fetch_apply_res(&rx);
+
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let compact_entry = EntryBuilder::new(2, 1)
+            .compact_log(1, 2)
+            .epoch(1, 3)
+            .build();
+        obs.filter_compact_log.store(true, Ordering::SeqCst);
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![compact_entry],
+                vec![cb(2, 1, capture_tx)],
+            )),
+        );
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 2);
+        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.exec_res.len(), 0);
+
+        let (capture_tx, capture_rx) = mpsc::channel();
+        obs.filter_compact_log.store(false, Ordering::SeqCst);
+        let compact_entry = EntryBuilder::new(3, 1)
+            .compact_log(2, 2)
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![compact_entry.clone()],
+                vec![cb(3, 1, capture_tx)],
+            )),
+        );
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 3);
+        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.exec_res.len(), 1);
+
+        system.shutdown();
+    }
+
+    #[test]
     fn test_cmd_observer() {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
@@ -5497,7 +5626,9 @@ mod tests {
         let (sink, cmdbatch_rx) = mpsc::channel();
         obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));
         host.registry
-            .register_cmd_observer(1, BoxCmdObserver::new(obs));
+            .register_cmd_observer(1, BoxCmdObserver::new(obs.clone()));
+        host.registry
+            .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();

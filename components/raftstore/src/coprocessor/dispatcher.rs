@@ -406,6 +406,29 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn pre_exec(&self, region: &Region, cmd: &RaftCmdRequest) -> bool {
+        let mut ctx = ObserverContext::new(region);
+        if !cmd.has_admin_request() {
+            let query = cmd.get_requests();
+            for observer in &self.registry.query_observers {
+                let observer = observer.observer.inner();
+                if observer.pre_exec_query(&mut ctx, query) {
+                    return true;
+                }
+            }
+            false
+        } else {
+            let admin = cmd.get_admin_request();
+            for observer in &self.registry.admin_observers {
+                let observer = observer.observer.inner();
+                if observer.pre_exec_admin(&mut ctx, admin) {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+
     pub fn post_apply_plain_kvs_from_snapshot(
         &self,
         region: &Region,
@@ -598,6 +621,12 @@ mod tests {
             self.called.fetch_add(3, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
+
+        fn pre_exec_admin(&self, ctx: &mut ObserverContext<'_>, _: &AdminRequest) -> bool {
+            self.called.fetch_add(14, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            false
+        }
     }
 
     impl QueryObserver for TestCoprocessor {
@@ -622,6 +651,12 @@ mod tests {
         fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &Cmd) {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn pre_exec_query(&self, ctx: &mut ObserverContext<'_>, _: &[Request]) -> bool {
+            self.called.fetch_add(15, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            false
         }
     }
 
@@ -748,6 +783,20 @@ mod tests {
         host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
         // `post_apply` + `on_flush_applied_cmd_batch` => 13 + 6 = 19
         assert_all!([&ob.called], &[74]);
+
+        {
+            let mut query_req = RaftCmdRequest::default();
+            query_req.set_requests(vec![Request::default()].into());
+            host.pre_exec(&region, &query_req);
+            assert_all!([&ob.called], &[89]);
+        }
+
+        {
+            let mut admin_req = RaftCmdRequest::default();
+            admin_req.set_admin_request(AdminRequest::default());
+            host.pre_exec(&region, &admin_req);
+            assert_all!([&ob.called], &[103]);
+        }
     }
 
     #[test]
