@@ -4288,7 +4288,6 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
     use tikv_util::{config::VersionTrack, worker::dummy_scheduler};
-    use tokio::io::AsyncWriteExt;
     use uuid::Uuid;
 
     use super::*;
