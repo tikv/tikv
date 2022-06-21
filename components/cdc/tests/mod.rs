@@ -115,6 +115,13 @@ impl TestSuiteBuilder {
     }
 
     pub fn build(self) -> TestSuite {
+        self.build_with_cluster_runner(|cluster| cluster.run())
+    }
+
+    pub fn build_with_cluster_runner<F>(self, mut runner: F) -> TestSuite
+    where
+        F: FnMut(&mut Cluster<ServerCluster>),
+    {
         init();
         let memory_quota = self.memory_quota.unwrap_or(usize::MAX);
         let mut cluster = self.cluster.unwrap();
@@ -155,7 +162,7 @@ impl TestSuiteBuilder {
             endpoints.insert(id, worker);
         }
 
-        cluster.run();
+        runner(&mut cluster);
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);

@@ -97,6 +97,23 @@ impl RaftEngineReadOnly for RocksEngine {
         // Here means we don't fetch enough entries.
         Err(Error::EntriesUnavailable)
     }
+
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
+        let start_key = keys::raft_log_key(region_id, 0);
+        let end_key = keys::raft_log_key(region_id, u64::MAX);
+        self.scan(
+            &start_key,
+            &end_key,
+            false, // fill_cache
+            |_, value| {
+                let mut entry = Entry::default();
+                entry.merge_from_bytes(value)?;
+                buf.push(entry);
+                Ok(true)
+            },
+        )?;
+        Ok(())
+    }
 }
 impl RocksEngine {
     fn gc_impl(
@@ -171,21 +188,29 @@ impl RaftEngine for RocksEngine {
     fn clean(
         &self,
         raft_group_id: u64,
+        mut first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()> {
         batch.delete(&keys::raft_state_key(raft_group_id))?;
-        let seek_key = keys::raft_log_key(raft_group_id, 0);
-        let prefix = keys::raft_log_prefix(raft_group_id);
-        if let Some((key, _)) = self.seek(&seek_key)? {
-            if !key.starts_with(&prefix) {
-                // No raft logs for the raft group.
+        if first_index == 0 {
+            let seek_key = keys::raft_log_key(raft_group_id, 0);
+            let prefix = keys::raft_log_prefix(raft_group_id);
+            fail::fail_point!("engine_rocks_raft_engine_clean_seek", |_| Ok(()));
+            if let Some((key, _)) = self.seek(&seek_key)? {
+                if !key.starts_with(&prefix) {
+                    // No raft logs for the raft group.
+                    return Ok(());
+                }
+                first_index = match keys::raft_log_index(&key) {
+                    Ok(index) => index,
+                    Err(_) => return Ok(()),
+                };
+            } else {
                 return Ok(());
             }
-            let first_index = match keys::raft_log_index(&key) {
-                Ok(index) => index,
-                Err(_) => return Ok(()),
-            };
+        }
+        if first_index <= state.last_index {
             for index in first_index..=state.last_index {
                 let key = keys::raft_log_key(raft_group_id, index);
                 batch.delete(&key)?;
