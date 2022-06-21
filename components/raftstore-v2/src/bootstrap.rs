@@ -20,7 +20,7 @@ use crate::{raft::write_initial_states, Result};
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-/// A struct for bootstraping the store.
+/// A struct for bootstrapping the store.
 ///
 /// A typical bootstrap process should follow following order:
 /// 1. bootstrap the store to get a store ID.
@@ -90,7 +90,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
 
     /// Bootstrap the store and return the store ID.
     ///
-    /// If store is bootstraped already, return the store ID directly.
+    /// If store is bootstrapped already, return the store ID directly.
     pub fn bootstrap_store(&mut self) -> Result<u64> {
         let store_id = match self.check_store()? {
             Some(id) => id,
@@ -221,7 +221,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
 
     /// Bootstrap the first region.
     ///
-    /// If the cluster is already bootstraped, `None` is returned.
+    /// If the cluster is already bootstrapped, `None` is returned.
     pub fn bootstrap_first_region(
         &mut self,
         store: &Store,
