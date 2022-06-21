@@ -6,8 +6,8 @@ make_auto_flush_static_metric! {
 
     pub label_enum GcKeyMode {
         tidb,
-        txnkv,
-        rawkv,
+        txn,
+        raw,
     }
 
     pub label_enum GcKeysCF {

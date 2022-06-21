@@ -574,7 +574,7 @@ where
 
             if raw_modifies.write_size >= MAX_RAW_WRITE_SIZE {
                 self.stats.data.add(&statistics);
-                self.update_cf_stats_map(GcKeyMode::rawkv, statistics, CF_DEFAULT);
+                self.update_cf_stats_map(GcKeyMode::raw, statistics, CF_DEFAULT);
                 return Ok(());
             }
 
@@ -595,7 +595,7 @@ where
         gc_info.is_completed = true;
 
         self.stats.data.add(&statistics);
-        self.update_cf_stats_map(GcKeyMode::rawkv, statistics, CF_DEFAULT);
+        self.update_cf_stats_map(GcKeyMode::raw, statistics, CF_DEFAULT);
 
         if let Some(to_del_key) = latest_version_key {
             self.delete_raws(to_del_key, raw_modifies, gc_info);
@@ -911,7 +911,7 @@ where
                         update_metrics(true);
                     }
                 }
-                self.update_statistics_metrics(GcKeyMode::rawkv);
+                self.update_statistics_metrics(GcKeyMode::raw);
             }
             GcTask::UnsafeDestroyRange {
                 ctx,
@@ -1966,7 +1966,7 @@ mod tests {
             .raw_gc_keys(to_gc_keys, TimeStamp::new(120), Some((1, ri_provider)))
             .unwrap();
 
-        let stats = runner.stats_map.get(&GcKeyMode::rawkv);
+        let stats = runner.stats_map.get(&GcKeyMode::raw);
         match stats {
             None => {
                 unreachable!();
