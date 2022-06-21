@@ -5572,7 +5572,6 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
         fetch_apply_res(&rx);
 
-        let (capture_tx, capture_rx) = mpsc::channel();
         let compact_entry = EntryBuilder::new(2, 1)
             .compact_log(1, 2)
             .epoch(1, 3)
@@ -5580,13 +5579,7 @@ mod tests {
         obs.filter_compact_log.store(true, Ordering::SeqCst);
         router.schedule_task(
             1,
-            Msg::apply(apply(
-                peer_id,
-                1,
-                1,
-                vec![compact_entry],
-                vec![cb(2, 1, capture_tx)],
-            )),
+            Msg::apply(apply(peer_id, 1, 1, vec![compact_entry], vec![])),
         );
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), 2);
@@ -5595,7 +5588,6 @@ mod tests {
         assert_eq!(apply_res.exec_res.len(), 0);
         assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
 
-        let (capture_tx, capture_rx) = mpsc::channel();
         obs.filter_compact_log.store(false, Ordering::SeqCst);
         let compact_entry = EntryBuilder::new(3, 1)
             .compact_log(2, 2)
@@ -5603,13 +5595,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(apply(
-                peer_id,
-                1,
-                1,
-                vec![compact_entry.clone()],
-                vec![cb(3, 1, capture_tx)],
-            )),
+            Msg::apply(apply(peer_id, 1, 1, vec![compact_entry.clone()], vec![])),
         );
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), 3);
