@@ -5989,6 +5989,7 @@ dependencies = [
  "futures-executor",
  "futures-timer",
  "futures-util",
+ "getset",
  "grpcio",
  "grpcio-health",
  "hex 0.4.2",
