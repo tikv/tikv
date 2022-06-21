@@ -804,7 +804,7 @@ mod tests {
     use crate::storage::txn::actions::acquire_pessimistic_lock::tests::must_pessimistic_locked;
     use crate::storage::txn::actions::tests::{
         must_pessimistic_prewrite_put_async_commit, must_prewrite_delete, must_prewrite_put,
-        must_prewrite_put_async_commit,
+        must_prewrite_put_async_commit, must_prewrite_put_impl,
     };
     use crate::storage::{
         mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
@@ -820,7 +820,7 @@ mod tests {
     };
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
-    use kvproto::kvrpcpb::{Context, ExtraOp};
+    use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
     use txn_types::{Key, Mutation, TimeStamp};
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
