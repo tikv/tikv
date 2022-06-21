@@ -7,8 +7,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("{0}")]
-    Io(#[from] std::io::Error),
     #[error("cluster {0} is already bootstrapped")]
     ClusterBootstrapped(u64),
     #[error("cluster {0} is not bootstrapped")]
@@ -29,10 +27,23 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
+impl Error {
+    pub fn retryable(&self) -> bool {
+        match self {
+            Error::Grpc(_) | Error::ClusterNotBootstrapped(_) => true,
+            Error::Other(_)
+            | Error::RegionNotFound(_)
+            | Error::StoreTombstone(_)
+            | Error::GlobalConfigNotFound(_)
+            | Error::ClusterBootstrapped(_)
+            | Error::Incompatible => false,
+        }
+    }
+}
+
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
-            Error::Io(_) => error_code::pd::IO,
             Error::ClusterBootstrapped(_) => error_code::pd::CLUSTER_BOOTSTRAPPED,
             Error::ClusterNotBootstrapped(_) => error_code::pd::CLUSTER_NOT_BOOTSTRAPPED,
             Error::Incompatible => error_code::pd::INCOMPATIBLE,
