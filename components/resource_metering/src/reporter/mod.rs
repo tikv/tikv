@@ -129,9 +129,18 @@ impl Reporter {
     }
 
     fn upload(&mut self) {
+        // When either of records.records and records.others is not empty, we
+        // will report it. Only when the cpu_time of all tags is equal, and the
+        // number of tags exceeds the max_resource_group limit, will records.records
+        // be empty and records.others not be empty. This means that we will report
+        // a batch of data that only contains records.others.
+        //
+        // See: https://github.com/tikv/tikv/issues/12234
         if self.records.is_empty() {
+            // This means records.records and records.others are both empty.
             return;
         }
+
         // Whether endpoint exists or not, records should be taken in order to reset.
         let records = std::mem::take(&mut self.records);
         let report_data: Arc<Vec<ResourceUsageRecord>> = Arc::new(records.into());
