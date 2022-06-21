@@ -5591,7 +5591,9 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), 2);
         assert_eq!(apply_res.applied_index_term, 1);
+        // CompactLog is filtered and takes no effect.
         assert_eq!(apply_res.exec_res.len(), 0);
+        assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
 
         let (capture_tx, capture_rx) = mpsc::channel();
         obs.filter_compact_log.store(false, Ordering::SeqCst);
@@ -5613,6 +5615,7 @@ mod tests {
         assert_eq!(apply_res.apply_state.get_applied_index(), 3);
         assert_eq!(apply_res.applied_index_term, 1);
         assert_eq!(apply_res.exec_res.len(), 1);
+        assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 2);
 
         system.shutdown();
     }
