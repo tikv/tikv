@@ -97,8 +97,14 @@ use tikv::{
         GRPC_THREAD_PREFIX,
     },
     storage::{
-        self, config_manager::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
-        txn::flow_controller::EngineFlowController, Engine,
+        self,
+        config_manager::StorageConfigManger,
+        mvcc::MvccConsistencyCheckObserver,
+        txn::{
+            flow_controller::{FlowControlType, FlowController},
+            singleton_flow_controller::EngineFlowController,
+        },
+        Engine,
     },
 };
 use tikv_util::{
@@ -558,11 +564,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     }
 
     fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
-        let flow_controller = Arc::new(EngineFlowController::new(
+        let control_type = FlowControlType::Singleton(EngineFlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
             self.flow_info_receiver.take().unwrap(),
         ));
+        let flow_controller = Arc::new(FlowController::new(control_type));
         let gc_worker = self.init_gc_worker();
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();

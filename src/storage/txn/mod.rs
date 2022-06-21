@@ -6,6 +6,7 @@ pub mod commands;
 pub mod flow_controller;
 pub mod sched_pool;
 pub mod scheduler;
+pub mod singleton_flow_controller;
 pub mod tablet_flow_controller;
 
 mod actions;

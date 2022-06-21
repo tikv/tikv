@@ -199,7 +199,7 @@ struct SchedulerInner<L: LockManager> {
     // used to control write flow
     running_write_bytes: CachePadded<AtomicUsize>,
 
-    flow_controller: Arc<dyn FlowController + Send + Sync>,
+    flow_controller: Arc<FlowController>,
 
     control_mutex: Arc<tokio::sync::Mutex<bool>>,
 
@@ -332,7 +332,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency_manager: ConcurrencyManager,
         config: &Config,
         dynamic_configs: DynamicConfigs,
-        flow_controller: Arc<dyn FlowController + Send + Sync>,
+        flow_controller: Arc<FlowController>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
@@ -1190,7 +1190,13 @@ mod tests {
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
-        txn::{commands, commands::TypedCommand, flow_controller::EngineFlowController, latch::*},
+        txn::{
+            commands,
+            commands::TypedCommand,
+            flow_controller::{FlowControlType, FlowController},
+            latch::*,
+            singleton_flow_controller::EngineFlowController,
+        },
         TestEngineBuilder, TxnStatus,
     };
 
@@ -1337,7 +1343,9 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             },
-            Arc::new(EngineFlowController::empty()),
+            Arc::new(FlowController::new(FlowControlType::Singleton(
+                EngineFlowController::empty(),
+            ))),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1395,7 +1403,9 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             },
-            Arc::new(EngineFlowController::empty()),
+            Arc::new(FlowController::new(FlowControlType::Singleton(
+                EngineFlowController::empty(),
+            ))),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1453,7 +1463,9 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             },
-            Arc::new(EngineFlowController::empty()),
+            Arc::new(FlowController::new(FlowControlType::Singleton(
+                EngineFlowController::empty(),
+            ))),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1519,7 +1531,9 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             },
-            Arc::new(EngineFlowController::empty()),
+            Arc::new(FlowController::new(FlowControlType::Singleton(
+                EngineFlowController::empty(),
+            ))),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1579,7 +1593,9 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             },
-            Arc::new(EngineFlowController::empty()),
+            Arc::new(FlowController::new(FlowControlType::Singleton(
+                EngineFlowController::empty(),
+            ))),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),

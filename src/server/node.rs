@@ -54,7 +54,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
     dynamic_configs: StorageDynamicConfigs,
-    flow_controller: Arc<dyn FlowController + Send + Sync>,
+    flow_controller: Arc<FlowController>,
     reporter: R,
     resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,

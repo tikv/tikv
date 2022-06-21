@@ -3831,7 +3831,10 @@ mod tests {
         storage::{
             config_manager::StorageConfigManger,
             lock_manager::DummyLockManager,
-            txn::flow_controller::{EngineFlowController, FlowController},
+            txn::{
+                flow_controller::{FlowControlType, FlowController},
+                singleton_flow_controller::EngineFlowController,
+            },
             Storage, TestStorageBuilder,
         },
     };
@@ -4195,7 +4198,7 @@ mod tests {
         Storage<RocksDBEngine, DummyLockManager, F>,
         ConfigController,
         ReceiverWrapper<TtlCheckerTask>,
-        Arc<dyn FlowController + Send + Sync>,
+        Arc<FlowController>,
     ) {
         assert_eq!(F::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
@@ -4218,11 +4221,9 @@ mod tests {
                 .unwrap();
         let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
-        let flow_controller = Arc::new(EngineFlowController::new(
-            &cfg.storage.flow_control,
-            engine.clone(),
-            rx,
-        ));
+        let flow_controller = Arc::new(FlowController::new(FlowControlType::Singleton(
+            EngineFlowController::new(&cfg.storage.flow_control, engine.clone(), rx),
+        )));
 
         let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
         cfg_controller.register(

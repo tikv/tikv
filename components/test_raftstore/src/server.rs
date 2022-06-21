@@ -61,7 +61,15 @@ use tikv::{
         ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
-    storage::{self, kv::SnapContext, txn::flow_controller::EngineFlowController, Engine},
+    storage::{
+        self,
+        kv::SnapContext,
+        txn::{
+            flow_controller::{FlowControlType, FlowController},
+            singleton_flow_controller::EngineFlowController,
+        },
+        Engine,
+    },
 };
 use tikv_util::{
     config::VersionTrack,
@@ -385,7 +393,9 @@ impl ServerCluster {
             lock_mgr.clone(),
             concurrency_manager.clone(),
             lock_mgr.get_storage_dynamic_configs(),
-            Arc::new(EngineFlowController::empty()),
+            Arc::new(FlowController::new(FlowControlType::Singleton(
+                EngineFlowController::empty(),
+            ))),
             pd_sender,
             res_tag_factory.clone(),
             quota_limiter.clone(),
