@@ -282,7 +282,7 @@ fn parse_memory_max(line: &str) -> Option<u64> {
     if line == "max" {
         return None;
     }
-    match capping_parse_int::<i64>(line) {
+    match capping_parse_int::<u64>(line) {
         Ok(x) => Some(x),
         Err(e) => {
             warn!("fail to parse memory max: {}", e);
