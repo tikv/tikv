@@ -674,16 +674,6 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
     let stderr = BufferRedirect::stderr().unwrap();
     let stdout = BufferRedirect::stdout().unwrap();
     let opts = cfg.rocksdb.build_opt();
-<<<<<<< HEAD
-    match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)).unwrap()
-    {
-        0 => {}
-        status => {
-            let mut err = String::new();
-            stderr.read_to_string(&mut err).unwrap();
-            println!("failed to run {}:\n{}", args.join(" "), err);
-            std::process::exit(status);
-=======
 
     match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)) {
         Ok(code) => {
@@ -695,7 +685,6 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
                 );
                 tikv_util::logger::exit_process_gracefully(code);
             }
->>>>>>> e1fae9469... Fix logic of error string match in `bad-ssts` (#12049)
         }
         Err(e) => {
             flush_std_buffer_to_log(
