@@ -28,6 +28,5 @@ export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib"
 export LOG_LEVEL=DEBUG
 export RUST_BACKTRACE=full
 
-cargo $CARGO_TEST_COMMAND --workspace \
-    --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+cargo $CARGO_TEST_COMMAND --workspace --exclude fuzz \
     --features "${TIKV_ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} "$@"
