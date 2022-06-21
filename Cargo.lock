@@ -4168,15 +4168,21 @@ version = "0.1.0"
 dependencies = [
  "collections",
  "crossbeam",
+ "engine_test",
  "engine_traits",
  "error_code",
+ "fail",
  "kvproto",
  "pd_client",
  "raft",
  "raft-proto",
  "raftstore",
  "slog",
+ "slog-global",
  "smallvec",
+ "tempfile",
+ "test_pd",
+ "test_util",
  "tikv_util",
 ]
 

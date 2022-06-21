@@ -29,6 +29,18 @@ impl RaftEngineReadOnly for PanicEngine {
     fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
         panic!()
     }
+
+    fn is_empty(&self) -> Result<bool> {
+        panic!()
+    }
+
+    fn get_store_ident(&self) -> Result<Option<kvproto::raft_serverpb::StoreIdent>> {
+        panic!()
+    }
+
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<kvproto::metapb::Region>> {
+        panic!()
+    }
 }
 
 impl RaftEngineDebug for PanicEngine {
@@ -114,6 +126,10 @@ impl RaftEngine for PanicEngine {
     fn get_engine_size(&self) -> Result<u64> {
         panic!()
     }
+
+    fn put_store_ident(&self, ident: &kvproto::raft_serverpb::StoreIdent) -> Result<()> {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
@@ -138,6 +154,34 @@ impl RaftLogBatch for PanicWriteBatch {
     }
 
     fn merge(&mut self, _: Self) -> Result<()> {
+        panic!()
+    }
+
+    fn put_store_ident(&mut self, ident: &kvproto::raft_serverpb::StoreIdent) -> Result<()> {
+        panic!()
+    }
+
+    fn put_prepare_bootstrap_region(&mut self, region: &kvproto::metapb::Region) -> Result<()> {
+        panic!()
+    }
+
+    fn remove_prepare_bootstrap_region(&mut self) -> Result<()> {
+        panic!()
+    }
+
+    fn put_region_state(
+        &mut self,
+        raft_group_id: u64,
+        state: &kvproto::raft_serverpb::RegionLocalState,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_apply_state(
+        &mut self,
+        raft_group_id: u64,
+        state: &kvproto::raft_serverpb::RaftApplyState,
+    ) -> Result<()> {
         panic!()
     }
 }
