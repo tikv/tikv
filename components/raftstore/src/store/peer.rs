@@ -725,6 +725,9 @@ where
     #[getset(get = "pub")]
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
+    /// Record the propose instants to calculate the wait duration before
+    /// the proposal is sent through the Raft client.
+    pending_propose_instants: VecDeque<(u64, Instant)>,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -925,6 +928,7 @@ where
             raft_max_inflight_msgs: cfg.raft_max_inflight_msgs,
             proposals: ProposalQueue::new(tag.clone()),
             pending_reads: Default::default(),
+            pending_propose_instants: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -1571,6 +1575,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msgs: Vec<RaftMessage>,
     ) {
+        let now = Instant::now();
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
@@ -1595,6 +1600,26 @@ where
                 "to" => to_peer_id,
                 "disk_usage" => ?msg.get_disk_usage(),
             );
+
+            for index in msg
+                .get_message()
+                .get_entries()
+                .iter()
+                .map(|e| e.get_index())
+            {
+                while let Some((propose_idx, instant)) = self.pending_propose_instants.front() {
+                    if index == *propose_idx {
+                        ctx.raft_metrics
+                            .proposal_send_wait
+                            .observe(now.saturating_duration_since(*instant).as_secs_f64());
+                    }
+                    if index >= *propose_idx {
+                        self.pending_propose_instants.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+            }
 
             if let Err(e) = ctx.trans.send(msg) {
                 // We use metrics to observe failure on production.
@@ -2048,6 +2073,7 @@ where
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
                     self.clear_in_memory_pessimistic_locks();
+                    self.pending_propose_instants.clear();
                 }
                 _ => {}
             }
@@ -4269,6 +4295,9 @@ where
                 _ => {}
             }
         }
+
+        self.pending_propose_instants
+            .push_back((propose_index, Instant::now()));
 
         Ok(Either::Left(propose_index))
     }
