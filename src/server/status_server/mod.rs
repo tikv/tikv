@@ -29,15 +29,8 @@ use hyper::server::Builder as HyperBuilder;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use online_config::OnlineConfig;
-<<<<<<< HEAD
-use openssl::ssl::{Ssl, SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+use openssl::ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
-=======
-use openssl::{
-    ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
-    x509::X509,
-};
->>>>>>> 470370510... status_server: reload TLS certificate on TLS errors (#12569)
 use pin_project::pin_project;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
