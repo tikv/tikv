@@ -959,7 +959,7 @@ where
                 }
                 info!("write GcTask::OrphanVersions success"; "id" => id);
                 GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-                    .with_label_values(&["cleaned"])
+                    .with_label_values(&["tidb","cleaned"])
                     .inc_by(wb.count() as u64);
                 update_metrics(false);
             }
