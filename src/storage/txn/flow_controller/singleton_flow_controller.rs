@@ -368,7 +368,7 @@ where
     }
 }
 
-// CFFlowChecker records some statistics and states related to one CF.
+// CfFlowChecker records some statistics and states related to one CF.
 // These statistics fall into five categories:
 //   * memtable
 //   * L0 files
@@ -376,7 +376,7 @@ where
 //   * L0 consumption flow (compaction read flow of L0)
 //   * pending compaction bytes
 // And all of them are collected from the hook of RocksDB's event listener.
-struct CFFlowChecker {
+struct CfFlowChecker {
     // Memtable related
     last_num_memtables: Smoother<u64, 20, SMOOTHER_STALE_RECORD_THRESHOLD, 0>,
     memtable_debt: f64,
@@ -419,7 +419,7 @@ struct CFFlowChecker {
     on_start_pending_bytes: bool,
 }
 
-impl Default for CFFlowChecker {
+impl Default for CfFlowChecker {
     fn default() -> Self {
         Self {
             last_num_memtables: Smoother::default(),
@@ -448,8 +448,8 @@ pub(super) struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'st
     memtables_threshold: u64,
     l0_files_threshold: u64,
 
-    // CFFlowChecker for each CF.
-    cf_checkers: HashMap<String, CFFlowChecker>,
+    // CfFlowChecker for each CF.
+    cf_checkers: HashMap<String, CfFlowChecker>,
     // Record which CF is taking control of throttling, the throttle speed is
     // decided based on the statistics of the throttle CF. If the multiple CFs
     // exceed the threshold, choose the larger one.
@@ -492,7 +492,7 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         let cf_checkers = engine
             .cf_names()
             .into_iter()
-            .map(|cf| (cf.to_owned(), CFFlowChecker::default()))
+            .map(|cf| (cf.to_owned(), CfFlowChecker::default()))
             .collect();
 
         Self {
@@ -991,10 +991,7 @@ pub(super) mod tests {
 
     use engine_traits::Result;
 
-    use super::{
-        super::flow_controller::{FlowControlType, FlowController},
-        *,
-    };
+    use super::{super::FlowController, *};
 
     #[derive(Clone)]
     pub struct EngineStub(pub Arc<EngineStubInner>);
@@ -1061,7 +1058,7 @@ pub(super) mod tests {
         let stub = EngineStub::new();
         let (_tx, rx) = mpsc::channel();
         let flow_controller = EngineFlowController::new(&FlowControlConfig::default(), stub, rx);
-        let flow_controller = FlowController::new(FlowControlType::Singleton(flow_controller));
+        let flow_controller = FlowController::Singleton(flow_controller);
         test_flow_controller_basic_impl(&flow_controller, 0);
     }
 
@@ -1187,7 +1184,7 @@ pub(super) mod tests {
         let (tx, rx) = mpsc::sync_channel(0);
         let flow_controller =
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
-        let flow_controller = FlowController::new(FlowControlType::Singleton(flow_controller));
+        let flow_controller = FlowController::Singleton(flow_controller);
         test_flow_controller_memtable_impl(&flow_controller, &stub, &tx, 0, 0);
     }
 
@@ -1269,7 +1266,7 @@ pub(super) mod tests {
         let (tx, rx) = mpsc::sync_channel(0);
         let flow_controller =
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
-        let flow_controller = FlowController::new(FlowControlType::Singleton(flow_controller));
+        let flow_controller = FlowController::Singleton(flow_controller);
         test_flow_controller_l0_impl(&flow_controller, &stub, &tx, 0, 0);
     }
 
@@ -1451,7 +1448,7 @@ pub(super) mod tests {
         let (tx, rx) = mpsc::sync_channel(0);
         let flow_controller =
             EngineFlowController::new(&FlowControlConfig::default(), stub.clone(), rx);
-        let flow_controller = FlowController::new(FlowControlType::Singleton(flow_controller));
+        let flow_controller = FlowController::Singleton(flow_controller);
         test_flow_controller_pending_compaction_bytes_impl(&flow_controller, &stub, &tx, 0, 0);
     }
 

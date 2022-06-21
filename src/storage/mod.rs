@@ -108,9 +108,8 @@ use crate::{
         mvcc::{MvccReader, PointGetterBuilder},
         txn::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
-            flow_controller::{FlowControlType, FlowController},
+            flow_controller::{EngineFlowController, FlowController},
             scheduler::Scheduler as TxnScheduler,
-            singleton_flow_controller::EngineFlowController,
             Command,
         },
         types::StorageCallbackType,
@@ -2812,9 +2811,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
             },
-            Arc::new(FlowController::new(FlowControlType::Singleton(
-                EngineFlowController::empty(),
-            ))),
+            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
             self.resource_tag_factory,
             Arc::new(QuotaLimiter::default()),
@@ -2842,9 +2839,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
             },
-            Arc::new(FlowController::new(FlowControlType::Singleton(
-                EngineFlowController::empty(),
-            ))),
+            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),

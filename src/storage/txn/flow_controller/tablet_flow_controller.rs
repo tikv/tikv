@@ -287,10 +287,7 @@ mod tests {
     use engine_traits::DummyFactory;
 
     use super::{
-        super::{
-            flow_controller::{FlowControlType, FlowController},
-            singleton_flow_controller::tests::*,
-        },
+        super::{singleton_flow_controller::tests::*, FlowController},
         *,
     };
 
@@ -301,11 +298,11 @@ mod tests {
         let factory = DummyFactory::<EngineStub>::new(Some(stub.clone()), root_path.to_string());
         let tablet_factory = Arc::new(factory);
         (
-            FlowController::new(FlowControlType::Tablet(TabletFlowController::new(
+            FlowController::Tablet(TabletFlowController::new(
                 &FlowControlConfig::default(),
                 tablet_factory,
                 rx,
-            ))),
+            )),
             tx,
             stub,
         )

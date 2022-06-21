@@ -3831,10 +3831,7 @@ mod tests {
         storage::{
             config_manager::StorageConfigManger,
             lock_manager::DummyLockManager,
-            txn::{
-                flow_controller::{FlowControlType, FlowController},
-                singleton_flow_controller::EngineFlowController,
-            },
+            txn::flow_controller::{EngineFlowController, FlowController},
             Storage, TestStorageBuilder,
         },
     };
@@ -4221,8 +4218,10 @@ mod tests {
                 .unwrap();
         let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
-        let flow_controller = Arc::new(FlowController::new(FlowControlType::Singleton(
-            EngineFlowController::new(&cfg.storage.flow_control, engine.clone(), rx),
+        let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
+            &cfg.storage.flow_control,
+            engine.clone(),
+            rx,
         )));
 
         let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));

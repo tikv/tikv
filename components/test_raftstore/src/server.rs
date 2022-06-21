@@ -64,10 +64,7 @@ use tikv::{
     storage::{
         self,
         kv::SnapContext,
-        txn::{
-            flow_controller::{FlowControlType, FlowController},
-            singleton_flow_controller::EngineFlowController,
-        },
+        txn::flow_controller::{EngineFlowController, FlowController},
         Engine,
     },
 };
@@ -393,9 +390,7 @@ impl ServerCluster {
             lock_mgr.clone(),
             concurrency_manager.clone(),
             lock_mgr.get_storage_dynamic_configs(),
-            Arc::new(FlowController::new(FlowControlType::Singleton(
-                EngineFlowController::empty(),
-            ))),
+            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             pd_sender,
             res_tag_factory.clone(),
             quota_limiter.clone(),
