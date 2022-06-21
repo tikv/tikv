@@ -5593,7 +5593,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(apply(peer_id, 1, 1, vec![compact_entry.clone()], vec![])),
+            Msg::apply(apply(peer_id, 1, 1, vec![compact_entry], vec![])),
         );
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), 3);
@@ -5614,8 +5614,6 @@ mod tests {
         obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));
         host.registry
             .register_cmd_observer(1, BoxCmdObserver::new(obs.clone()));
-        host.registry
-            .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
