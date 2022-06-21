@@ -164,6 +164,7 @@ tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 toml = "0.5"
+tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
@@ -246,6 +247,7 @@ members = [
   "components/panic_hook",
   "components/pd_client",
   "components/raftstore",
+  "components/raftstore-v2",
   "components/resolved_ts",
   "components/resource_metering",
   "components/server",
@@ -268,6 +270,7 @@ members = [
   "components/tikv_alloc",
   "components/tikv_util",
   "components/tipb_helper",
+  "components/tracker",
   "components/txn_types",
   "fuzz",
   "fuzz/fuzzer-afl",
@@ -277,9 +280,25 @@ members = [
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
+[profile.dev.package.grpcio-sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.librocksdb_sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.libtitan_sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.tests]
+debug = 1
+opt-level = 1
+
 [profile.dev]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 4
 lto = false
 incremental = true
@@ -305,7 +324,7 @@ codegen-units = 4
 
 [profile.test]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 16
 lto = false
 incremental = true

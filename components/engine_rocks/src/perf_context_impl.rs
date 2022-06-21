@@ -1,39 +1,39 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Debug, marker::PhantomData, ops::Sub};
+use std::{fmt::Debug, marker::PhantomData, mem, ops::Sub, time::Duration};
 
 use derive_more::{Add, AddAssign, Sub, SubAssign};
 use engine_traits::{PerfContextKind, PerfLevel};
 use kvproto::kvrpcpb::ScanDetailV2;
 use lazy_static::lazy_static;
 use slog_derive::KV;
+use tikv_util::time::Instant;
+use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS};
 
 use crate::{
-    perf_context_metrics::{
-        APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC,
-    },
-    raw_util, set_perf_flags, set_perf_level, PerfContext as RawPerfContext, PerfFlag, PerfFlags,
+    perf_context_metrics::*, raw_util, set_perf_flags, set_perf_level,
+    PerfContext as RawPerfContext, PerfFlag, PerfFlags,
 };
 
 macro_rules! report_write_perf_context {
     ($ctx: expr, $metric: ident) => {
         if $ctx.perf_level != PerfLevel::Disable {
             $ctx.write = WritePerfContext::capture();
-            observe_perf_context_type!($ctx, $metric, write_wal_time);
-            observe_perf_context_type!($ctx, $metric, write_memtable_time);
-            observe_perf_context_type!($ctx, $metric, db_mutex_lock_nanos);
-            observe_perf_context_type!($ctx, $metric, pre_and_post_process);
-            observe_perf_context_type!($ctx, $metric, write_thread_wait);
-            observe_perf_context_type!($ctx, $metric, write_scheduling_flushes_compactions_time);
-            observe_perf_context_type!($ctx, $metric, db_condition_wait_nanos);
-            observe_perf_context_type!($ctx, $metric, write_delay_time);
+            observe_write_time!($ctx, $metric, write_wal_time);
+            observe_write_time!($ctx, $metric, write_memtable_time);
+            observe_write_time!($ctx, $metric, db_mutex_lock_nanos);
+            observe_write_time!($ctx, $metric, pre_and_post_process);
+            observe_write_time!($ctx, $metric, write_thread_wait);
+            observe_write_time!($ctx, $metric, write_scheduling_flushes_compactions_time);
+            observe_write_time!($ctx, $metric, db_condition_wait_nanos);
+            observe_write_time!($ctx, $metric, write_delay_time);
         }
     };
 }
 
-macro_rules! observe_perf_context_type {
-    ($s:expr, $metric: expr, $v:ident) => {
-        $metric.$v.observe(($s.write.$v) as f64 / 1e9);
+macro_rules! observe_write_time {
+    ($ctx:expr, $metric: expr, $v:ident) => {
+        $metric.$v.observe(($ctx.write.$v) as f64 / 1e9);
     };
 }
 
@@ -143,6 +143,14 @@ impl ReadPerfContext {
         detail_v2.set_rocksdb_block_read_count(self.block_read_count);
         detail_v2.set_rocksdb_block_read_byte(self.block_read_byte);
     }
+
+    fn report_to_tracker(&self, tracker: &mut Tracker) {
+        tracker.metrics.block_cache_hit_count += self.block_cache_hit_count;
+        tracker.metrics.block_read_byte += self.block_read_byte;
+        tracker.metrics.block_read_count += self.block_read_count;
+        tracker.metrics.deleted_key_skipped_count += self.internal_delete_skipped_count;
+        tracker.metrics.internal_key_skipped_count += self.internal_key_skipped_count;
+    }
 }
 
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
@@ -159,11 +167,14 @@ pub struct WritePerfContext {
 
 #[derive(Debug)]
 pub struct PerfContextStatistics {
-    pub perf_level: PerfLevel,
-    pub kind: PerfContextKind,
-    pub read: ReadPerfContext,
-    pub write: WritePerfContext,
+    perf_level: PerfLevel,
+    kind: PerfContextKind,
+    read: ReadPerfContext,
+    write: WritePerfContext,
+    last_flush_time: Instant,
 }
+
+const FLUSH_METRICS_INTERVAL: Duration = Duration::from_secs(2);
 
 impl PerfContextStatistics {
     /// Create an instance which stores instant statistics values, retrieved at creation.
@@ -173,13 +184,16 @@ impl PerfContextStatistics {
             kind,
             read: Default::default(),
             write: Default::default(),
+            last_flush_time: Instant::now_coarse(),
         }
     }
 
     fn apply_perf_settings(&self) {
         if self.perf_level == PerfLevel::Uninitialized {
             match self.kind {
-                PerfContextKind::GenericRead => set_perf_flags(&*DEFAULT_READ_PERF_FLAGS),
+                PerfContextKind::Storage(_) | PerfContextKind::Coprocessor(_) => {
+                    set_perf_flags(&*DEFAULT_READ_PERF_FLAGS)
+                }
                 PerfContextKind::RaftstoreStore | PerfContextKind::RaftstoreApply => {
                     set_perf_flags(&*DEFAULT_WRITE_PERF_FLAGS)
                 }
@@ -198,7 +212,7 @@ impl PerfContextStatistics {
         self.apply_perf_settings();
     }
 
-    pub fn report(&mut self) {
+    pub fn report(&mut self, trackers: &[TrackerToken]) {
         match self.kind {
             PerfContextKind::RaftstoreApply => {
                 report_write_perf_context!(self, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
@@ -206,14 +220,172 @@ impl PerfContextStatistics {
             PerfContextKind::RaftstoreStore => {
                 report_write_perf_context!(self, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
             }
-            PerfContextKind::GenericRead => {
-                // TODO: Currently, metrics about reading is reported in other ways.
-                // It is better to unify how to report the perf metrics.
-                //
-                // Here we only record the PerfContext data into the fields.
-                self.read = ReadPerfContext::capture();
+            PerfContextKind::Storage(_) | PerfContextKind::Coprocessor(_) => {
+                let perf_context = ReadPerfContext::capture();
+                for token in trackers {
+                    GLOBAL_TRACKERS.with_tracker(*token, |t| perf_context.report_to_tracker(t));
+                }
+                self.read += perf_context;
+                self.flush_read_metrics();
             }
         }
+    }
+
+    fn flush_read_metrics(&mut self) {
+        if self.last_flush_time.saturating_elapsed() < FLUSH_METRICS_INTERVAL {
+            return;
+        }
+        self.last_flush_time = Instant::now_coarse();
+        let ctx = mem::take(&mut self.read);
+        let (v, tag) = match self.kind {
+            PerfContextKind::Storage(tag) => (&*STORAGE_ROCKSDB_PERF_COUNTER, tag),
+            PerfContextKind::Coprocessor(tag) => (&*COPR_ROCKSDB_PERF_COUNTER, tag),
+            _ => unreachable!(),
+        };
+        v.get_metric_with_label_values(&[tag, "user_key_comparison_count"])
+            .unwrap()
+            .inc_by(ctx.user_key_comparison_count);
+        v.get_metric_with_label_values(&[tag, "block_cache_hit_count"])
+            .unwrap()
+            .inc_by(ctx.block_cache_hit_count);
+        v.get_metric_with_label_values(&[tag, "block_read_count"])
+            .unwrap()
+            .inc_by(ctx.block_read_count);
+        v.get_metric_with_label_values(&[tag, "block_read_byte"])
+            .unwrap()
+            .inc_by(ctx.block_read_byte);
+        v.get_metric_with_label_values(&[tag, "block_read_time"])
+            .unwrap()
+            .inc_by(ctx.block_read_time);
+        v.get_metric_with_label_values(&[tag, "block_cache_index_hit_count"])
+            .unwrap()
+            .inc_by(ctx.block_cache_index_hit_count);
+        v.get_metric_with_label_values(&[tag, "index_block_read_count"])
+            .unwrap()
+            .inc_by(ctx.index_block_read_count);
+        v.get_metric_with_label_values(&[tag, "block_cache_filter_hit_count"])
+            .unwrap()
+            .inc_by(ctx.block_cache_filter_hit_count);
+        v.get_metric_with_label_values(&[tag, "filter_block_read_count"])
+            .unwrap()
+            .inc_by(ctx.filter_block_read_count);
+        v.get_metric_with_label_values(&[tag, "block_checksum_time"])
+            .unwrap()
+            .inc_by(ctx.block_checksum_time);
+        v.get_metric_with_label_values(&[tag, "block_decompress_time"])
+            .unwrap()
+            .inc_by(ctx.block_decompress_time);
+        v.get_metric_with_label_values(&[tag, "get_read_bytes"])
+            .unwrap()
+            .inc_by(ctx.get_read_bytes);
+        v.get_metric_with_label_values(&[tag, "iter_read_bytes"])
+            .unwrap()
+            .inc_by(ctx.iter_read_bytes);
+        v.get_metric_with_label_values(&[tag, "internal_key_skipped_count"])
+            .unwrap()
+            .inc_by(ctx.internal_key_skipped_count);
+        v.get_metric_with_label_values(&[tag, "internal_delete_skipped_count"])
+            .unwrap()
+            .inc_by(ctx.internal_delete_skipped_count);
+        v.get_metric_with_label_values(&[tag, "internal_recent_skipped_count"])
+            .unwrap()
+            .inc_by(ctx.internal_recent_skipped_count);
+        v.get_metric_with_label_values(&[tag, "get_snapshot_time"])
+            .unwrap()
+            .inc_by(ctx.get_snapshot_time);
+        v.get_metric_with_label_values(&[tag, "get_from_memtable_time"])
+            .unwrap()
+            .inc_by(ctx.get_from_memtable_time);
+        v.get_metric_with_label_values(&[tag, "get_from_memtable_count"])
+            .unwrap()
+            .inc_by(ctx.get_from_memtable_count);
+        v.get_metric_with_label_values(&[tag, "get_post_process_time"])
+            .unwrap()
+            .inc_by(ctx.get_post_process_time);
+        v.get_metric_with_label_values(&[tag, "get_from_output_files_time"])
+            .unwrap()
+            .inc_by(ctx.get_from_output_files_time);
+        v.get_metric_with_label_values(&[tag, "seek_on_memtable_time"])
+            .unwrap()
+            .inc_by(ctx.seek_on_memtable_time);
+        v.get_metric_with_label_values(&[tag, "seek_on_memtable_count"])
+            .unwrap()
+            .inc_by(ctx.seek_on_memtable_count);
+        v.get_metric_with_label_values(&[tag, "next_on_memtable_count"])
+            .unwrap()
+            .inc_by(ctx.next_on_memtable_count);
+        v.get_metric_with_label_values(&[tag, "prev_on_memtable_count"])
+            .unwrap()
+            .inc_by(ctx.prev_on_memtable_count);
+        v.get_metric_with_label_values(&[tag, "seek_child_seek_time"])
+            .unwrap()
+            .inc_by(ctx.seek_child_seek_time);
+        v.get_metric_with_label_values(&[tag, "seek_child_seek_count"])
+            .unwrap()
+            .inc_by(ctx.seek_child_seek_count);
+        v.get_metric_with_label_values(&[tag, "seek_min_heap_time"])
+            .unwrap()
+            .inc_by(ctx.seek_min_heap_time);
+        v.get_metric_with_label_values(&[tag, "seek_max_heap_time"])
+            .unwrap()
+            .inc_by(ctx.seek_max_heap_time);
+        v.get_metric_with_label_values(&[tag, "seek_internal_seek_time"])
+            .unwrap()
+            .inc_by(ctx.seek_internal_seek_time);
+        v.get_metric_with_label_values(&[tag, "db_mutex_lock_nanos"])
+            .unwrap()
+            .inc_by(ctx.db_mutex_lock_nanos);
+        v.get_metric_with_label_values(&[tag, "db_condition_wait_nanos"])
+            .unwrap()
+            .inc_by(ctx.db_condition_wait_nanos);
+        v.get_metric_with_label_values(&[tag, "read_index_block_nanos"])
+            .unwrap()
+            .inc_by(ctx.read_index_block_nanos);
+        v.get_metric_with_label_values(&[tag, "read_filter_block_nanos"])
+            .unwrap()
+            .inc_by(ctx.read_filter_block_nanos);
+        v.get_metric_with_label_values(&[tag, "new_table_block_iter_nanos"])
+            .unwrap()
+            .inc_by(ctx.new_table_block_iter_nanos);
+        v.get_metric_with_label_values(&[tag, "new_table_iterator_nanos"])
+            .unwrap()
+            .inc_by(ctx.new_table_iterator_nanos);
+        v.get_metric_with_label_values(&[tag, "block_seek_nanos"])
+            .unwrap()
+            .inc_by(ctx.block_seek_nanos);
+        v.get_metric_with_label_values(&[tag, "find_table_nanos"])
+            .unwrap()
+            .inc_by(ctx.find_table_nanos);
+        v.get_metric_with_label_values(&[tag, "bloom_memtable_hit_count"])
+            .unwrap()
+            .inc_by(ctx.bloom_memtable_hit_count);
+        v.get_metric_with_label_values(&[tag, "bloom_memtable_miss_count"])
+            .unwrap()
+            .inc_by(ctx.bloom_memtable_miss_count);
+        v.get_metric_with_label_values(&[tag, "bloom_sst_hit_count"])
+            .unwrap()
+            .inc_by(ctx.bloom_sst_hit_count);
+        v.get_metric_with_label_values(&[tag, "bloom_sst_miss_count"])
+            .unwrap()
+            .inc_by(ctx.bloom_sst_miss_count);
+        v.get_metric_with_label_values(&[tag, "get_cpu_nanos"])
+            .unwrap()
+            .inc_by(ctx.get_cpu_nanos);
+        v.get_metric_with_label_values(&[tag, "iter_next_cpu_nanos"])
+            .unwrap()
+            .inc_by(ctx.iter_next_cpu_nanos);
+        v.get_metric_with_label_values(&[tag, "iter_prev_cpu_nanos"])
+            .unwrap()
+            .inc_by(ctx.iter_prev_cpu_nanos);
+        v.get_metric_with_label_values(&[tag, "iter_seek_cpu_nanos"])
+            .unwrap()
+            .inc_by(ctx.iter_seek_cpu_nanos);
+        v.get_metric_with_label_values(&[tag, "encrypt_data_nanos"])
+            .unwrap()
+            .inc_by(ctx.encrypt_data_nanos);
+        v.get_metric_with_label_values(&[tag, "decrypt_data_nanos"])
+            .unwrap()
+            .inc_by(ctx.decrypt_data_nanos);
     }
 }
 

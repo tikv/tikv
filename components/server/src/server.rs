@@ -26,7 +26,11 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
-use backup_stream::{config::BackupStreamConfigManager, observer::BackupStreamObserver};
+use backup_stream::{
+    config::BackupStreamConfigManager,
+    metadata::{ConnectionConfig, LazyEtcdClient},
+    observer::BackupStreamObserver,
+};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -109,7 +113,10 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
-use crate::{memory::*, raft_engine_switch::*, setup::*, signal_handler};
+use crate::{
+    memory::*, raft_engine_switch::*, setup::*, signal_handler,
+    tikv_util::sys::thread::ThreadBuildWrapper,
+};
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
@@ -618,11 +625,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .on_thread_start(move || {
+                .after_start_wrapper(move || {
                     tikv_alloc::add_thread_memory_accessor();
                     tikv_util::thread_group::set_properties(props.clone());
                 })
-                .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
+                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
         );
@@ -863,9 +870,17 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
             );
 
-            let backup_stream_endpoint = backup_stream::Endpoint::new::<String>(
+            let etcd_cli = LazyEtcdClient::new(
+                self.config.pd.endpoints.as_slice(),
+                ConnectionConfig {
+                    keep_alive_interval: self.config.server.grpc_keepalive_time.0,
+                    keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
+                    tls: self.security_mgr.tonic_tls_config(),
+                },
+            );
+            let backup_stream_endpoint = backup_stream::Endpoint::new(
                 node.id(),
-                &self.config.pd.endpoints,
+                etcd_cli,
                 self.config.backup_stream.clone(),
                 backup_stream_scheduler,
                 backup_stream_ob,
@@ -1402,6 +1417,8 @@ impl ConfiguredRaftEngine for RocksEngine {
                 RaftLogEngine::new(config.raft_engine.config(), key_manager.clone(), None)
                     .expect("failed to open raft engine for migration");
             dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
+            raft_engine.stop();
+            drop(raft_engine);
             raft_data_state_machine.after_dump_data();
         }
         raftdb
@@ -1451,6 +1468,8 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             .expect("failed to open raftdb for migration");
             let raftdb = RocksEngine::from_db(Arc::new(raftdb));
             dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
+            raftdb.stop();
+            drop(raftdb);
             raft_data_state_machine.after_dump_data();
         }
         raft_engine
@@ -1487,7 +1506,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         }
         let factory = builder.build();
         let kv_engine = factory
-            .create_tablet()
+            .create_shared_db()
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
         let engines = Engines::new(kv_engine, raft_engine);
 

@@ -522,7 +522,7 @@ impl<E: KvEngine> Initializer<E> {
         });
 
         let valid_count = total_count - filtered_count;
-        let use_ts_filter = valid_count as f64 / total_count as f64 <= self.ts_filter_ratio;
+        let use_ts_filter = valid_count as f64 <= total_count as f64 * self.ts_filter_ratio;
         info!("cdc incremental scan uses ts filter: {}", use_ts_filter;
             "region_id" => self.region_id,
             "hint_min_ts" => hint_min_ts,
@@ -564,7 +564,10 @@ mod tests {
         },
         TestEngineBuilder,
     };
-    use tikv_util::worker::{LazyWorker, Runnable};
+    use tikv_util::{
+        sys::thread::ThreadBuildWrapper,
+        worker::{LazyWorker, Runnable},
+    };
     use tokio::runtime::{Builder, Runtime};
 
     use super::*;
@@ -608,6 +611,8 @@ mod tests {
         let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
             .worker_threads(4)
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));

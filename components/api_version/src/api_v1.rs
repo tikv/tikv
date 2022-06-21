@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use tikv_util::box_err;
+
 use super::*;
 
 impl KvFormat for ApiV1 {
@@ -43,28 +45,18 @@ impl KvFormat for ApiV1 {
     ) -> Result<Key> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => Ok(Key::from_encoded_slice(key)),
-            ApiVersion::V2 => {
-                debug_assert_eq!(ApiV2::parse_key_mode(key), KeyMode::Raw);
-                let (mut user_key, _) = ApiV2::decode_raw_key(&Key::from_encoded_slice(key), true)?;
-                user_key.remove(0); // remove first byte `RAW_KEY_PREFIX`
-                Ok(Self::encode_raw_key_owned(user_key, None))
-            }
+            ApiVersion::V2 => Err(box_err!("unsupported conversion from v2 to v1")), // reject apiv2 -> apiv1 conversion
         }
     }
 
     fn convert_raw_user_key_range_version_from(
         src_api: ApiVersion,
-        mut start_key: Vec<u8>,
-        mut end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>) {
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         match src_api {
-            ApiVersion::V1 | ApiVersion::V1ttl => (start_key, end_key),
-            ApiVersion::V2 => {
-                // TODO: check raw key range after check_api_version_range is refactored.
-                start_key.remove(0);
-                end_key.remove(0);
-                (start_key, end_key)
-            }
+            ApiVersion::V1 | ApiVersion::V1ttl => Ok((start_key, end_key)),
+            ApiVersion::V2 => Err(box_err!("unsupported conversion from v2 to v1")), // reject apiv2 -> apiv1 conversion
         }
     }
 }

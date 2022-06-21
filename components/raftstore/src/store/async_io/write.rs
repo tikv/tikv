@@ -27,7 +27,9 @@ use raft::eraftpb::Entry;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
-    debug, info, slow_log, thd_name,
+    debug, info, slow_log,
+    sys::thread::StdThreadBuildWrapper,
+    thd_name,
     time::{duration_to_sec, Instant},
     warn,
 };
@@ -533,7 +535,7 @@ where
                         self.store_id, self.tag, e
                     );
                 });
-            self.perf_context.report_metrics();
+            self.perf_context.report_metrics(&[]); // TODO: pass in request trackers
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
         }
@@ -692,9 +694,11 @@ where
                 cfg,
             );
             info!("starting store writer {}", i);
-            let t = thread::Builder::new().name(thd_name!(tag)).spawn(move || {
-                worker.run();
-            })?;
+            let t = thread::Builder::new()
+                .name(thd_name!(tag))
+                .spawn_wrapper(move || {
+                    worker.run();
+                })?;
             self.writers.push(tx);
             self.handlers.push(t);
         }

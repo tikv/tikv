@@ -13,19 +13,18 @@ use std::{
 
 use fail::fail_point;
 use futures::channel::oneshot::{self, Canceled};
-use prometheus::{Histogram, IntCounter, IntGauge};
+use prometheus::{IntCounter, IntGauge};
+use tracker::TrackedFuture;
 use yatp::task::future;
 
 pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
 use super::metrics;
-use crate::time::Instant;
 
 #[derive(Clone)]
 struct Env {
     metrics_running_task_count: IntGauge,
     metrics_handled_task_count: IntCounter,
-    metrics_pool_schedule_duration: Histogram,
 }
 
 #[derive(Clone)]
@@ -48,8 +47,6 @@ impl FuturePool {
             metrics_running_task_count: metrics::FUTUREPOOL_RUNNING_TASK_VEC
                 .with_label_values(&[name]),
             metrics_handled_task_count: metrics::FUTUREPOOL_HANDLED_TASK_VEC
-                .with_label_values(&[name]),
-            metrics_pool_schedule_duration: metrics::FUTUREPOOL_SCHEDULE_DURATION_VEC
                 .with_label_values(&[name]),
         };
         FuturePool {
@@ -85,7 +82,7 @@ impl FuturePool {
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn(future)
+        self.inner.spawn(TrackedFuture::new(future))
     }
 
     /// Spawns a future in the pool and returns a handle to the result of the future.
@@ -99,7 +96,7 @@ impl FuturePool {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        self.inner.spawn_handle(future)
+        self.inner.spawn_handle(TrackedFuture::new(future))
     }
 }
 
@@ -149,8 +146,6 @@ impl PoolInner {
     where
         F: Future + Send + 'static,
     {
-        let timer = Instant::now_coarse();
-        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
         let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
         let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
@@ -159,7 +154,6 @@ impl PoolInner {
         metrics_running_task_count.inc();
 
         self.pool.spawn(async move {
-            h_schedule.observe(timer.saturating_elapsed_secs());
             let _ = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
@@ -175,8 +169,6 @@ impl PoolInner {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        let timer = Instant::now_coarse();
-        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
         let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
         let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
@@ -185,7 +177,6 @@ impl PoolInner {
         let (tx, rx) = oneshot::channel();
         metrics_running_task_count.inc();
         self.pool.spawn(async move {
-            h_schedule.observe(timer.saturating_elapsed_secs());
             let res = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
