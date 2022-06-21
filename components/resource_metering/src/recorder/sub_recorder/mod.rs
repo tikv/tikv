@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
+use tikv_util::sys::thread::Pid;
 
 use crate::recorder::localstorage::LocalStorage;
 use crate::RawRecords;
@@ -24,11 +25,7 @@ pub trait SubRecorder: Send {
     ///
     /// [RawRecords]: crate::model::RawRecords
     /// [LocalStorage]: crate::localstorage::LocalStorage
-    fn tick(
-        &mut self,
-        _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
-    ) {
+    fn tick(&mut self, _records: &mut RawRecords, _thread_stores: &mut HashMap<Pid, LocalStorage>) {
     }
 
     /// This function is called every time before reporting to Collector.
@@ -42,7 +39,7 @@ pub trait SubRecorder: Send {
     fn collect(
         &mut self,
         _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
+        _thread_stores: &mut HashMap<Pid, LocalStorage>,
     ) {
     }
 
@@ -51,7 +48,7 @@ pub trait SubRecorder: Send {
     fn cleanup(
         &mut self,
         _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
+        _thread_stores: &mut HashMap<Pid, LocalStorage>,
     ) {
     }
 
@@ -59,7 +56,7 @@ pub trait SubRecorder: Send {
     fn pause(
         &mut self,
         _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
+        _thread_stores: &mut HashMap<Pid, LocalStorage>,
     ) {
     }
 
@@ -67,7 +64,7 @@ pub trait SubRecorder: Send {
     fn resume(
         &mut self,
         _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
+        _thread_stores: &mut HashMap<Pid, LocalStorage>,
     ) {
     }
 
@@ -76,5 +73,5 @@ pub trait SubRecorder: Send {
     /// This function exists because the sampling work of `SubRecorder` may need
     /// to be performed on all functions, and `SubRecorder` may wish to maintain
     /// a thread-related data structure by itself.
-    fn thread_created(&mut self, _id: usize, _store: &LocalStorage) {}
+    fn thread_created(&mut self, _id: Pid, _store: &LocalStorage) {}
 }

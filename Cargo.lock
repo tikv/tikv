@@ -115,12 +115,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dabe5a181f83789739c194cbe5a897dde195078fac08568d09221fd6137a7ba8"
 
 [[package]]
-name = "arc-swap"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5d78ce20460b82d3fa150275ed9d55e21064fc7951177baacf86a145c4a4b1f"
-
-[[package]]
 name = "arrayvec"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1639,7 +1633,7 @@ dependencies = [
 [[package]]
 name = "fs2"
 version = "0.4.3"
-source = "git+https://github.com/tabokie/fs2-rs?branch=tikv#9e17642f4ddec02a8d7733d8c5977cf211de6552"
+source = "git+https://github.com/tabokie/fs2-rs?branch=tikv#cd503764a19a99d74c1ab424dd13d6bcd093fcae"
 dependencies = [
  "libc 0.2.106",
  "winapi 0.3.9",
@@ -2428,7 +2422,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#06aa625e21b0b2c632cc02b7d001e6d5671bbc38"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.4#7641ef513d6b06c18f8354f13e08ee552ff6ae5d"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2447,7 +2441,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#06aa625e21b0b2c632cc02b7d001e6d5671bbc38"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.4#7641ef513d6b06c18f8354f13e08ee552ff6ae5d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3644,7 +3638,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#7842aad23f36ffe836b47762f85fc752b5d7ad48"
+source = "git+https://github.com/tikv/raft-engine?branch=master#cc0fa30612c7f8e849436681a468996d1624682a"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4083,7 +4077,6 @@ dependencies = [
 name = "resource_metering"
 version = "0.0.1"
 dependencies = [
- "arc-swap 1.5.0",
  "collections",
  "crossbeam",
  "futures 0.3.15",
@@ -4136,7 +4129,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#06aa625e21b0b2c632cc02b7d001e6d5671bbc38"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.4#7641ef513d6b06c18f8354f13e08ee552ff6ae5d"
 dependencies = [
  "libc 0.2.106",
  "librocksdb_sys",
@@ -4696,7 +4689,7 @@ name = "slog-global"
 version = "0.1.0"
 source = "git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9#d592f88e4dbba5eb439998463054f1a44fbf17b9"
 dependencies = [
- "arc-swap 0.4.8",
+ "arc-swap",
  "lazy_static",
  "log",
  "slog",
@@ -5472,7 +5465,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.4.0-alpha"
+version = "5.4.1"
 dependencies = [
  "anyhow",
  "api_version",
@@ -5908,8 +5901,7 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93044f2d313c95ff1cb7809ce9a7a05735b012288a888b62d4434fd58c94f296"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
 dependencies = [
  "crossbeam-utils 0.7.2",
  "futures 0.1.31",

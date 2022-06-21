@@ -3,13 +3,14 @@
 use self::collector_reg::CollectorReg;
 use self::sub_recorder::SubRecorder;
 use crate::collector::Collector;
-use crate::{utils, Config, RawRecords, ResourceTagFactory};
+use crate::{Config, RawRecords, ResourceTagFactory};
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
+use tikv_util::sys::thread::{self, Pid};
 use tikv_util::time::Instant;
 use tikv_util::warn;
 use tikv_util::worker::{
@@ -82,7 +83,7 @@ pub struct Recorder {
     running: bool,
     recorders: Vec<Box<dyn SubRecorder>>,
 
-    thread_stores: HashMap<usize, LocalStorage>,
+    thread_stores: HashMap<Pid, LocalStorage>,
 
     collectors: HashMap<CollectorId, Box<dyn Collector>>,
     observers: HashMap<CollectorId, Box<dyn Collector>>,
@@ -144,10 +145,10 @@ impl Recorder {
     fn cleanup(&mut self) {
         if self.last_cleanup.saturating_elapsed().as_secs() > CLEANUP_INTERVAL_SECS {
             // Clean up the data of the destroyed threads.
-            if let Some(ids) = utils::thread_ids() {
+            if let Ok(ids) = thread::thread_ids::<HashSet<_>>(thread::process_id()) {
                 self.thread_stores.retain(|k, v| {
-                    let retain = ids.contains(k);
-                    assert!(retain || v.attached_tag.load().is_none());
+                    let retain = ids.contains(&(*k as _));
+                    debug_assert!(retain || v.attached_tag.swap(None).is_none());
                     retain
                 });
             }
@@ -326,6 +327,7 @@ mod tests {
     use std::sync::atomic::Ordering::SeqCst;
     use std::sync::Mutex;
     use std::thread::sleep;
+    use tikv_util::sys::thread::Pid;
 
     #[derive(Clone, Default)]
     struct MockSubRecorder {
@@ -339,7 +341,7 @@ mod tests {
         fn tick(
             &mut self,
             _records: &mut RawRecords,
-            _thread_stores: &mut HashMap<usize, LocalStorage>,
+            _thread_stores: &mut HashMap<Pid, LocalStorage>,
         ) {
             self.tick_count.fetch_add(1, SeqCst);
         }
@@ -347,7 +349,7 @@ mod tests {
         fn collect(
             &mut self,
             records: &mut RawRecords,
-            _thread_stores: &mut HashMap<usize, LocalStorage>,
+            _thread_stores: &mut HashMap<Pid, LocalStorage>,
         ) {
             let mut tag = TagInfos::default();
             tag.extra_attachment.push(1);
@@ -357,7 +359,7 @@ mod tests {
         fn pause(
             &mut self,
             _records: &mut RawRecords,
-            _thread_stores: &mut HashMap<usize, LocalStorage>,
+            _thread_stores: &mut HashMap<Pid, LocalStorage>,
         ) {
             self.pause_count.fetch_add(1, SeqCst);
         }
@@ -365,12 +367,12 @@ mod tests {
         fn resume(
             &mut self,
             _records: &mut RawRecords,
-            _thread_stores: &mut HashMap<usize, LocalStorage>,
+            _thread_stores: &mut HashMap<Pid, LocalStorage>,
         ) {
             self.resume_count.fetch_add(1, SeqCst);
         }
 
-        fn thread_created(&mut self, _id: usize, _store: &LocalStorage) {
+        fn thread_created(&mut self, _id: Pid, _store: &LocalStorage) {
             self.thread_created_count.fetch_add(1, SeqCst);
         }
     }

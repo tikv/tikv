@@ -115,6 +115,14 @@ impl<T: Display + Send> Scheduler<T> {
         if self.counter.load(Ordering::Acquire) >= self.pending_capacity {
             return Err(ScheduleError::Full(task));
         }
+        self.schedule_force(task)
+    }
+
+    /// Schedules a task to run.
+    ///
+    /// Different from the `schedule` function, the task will still be scheduled
+    /// if pending task number exceeds capacity.
+    pub fn schedule_force(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.counter.fetch_add(1, Ordering::SeqCst);
         self.metrics_pending_task_count.inc();
         if let Err(e) = self.sender.unbounded_send(Msg::Task(task)) {

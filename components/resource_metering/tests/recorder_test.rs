@@ -4,11 +4,12 @@
 #[cfg(target_os = "linux")]
 mod linux {
     use collections::HashMap;
-    use resource_metering::{init_recorder, utils, ResourceTagFactory};
+    use resource_metering::{init_recorder, ResourceTagFactory};
     use resource_metering::{Collector, RawRecord, RawRecords};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::Duration;
+    use tikv_util::sys::thread;
     use Operation::*;
 
     enum Operation {
@@ -95,18 +96,13 @@ mod linux {
                             guard.take();
                         }
                         CpuHeavy(ms) => {
-                            let begin_stat =
-                                utils::stat_task(utils::process_id(), utils::thread_id()).unwrap();
-                            let begin_ticks = begin_stat.utime.wrapping_add(begin_stat.stime);
+                            let begin_stat = thread::current_thread_stat().unwrap();
                             loop {
                                 Self::heavy_job();
-                                let later_stat =
-                                    utils::stat_task(utils::process_id(), utils::thread_id())
-                                        .unwrap();
-                                let later_ticks = later_stat.utime.wrapping_add(later_stat.stime);
-                                let delta_ms = later_ticks.wrapping_sub(begin_ticks) * 1_000
-                                    / utils::clock_tick();
-                                if delta_ms >= ms as i64 {
+                                let later_stat = thread::current_thread_stat().unwrap();
+                                let delta =
+                                    later_stat.total_cpu_time() - begin_stat.total_cpu_time();
+                                if delta >= ms as f64 * 0.001 {
                                     break;
                                 }
                             }

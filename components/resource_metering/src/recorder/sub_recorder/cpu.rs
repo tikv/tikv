@@ -1,16 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::metrics::STAT_TASK_COUNT;
-use crate::recorder::localstorage::LocalStorage;
+use crate::recorder::localstorage::{LocalStorage, SharedTagInfos};
 use crate::recorder::SubRecorder;
-use crate::utils::{self, Stat};
-use crate::TagInfos;
 use crate::{RawRecord, RawRecords};
 
-use std::sync::Arc;
-
-use arc_swap::ArcSwapOption;
 use collections::HashMap;
+use tikv_util::sys::thread::{self, Pid};
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.
 ///
@@ -21,23 +17,22 @@ use collections::HashMap;
 /// [SubRecorder]: crate::recorder::SubRecorder
 #[derive(Default)]
 pub struct CpuRecorder {
-    thread_stats: HashMap<usize, ThreadStat>,
+    thread_stats: HashMap<Pid, ThreadStat>,
 }
 
 impl SubRecorder for CpuRecorder {
-    fn tick(&mut self, records: &mut RawRecords, _: &mut HashMap<usize, LocalStorage>) {
+    fn tick(&mut self, records: &mut RawRecords, _: &mut HashMap<Pid, LocalStorage>) {
         let records = &mut records.records;
+        let pid = thread::process_id();
         self.thread_stats.iter_mut().for_each(|(tid, thread_stat)| {
             let cur_tag = thread_stat.attached_tag.load_full();
             if let Some(cur_tag) = cur_tag {
-                if let Ok(cur_stat) = utils::stat_task(utils::process_id(), *tid) {
+                if let Ok(cur_stat) = thread::thread_stat(pid, *tid) {
                     STAT_TASK_COUNT.inc();
                     let last_stat = &thread_stat.stat;
-                    let last_cpu_tick = last_stat.utime.wrapping_add(last_stat.stime);
-                    let cur_cpu_tick = cur_stat.utime.wrapping_add(cur_stat.stime);
-                    let delta_ticks = cur_cpu_tick.wrapping_sub(last_cpu_tick);
-                    if delta_ticks > 0 {
-                        let delta_ms = delta_ticks * 1_000 / utils::clock_tick();
+                    if *last_stat != cur_stat {
+                        let delta_ms =
+                            (cur_stat.total_cpu_time() - last_stat.total_cpu_time()) * 1_000.;
                         let record = records.entry(cur_tag).or_insert_with(RawRecord::default);
                         record.cpu_time += delta_ms as u32;
                     }
@@ -50,7 +45,7 @@ impl SubRecorder for CpuRecorder {
     fn cleanup(
         &mut self,
         _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
+        _thread_stores: &mut HashMap<Pid, LocalStorage>,
     ) {
         const THREAD_STAT_LEN_THRESHOLD: usize = 500;
 
@@ -64,27 +59,28 @@ impl SubRecorder for CpuRecorder {
     fn resume(
         &mut self,
         _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
+        _thread_stores: &mut HashMap<Pid, LocalStorage>,
     ) {
-        for (thread_id, stat) in &mut self.thread_stats {
-            stat.stat = utils::stat_task(utils::process_id(), *thread_id).unwrap_or_default();
+        let pid = thread::process_id();
+        for (tid, stat) in &mut self.thread_stats {
+            stat.stat = thread::thread_stat(pid, *tid).unwrap_or_default();
         }
     }
 
-    fn thread_created(&mut self, id: usize, store: &LocalStorage) {
+    fn thread_created(&mut self, id: Pid, store: &LocalStorage) {
         self.thread_stats.insert(
             id,
             ThreadStat {
                 attached_tag: store.attached_tag.clone(),
-                stat: Stat::default(),
+                stat: Default::default(),
             },
         );
     }
 }
 
 struct ThreadStat {
-    attached_tag: Arc<ArcSwapOption<TagInfos>>,
-    stat: Stat,
+    attached_tag: SharedTagInfos,
+    stat: thread::ThreadStat,
 }
 
 #[cfg(test)]
@@ -105,8 +101,7 @@ mod tests {
 #[cfg(target_os = "linux")]
 mod tests {
     use super::*;
-    use crate::{utils, RawRecords, TagInfos};
-    use arc_swap::ArcSwapOption;
+    use crate::{RawRecords, TagInfos};
     use std::sync::Arc;
 
     fn heavy_job() -> u64 {
@@ -129,17 +124,16 @@ mod tests {
             extra_attachment: b"abc".to_vec(),
         });
         let mut store = LocalStorage::default();
-        store.attached_tag = Arc::new(ArcSwapOption::new(Some(info)));
+        store.attached_tag = SharedTagInfos::new(info);
         let mut recorder = CpuRecorder::default();
-        recorder.thread_created(utils::thread_id(), &store);
-        let thread_id = utils::thread_id();
-        let prev_stat = &recorder.thread_stats.get(&thread_id).unwrap().stat;
-        let prev_cpu_ticks = prev_stat.utime.wrapping_add(prev_stat.stime);
+        recorder.thread_created(thread::thread_id(), &store);
+        let pid = thread::process_id();
+        let tid = thread::thread_id();
+        let prev_stat = &recorder.thread_stats.get(&tid).unwrap().stat;
         loop {
-            let stat = utils::stat_task(utils::process_id(), thread_id).unwrap();
-            let cpu_ticks = stat.utime.wrapping_add(stat.stime);
-            let delta_ms = cpu_ticks.wrapping_sub(prev_cpu_ticks) * 1_000 / utils::clock_tick();
-            if delta_ms != 0 {
+            let stat = thread::thread_stat(pid, tid).unwrap();
+            let delta = stat.total_cpu_time() - prev_stat.total_cpu_time();
+            if delta >= 0.001 {
                 break;
             }
             heavy_job();
