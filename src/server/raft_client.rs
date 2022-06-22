@@ -682,7 +682,7 @@ where
             .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
             .default_compression_algorithm(cfg.grpc_compression_algorithm())
             .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
-            .default_compression_lower_bound(cfg.grpc_compression_lower_bound)
+            .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress)
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),

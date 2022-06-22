@@ -27,7 +27,7 @@ const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
-const DEFAULT_GRPC_COMPRESSION_LOWER_BOUND: usize = 4096;
+const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 
 // Number of rows in each chunk.
 const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
@@ -220,7 +220,7 @@ impl Default for Config {
             raft_msg_max_batch_size: 128,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,
-            grpc_compression_lower_bound: DEFAULT_GRPC_COMPRESSION_LOWER_BOUND,
+            grpc_min_message_size_to_compress: DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
