@@ -737,7 +737,7 @@ fn test_report_approximate_size_after_split_check() {
 #[test]
 fn test_split_replace_skip_log_gc() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(15);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 15;
     cluster.cfg.raft_store.raft_log_gc_threshold = 15;
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
@@ -790,7 +790,7 @@ fn test_split_replace_skip_log_gc() {
     // Wait till split is finished.
     must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
     // Wait a little bit so the uninitialized peer is replaced.
-    thread::sleep(Duration::from_millis(10));
+    std::thread::sleep(Duration::from_millis(10));
     // Resume destroy.
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     // Resume gc.
