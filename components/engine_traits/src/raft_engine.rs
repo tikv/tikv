@@ -17,6 +17,8 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>>;
 
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
 

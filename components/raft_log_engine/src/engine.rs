@@ -13,7 +13,10 @@ use engine_traits::{
     RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
-use kvproto::raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent};
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+};
 use raft::eraftpb::Entry;
 use raft_engine::{
     env::{DefaultFileSystem, FileSystem, Handle, WriteExt},
@@ -302,7 +305,7 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .map_err(transfer_error)
     }
 
-    fn put_prepare_bootstrap_region(&mut self, region: &kvproto::metapb::Region) -> Result<()> {
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
         self.0
             .put_message(
                 STORE_REGION_ID,
@@ -379,9 +382,21 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .map_err(transfer_error)
     }
 
-    fn get_prepare_bootstrap_region(&self) -> Result<Option<kvproto::metapb::Region>> {
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
         self.0
             .get_message(STORE_REGION_ID, PREPARE_BOOTSTRAP_REGION_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+        self.0
+            .get_message(raft_group_id, REGION_STATE_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+        self.0
+            .get_message(raft_group_id, APPLY_STATE_KEY)
             .map_err(transfer_error)
     }
 }

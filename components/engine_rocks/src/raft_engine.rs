@@ -6,7 +6,10 @@ use engine_traits::{
     RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, Result, SyncMutable, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
-use kvproto::raft_serverpb::{RaftLocalState, StoreIdent};
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+};
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
@@ -132,8 +135,18 @@ impl RaftEngineReadOnly for RocksEngine {
         self.get_msg_cf(CF_DEFAULT, keys::STORE_IDENT_KEY)
     }
 
-    fn get_prepare_bootstrap_region(&self) -> Result<Option<kvproto::metapb::Region>> {
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
         self.get_msg_cf(CF_DEFAULT, keys::PREPARE_BOOTSTRAP_KEY)
+    }
+
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+        let key = keys::region_state_key(raft_group_id);
+        self.get_msg_cf(CF_DEFAULT, &key)
+    }
+
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+        let key = keys::apply_state_key(raft_group_id);
+        self.get_msg_cf(CF_DEFAULT, &key)
     }
 }
 
@@ -363,7 +376,7 @@ impl RaftLogBatch for RocksWriteBatch {
         self.put_msg(keys::STORE_IDENT_KEY, ident)
     }
 
-    fn put_prepare_bootstrap_region(&mut self, region: &kvproto::metapb::Region) -> Result<()> {
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
         self.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region)
     }
 
@@ -371,19 +384,11 @@ impl RaftLogBatch for RocksWriteBatch {
         self.delete(keys::PREPARE_BOOTSTRAP_KEY)
     }
 
-    fn put_region_state(
-        &mut self,
-        raft_group_id: u64,
-        state: &kvproto::raft_serverpb::RegionLocalState,
-    ) -> Result<()> {
+    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
         self.put_msg(&keys::region_state_key(raft_group_id), state)
     }
 
-    fn put_apply_state(
-        &mut self,
-        raft_group_id: u64,
-        state: &kvproto::raft_serverpb::RaftApplyState,
-    ) -> Result<()> {
+    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         self.put_msg(&keys::apply_state_key(raft_group_id), state)
     }
 }

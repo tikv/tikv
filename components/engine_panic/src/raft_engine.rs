@@ -1,7 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result};
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+};
 use raft::eraftpb::Entry;
 
 use crate::{engine::PanicEngine, write_batch::PanicWriteBatch};
@@ -34,11 +37,19 @@ impl RaftEngineReadOnly for PanicEngine {
         panic!()
     }
 
-    fn get_store_ident(&self) -> Result<Option<kvproto::raft_serverpb::StoreIdent>> {
+    fn get_store_ident(&self) -> Result<Option<StoreIdent>> {
         panic!()
     }
 
-    fn get_prepare_bootstrap_region(&self) -> Result<Option<kvproto::metapb::Region>> {
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
+        panic!()
+    }
+
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+        panic!()
+    }
+
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
         panic!()
     }
 }
@@ -127,7 +138,7 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn put_store_ident(&self, ident: &kvproto::raft_serverpb::StoreIdent) -> Result<()> {
+    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
         panic!()
     }
 }
@@ -157,11 +168,11 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn put_store_ident(&mut self, ident: &kvproto::raft_serverpb::StoreIdent) -> Result<()> {
+    fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()> {
         panic!()
     }
 
-    fn put_prepare_bootstrap_region(&mut self, region: &kvproto::metapb::Region) -> Result<()> {
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
         panic!()
     }
 
@@ -169,19 +180,11 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn put_region_state(
-        &mut self,
-        raft_group_id: u64,
-        state: &kvproto::raft_serverpb::RegionLocalState,
-    ) -> Result<()> {
+    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
         panic!()
     }
 
-    fn put_apply_state(
-        &mut self,
-        raft_group_id: u64,
-        state: &kvproto::raft_serverpb::RaftApplyState,
-    ) -> Result<()> {
+    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         panic!()
     }
 }
