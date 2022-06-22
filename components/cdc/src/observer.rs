@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use causal_ts::{Error as CausalTsError, RawTsTracker, Result as CausalTsResult};
+use causal_ts::{CausalTsProvider, Error as CausalTsError, RawTsTracker, Result as CausalTsResult};
 use collections::HashMap;
 use engine_traits::KvEngine;
 use fail::fail_point;
@@ -30,6 +30,8 @@ pub struct CdcObserver {
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
+
+    pub causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
 }
 
 impl CdcObserver {
@@ -41,7 +43,12 @@ impl CdcObserver {
         CdcObserver {
             sched,
             observe_regions: Arc::default(),
+            causal_ts_provider: None,
         }
+    }
+
+    pub fn set_causal_ts_provider(&mut self, provider: Arc<dyn CausalTsProvider>) {
+        self.causal_ts_provider = Some(provider);
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
@@ -90,6 +97,12 @@ impl CdcObserver {
             .unwrap()
             .get(&region_id)
             .cloned()
+    }
+
+    pub fn flush_causal_timestamp(&self) -> CausalTsResult<()> {
+        self.causal_ts_provider
+            .as_ref()
+            .map_or(Ok(()), |provider| provider.flush())
     }
 }
 
@@ -195,19 +208,14 @@ impl RegionChangeObserver for CdcObserver {
 }
 
 impl RawTsTracker for CdcObserver {
-    fn track_key_ts(&self, region_id: u64, key: &[u8], ts: TimeStamp) -> CausalTsResult<()> {
+    fn track_ts(&self, region_id: u64, ts: TimeStamp) -> CausalTsResult<()> {
         if self.is_subscribed(region_id).is_some() {
             self.sched
-                .schedule(Task::RawTrackTs {
-                    region_id,
-                    key: key.to_vec(),
-                    ts,
-                })
+                .schedule(Task::RawTrackTs { region_id, ts })
                 .map_err(|err| {
                     CausalTsError::Other(box_err!(
-                        "sched track key err: {:?}, key: {:?}, region: {:?}, ts: {:?}",
+                        "sched raw track ts err: {:?}, region: {:?}, ts: {:?}",
                         err,
-                        key,
                         region_id,
                         ts
                     ))
@@ -344,15 +352,13 @@ mod tests {
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // track for unregistered region id.
-        let test_key = vec![107, 108, 109];
-        observer.track_key_ts(2, &test_key, 10.into()).unwrap();
+        observer.track_ts(2, 10.into()).unwrap();
         // no event for unregistered region id.
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
-        observer.track_key_ts(1, &test_key, 10.into()).unwrap();
+        observer.track_ts(1, 10.into()).unwrap();
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::RawTrackTs { region_id, key, ts } => {
+            Task::RawTrackTs { region_id, ts } => {
                 assert_eq!(region_id, 1);
-                assert_eq!(key, test_key);
                 assert_eq!(ts, 10.into());
             }
             _ => panic!("unexpected task"),

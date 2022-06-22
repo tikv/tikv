@@ -1,12 +1,19 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, collections::BTreeMap, sync::Arc};
+use std::{
+    cmp,
+    cmp::Reverse,
+    collections::{BTreeMap, BinaryHeap},
+    sync::Arc,
+};
 
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use txn_types::TimeStamp;
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
+
+const RAW_LOCK_TS_TTL: u64 = 60_1000; // 60s
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
@@ -16,6 +23,9 @@ pub struct Resolver {
     locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
+    // raw ts, depend on "non-decreasing" of entries' timestamp in the same region.
+    // BinaryHeap is max heap, so we reverse order to get a min heap.
+    raw_lock_ts_heap: BinaryHeap<Reverse<TimeStamp>>,
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: TimeStamp,
     // The highest index `Resolver` had been tracked
@@ -63,6 +73,7 @@ impl Resolver {
             resolved_ts: TimeStamp::zero(),
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
+            raw_lock_ts_heap: BinaryHeap::new(),
             read_progress,
             tracked_index: 0,
             min_ts: TimeStamp::zero(),
@@ -145,6 +156,26 @@ impl Resolver {
         }
     }
 
+    pub fn raw_track_lock(&mut self, ts: TimeStamp) {
+        debug!("raw track ts {}, region {}", ts, self.region_id);
+        self.raw_lock_ts_heap.push(Reverse(ts));
+    }
+
+    // untrack all timestamps smaller than input ts, depend on the raw ts in one region is non-decreasing
+    pub fn raw_untrack_lock(&mut self, ts: TimeStamp) {
+        let mut last_min_ts = None;
+        debug!("raw untrack ts before {}, region {}", ts, self.region_id);
+        while let Some(&Reverse(min_ts)) = self.raw_lock_ts_heap.peek() {
+            if min_ts > ts {
+                break;
+            }
+            last_min_ts = self.raw_lock_ts_heap.pop();
+        }
+        if let Some(last_min_ts) = last_min_ts {
+            self.resolved_ts = last_min_ts.0;
+        }
+    }
+
     /// Try to advance resolved ts.
     ///
     /// `min_ts` advances the resolver even if there is no write.
@@ -160,7 +191,7 @@ impl Resolver {
         let min_start_ts = min_lock.unwrap_or(min_ts);
 
         // No more commit happens before the ts.
-        let new_resolved_ts = cmp::min(min_start_ts, min_ts);
+        let mut new_resolved_ts = cmp::min(min_start_ts, min_ts);
 
         if self.resolved_ts >= new_resolved_ts {
             let label = if has_lock { "has_lock" } else { "stale_ts" };
@@ -168,6 +199,19 @@ impl Resolver {
                 .with_label_values(&[label])
                 .inc();
         }
+
+        let min_raw_ts = self
+            .raw_lock_ts_heap
+            .peek()
+            .map_or(min_ts, |ts| ts.to_owned().0);
+        // RawKv has no place to untrack_lock if PutCmd failed in propose/apply after track_lock,
+        // Here is a workaround, if raw ts has no advance in past RAW_LOCK_TS_TTL, which means,
+        // no PutCmd succeed after previous failure, we need advance it by TTL.
+        // The final solution should be move append_ts & track_lock to storage and untrack it in callback, need more discussion.
+        if min_ts.physical().saturating_sub(min_raw_ts.physical()) > RAW_LOCK_TS_TTL {
+            self.raw_untrack_lock(TimeStamp::compose(min_ts.physical() - RAW_LOCK_TS_TTL, 0));
+        }
+        new_resolved_ts = cmp::min(new_resolved_ts, min_raw_ts);
 
         // Resolved ts never decrease.
         self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);

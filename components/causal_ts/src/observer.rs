@@ -97,12 +97,14 @@ impl<Ts: CausalTsProvider, Tk: RawTsTracker> QueryObserver for CausalObserver<Ts
                 ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
                     coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
                 })?);
+                self.ts_tracker
+                    .track_ts(region_id, ts.unwrap())
+                    .map_err(|err| {
+                        coprocessor::Error::Other(box_err!("track ts err: {:?}", err))
+                    })?;
             }
 
             ApiV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
-            self.ts_tracker
-                .track_key_ts(region_id, req.get_put().get_key(), ts.unwrap())
-                .map_err(|err| coprocessor::Error::Other(box_err!("track key err: {:?}", err)))?;
             trace!("CausalObserver::pre_propose_query, append_ts"; "region_id" => region_id,
                 "key" => &log_wrappers::Value::key(req.get_put().get_key()), "ts" => ?ts.unwrap());
         }

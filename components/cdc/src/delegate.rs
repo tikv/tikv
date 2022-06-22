@@ -214,6 +214,7 @@ struct Pending {
     pub downstreams: Vec<Downstream>,
     pub locks: Vec<PendingLock>,
     pub pending_bytes: usize,
+    pub raw_resolved_ts: TimeStamp,
 }
 
 impl Drop for Pending {
@@ -385,6 +386,7 @@ impl Delegate {
 
         // Mark the delegate as initialized.
         let mut pending = self.pending.take().unwrap();
+        resolver.resolve(pending.raw_resolved_ts);
         self.region = Some(region);
         info!("cdc region is ready"; "region_id" => self.region_id);
 
@@ -604,11 +606,31 @@ impl Delegate {
             rows.push(v);
         }
         self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
+        self.sink_raw_downstream(raw_rows, index)?;
 
-        if !raw_rows.is_empty() {
-            self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
+        Ok(())
+    }
+
+    fn sink_raw_downstream(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
         }
-
+        let max_raw_ts = entries
+            .iter()
+            .max_by_key(|entry| entry.commit_ts)
+            .unwrap()
+            .commit_ts;
+        self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)?;
+        match self.resolver {
+            Some(ref mut resolver) => {
+                resolver.raw_untrack_lock(max_raw_ts.into());
+            }
+            None => {
+                assert!(self.pending.is_some(), "region resolver not ready");
+                let pending = self.pending.as_mut().unwrap();
+                pending.raw_resolved_ts = max_raw_ts.into();
+            }
+        }
         Ok(())
     }
 
@@ -670,9 +692,6 @@ impl Delegate {
 
     fn sink_raw_put(&mut self, mut put: PutRequest, rows: &mut Vec<EventRow>) -> Result<()> {
         let mut row = EventRow::default();
-        if let Some(resolver) = self.resolver.as_mut() {
-            resolver.untrack_lock(put.get_key(), None);
-        }
         decode_rawkv(put.take_key(), put.take_value(), &mut row)?;
         rows.push(row);
         Ok(())

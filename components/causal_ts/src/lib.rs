@@ -29,7 +29,7 @@ pub trait CausalTsProvider: Send + Sync {
 }
 
 pub trait RawTsTracker: Send + Sync + Clone {
-    fn track_key_ts(&self, region_id: u64, key: &[u8], ts: TimeStamp) -> Result<()>;
+    fn track_ts(&self, region_id: u64, ts: TimeStamp) -> Result<()>;
 }
 
 pub mod tests {
@@ -64,7 +64,7 @@ pub mod tests {
     pub struct TestRawTsTracker {}
 
     impl RawTsTracker for TestRawTsTracker {
-        fn track_key_ts(&self, _region_id: u64, _key: &[u8], _ts: TimeStamp) -> Result<()> {
+        fn track_ts(&self, _region_id: u64, _ts: TimeStamp) -> Result<()> {
             Ok(())
         }
     }

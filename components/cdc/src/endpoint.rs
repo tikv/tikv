@@ -170,7 +170,6 @@ pub enum Task {
     ChangeConfig(ConfigChange),
     RawTrackTs {
         region_id: u64,
-        key: Vec<u8>,
         ts: TimeStamp,
     },
 }
@@ -240,12 +239,10 @@ impl fmt::Debug for Task {
                 .finish(),
             Task::RawTrackTs {
                 ref region_id,
-                ref key,
                 ref ts,
             } => de
-                .field("type", &"track_key_ts")
+                .field("type", &"track_ts")
                 .field("region_id", &region_id)
-                .field("key", &key)
                 .field("ts", &ts)
                 .finish(),
         }
@@ -1006,6 +1003,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let tikv_clients = self.tikv_clients.clone();
         let hibernate_regions_compatible = self.config.hibernate_regions_compatible;
         let region_read_progress = self.region_read_progress.clone();
+        let observer = self.observer.clone();
 
         let fut = async move {
             let _ = timeout.compat().await;
@@ -1024,6 +1022,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     min_ts = min_mem_lock_ts;
                 }
                 min_ts_min_lock = min_mem_lock_ts;
+            }
+            // If flush_causal_timestamp fails, cannot schedule RegisterMinTsEvent task
+            // as new coming raw data may use timestamp smaller than min_ts
+            if let Err(e) = observer.flush_causal_timestamp() {
+                error!("cdc flush causal timestamp failed"; "err" => ?e);
+                return;
             }
 
             match scheduler.schedule(Task::RegisterMinTsEvent) {
@@ -1129,10 +1133,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         self.connections.insert(conn.get_id(), conn);
     }
 
-    fn on_raw_track_key_ts(&mut self, region_id: u64, key: Vec<u8>, ts: TimeStamp) {
+    fn on_raw_track_ts(&mut self, region_id: u64, ts: TimeStamp) {
         if let Some(ref mut delegate) = self.capture_regions.get_mut(&region_id) {
             if let Some(resolver) = delegate.resolver.as_mut() {
-                resolver.track_lock(ts, key, None);
+                resolver.raw_track_lock(ts);
             }
         }
     }
@@ -1203,7 +1207,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                 }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
-            Task::RawTrackTs { region_id, key, ts } => self.on_raw_track_key_ts(region_id, key, ts),
+            Task::RawTrackTs { region_id, ts } => self.on_raw_track_ts(region_id, ts),
         }
     }
 }
@@ -1907,12 +1911,7 @@ mod tests {
             .unwrap_err();
 
         let ts = TimeStamp::from(10);
-        let test_key = vec![0, 1, 2];
-        suite.run(Task::RawTrackTs {
-            region_id,
-            key: test_key,
-            ts,
-        });
+        suite.run(Task::RawTrackTs { region_id, ts });
         let delegate = &suite.endpoint.capture_regions[&region_id];
         let resolver = delegate.resolver.as_ref().unwrap();
         let resolver_locks = resolver.locks();

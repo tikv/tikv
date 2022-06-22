@@ -744,7 +744,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
 
         // Register cdc.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        let mut cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
@@ -782,7 +782,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             }
             let causal_ts_provider = Arc::new(tso.unwrap());
             info!("Causal timestamp provider startup.");
-
+            cdc_ob.set_causal_ts_provider(causal_ts_provider.clone());
             let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider, cdc_ob.clone());
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         }
