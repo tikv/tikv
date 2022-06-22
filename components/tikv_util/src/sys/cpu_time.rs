@@ -111,6 +111,7 @@ mod imp {
         })()
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "first line of /proc/stat malformed"))
     }
+
     pub fn cpu_time() -> io::Result<Duration> {
         let mut time = libc::timespec {
             tv_sec: 0,

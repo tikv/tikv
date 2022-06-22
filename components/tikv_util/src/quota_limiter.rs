@@ -228,26 +228,41 @@ impl QuotaLimiter {
         }
     }
 
-    // To consume a sampler and return delayed duration for foreground request.
+    // To consume a sampler and return delayed duration.
     // If the sampler is null, the speed limiter will just return ZERO.
-    pub async fn async_foreground_consume(&self, sample: Sample) -> Duration {
+    fn consume_sample(&self, sample: Sample, is_foreground: bool) -> Duration {
         let cpu_dur = if sample.cpu_time > Duration::ZERO {
-            self.foreground_cputime_limiter
-                .consume_duration(sample.cpu_time.as_micros() as usize)
+            if is_foreground {
+                self.foreground_cputime_limiter
+                    .consume_duration(sample.cpu_time.as_micros() as usize)
+            } else {
+                self.background_cputime_limiter
+                    .consume_duration(sample.cpu_time.as_micros() as usize)
+            }
         } else {
             Duration::ZERO
         };
 
         let w_bw_dur = if sample.write_bytes > 0 {
-            self.foreground_write_bandwidth_limiter
-                .consume_duration(sample.write_bytes)
+            if is_foreground {
+                self.foreground_write_bandwidth_limiter
+                    .consume_duration(sample.write_bytes)
+            } else {
+                self.background_write_bandwidth_limiter
+                    .consume_duration(sample.write_bytes)
+            }
         } else {
             Duration::ZERO
         };
 
         let r_bw_dur = if sample.read_bytes > 0 {
-            self.foreground_read_bandwidth_limiter
-                .consume_duration(sample.read_bytes)
+            if is_foreground {
+                self.foreground_read_bandwidth_limiter
+                    .consume_duration(sample.read_bytes)
+            } else {
+                self.background_read_bandwidth_limiter
+                    .consume_duration(sample.read_bytes)
+            }
         } else {
             Duration::ZERO
         };
@@ -257,14 +272,6 @@ impl QuotaLimiter {
         if !delay_duration.is_zero() {
             exec_delay = std::cmp::min(delay_duration, exec_delay);
         };
-
-        if !exec_delay.is_zero() {
-            GLOBAL_TIMER_HANDLE
-                .delay(std::time::Instant::now() + exec_delay)
-                .compat()
-                .await
-                .unwrap();
-        }
 
         exec_delay
     }
@@ -272,33 +279,7 @@ impl QuotaLimiter {
     // To consume a sampler and return delayed duration for background request.
     // If the sampler is null, the speed limiter will just return ZERO.
     pub async fn async_background_consume(&self, sample: Sample) -> Duration {
-        let cpu_dur = if sample.cpu_time > Duration::ZERO {
-            self.background_cputime_limiter
-                .consume_duration(sample.cpu_time.as_micros() as usize)
-        } else {
-            Duration::ZERO
-        };
-
-        let w_bw_dur = if sample.write_bytes > 0 {
-            self.background_write_bandwidth_limiter
-                .consume_duration(sample.write_bytes)
-        } else {
-            Duration::ZERO
-        };
-
-        let r_bw_dur = if sample.read_bytes > 0 {
-            self.background_read_bandwidth_limiter
-                .consume_duration(sample.read_bytes)
-        } else {
-            Duration::ZERO
-        };
-
-        let mut exec_delay = std::cmp::max(cpu_dur, std::cmp::max(w_bw_dur, r_bw_dur));
-        let delay_duration = self.max_delay_duration();
-        if !delay_duration.is_zero() {
-            exec_delay = std::cmp::min(delay_duration, exec_delay);
-        };
-
+        let exec_delay = self.consume_sample(sample, false);
         if !exec_delay.is_zero() {
             GLOBAL_TIMER_HANDLE
                 .delay(std::time::Instant::now() + exec_delay)
@@ -306,7 +287,20 @@ impl QuotaLimiter {
                 .await
                 .unwrap();
         }
+        exec_delay
+    }
 
+    // To consume a sampler and return delayed duration for foreground request.
+    // If the sampler is null, the speed limiter will just return ZERO.
+    pub async fn async_foreground_consume(&self, sample: Sample) -> Duration {
+        let exec_delay = self.consume_sample(sample, true);
+        if !exec_delay.is_zero() {
+            GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + exec_delay)
+                .compat()
+                .await
+                .unwrap();
+        }
         exec_delay
     }
 }

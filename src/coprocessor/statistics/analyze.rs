@@ -62,7 +62,6 @@ impl<S: Snapshot> AnalyzeContext<S> {
         snap: S,
         req_ctx: &ReqContext,
         quota_limiter: Arc<QuotaLimiter>,
-        is_auto: bool,
     ) -> Result<Self> {
         let store = SnapshotStore::new(
             snap,
@@ -73,6 +72,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req_ctx.access_locks.clone(),
             false,
         );
+        let is_auto = req.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0;
+
         Ok(Self {
             req,
             storage: Some(TiKvStorage::new(store, false)),
@@ -112,11 +113,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
         Ok(res_data)
     }
 
-    async fn handle_full_sampling(
-        builder: &mut RowSampleBuilder<S>,
-        is_auto: bool,
-    ) -> Result<Vec<u8>> {
-        let sample_res = builder.collect_column_stats(is_auto).await?;
+    async fn handle_full_sampling(builder: &mut RowSampleBuilder<S>) -> Result<Vec<u8>> {
+        let sample_res = builder.collect_column_stats().await?;
         let res_data = {
             let res = sample_res.into_proto();
             box_try!(res.write_to_bytes())
@@ -279,10 +277,15 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let storage = self.storage.take().unwrap();
                 let ranges = std::mem::take(&mut self.ranges);
 
-                let mut builder =
-                    RowSampleBuilder::new(col_req, storage, ranges, self.quota_limiter.clone())?;
+                let mut builder = RowSampleBuilder::new(
+                    col_req,
+                    storage,
+                    ranges,
+                    self.quota_limiter.clone(),
+                    self.is_auto,
+                )?;
 
-                let res = AnalyzeContext::handle_full_sampling(&mut builder, self.is_auto).await;
+                let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
             }
@@ -322,6 +325,7 @@ struct RowSampleBuilder<S: Snapshot> {
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: Arc<QuotaLimiter>,
+    is_quota_auto_tune: bool,
 }
 
 impl<S: Snapshot> RowSampleBuilder<S> {
@@ -330,6 +334,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         storage: TiKvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
         quota_limiter: Arc<QuotaLimiter>,
+        is_quota_auto_tune: bool,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
         if columns_info.is_empty() {
@@ -354,6 +359,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter,
+            is_quota_auto_tune,
         })
     }
 
@@ -372,7 +378,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         ))
     }
 
-    async fn collect_column_stats(&mut self, is_auto: bool) -> Result<AnalyzeSamplingResult> {
+    async fn collect_column_stats(&mut self) -> Result<AnalyzeSamplingResult> {
         use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
 
         let mut is_drained = false;
@@ -440,7 +446,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
 
             // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
             let quota_delay = {
-                if !is_auto {
+                if !self.is_quota_auto_tune {
                     self.quota_limiter.async_foreground_consume(sample).await
                 } else {
                     self.quota_limiter.async_background_consume(sample).await
