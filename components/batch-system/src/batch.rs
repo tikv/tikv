@@ -299,9 +299,6 @@ impl HandleResult {
 /// Note that, every poll thread has its own handler, which doesn't have to be
 /// Sync.
 pub trait PollHandler<N, C>: Send + 'static {
-    /// This function is called at the very beginning of polling started.
-    fn on_poll_start(&mut self) {}
-
     /// This function is called at the very beginning of every round.
     fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
     where

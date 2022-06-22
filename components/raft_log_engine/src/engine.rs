@@ -283,6 +283,7 @@ const STORE_IDENT_KEY: &[u8] = &[0x01];
 const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
 const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
+const SEQNO_RELATION_KEY: &[u8] = &[0x05];
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -299,6 +300,18 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.0
             .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)
+    }
+
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        sequence: u64,
+        applied_idx: u64,
+    ) -> Result<()> {
+        let mut v = sequence.to_be_bytes().to_vec();
+        v.append(&mut applied_idx.to_be_bytes().to_vec());
+        self.0.put(raft_group_id, SEQNO_RELATION_KEY.to_vec(), v);
+        Ok(())
     }
 
     fn persist_size(&self) -> usize {

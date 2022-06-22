@@ -156,6 +156,13 @@ pub trait RaftLogBatch: Send {
     fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
 
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        sequence: u64,
+        applied_idx: u64,
+    ) -> Result<()>;
+
     /// The data size of this RaftLogBatch.
     fn persist_size(&self) -> usize;
 

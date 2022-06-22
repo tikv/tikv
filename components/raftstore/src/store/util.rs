@@ -2,7 +2,6 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    cell::RefCell,
     cmp,
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     fmt,
@@ -1345,17 +1344,14 @@ impl LatencyInspector {
 
 lazy_static! {
     pub static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicUsize = AtomicUsize::new(1);
-}
-
-thread_local! {
-    pub static LOCAL_MAX_SEQUENCE_NUMBER: RefCell<Option<Arc<AtomicU64>>> = RefCell::default();
+    pub static ref SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct SequenceNumber {
     pub sequence: u64,
-    pub start_counter: usize,
-    pub end_counter: usize,
+    start_counter: usize,
+    end_counter: usize,
 }
 
 impl SequenceNumber {
@@ -1372,28 +1368,27 @@ impl SequenceNumber {
         self.end_counter = SEQUENCE_NUMBER_COUNTER_ALLOCATOR.load(AtomicOrdering::SeqCst);
     }
 
-    pub fn set_thread_local_max(number: u64) {
-        LOCAL_MAX_SEQUENCE_NUMBER.with(|x| {
-            (*x.borrow())
-                .as_ref()
-                .unwrap()
-                .store(number, AtomicOrdering::SeqCst)
-        })
+    pub fn max(left: Self, right: Self) -> Self {
+        match left.sequence.cmp(&right.sequence) {
+            cmp::Ordering::Less | cmp::Ordering::Equal => right,
+            cmp::Ordering::Greater => left,
+        }
     }
 }
 
+#[derive(Default)]
 pub struct SequenceNumberWindow {
     // The sequence number doesn't be received in order, we need a ordered set to
     // store received start counters which are bigger than last_start_counter + 1.
     pending_start_counter: BTreeSet<usize>,
-    // end_counter => sequence number
-    pending_sequence: BTreeMap<usize, u64>,
+    // end_counter => (sequence number, region id)
+    pending_sequence: BTreeMap<usize, SequenceNumber>,
     last_start_counter: usize,
-    last_sequence: Option<u64>,
+    last_sequence: Option<SequenceNumber>,
 }
 
 impl SequenceNumberWindow {
-    pub fn push(&mut self, sn: SequenceNumber) -> Option<u64> {
+    pub fn push(&mut self, sn: SequenceNumber) -> Option<SequenceNumber> {
         if sn.start_counter == self.last_start_counter + 1 {
             self.last_start_counter += 1;
             while let Some(start_counter) = self.pending_start_counter.first().copied() {
@@ -1413,7 +1408,7 @@ impl SequenceNumberWindow {
                 if end_counter <= self.last_start_counter {
                     match self.last_sequence {
                         Some(last_sequence) => {
-                            self.last_sequence = Some(u64::max(last_sequence, sequence));
+                            self.last_sequence = Some(SequenceNumber::max(last_sequence, sequence));
                         }
                         None => self.last_sequence = Some(sequence),
                     }
@@ -1425,9 +1420,7 @@ impl SequenceNumberWindow {
             self.last_sequence
         } else {
             assert!(self.pending_start_counter.insert(sn.start_counter));
-            self.pending_sequence
-                .insert(sn.end_counter, sn.sequence)
-                .unwrap();
+            self.pending_sequence.insert(sn.end_counter, sn).unwrap();
             None
         }
     }

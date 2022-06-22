@@ -9,7 +9,7 @@
 
 use std::{
     fmt,
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
     thread::{self, JoinHandle},
 };
 
@@ -41,7 +41,7 @@ use crate::{
         local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics, TimeTracker},
         metrics::*,
         transport::Transport,
-        util::LatencyInspector,
+        util::{LatencyInspector, SequenceNumber, SYNCED_MAX_SEQUENCE_NUMBER},
         PeerMsg,
     },
     Result,
@@ -80,6 +80,8 @@ where
         }
     }
 }
+
+pub type WriteRaftDbCallback = Box<dyn FnOnce() + Send>;
 
 /// WriteTask contains write tasks which need to be persisted to kv db and raft db.
 pub struct WriteTask<EK, ER>
@@ -167,6 +169,10 @@ where
         send_time: Instant,
         inspector: Vec<LatencyInspector>,
     },
+    SequenceNumberRelation {
+        to_update_sequence: Option<SequenceNumber>,
+        raft_wb: ER::LogBatch,
+    },
     Shutdown,
 }
 
@@ -184,6 +190,9 @@ where
             ),
             WriteMsg::Shutdown => write!(fmt, "WriteMsg::Shutdown"),
             WriteMsg::LatencyInspect { .. } => write!(fmt, "WriteMsg::LatencyInspect"),
+            WriteMsg::SequenceNumberRelation { .. } => {
+                write!(fmt, "WriteMsg::SequenceNumberRelation")
+            }
         }
     }
 }
@@ -202,6 +211,7 @@ where
     pub tasks: Vec<WriteTask<EK, ER>>,
     // region_id -> (peer_id, ready_number)
     pub readies: HashMap<u64, (u64, u64)>,
+    pub raft_db_callbacks: Vec<WriteRaftDbCallback>,
 }
 
 impl<EK, ER> WriteTaskBatch<EK, ER>
@@ -217,6 +227,7 @@ where
             state_size: 0,
             tasks: vec![],
             readies: HashMap::default(),
+            raft_db_callbacks: vec![],
         }
     }
 
@@ -330,6 +341,9 @@ where
                     tracker.observe(now, &metrics.wf_write_end, |t| {
                         &mut t.metrics.wf_write_end_nanos
                     });
+                }
+                for cb in std::mem::take(&mut self.raft_db_callbacks) {
+                    cb()
                 }
             }
         }
@@ -469,12 +483,27 @@ where
             } => {
                 self.pending_latency_inspect.push((send_time, inspector));
             }
+            WriteMsg::SequenceNumberRelation {
+                to_update_sequence,
+                raft_wb,
+            } => {
+                self.handle_raft_write(raft_wb);
+                if let Some(sn) = to_update_sequence {
+                    self.batch.raft_db_callbacks.push(Box::new(move || {
+                        SYNCED_MAX_SEQUENCE_NUMBER.store(sn.sequence, Ordering::SeqCst);
+                    }));
+                }
+            }
         }
         false
     }
 
     pub fn handle_write_task(&mut self, task: WriteTask<EK, ER>) {
         self.batch.add_write_task(task);
+    }
+
+    pub fn handle_raft_write(&mut self, raft_wb: ER::LogBatch) {
+        self.batch.raft_wb.merge(raft_wb).unwrap();
     }
 
     pub fn write_to_db(&mut self, notify: bool) {

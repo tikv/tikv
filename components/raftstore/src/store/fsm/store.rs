@@ -87,7 +87,10 @@ use crate::{
         metrics::*,
         peer_storage,
         transport::Transport,
-        util::{self, is_initial_msg, RegionReadProgressRegistry},
+        util::{
+            self, is_initial_msg, RegionReadProgressRegistry, SequenceNumber, SequenceNumberWindow,
+            SYNCED_MAX_SEQUENCE_NUMBER,
+        },
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
@@ -497,6 +500,9 @@ where
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
+    // region_id -> (sequence_number, applied_index)
+    pub pending_sequence_number_relation: HashMap<u64, (SequenceNumber, u64)>,
+    pub to_update_sequence: Option<SequenceNumber>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -601,6 +607,7 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     last_unreachable_report: HashMap<u64, Instant>,
+    sequence_number_window: SequenceNumberWindow,
 }
 
 pub struct StoreFsm<EK>
@@ -625,6 +632,7 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 last_unreachable_report: HashMap::default(),
+                sequence_number_window: SequenceNumberWindow::default(),
             },
             receiver: rx,
         });
@@ -713,6 +721,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     drop(syncer);
                 }
                 StoreMsg::GcSnapshotFinish => self.register_snap_mgr_gc_tick(),
+                StoreMsg::ApplyRes(res) => self.on_apply_res(res),
             }
         }
     }
@@ -939,14 +948,30 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         }
         let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
+        let sequence_number_relation =
+            std::mem::take(&mut self.poll_ctx.pending_sequence_number_relation);
         let mut dur = self.timer.saturating_elapsed();
 
         for inspector in &mut latency_inspect {
             inspector.record_store_process(dur);
         }
+        let mut raft_wb = None;
+        if !sequence_number_relation.is_empty() {
+            let mut wb = self
+                .poll_ctx
+                .engines
+                .raft
+                .log_batch(sequence_number_relation.len());
+            for (region_id, (sn, applied_idx)) in sequence_number_relation {
+                wb.put_seqno_relation(region_id, sn.sequence, applied_idx)
+                    .unwrap();
+            }
+            raft_wb = Some(wb);
+        }
         let write_begin = TiInstant::now();
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
-            if self.poll_ctx.has_ready {
+            if self.poll_ctx.has_ready || raft_wb.is_some() {
+                write_worker.handle_raft_write(raft_wb.unwrap());
                 write_worker.write_to_db(false);
 
                 for mut inspector in latency_inspect {
@@ -962,8 +987,21 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     inspector.finish();
                 }
             }
+            if let Some(sn) = self.poll_ctx.to_update_sequence.take() {
+                SYNCED_MAX_SEQUENCE_NUMBER.store(sn.sequence, Ordering::SeqCst);
+            }
         } else {
             let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
+            if let Some(raft_wb) = raft_wb {
+                if let Err(err) = self.poll_ctx.write_senders[writer_id].try_send(
+                    WriteMsg::SequenceNumberRelation {
+                        to_update_sequence: self.poll_ctx.to_update_sequence.take(),
+                        raft_wb,
+                    },
+                ) {
+                    warn!("send sequence number relations to write workers failed"; "err" => ?err);
+                }
+            }
             if let Err(err) =
                 self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
                     send_time: write_begin,
@@ -1032,15 +1070,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.flush_events();
             }
         }
-    }
-
-    fn on_poll_start(&mut self) {
-        util::LOCAL_MAX_SEQUENCE_NUMBER.with(|x| {
-            let atomic = Arc::new(AtomicU64::default());
-            *x.borrow_mut() = Some(atomic.clone());
-            let mut meta = self.poll_ctx.store_meta.lock().unwrap();
-            meta.threads_sequence_numbers.push(atomic);
-        })
     }
 }
 
@@ -1308,6 +1337,8 @@ where
             sync_write_worker,
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
+            pending_sequence_number_relation: HashMap::default(),
+            to_update_sequence: None,
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -2470,6 +2501,25 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             StoreTick::CompactLockCf,
             self.ctx.cfg.lock_cf_compact_interval.0,
         )
+    }
+
+    fn on_apply_res(&mut self, res: ApplyRes<EK::Snapshot>) {
+        if let Some(sequence) = res.last_sequence {
+            if let Some(committed_sn) = self.fsm.store.sequence_number_window.push(sequence) {
+                // Update global sequence
+                if let Some(last) = self.ctx.to_update_sequence.replace(committed_sn) {
+                    assert!(
+                        last.sequence < committed_sn.sequence,
+                        "last {:?}, committed: {:?}",
+                        last,
+                        committed_sn
+                    );
+                }
+            }
+            self.ctx
+                .pending_sequence_number_relation
+                .insert(res.region_id, (sequence, res.apply_state.applied_index));
+        }
     }
 }
 

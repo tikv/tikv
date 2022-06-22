@@ -360,6 +360,17 @@ impl RaftLogBatch for RocksWriteBatch {
         self.put_msg(&keys::raft_state_key(raft_group_id), state)
     }
 
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        sequence: u64,
+        applied_idx: u64,
+    ) -> Result<()> {
+        let mut v = sequence.to_be_bytes().to_vec();
+        v.append(&mut applied_idx.to_be_bytes().to_vec());
+        self.put(&keys::sequence_number_relation_key(raft_group_id), &v)
+    }
+
     fn persist_size(&self) -> usize {
         self.data_size()
     }

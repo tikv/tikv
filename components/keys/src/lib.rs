@@ -52,6 +52,7 @@ pub const RAFT_LOG_SUFFIX: u8 = 0x01;
 pub const RAFT_STATE_SUFFIX: u8 = 0x02;
 pub const APPLY_STATE_SUFFIX: u8 = 0x03;
 pub const SNAPSHOT_RAFT_STATE_SUFFIX: u8 = 0x04;
+pub const SEQUENCE_NUMBER_RELATION_SUFFIX: u8 = 0x05;
 
 // For region meta
 pub const REGION_STATE_SUFFIX: u8 = 0x01;
@@ -93,6 +94,10 @@ pub fn raft_log_key(region_id: u64, log_index: u64) -> [u8; 19] {
 
 pub fn raft_state_key(region_id: u64) -> [u8; 11] {
     make_region_prefix(region_id, RAFT_STATE_SUFFIX)
+}
+
+pub fn sequence_number_relation_key(region_id: u64) -> [u8; 11] {
+    make_region_prefix(region_id, SEQUENCE_NUMBER_RELATION_SUFFIX)
 }
 
 pub fn snapshot_raft_state_key(region_id: u64) -> [u8; 11] {

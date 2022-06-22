@@ -187,4 +187,13 @@ impl RaftLogBatch for PanicWriteBatch {
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         panic!()
     }
+
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        sequence: u64,
+        applied_idx: u64,
+    ) -> Result<()> {
+        panic!()
+    }
 }
