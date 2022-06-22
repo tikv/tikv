@@ -8,6 +8,7 @@ use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::{
     box_err, error,
     stream::{retry, with_timeout},
+    sys::thread::ThreadBuildWrapper,
 };
 use tokio::runtime::{Builder, Runtime};
 
@@ -81,6 +82,8 @@ impl KmsBackend {
             Builder::new_current_thread()
                 .thread_name("kms-runtime")
                 .enable_all()
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()?,
         );
 
