@@ -1795,7 +1795,13 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
         if let Some(e) = external_error {
             let e = Arc::new(e);
             for r in results {
-                if fail_all_on_error || matches!(r, PessimisticLockKeyResult::Waiting(None)) {
+                if fail_all_on_error
+                    || matches!(
+                        r,
+                        PessimisticLockKeyResult::Waiting(_)
+                            | PessimisticLockKeyResult::PrimaryWaiting(_)
+                    )
+                {
                     *r = PessimisticLockKeyResult::Failed(e.clone());
                 }
             }
