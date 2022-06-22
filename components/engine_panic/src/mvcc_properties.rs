@@ -1,8 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
 use engine_traits::{MvccProperties, MvccPropertiesExt, Result};
 use txn_types::TimeStamp;
+
+use crate::engine::PanicEngine;
 
 impl MvccPropertiesExt for PanicEngine {
     fn get_mvcc_properties_cf(

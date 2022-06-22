@@ -6,23 +6,25 @@
 //! that controls how the former is created or metrics are collected.
 
 // #[PerformanceCriticalPath]
-use crate::config::Config;
-use crate::fsm::{Fsm, FsmScheduler, Priority};
-use crate::mailbox::BasicMailbox;
-use crate::router::Router;
-use crossbeam::channel::TryRecvError;
+use std::{
+    borrow::Cow,
+    ops::{Deref, DerefMut},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
+    thread::{self, current, JoinHandle, ThreadId},
+    time::Duration,
+};
+
 use crossbeam::channel::{self, SendError};
 use fail::fail_point;
 use file_system::{set_io_type, IOType};
-use std::borrow::Cow;
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::AtomicUsize;
-use std::sync::{Arc, Mutex};
-use std::thread::{self, current, JoinHandle, ThreadId};
-use std::time::Duration;
-use tikv_util::mpsc;
-use tikv_util::time::Instant;
-use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
+use tikv_util::{debug, error, info, mpsc, safe_panic, thd_name, time::Instant, warn};
+
+use crate::{
+    config::Config,
+    fsm::{Fsm, FsmScheduler, Priority},
+    mailbox::BasicMailbox,
+    router::Router,
+};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 pub enum FsmTypes<N, C> {
@@ -323,10 +325,6 @@ pub trait PollHandler<N, C>: Send + 'static {
     /// This function is called when batch system is going to sleep.
     fn pause(&mut self) {}
 
-    fn batch_retry_recv_timeout(&self) -> Option<Duration> {
-        None
-    }
-
     /// This function returns the priority of this handler.
     fn get_priority(&self) -> Priority {
         Priority::Normal
@@ -450,19 +448,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
             let mut fsm_cnt = batch.normals.len();
             while batch.normals.len() < max_batch_size {
-                match self.fsm_receiver.try_recv() {
-                    Ok(fsm) => run = batch.push(fsm),
-                    Err(TryRecvError::Empty) => {
-                        if let Some(t) = self.handler.batch_retry_recv_timeout() {
-                            match self.fsm_receiver.recv_timeout(t) {
-                                Ok(fsm) => run = batch.push(fsm),
-                                _ => {}
-                            }
-                        }
-                    }
-                    _ => {}
-                };
-
+                if let Ok(fsm) = self.fsm_receiver.try_recv() {
+                    run = batch.push(fsm);
+                }
                 // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
                 // may change state of the handler, we shall deal with it immediately after
                 // calling `begin` of `Handler`.

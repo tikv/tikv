@@ -1,26 +1,29 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
-use crate::server::Error;
-use futures::compat::Future01CompatExt;
-use futures::future::{FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::StreamExt;
+use futures::{
+    compat::Future01CompatExt,
+    future::{FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::StreamExt,
+};
 use grpcio::{
     Result as GrpcResult, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
 };
-use kvproto::diagnosticspb::SearchLogRequestTarget;
 use kvproto::diagnosticspb::{
-    Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
-    ServerInfoType,
+    Diagnostics, SearchLogRequest, SearchLogRequestTarget, SearchLogResponse, ServerInfoRequest,
+    ServerInfoResponse, ServerInfoType,
 };
 use tikv_util::{sys::SystemExt, timer::GLOBAL_TIMER_HANDLE};
 use tokio::runtime::Handle;
 
-pub mod ioload;
+use crate::server::Error;
+mod ioload;
 mod log;
 pub mod sys;
 

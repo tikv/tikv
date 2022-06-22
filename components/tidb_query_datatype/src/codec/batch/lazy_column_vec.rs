@@ -1,13 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::{Index, IndexMut, Range, RangeFrom, RangeTo};
+
 use tipb::FieldType;
 
 use super::LazyBatchColumn;
-use crate::codec::data_type::VectorValue;
-use crate::codec::Result;
-use crate::expr::EvalContext;
-
-use std::ops::{Index, IndexMut, Range, RangeFrom, RangeTo};
+use crate::{
+    codec::{data_type::VectorValue, Result},
+    expr::EvalContext,
+};
 
 /// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
 #[derive(Clone, Debug)]

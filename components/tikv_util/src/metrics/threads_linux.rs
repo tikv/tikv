@@ -1,19 +1,29 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
-use std::io::{Error, ErrorKind, Result};
-use std::sync::Mutex;
-use std::time::Duration;
+<<<<<<< HEAD
+use std::{
+    io::{Error, ErrorKind, Result},
+    sync::Mutex,
+    time::Duration,
+};
 
 use collections::HashMap;
 use lazy_static::lazy_static;
 use libc::{self, pid_t};
-use prometheus::core::{Collector, Desc};
-use prometheus::{self, proto, GaugeVec, IntGaugeVec, Opts};
 
 use crate::time::Instant;
 
 use procinfo::pid;
+use prometheus::{
+    self,
+    core::{Collector, Desc},
+    proto, GaugeVec, IntGaugeVec, Opts,
+};
+
+use crate::{
+    sys::thread::{self, Pid},
+    time::Instant,
+};
 
 /// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
@@ -39,15 +49,15 @@ impl Metrics {
                 "Total user and system CPU time spent in \
                  seconds by threads.",
             )
-            .namespace(ns.clone()),
+                .namespace(ns.clone()),
             &["name", "tid"],
         )
-        .unwrap();
+            .unwrap();
         let threads_state = IntGaugeVec::new(
             Opts::new("threads_state", "Number of threads in each state.").namespace(ns.clone()),
             &["state"],
         )
-        .unwrap();
+            .unwrap();
         let io_totals = GaugeVec::new(
             Opts::new(
                 "threads_io_bytes_total",
@@ -55,25 +65,25 @@ impl Metrics {
             ).namespace(ns.clone()),
             &["name", "tid", "io"],
         )
-        .unwrap();
+            .unwrap();
         let voluntary_ctxt_switches = IntGaugeVec::new(
             Opts::new(
                 "thread_voluntary_context_switches",
                 "Number of thread voluntary context switches.",
             )
-            .namespace(ns.clone()),
+                .namespace(ns.clone()),
             &["name", "tid"],
         )
-        .unwrap();
+            .unwrap();
         let nonvoluntary_ctxt_switches = IntGaugeVec::new(
             Opts::new(
                 "thread_nonvoluntary_context_switches",
                 "Number of thread nonvoluntary context switches.",
             )
-            .namespace(ns),
+                .namespace(ns),
             &["name", "tid"],
         )
-        .unwrap();
+            .unwrap();
 
         Metrics {
             cpu_totals,
@@ -506,10 +516,7 @@ impl TidRetriever {
 
 #[cfg(test)]
 mod tests {
-    use std::env::temp_dir;
-    use std::io::Write;
-    use std::time::Duration;
-    use std::{fs, sync, thread};
+    use std::{env::temp_dir, fs, io::Write, sync, time::Duration};
 
     use super::*;
 

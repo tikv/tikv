@@ -1,17 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::VecDeque;
-use std::error::Error as StdError;
-use std::fmt::{self, Display, Formatter};
+use std::{
+    collections::VecDeque,
+    error::Error as StdError,
+    fmt::{self, Display, Formatter},
+};
 
+use engine_traits::{KvEngine, CF_WRITE};
 use fail::fail_point;
 use thiserror::Error;
-
-use engine_traits::KvEngine;
-use engine_traits::CF_WRITE;
-use tikv_util::time::Instant;
-use tikv_util::worker::Runnable;
-use tikv_util::{box_try, error, info, warn};
+use tikv_util::{box_try, error, info, time::Instant, warn, worker::Runnable};
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -246,17 +244,18 @@ fn collect_ranges_need_compact(
 
 #[cfg(test)]
 mod tests {
-    use std::thread::sleep;
-    use std::time::Duration;
+    use std::{thread::sleep, time::Duration};
 
-    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
-    use engine_test::kv::KvTestEngine;
-    use engine_test::kv::{new_engine, new_engine_opt};
-    use engine_traits::{MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt};
-    use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use tempfile::Builder;
-
+    use engine_test::{
+        ctor::{CFOptions, ColumnFamilyOptions, DBOptions},
+        kv::{new_engine, new_engine_opt, KvTestEngine},
+    };
+    use engine_traits::{
+        MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT,
+        CF_WRITE,
+    };
     use keys::data_key;
+    use tempfile::Builder;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::*;
@@ -320,7 +319,7 @@ mod tests {
     }
 
     fn open_db(path: &str) -> KvTestEngine {
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
         let cfs_opts = vec![

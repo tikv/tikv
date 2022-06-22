@@ -1,20 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam::channel;
-use engine_rocks::raw::Writable;
-use engine_rocks::Compat;
-use engine_traits::{Iterable, Peekable, RaftEngineReadOnly};
-use engine_traits::{SyncMutable, CF_RAFT};
+use engine_rocks::{raw::Writable, Compat};
+use engine_traits::{Iterable, Peekable, RaftEngineReadOnly, SyncMutable, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::time::Instant;
+use tikv_util::{config::*, time::Instant};
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -342,7 +337,7 @@ fn test_safe_tombstone_gc() {
 #[test]
 fn test_destroy_clean_up_logs_with_log_gc() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 50;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(50);
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
     let pd_client = cluster.pd_client.clone();
 

@@ -1,17 +1,17 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::AtomicBool;
-use std::sync::{mpsc, Arc};
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{atomic::AtomicBool, mpsc, Arc},
+    thread,
+    time::Duration,
+};
 
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 #[test]
 fn test_destroy_local_reader() {
@@ -51,7 +51,7 @@ fn test_destroy_local_reader() {
     pd_client.must_remove_peer(r1, new_peer(1, 1));
 
     // Make sure region 1 is removed from store 1.
-    cluster.wait_tombstone(r1, new_peer(1, 1), false);
+    cluster.wait_destroy_and_clean(r1, new_peer(1, 1));
 
     let region = block_on(pd_client.get_region_by_id(r1)).unwrap().unwrap();
 
@@ -213,7 +213,7 @@ fn test_stale_peer_cache() {
 #[test]
 fn test_redundant_conf_change_by_snapshot() {
     let mut cluster = new_node_cluster(0, 4);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
     cluster.cfg.raft_store.merge_max_log_gap = 4;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
 

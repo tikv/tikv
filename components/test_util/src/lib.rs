@@ -13,18 +13,22 @@ mod macros;
 mod runner;
 mod security;
 
-use rand::Rng;
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::{env, thread};
-
-pub use crate::encryption::*;
-pub use crate::kv_generator::*;
-pub use crate::logging::*;
-pub use crate::macros::*;
-pub use crate::runner::{
-    clear_failpoints, run_failpoint_tests, run_test_with_hook, run_tests, TestHook,
+use std::{
+    env,
+    sync::atomic::{AtomicU16, Ordering},
+    thread,
 };
-pub use crate::security::*;
+
+use rand::Rng;
+
+pub use crate::{
+    encryption::*,
+    kv_generator::*,
+    logging::*,
+    macros::*,
+    runner::{clear_failpoints, run_failpoint_tests, run_test_with_hook, run_tests, TestHook},
+    security::*,
+};
 
 pub fn setup_for_ci() {
     // We use backtrace in tests to record suspicious problems. And loading backtrace

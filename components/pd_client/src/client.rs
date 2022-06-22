@@ -1,38 +1,46 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-use std::u64;
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+    u64,
+};
 
-use futures::channel::mpsc;
-use futures::compat::{Compat, Future01CompatExt};
-use futures::executor::block_on;
-use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::StreamExt;
+use futures::{
+    channel::mpsc,
+    compat::{Compat, Future01CompatExt},
+    executor::block_on,
+    future::{self, BoxFuture, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::StreamExt,
+};
 use grpcio::{CallOption, EnvBuilder, Environment, WriteFlags};
-
-use kvproto::metapb;
-use kvproto::pdpb::{self, Member};
-use kvproto::replication_modepb::{
-    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+use kvproto::{
+    metapb,
+    pdpb::{self, Member},
+    replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use security::SecurityManager;
-use tikv_util::time::{duration_to_sec, Instant};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{box_err, debug, error, info, thd_name, warn};
-use tikv_util::{Either, HandyRwLock};
+use tikv_util::{
+    box_err, debug, error, info, thd_name,
+    time::{duration_to_sec, Instant},
+    timer::GLOBAL_TIMER_HANDLE,
+    warn, Either, HandyRwLock,
+};
 use txn_types::TimeStamp;
-use yatp::task::future::TaskCell;
-use yatp::ThreadPool;
+use yatp::{task::future::TaskCell, ThreadPool};
 
-use super::metrics::*;
-use super::util::{check_resp_header, sync_request, Client, PdConnector};
-use super::{Config, FeatureGate, PdFuture, UnixSecs};
-use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
+use super::{
+    metrics::*,
+    util::{check_resp_header, sync_request, Client, PdConnector},
+    BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
+    UnixSecs, REQUEST_TIMEOUT,
+};
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
@@ -540,7 +548,7 @@ impl PdClient for RpcClient {
                     .with_label_values(&["get_region_by_id"])
                     .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
-                if resp.has_region() {
+                if resp.has_region() && resp.has_leader() {
                     Ok(Some((resp.take_region(), resp.take_leader())))
                 } else {
                     Ok(None)
@@ -870,11 +878,11 @@ impl PdClient for RpcClient {
         Ok(resp)
     }
 
-    fn get_tso(&self) -> PdFuture<TimeStamp> {
+    fn batch_get_tso(&self, count: u32) -> PdFuture<TimeStamp> {
         let begin = Instant::now();
         let executor = move |client: &Client, _| {
             // Remove Box::pin and Compat when GLOBAL_TIMER_HANDLE supports futures 0.3
-            let ts_fut = Compat::new(Box::pin(client.inner.rl().tso.get_timestamp()));
+            let ts_fut = Compat::new(Box::pin(client.inner.rl().tso.get_timestamp(count)));
             let with_timeout = GLOBAL_TIMER_HANDLE
                 .timeout(
                     ts_fut,
@@ -897,6 +905,44 @@ impl PdClient for RpcClient {
         };
         self.pd_client
             .request((), executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn update_service_safe_point(
+        &self,
+        name: String,
+        safe_point: TimeStamp,
+        ttl: Duration,
+    ) -> PdFuture<()> {
+        let begin = Instant::now();
+        let mut req = pdpb::UpdateServiceGcSafePointRequest::default();
+        req.set_header(self.header());
+        req.set_service_id(name.into());
+        req.set_ttl(ttl.as_secs() as _);
+        req.set_safe_point(safe_point.into_inner());
+        let executor = move |client: &Client, r: pdpb::UpdateServiceGcSafePointRequest| {
+            let handler = client
+                .inner
+                .rl()
+                .client_stub
+                .update_service_gc_safe_point_async_opt(&r, Self::call_option(client))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fail to request PD {} err {:?}",
+                        "update_service_safe_point", e
+                    )
+                });
+            Box::pin(async move {
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["update_service_safe_point"])
+                    .observe(duration_to_sec(begin.saturating_elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(())
+            }) as PdFuture<_>
+        };
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
 
@@ -933,6 +979,83 @@ impl PdClient for RpcClient {
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
+
+    fn report_region_buckets(&self, bucket_stat: &BucketStat, period: Duration) -> PdFuture<()> {
+        PD_BUCKETS_COUNTER_VEC.with_label_values(&["send"]).inc();
+
+        let mut buckets = metapb::Buckets::default();
+        buckets.set_region_id(bucket_stat.meta.region_id);
+        buckets.set_version(bucket_stat.meta.version);
+        buckets.set_keys(bucket_stat.meta.keys.clone().into());
+        buckets.set_period_in_ms(period.as_millis() as u64);
+        buckets.set_stats(bucket_stat.stats.clone());
+        let mut req = pdpb::ReportBucketsRequest::default();
+        req.set_header(self.header());
+        req.set_buckets(buckets);
+        req.set_region_epoch(bucket_stat.meta.region_epoch.clone());
+
+        let executor = |client: &Client, req: pdpb::ReportBucketsRequest| {
+            let mut inner = client.inner.wl();
+            if let Either::Left(ref mut left) = inner.buckets_sender {
+                debug!("region buckets sender is refreshed");
+                let sender = left.take().expect("expect report region buckets sink");
+                let (tx, rx) = mpsc::unbounded();
+                let pending_buckets = Arc::new(AtomicU64::new(0));
+                inner.buckets_sender = Either::Right(tx);
+                inner.pending_buckets = pending_buckets.clone();
+                let resp = inner.buckets_resp.take().unwrap();
+                inner.client_stub.spawn(async {
+                    let res = resp.await;
+                    warn!("region buckets stream exited: {:?}", res);
+                });
+                inner.client_stub.spawn(async move {
+                    let mut sender = sender.sink_map_err(Error::Grpc);
+                    let mut last_report = u64::MAX;
+                    let result = sender
+                        .send_all(&mut rx.map(|r| {
+                            let last = pending_buckets.fetch_sub(1, Ordering::Relaxed);
+                            // Sender will update pending at every send operation, so as long as
+                            // pending task is increasing, pending count should be reported by
+                            // sender.
+                            if last + 10 < last_report || last == 1 {
+                                PD_PENDING_BUCKETS_GAUGE.set(last as i64 - 1);
+                                last_report = last;
+                            }
+                            if last > last_report {
+                                last_report = last - 1;
+                            }
+                            Ok((r, WriteFlags::default()))
+                        }))
+                        .await;
+                    match result {
+                        Ok(()) => {
+                            sender.get_mut().cancel();
+                            info!("cancel region buckets sender");
+                        }
+                        Err(e) => {
+                            error!(?e; "failed to send region buckets");
+                        }
+                    };
+                });
+            }
+
+            let last = inner.pending_buckets.fetch_add(1, Ordering::Relaxed);
+            PD_PENDING_BUCKETS_GAUGE.set(last as i64 + 1);
+            let sender = inner
+                .buckets_sender
+                .as_mut()
+                .right()
+                .expect("expect region buckets sender");
+            let ret = sender
+                .unbounded_send(req)
+                .map_err(|e| Error::Other(Box::new(e)));
+            Box::pin(future::ready(ret)) as PdFuture<_>
+        };
+
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
 }
 
 pub struct DummyPdClient {
@@ -954,7 +1077,7 @@ impl Default for DummyPdClient {
 }
 
 impl PdClient for DummyPdClient {
-    fn get_tso(&self) -> PdFuture<TimeStamp> {
+    fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
         Box::pin(future::ok(self.next_ts))
     }
 }

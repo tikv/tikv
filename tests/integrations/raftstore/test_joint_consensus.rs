@@ -1,14 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::metapb::{self, PeerRole, Region};
-use kvproto::raft_cmdpb::{ChangePeerRequest, RaftCmdRequest, RaftCmdResponse};
+use std::{
+    sync::{mpsc, Arc},
+    time::*,
+};
+
+use kvproto::{
+    metapb::{self, PeerRole, Region},
+    raft_cmdpb::{ChangePeerRequest, RaftCmdRequest, RaftCmdResponse},
+};
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
-use raftstore::store::util::find_peer;
-use raftstore::Result;
-use std::sync::mpsc;
-use std::sync::Arc;
-use std::time::*;
+use raftstore::{store::util::find_peer, Result};
 use test_raftstore::*;
 
 /// Tests multiple confchange commands can be done by one request

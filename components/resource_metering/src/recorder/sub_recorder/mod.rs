@@ -3,8 +3,7 @@
 use collections::HashMap;
 use tikv_util::sys::thread::Pid;
 
-use crate::recorder::localstorage::LocalStorage;
-use crate::RawRecords;
+use crate::{recorder::localstorage::LocalStorage, RawRecords};
 
 pub mod cpu;
 pub mod summary;

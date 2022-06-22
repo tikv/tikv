@@ -1,13 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    sync::{mpsc::channel, Arc, Mutex},
+    time::Duration,
+};
+
 use file_system::calc_crc32;
-use futures::executor::block_on;
-use futures::{stream, SinkExt};
+use futures::{executor::block_on, stream, SinkExt};
 use grpcio::{Result, WriteFlags};
 use kvproto::import_sstpb::*;
-use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tempfile::Builder;
 use test_raftstore::Simulator;
 use test_sst_importer::*;

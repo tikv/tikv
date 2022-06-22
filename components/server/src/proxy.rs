@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::process;
+#![feature(proc_macro_hygiene)]
+use std::{path::Path, process};
 
 use crate::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use clap::{App, Arg};
@@ -220,13 +220,13 @@ pub unsafe fn run_proxy(
                     None
                 },
             )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "invalid auto generated configuration file {}, err {}",
-                    path.display(),
-                    e
-                );
-            })
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "invalid auto generated configuration file {}, err {}",
+                        path.display(),
+                        e
+                    );
+                })
         });
 
     check_engine_label(&matches);

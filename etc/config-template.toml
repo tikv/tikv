@@ -244,6 +244,18 @@
 ## Set it to 0 will cause no space is reserved at all. It's generally used for tests.
 # reserve-space = "5GB"
 
+## The maximum recovery time after rocksdb detects restorable background errors. When the data belonging
+## to the data range is damaged, it will be reported to PD through heartbeat, and PD will add `remove-peer`
+## operator to remove this damaged peer. When the damaged peer still exists in the current store, the
+## corruption SST files remain, and the KV storage engine can still put new content normally, but it
+## will return error when reading corrupt data range.
+##
+## If after this time, the peer where the corrupted data range located has not been removed from the
+## current store, TiKV will panic.
+##
+## Set to 0 to disable this feature if you want to panic immediately when encountering such an error.
+# background-error-recovery-window = "1h"
+
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
 ##
@@ -989,6 +1001,10 @@
 ## Default: 4. Minimum: 1.
 # recovery-threads = 4
 
+## Memory usage limit for Raft Engine.
+## When it's not set, 15% of available system memory will be used.
+# memory-limit = "1GB"
+
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
 # ca-path = ""
@@ -1088,6 +1104,15 @@
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
 # enable-auto-tune = true 
+
+[log-backup] 
+## Number of threads to perform backup stream tasks.
+## The default value is set to min(CPU_NUM * 0.5, 8).
+# num-threads = 8
+
+## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
+## The default value is false.
+# enable = false 
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.

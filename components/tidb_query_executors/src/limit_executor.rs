@@ -1,10 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use tidb_query_common::{storage::IntervalRange, Result};
 use tipb::FieldType;
 
 use crate::interface::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
 
 /// Executor that retrieves rows from the source executor
 /// and only produces part of the rows.
@@ -75,15 +74,14 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
 #[cfg(test)]
 mod tests {
+    use tidb_query_datatype::{
+        codec::{batch::LazyBatchColumnVec, data_type::VectorValue},
+        expr::EvalWarnings,
+        FieldTypeTp,
+    };
+
     use super::*;
-
-    use tidb_query_datatype::FieldTypeTp;
-
-    use crate::util::mock_executor::MockExecutor;
-    use crate::util::mock_executor::MockScanExecutor;
-    use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-    use tidb_query_datatype::codec::data_type::VectorValue;
-    use tidb_query_datatype::expr::EvalWarnings;
+    use crate::util::mock_executor::{MockExecutor, MockScanExecutor};
 
     #[test]
     fn test_limit_0() {

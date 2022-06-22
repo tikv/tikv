@@ -10,29 +10,25 @@ mod util;
 
 mod config;
 pub mod errors;
-pub use self::client::{DummyPdClient, RpcClient};
-pub use self::config::Config;
-pub use self::errors::{Error, Result};
-pub use self::feature_gate::{Feature, FeatureGate};
-pub use self::util::PdConnector;
-pub use self::util::REQUEST_RECONNECT_INTERVAL;
-pub use self::util::{merge_bucket_stats, new_bucket_stats};
-
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::Arc;
+use std::{cmp::Ordering, collections::HashMap, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
-use kvproto::metapb;
-use kvproto::pdpb;
-use kvproto::replication_modepb::{
-    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+use kvproto::{
+    metapb, pdpb,
+    replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
 use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
+
+pub use self::{
+    client::{DummyPdClient, RpcClient},
+    config::Config,
+    errors::{Error, Result},
+    feature_gate::{Feature, FeatureGate},
+    util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
+};
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
@@ -80,6 +76,7 @@ pub struct BucketMeta {
     pub version: u64,
     pub region_epoch: metapb::RegionEpoch,
     pub keys: Vec<Vec<u8>>,
+    pub sizes: Vec<u64>,
 }
 
 impl Eq for BucketMeta {}
@@ -111,17 +108,31 @@ impl Ord for BucketMeta {
     }
 }
 
+impl BucketMeta {
+    pub fn split(&mut self, idx: usize, key: Vec<u8>) {
+        assert!(idx != 0);
+        self.keys.insert(idx, key);
+        self.sizes.insert(idx, self.sizes[idx - 1]);
+    }
+
+    pub fn left_merge(&mut self, idx: usize) {
+        self.sizes[idx - 1] += self.sizes[idx];
+        self.keys.remove(idx);
+        self.sizes.remove(idx);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BucketStat {
     pub meta: Arc<BucketMeta>,
     pub stats: metapb::BucketStats,
-    pub last_report_time: Instant,
+    pub create_time: Instant,
 }
 
 impl Default for BucketStat {
     fn default() -> Self {
         Self {
-            last_report_time: Instant::now(),
+            create_time: Instant::now(),
             meta: Arc::default(),
             stats: metapb::BucketStats::default(),
         }
@@ -133,7 +144,7 @@ impl BucketStat {
         Self {
             meta,
             stats,
-            last_report_time: Instant::now(),
+            create_time: Instant::now(),
         }
     }
 
@@ -148,6 +159,39 @@ impl BucketStat {
         if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx) {
             *bytes += key.len() as u64 + value_size;
         }
+    }
+
+    pub fn split(&mut self, idx: usize) {
+        assert!(idx != 0);
+        // inherit the traffic stats for splited bucket
+        let val = self.stats.write_keys[idx - 1];
+        self.stats.mut_write_keys().insert(idx, val);
+        let val = self.stats.write_bytes[idx - 1];
+        self.stats.mut_write_bytes().insert(idx, val);
+        let val = self.stats.read_qps[idx - 1];
+        self.stats.mut_read_qps().insert(idx, val);
+        let val = self.stats.write_qps[idx - 1];
+        self.stats.mut_write_qps().insert(idx, val);
+        let val = self.stats.read_keys[idx - 1];
+        self.stats.mut_read_keys().insert(idx, val);
+        let val = self.stats.read_bytes[idx - 1];
+        self.stats.mut_read_bytes().insert(idx, val);
+    }
+
+    pub fn left_merge(&mut self, idx: usize) {
+        assert!(idx != 0);
+        let val = self.stats.mut_write_keys().remove(idx);
+        self.stats.mut_write_keys()[idx - 1] += val;
+        let val = self.stats.mut_write_bytes().remove(idx);
+        self.stats.mut_write_bytes()[idx - 1] += val;
+        let val = self.stats.mut_read_qps().remove(idx);
+        self.stats.mut_read_qps()[idx - 1] += val;
+        let val = self.stats.mut_write_qps().remove(idx);
+        self.stats.mut_write_qps()[idx - 1] += val;
+        let val = self.stats.mut_read_keys().remove(idx);
+        self.stats.mut_read_keys()[idx - 1] += val;
+        let val = self.stats.mut_read_bytes().remove(idx);
+        self.stats.mut_read_bytes()[idx - 1] += val;
     }
 }
 
@@ -361,6 +405,23 @@ pub trait PdClient: Send + Sync {
 
     /// Gets a timestamp from PD.
     fn get_tso(&self) -> PdFuture<TimeStamp> {
+        self.batch_get_tso(1)
+    }
+
+    /// Gets a batch of timestamps from PD.
+    /// Return a timestamp with (physical, logical), indicating that timestamps allocated are:
+    /// [Timestamp(physical, logical - count + 1), Timestamp(physical, logical)]
+    fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
+        unimplemented!()
+    }
+
+    /// Set a service safe point.
+    fn update_service_safe_point(
+        &self,
+        _name: String,
+        _safepoint: TimeStamp,
+        _ttl: Duration,
+    ) -> PdFuture<()> {
         unimplemented!()
     }
 
@@ -372,6 +433,11 @@ pub trait PdClient: Send + Sync {
     // Report min resolved_ts to PD.
     fn report_min_resolved_ts(&self, _store_id: u64, _min_resolved_ts: u64) -> PdFuture<()> {
         unimplemented!()
+    }
+
+    /// Region's Leader uses this to report buckets to PD.
+    fn report_region_buckets(&self, _bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
+        unimplemented!();
     }
 }
 

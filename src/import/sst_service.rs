@@ -1,46 +1,54 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::future::Future;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    future::Future,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
-use super::make_rpc_error;
 use collections::HashSet;
-use engine_traits::{KvEngine, CF_WRITE};
+use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IOType};
-use futures::executor::{ThreadPool, ThreadPoolBuilder};
-use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
-use futures::TryFutureExt;
+use futures::{
+    executor::{ThreadPool, ThreadPoolBuilder},
+    future::join_all,
+    sink::SinkExt,
+    stream::TryStreamExt,
+    TryFutureExt,
+};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::{errorpb, kvrpcpb::Context};
+use kvproto::{
+    encryptionpb::EncryptionMethod,
+    errorpb,
+    import_sstpb::{RawWriteRequest_oneof_chunk as RawChunk, WriteRequest_oneof_chunk as Chunk, *},
+    kvrpcpb::Context,
+    raft_cmdpb::*,
+};
+use protobuf::Message;
+use raftstore::{
+    router::RaftStoreRouter,
+    store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
+};
+use sst_importer::{error_inc, metrics::*, sst_meta_to_path, Config, Error, Result, SstImporter};
+use tikv_util::{
+    config::ReadableSize,
+    future::{create_stream_with_buffer, paired_future_callback},
+    time::{Instant, Limiter},
+};
+use txn_types::{Key, WriteRef, WriteType};
 
-use kvproto::import_sstpb::RawWriteRequest_oneof_chunk as RawChunk;
-use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
-use kvproto::import_sstpb::*;
+use super::make_rpc_error;
+use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_GAUGE};
 
-use kvproto::raft_cmdpb::*;
-
-use crate::server::CONFIG_ROCKSDB_GAUGE;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, RaftCmdExtraOpts, RegionSnapshot};
-use tikv_util::future::create_stream_with_buffer;
-use tikv_util::future::paired_future_callback;
-use tikv_util::time::{Instant, Limiter};
-
-use crate::import::duplicate_detect::DuplicateDetector;
-use sst_importer::metrics::*;
-use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
-
-/// ImportSSTService provides tikv-server with the ability to ingest SST files.
+/// ImportSstService provides tikv-server with the ability to ingest SST files.
 ///
 /// It saves the SST sent from client to a file and then sends a command to
 /// raftstore to trigger the ingest process.
 #[derive(Clone)]
-pub struct ImportSSTService<E, Router>
+pub struct ImportSstService<E, Router>
 where
     E: KvEngine,
 {
@@ -48,9 +56,10 @@ where
     engine: E,
     router: Router,
     threads: ThreadPool,
-    importer: Arc<SSTImporter>,
+    importer: Arc<SstImporter>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
+    raft_entry_max_size: ReadableSize,
 }
 
 pub struct SnapshotResult<E: KvEngine> {
@@ -58,17 +67,18 @@ pub struct SnapshotResult<E: KvEngine> {
     term: u64,
 }
 
-impl<E, Router> ImportSSTService<E, Router>
+impl<E, Router> ImportSstService<E, Router>
 where
     E: KvEngine,
     Router: 'static + RaftStoreRouter<E>,
 {
     pub fn new(
         cfg: Config,
+        raft_entry_max_size: ReadableSize,
         router: Router,
         engine: E,
-        importer: Arc<SSTImporter>,
-    ) -> ImportSSTService<E, Router> {
+        importer: Arc<SstImporter>,
+    ) -> ImportSstService<E, Router> {
         let props = tikv_util::thread_group::current_properties();
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
@@ -82,7 +92,7 @@ where
             .create()
             .unwrap();
         importer.start_switch_mode_check(&threads, engine.clone());
-        ImportSSTService {
+        ImportSstService {
             cfg,
             engine,
             threads,
@@ -90,6 +100,7 @@ where
             importer,
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
+            raft_entry_max_size,
         }
     }
 
@@ -293,7 +304,7 @@ macro_rules! impl_write {
     };
 }
 
-impl<E, Router> ImportSst for ImportSSTService<E, Router>
+impl<E, Router> ImportSst for ImportSstService<E, Router>
 where
     E: KvEngine,
     Router: 'static + RaftStoreRouter<E>,
@@ -372,6 +383,147 @@ where
         };
 
         self.threads.spawn_ok(buf_driver);
+        self.threads.spawn_ok(handle_task);
+    }
+
+    // clear_files the KV files after apply finished.
+    // it will remove the direcotry in import path.
+    fn clear_files(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: ClearRequest,
+        sink: UnarySink<ClearResponse>,
+    ) {
+        let label = "clear_files";
+        let timer = Instant::now_coarse();
+        let importer = Arc::clone(&self.importer);
+        let start = Instant::now();
+        let mut resp = ClearResponse::default();
+
+        let handle_task = async move {
+            // Records how long the apply task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_APPLY_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            if let Err(e) = importer.remove_dir(req.get_prefix()) {
+                let mut import_err = kvproto::import_sstpb::Error::default();
+                import_err.set_message(format!("failed to remove directory: {}", e));
+                resp.set_error(import_err);
+            }
+            sst_importer::metrics::IMPORTER_APPLY_DURATION
+                .with_label_values(&[label])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            let resp = Ok(resp);
+            crate::send_rpc_response!(resp, sink, label, timer);
+        };
+        self.threads.spawn_ok(handle_task);
+    }
+
+    // Downloads KV file and performs key-rewrite then apply kv into this tikv store.
+    fn apply(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        mut req: ApplyRequest,
+        sink: UnarySink<ApplyResponse>,
+    ) {
+        let label = "apply";
+        let timer = Instant::now_coarse();
+        let importer = Arc::clone(&self.importer);
+        let router = self.router.clone();
+        let limiter = self.limiter.clone();
+        let start = Instant::now();
+        let raft_size = self.raft_entry_max_size;
+
+        let handle_task = async move {
+            // Records how long the apply task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_APPLY_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            let mut futs = vec![];
+            let mut apply_resp = ApplyResponse::default();
+            let context = req.take_context();
+            let meta = req.get_meta();
+
+            let result = (|| -> Result<()> {
+                let temp_file =
+                    importer.do_download_kv_file(meta, req.get_storage_backend(), &limiter)?;
+                let mut reqs = RequestCollector::from_cf(meta.get_cf());
+                let mut cmd_reqs = vec![];
+                let mut build_req_fn = build_apply_request(
+                    raft_size.0,
+                    &mut reqs,
+                    cmd_reqs.as_mut(),
+                    meta.get_is_delete(),
+                    meta.get_cf(),
+                    context.clone(),
+                );
+                let range = importer.do_apply_kv_file(
+                    meta.get_start_key(),
+                    meta.get_end_key(),
+                    meta.get_restore_ts(),
+                    temp_file,
+                    req.get_rewrite_rule(),
+                    &mut build_req_fn,
+                )?;
+                drop(build_req_fn);
+                if !reqs.is_empty() {
+                    let cmd = make_request(&mut reqs, context);
+                    cmd_reqs.push(cmd);
+                }
+                for cmd in cmd_reqs {
+                    let (cb, future) = paired_future_callback();
+                    match router.send_command(cmd, Callback::write(cb), RaftCmdExtraOpts::default())
+                    {
+                        Ok(_) => futs.push(future),
+                        Err(e) => {
+                            let mut import_err = kvproto::import_sstpb::Error::default();
+                            import_err.set_message(format!("failed to send raft command: {}", e));
+                            apply_resp.set_error(import_err);
+                        }
+                    }
+                }
+                if let Some(r) = range {
+                    apply_resp.set_range(r);
+                }
+                Ok(())
+            })();
+            if let Err(e) = result {
+                apply_resp.set_error(e.into());
+            }
+
+            let resp = Ok(join_all(futs).await.iter().fold(apply_resp, |mut resp, x| {
+                match x {
+                    Err(e) => {
+                        let mut import_err = kvproto::import_sstpb::Error::default();
+                        import_err.set_message(format!("failed to complete raft command: {}", e));
+                        resp.set_error(import_err);
+                    }
+                    Ok(r) => {
+                        if r.response.get_header().has_error() {
+                            let mut import_err = kvproto::import_sstpb::Error::default();
+                            let err = r.response.get_header().get_error();
+                            import_err
+                                .set_message("failed to complete raft command".to_string());
+                            // FIXME: if there are many errors, we may lose some of them here.
+                            import_err
+                                .set_store_error(err.clone());
+                            warn!("failed to apply the file to the store"; "error" => ?err, "file" => %meta.get_name());
+                            resp.set_error(import_err);
+                        }
+                    }
+                }
+                resp
+            }));
+            // Records how long the apply task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_APPLY_DURATION
+                .with_label_values(&["finish"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+            debug!("finished apply kv file with {:?}", resp);
+            crate::send_rpc_response!(resp, sink, label, timer);
+        };
         self.threads.spawn_ok(handle_task);
     }
 
@@ -703,6 +855,78 @@ fn pb_error_inc(type_: &str, e: &errorpb::Error) {
     IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
 }
 
+enum RequestCollector {
+    /// Retain the last ts of each key in each request.
+    /// This is used for write CF because resolved ts observer hates duplicated key in the same request.
+    RetainLastTs(HashMap<Vec<u8>, (Request, u64)>),
+    /// Collector favor that simple collect all items.
+    /// This is used for default CF.
+    KeepAll(Vec<Request>),
+}
+
+impl RequestCollector {
+    fn from_cf(cf: &str) -> Self {
+        match cf {
+            CF_DEFAULT | "" => Self::KeepAll(Default::default()),
+            CF_WRITE => Self::RetainLastTs(Default::default()),
+            _ => {
+                warn!("unknown cf name, using default request collector"; "cf" => %cf);
+                Self::RetainLastTs(Default::default())
+            }
+        }
+    }
+
+    fn accept(&mut self, req: Request) {
+        match self {
+            RequestCollector::RetainLastTs(ref mut reqs) => {
+                let k = key_from_request(&req);
+                let (encoded_key, ts) = match Key::split_on_ts_for(k) {
+                    Ok(k) => k,
+                    Err(err) => {
+                        warn!("key without ts, skipping"; "key" => %log_wrappers::Value::key(k), "err" => %err);
+                        return;
+                    }
+                };
+                if reqs
+                    .get(encoded_key)
+                    .map(|(_, old_ts)| *old_ts < ts.into_inner())
+                    .unwrap_or(true)
+                {
+                    reqs.insert(encoded_key.to_owned(), (req, ts.into_inner()));
+                }
+            }
+            RequestCollector::KeepAll(ref mut a) => a.push(req),
+        }
+    }
+
+    fn drain(&mut self) -> Vec<Request> {
+        match self {
+            RequestCollector::RetainLastTs(ref mut reqs) => {
+                reqs.drain().map(|(_, (req, _))| req).collect()
+            }
+            RequestCollector::KeepAll(ref mut reqs) => std::mem::take(reqs),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            RequestCollector::RetainLastTs(reqs) => reqs.is_empty(),
+            RequestCollector::KeepAll(reqs) => reqs.is_empty(),
+        }
+    }
+}
+
+fn key_from_request(req: &Request) -> &[u8] {
+    if req.has_put() {
+        return req.get_put().get_key();
+    }
+    if req.has_delete() {
+        return req.get_delete().get_key();
+    }
+    warn!("trying to extract key from request is neither put nor delete.");
+    b""
+}
+
 fn make_request_header(mut context: Context) -> RaftRequestHeader {
     let region_id = context.get_region_id();
     let mut header = RaftRequestHeader::default();
@@ -710,4 +934,231 @@ fn make_request_header(mut context: Context) -> RaftRequestHeader {
     header.set_region_id(region_id);
     header.set_region_epoch(context.take_region_epoch());
     header
+}
+
+fn make_request(reqs: &mut RequestCollector, context: Context) -> RaftCmdRequest {
+    let mut cmd = RaftCmdRequest::default();
+    let mut header = make_request_header(context);
+    // Set the UUID of header to prevent raftstore batching our requests.
+    // The current `resolved_ts` observer assumes that each batch of request doesn't has
+    // two writes to the same key. (Even with 2 different TS). That was true for normal cases
+    // because the latches reject concurrency write to keys. However we have bypassed the latch layer :(
+    header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
+    cmd.set_header(header);
+    cmd.set_requests(reqs.drain().into());
+    cmd
+}
+
+// we need to remove duplicate keys in here, since
+// in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
+// will panic if found duplicated entry during Vec<PutRequest>.
+fn build_apply_request<'a, 'b>(
+    raft_size: u64,
+    reqs: &'a mut RequestCollector,
+    cmd_reqs: &'a mut Vec<RaftCmdRequest>,
+    is_delete: bool,
+    cf: &'b str,
+    context: Context,
+) -> Box<dyn FnMut(Vec<u8>, Vec<u8>) + 'b>
+where
+    'a: 'b,
+{
+    let mut req_size = 0_u64;
+
+    // use callback to collect kv data.
+    if is_delete {
+        Box::new(move |k: Vec<u8>, _v: Vec<u8>| {
+            let mut req = Request::default();
+            let mut del = DeleteRequest::default();
+
+            del.set_key(k);
+            del.set_cf(cf.to_string());
+            req.set_cmd_type(CmdType::Delete);
+            req.set_delete(del);
+            req_size += req.compute_size() as u64;
+            reqs.accept(req);
+            // When the request size get grow to half of the max request size,
+            // build the request and add it to a batch.
+            if req_size > raft_size / 2 {
+                req_size = 0;
+                let cmd = make_request(reqs, context.clone());
+                cmd_reqs.push(cmd);
+            }
+        })
+    } else {
+        Box::new(move |k: Vec<u8>, v: Vec<u8>| {
+            if cf == CF_WRITE && !write_needs_restore(&v) {
+                return;
+            }
+
+            let mut req = Request::default();
+            let mut put = PutRequest::default();
+
+            put.set_key(k);
+            put.set_value(v);
+            put.set_cf(cf.to_string());
+            req.set_cmd_type(CmdType::Put);
+            req.set_put(put);
+            req_size += req.compute_size() as u64;
+            reqs.accept(req);
+            if req_size > raft_size / 2 {
+                req_size = 0;
+                let cmd = make_request(reqs, context.clone());
+                cmd_reqs.push(cmd);
+            }
+        })
+    }
+}
+
+fn write_needs_restore(write: &[u8]) -> bool {
+    let w = WriteRef::parse(write);
+    match w {
+        Ok(w)
+            if matches!(
+                w.write_type,
+                WriteType::Put | WriteType::Delete | WriteType::Rollback
+            ) =>
+        {
+            true
+        }
+        Ok(w) => {
+            debug!("skip unnecessary write."; "type" => ?w.write_type);
+            false
+        }
+        Err(err) => {
+            warn!("write cannot be parsed, skipping"; "err" => %err, 
+                        "write" => %log_wrappers::Value::key(write));
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+
+    use engine_traits::{CF_DEFAULT, CF_WRITE};
+    use kvproto::{kvrpcpb::Context, raft_cmdpb::*};
+    use txn_types::{Key, TimeStamp, Write, WriteType};
+
+    use crate::import::sst_service::{
+        build_apply_request, key_from_request, make_request, RequestCollector,
+    };
+
+    fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
+        let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
+        let v = Write::new(ty, TimeStamp::new(start_ts), None);
+        (k.into_encoded(), v.as_ref().to_bytes())
+    }
+
+    fn default(key: &[u8], val: &[u8], start_ts: u64) -> (Vec<u8>, Vec<u8>) {
+        let k = Key::from_raw(key).append_ts(TimeStamp::new(start_ts));
+        (k.into_encoded(), val.to_owned())
+    }
+
+    fn default_req(key: &[u8], val: &[u8], start_ts: u64) -> Request {
+        let (k, v) = default(key, val, start_ts);
+        req(k, v, CF_DEFAULT)
+    }
+
+    fn write_req(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> Request {
+        let (k, v) = write(key, ty, commit_ts, start_ts);
+        req(k, v, CF_WRITE)
+    }
+
+    fn req(k: Vec<u8>, v: Vec<u8>, cf: &str) -> Request {
+        let mut req = Request::default();
+        let mut put = PutRequest::default();
+
+        put.set_key(k);
+        put.set_value(v);
+        put.set_cf(cf.to_string());
+        req.set_cmd_type(CmdType::Put);
+        req.set_put(put);
+        req
+    }
+
+    #[test]
+    fn test_build_request() {
+        #[derive(Debug)]
+        struct Case {
+            cf: &'static str,
+            mutations: Vec<(Vec<u8>, Vec<u8>)>,
+            expected_reqs: Vec<Request>,
+        }
+
+        fn run_case(c: &Case) {
+            let mut v = vec![];
+            let mut coll = RequestCollector::from_cf(c.cf);
+            let mut builder =
+                build_apply_request(1024, &mut coll, &mut v, false, c.cf, Context::new());
+
+            for (k, v) in c.mutations.clone() {
+                builder(k, v);
+            }
+            drop(builder);
+            if !coll.is_empty() {
+                let cmd = make_request(&mut coll, Context::new());
+                v.push(cmd);
+            }
+
+            let mut req1: HashMap<_, _> = v
+                .into_iter()
+                .flat_map(|mut x| x.take_requests().into_iter())
+                .map(|req| {
+                    let key = key_from_request(&req).to_owned();
+                    (key, req)
+                })
+                .collect();
+            for req in c.expected_reqs.iter() {
+                let r = req1.remove(key_from_request(req));
+                assert_eq!(r.as_ref(), Some(req), "{:?}", c);
+            }
+            assert!(req1.is_empty(), "{:?}\ncase = {:?}", req1, c);
+        }
+
+        use WriteType::*;
+        let cases = vec![
+            Case {
+                cf: CF_WRITE,
+                mutations: vec![
+                    write(b"foo", Lock, 42, 41),
+                    write(b"foo", Put, 40, 39),
+                    write(b"bar", Put, 38, 37),
+                    write(b"baz", Put, 34, 31),
+                    write(b"bar", Delete, 28, 17),
+                ],
+                expected_reqs: vec![
+                    write_req(b"foo", Put, 40, 39),
+                    write_req(b"bar", Put, 38, 37),
+                    write_req(b"baz", Put, 34, 31),
+                ],
+            },
+            Case {
+                cf: CF_DEFAULT,
+                mutations: vec![
+                    default(b"aria", b"The planet where flowers bloom.", 123),
+                    default(
+                        b"aria",
+                        b"Even a small breeze can still bring small happiness.",
+                        178,
+                    ),
+                    default(b"beyond", b"Calling your name.", 278),
+                ],
+                expected_reqs: vec![
+                    default_req(b"aria", b"The planet where flowers bloom.", 123),
+                    default_req(
+                        b"aria",
+                        b"Even a small breeze can still bring small happiness.",
+                        178,
+                    ),
+                    default_req(b"beyond", b"Calling your name.", 278),
+                ],
+            },
+        ];
+
+        for case in cases {
+            run_case(&case);
+        }
+    }
 }

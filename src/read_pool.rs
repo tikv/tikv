@@ -1,25 +1,27 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::{
+    future::Future,
+    sync::{Arc, Mutex},
+};
 
-use futures::channel::oneshot;
-use futures::future::TryFutureExt;
+use file_system::{set_io_type, IOType};
+use futures::{channel::oneshot, future::TryFutureExt};
 use kvproto::kvrpcpb::CommandPri;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::IntGauge;
 use thiserror::Error;
-use yatp::pool::Remote;
-use yatp::queue::Extras;
-use yatp::task::future::TaskCell;
-
-use file_system::{set_io_type, IOType};
-use tikv_util::sys::SysQuota;
-use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
+use tikv_util::{
+    sys::SysQuota,
+    yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder},
+};
+use yatp::{pool::Remote, queue::Extras, task::future::TaskCell};
 
 use self::metrics::*;
-use crate::config::{UnifiedReadPoolConfig, UNIFIED_READPOOL_MIN_CONCURRENCY};
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
+use crate::{
+    config::{UnifiedReadPoolConfig, UNIFIED_READPOOL_MIN_CONCURRENCY},
+    storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter},
+};
 
 pub enum ReadPool {
     FuturePools {
@@ -333,12 +335,13 @@ mod metrics {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::TestEngineBuilder;
+    use std::{thread, time::Duration};
+
     use futures::channel::oneshot;
     use raftstore::store::{ReadStats, WriteStats};
-    use std::thread;
-    use std::time::Duration;
+
+    use super::*;
+    use crate::storage::TestEngineBuilder;
 
     #[derive(Clone)]
     struct DummyReporter;

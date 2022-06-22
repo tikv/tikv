@@ -1,16 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::disk_usage::DiskUsage;
-use kvproto::kvrpcpb::{DiskFullOpt, Op};
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::*;
+use std::{thread, time::Duration};
+
+use kvproto::{
+    disk_usage::DiskUsage,
+    kvrpcpb::{DiskFullOpt, Op},
+    metapb::Region,
+    raft_cmdpb::*,
+};
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
-use std::thread;
-use std::time::Duration;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
-use tikv_util::time::Instant;
+use tikv_util::{config::ReadableDuration, time::Instant};
 
 fn assert_disk_full(resp: &RaftCmdResponse) {
     assert!(resp.get_header().get_error().has_disk_full());

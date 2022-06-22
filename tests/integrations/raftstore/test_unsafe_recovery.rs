@@ -1,8 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::FromIterator;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use futures::executor::block_on;
 use kvproto::{metapb, pdpb};
@@ -10,8 +8,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::util::find_peer;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 fn confirm_quorum_is_lost<T: Simulator>(cluster: &mut Cluster<T>, region: &metapb::Region) {
     let put = new_put_cmd(b"k2", b"v2");
@@ -41,7 +38,6 @@ fn test_unsafe_recovery_demote_failed_voters() {
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    configure_for_lease_read(&mut cluster, None, None);
 
     let peer_on_store2 = find_peer(&region, nodes[2]).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store2.clone());
@@ -81,7 +77,7 @@ fn test_unsafe_recovery_demote_failed_voters() {
         }
         sleep_ms(200);
     }
-    assert_eq!(demoted, true);
+    assert!(demoted);
 }
 
 // Demote non-exist voters will not work, but TiKV should still report to PD.
@@ -97,7 +93,6 @@ fn test_unsafe_recovery_demote_non_exist_voters() {
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    configure_for_lease_read(&mut cluster, None, None);
 
     let peer_on_store2 = find_peer(&region, nodes[2]).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store2.clone());
@@ -163,7 +158,6 @@ fn test_unsafe_recovery_auto_promote_learner() {
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    configure_for_lease_read(&mut cluster, None, None);
 
     let peer_on_store0 = find_peer(&region, nodes[0]).unwrap();
     let peer_on_store2 = find_peer(&region, nodes[2]).unwrap();
@@ -221,8 +215,8 @@ fn test_unsafe_recovery_auto_promote_learner() {
         }
         sleep_ms(100);
     }
-    assert_eq!(demoted, true);
-    assert_eq!(promoted, true);
+    assert!(demoted);
+    assert!(promoted);
 }
 
 #[test]
@@ -237,7 +231,6 @@ fn test_unsafe_recovery_already_in_joint_state() {
     pd_client.disable_default_operator();
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    configure_for_lease_read(&mut cluster, None, None);
 
     let peer_on_store0 = find_peer(&region, nodes[0]).unwrap();
     let peer_on_store2 = find_peer(&region, nodes[2]).unwrap();
@@ -308,8 +301,95 @@ fn test_unsafe_recovery_already_in_joint_state() {
         }
         sleep_ms(100);
     }
+    assert!(demoted);
+    assert!(promoted);
+}
+
+// Tests whether unsafe recovery behaves correctly when the failed region is already in the
+// middle of a joint state, once exit, it recovers itself without any further demotions.
+#[test]
+fn test_unsafe_recovery_early_return_after_exit_joint_state() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+
+    // Changes the group config to
+    let peer_on_store0 = find_peer(&region, nodes[0]).unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[1]).unwrap();
+    let peer_on_store2 = find_peer(&region, nodes[2]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store2.clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), peer_on_store0.clone());
+    cluster.pd_client.must_add_peer(
+        region.get_id(),
+        new_learner_peer(nodes[0], peer_on_store0.get_id()),
+    );
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), peer_on_store2.clone());
+    cluster.pd_client.must_add_peer(
+        region.get_id(),
+        new_learner_peer(nodes[2], peer_on_store2.get_id()),
+    );
+    // Wait the new learner to be initialized.
+    sleep_ms(100);
+    pd_client.must_joint_confchange(
+        region.get_id(),
+        vec![
+            (
+                ConfChangeType::AddNode,
+                new_peer(nodes[0], peer_on_store0.get_id()),
+            ),
+            (
+                ConfChangeType::AddLearnerNode,
+                new_learner_peer(nodes[1], peer_on_store1.get_id()),
+            ),
+        ],
+    );
+    cluster.stop_node(nodes[1]);
+    cluster.stop_node(nodes[2]);
+    cluster.must_wait_for_leader_expire(nodes[0], region.get_id());
+
+    confirm_quorum_is_lost(&mut cluster, &region);
+    cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
+
+    let to_be_removed: Vec<metapb::Peer> = region
+        .get_peers()
+        .iter()
+        .filter(|&peer| peer.get_store_id() != nodes[0])
+        .cloned()
+        .collect();
+    let mut plan = pdpb::RecoveryPlan::default();
+    let mut demote = pdpb::DemoteFailedVoters::default();
+    demote.set_region_id(region.get_id());
+    demote.set_failed_voters(to_be_removed.into());
+    plan.mut_demotes().push(demote);
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    cluster.must_send_store_heartbeat(nodes[0]);
+
+    let mut demoted = true;
+    for _ in 0..10 {
+        let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+
+        demoted = region
+            .get_peers()
+            .iter()
+            .filter(|peer| peer.get_store_id() != nodes[0])
+            .all(|peer| peer.get_role() == metapb::PeerRole::Learner);
+        if demoted {
+            break;
+        }
+        sleep_ms(100);
+    }
     assert_eq!(demoted, true);
-    assert_eq!(promoted, true);
 }
 
 #[test]
@@ -330,7 +410,6 @@ fn test_unsafe_recovery_create_region() {
     pd_client.must_remove_peer(region.get_id(), store0_peer);
     cluster.must_remove_region(nodes[0], region.get_id());
 
-    configure_for_lease_read(&mut cluster, None, None);
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
     cluster.must_wait_for_leader_expire(nodes[0], region.get_id());
@@ -554,7 +633,6 @@ fn test_force_leader_for_learner() {
 #[test]
 fn test_force_leader_on_hibernated_leader() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_hibernate(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -603,7 +681,6 @@ fn test_force_leader_on_hibernated_leader() {
 fn test_force_leader_on_hibernated_follower() {
     test_util::init_log_for_test();
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_hibernate(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -648,97 +725,96 @@ fn test_force_leader_on_hibernated_follower() {
 
 // Test the case that three of five nodes fail and force leader on the rest node
 // with triggering snapshot.
-#[test]
-fn test_force_leader_trigger_snapshot() {
-    let mut cluster = new_node_cluster(0, 5);
-    configure_for_snapshot(&mut cluster);
-    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
-    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
-    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
-    cluster.pd_client.disable_default_operator();
-
-    cluster.run();
-    cluster.must_put(b"k1", b"v1");
-
-    let region = cluster.get_region(b"k1");
-    cluster.must_split(&region, b"k9");
-    let region = cluster.get_region(b"k2");
-    let peer_on_store1 = find_peer(&region, 1).unwrap();
-    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
-
-    // Isolate node 2
-    cluster.add_send_filter(IsolationFilterFactory::new(2));
-
-    // Compact logs to force requesting snapshot after clearing send filters.
-    let state = cluster.truncated_state(region.get_id(), 1);
-    // Write some data to trigger snapshot.
-    for i in 100..150 {
-        let key = format!("k{}", i);
-        let value = format!("v{}", i);
-        cluster.must_put(key.as_bytes(), value.as_bytes());
-    }
-    cluster.wait_log_truncated(region.get_id(), 1, state.get_index() + 40);
-
-    cluster.stop_node(3);
-    cluster.stop_node(4);
-    cluster.stop_node(5);
-
-    // Recover the isolation of 2, but still don't permit snapshot
-    let recv_filter = Box::new(
-        RegionPacketFilter::new(region.get_id(), 2)
-            .direction(Direction::Recv)
-            .msg_type(MessageType::MsgSnapshot),
-    );
-    cluster.sim.wl().add_recv_filter(2, recv_filter);
-    cluster.clear_send_filters();
-
-    // wait election timeout
-    sleep_ms(
-        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
-            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-            * 5,
-    );
-    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
-
-    sleep_ms(
-        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
-            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-            * 3,
-    );
-    let cmd = new_change_peer_request(
-        ConfChangeType::RemoveNode,
-        find_peer(&region, 3).unwrap().clone(),
-    );
-    let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
-    // Though it has a force leader now, but the command can't committed because the log is not replicated to all the alive peers.
-    assert!(
-        cluster
-            .call_command_on_leader(req, Duration::from_millis(1000))
-            .unwrap()
-            .get_header()
-            .has_error() // error "there is a pending conf change" indicating no committed log after being the leader
-    );
-
-    // Permit snapshot message, snapshot should be applied and advance commit index now.
-    cluster.sim.wl().clear_recv_filters(2);
-    cluster
-        .pd_client
-        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
-    cluster
-        .pd_client
-        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
-    cluster
-        .pd_client
-        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
-    cluster.exit_force_leader(region.get_id(), 1);
-
-    // quorum is formed, can propose command successfully now
-    cluster.must_put(b"k4", b"v4");
-    assert_eq!(cluster.must_get(b"k2"), None);
-    assert_eq!(cluster.must_get(b"k3"), None);
-    assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
-    cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
-}
+// #[test]
+// fn test_force_leader_trigger_snapshot() {
+//     let mut cluster = new_node_cluster(0, 5);
+//     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+//     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+//     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
+//     cluster.pd_client.disable_default_operator();
+//
+//     cluster.run();
+//     cluster.must_put(b"k1", b"v1");
+//
+//     let region = cluster.get_region(b"k1");
+//     cluster.must_split(&region, b"k9");
+//     let region = cluster.get_region(b"k2");
+//     let peer_on_store1 = find_peer(&region, 1).unwrap();
+//     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+//
+//     // Isolate node 2
+//     cluster.add_send_filter(IsolationFilterFactory::new(2));
+//
+//     // Compact logs to force requesting snapshot after clearing send filters.
+//     let state = cluster.truncated_state(region.get_id(), 1);
+//     // Write some data to trigger snapshot.
+//     for i in 100..150 {
+//         let key = format!("k{}", i);
+//         let value = format!("v{}", i);
+//         cluster.must_put(key.as_bytes(), value.as_bytes());
+//     }
+//     cluster.wait_log_truncated(region.get_id(), 1, state.get_index() + 40);
+//
+//     cluster.stop_node(3);
+//     cluster.stop_node(4);
+//     cluster.stop_node(5);
+//
+//     // Recover the isolation of 2, but still don't permit snapshot
+//     let recv_filter = Box::new(
+//         RegionPacketFilter::new(region.get_id(), 2)
+//             .direction(Direction::Recv)
+//             .msg_type(MessageType::MsgSnapshot),
+//     );
+//     cluster.sim.wl().add_recv_filter(2, recv_filter);
+//     cluster.clear_send_filters();
+//
+//     // wait election timeout
+//     sleep_ms(
+//         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+//             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+//             * 5,
+//     );
+//     cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+//
+//     sleep_ms(
+//         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+//             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+//             * 3,
+//     );
+//     let cmd = new_change_peer_request(
+//         ConfChangeType::RemoveNode,
+//         find_peer(&region, 3).unwrap().clone(),
+//     );
+//     let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
+//     // Though it has a force leader now, but the command can't committed because the log is not replicated to all the alive peers.
+//     assert!(
+//         cluster
+//             .call_command_on_leader(req, Duration::from_millis(1000))
+//             .unwrap()
+//             .get_header()
+//             .has_error() // error "there is a pending conf change" indicating no committed log after being the leader
+//     );
+//
+//     // Permit snapshot message, snapshot should be applied and advance commit index now.
+//     cluster.sim.wl().clear_recv_filters(2);
+//     cluster
+//         .pd_client
+//         .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+//     cluster
+//         .pd_client
+//         .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+//     cluster
+//         .pd_client
+//         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
+//     cluster.exit_force_leader(region.get_id(), 1);
+//
+//     // quorum is formed, can propose command successfully now
+//     cluster.must_put(b"k4", b"v4");
+//     assert_eq!(cluster.must_get(b"k2"), None);
+//     assert_eq!(cluster.must_get(b"k3"), None);
+//     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+//     cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
+// }
 
 // Test the case that three of five nodes fail and force leader on the rest node
 // with uncommitted conf change.
@@ -927,18 +1003,16 @@ fn test_force_leader_twice_on_different_peers() {
 
     cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // enter force leader on a different peer
-    cluster.must_enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
-    // leader is the peer of store 2
+    cluster.enter_force_leader(region.get_id(), 2, vec![3, 4, 5]);
     assert_eq!(
         cluster.leader_of_region(region.get_id()).unwrap(),
-        *find_peer(&region, 2).unwrap()
+        *find_peer(&region, 1).unwrap()
     );
 
-    // peer of store 1 should exit force leader state, and propose conf-change on it should fail
     let conf_change = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));
     let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), conf_change);
     req.mut_header()
-        .set_peer(find_peer(&region, 1).unwrap().clone());
+        .set_peer(find_peer(&region, 2).unwrap().clone());
     let resp = cluster
         .call_command(req, Duration::from_millis(10))
         .unwrap();
@@ -946,7 +1020,7 @@ fn test_force_leader_twice_on_different_peers() {
         region_id: region.get_id(),
         ..Default::default()
     };
-    not_leader.set_leader(find_peer(&region, 2).unwrap().clone());
+    not_leader.set_leader(find_peer(&region, 1).unwrap().clone());
     assert_eq!(resp.get_header().get_error().get_not_leader(), &not_leader,);
 
     // remove the peers on failed nodes
@@ -959,7 +1033,7 @@ fn test_force_leader_twice_on_different_peers() {
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
-    cluster.exit_force_leader(region.get_id(), 2);
+    cluster.exit_force_leader(region.get_id(), 1);
 
     // quorum is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
@@ -1043,7 +1117,7 @@ fn test_force_leader_multiple_election_rounds() {
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 2,
     ));
-    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
     // wait multiple election rounds
     std::thread::sleep(Duration::from_millis(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
@@ -1067,4 +1141,162 @@ fn test_force_leader_multiple_election_rounds() {
     // quorum is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+}
+
+// Tests whether unsafe recovery report sets has_commit_merge correctly.
+// This field is used by PD to issue force leader command in order, so that the recovery process
+// does not break the merge accidentally, when:
+//   *   The source region and the target region lost their quorum.
+//   *   The living peer(s) of the source region does not have prepare merge message replicated.
+//   *   The living peer(s) of the target region has commit merge messages replicated but
+//       uncommitted.
+// If the living peer(s) of the source region in the above example enters force leader state before
+// the peer(s) of the target region, thus proposes a no-op entry (while becoming the leader) which
+// is conflict with part of the catch up logs, there will be data loss.
+#[test]
+fn test_unsafe_recovery_has_commit_merge() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    let left_on_store1 = find_peer(&left, 1).unwrap();
+    cluster.must_transfer_leader(left.get_id(), left_on_store1.clone());
+    let right_on_store1 = find_peer(&right, 1).unwrap();
+    cluster.must_transfer_leader(right.get_id(), right_on_store1.clone());
+
+    // Block the target region from receiving MsgAppendResponse, so that the commit merge message
+    // will only be replicated but not committed.
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(right.get_id(), 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppendResponse),
+    );
+    cluster.sim.wl().add_recv_filter(1, recv_filter);
+
+    pd_client.merge_region(left.get_id(), right.get_id());
+    // Wait until the commit merge is proposed.
+    sleep_ms(300);
+    // Send a empty recovery plan to trigger report.
+    let plan = pdpb::RecoveryPlan::default();
+    pd_client.must_set_unsafe_recovery_plan(1, plan);
+    cluster.must_send_store_heartbeat(1);
+    let mut store_report = None;
+    for _ in 0..20 {
+        store_report = pd_client.must_get_store_report(1);
+        if store_report.is_some() {
+            break;
+        }
+        sleep_ms(200);
+    }
+    assert_ne!(store_report, None);
+    let mut has_commit_merge = false;
+    for peer_report in store_report.unwrap().get_peer_reports().iter() {
+        if peer_report.get_region_state().get_region().get_id() == right.get_id()
+            && peer_report.get_has_commit_merge()
+        {
+            has_commit_merge = true;
+        }
+    }
+    assert!(has_commit_merge);
+}
+
+#[test]
+fn test_unsafe_recovery_during_merge() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    let left_on_store1 = find_peer(&left, 1).unwrap();
+    cluster.must_transfer_leader(left.get_id(), left_on_store1.clone());
+    let right_on_store1 = find_peer(&right, 1).unwrap();
+    cluster.must_transfer_leader(right.get_id(), right_on_store1.clone());
+
+    // Blocks the replication of prepare merge message, so that the commit merge back fills it
+    // in CatchUpLogs.
+    let append_filter = Box::new(
+        RegionPacketFilter::new(left.get_id(), 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    );
+    // Blocks the target region from receiving MsgAppendResponse, so that the commit merge message
+    // will only be replicated but not committed.
+    let commit_filter = Box::new(
+        RegionPacketFilter::new(right.get_id(), 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppendResponse),
+    );
+    cluster.sim.wl().add_recv_filter(1, append_filter);
+    cluster.sim.wl().add_recv_filter(1, commit_filter);
+
+    pd_client.merge_region(left.get_id(), right.get_id());
+    // Wait until the commit merge is proposed.
+    sleep_ms(300);
+
+    cluster.stop_node(1);
+    cluster.stop_node(3);
+    confirm_quorum_is_lost(&mut cluster, &region);
+
+    let report = cluster.must_enter_force_leader(right.get_id(), 2, vec![1, 3]);
+    assert_eq!(report.get_peer_reports().len(), 1);
+    let peer_report = &report.get_peer_reports()[0];
+    assert_eq!(peer_report.get_has_commit_merge(), false);
+    let region = peer_report.get_region_state().get_region();
+    assert_eq!(region.get_id(), right.get_id());
+    assert_eq!(region.get_start_key().len(), 0);
+    assert_eq!(region.get_end_key().len(), 0);
+
+    let to_be_removed: Vec<metapb::Peer> = right
+        .get_peers()
+        .iter()
+        .filter(|&peer| peer.get_store_id() != 2)
+        .cloned()
+        .collect();
+    let mut plan = pdpb::RecoveryPlan::default();
+    let mut demote = pdpb::DemoteFailedVoters::default();
+    demote.set_region_id(right.get_id());
+    demote.set_failed_voters(to_be_removed.into());
+    plan.mut_demotes().push(demote);
+    pd_client.must_set_unsafe_recovery_plan(2, plan);
+    cluster.must_send_store_heartbeat(2);
+
+    let mut demoted = true;
+    for _ in 0..10 {
+        let region = block_on(pd_client.get_region_by_id(right.get_id()))
+            .unwrap()
+            .unwrap();
+
+        demoted = true;
+        for peer in region.get_peers() {
+            if peer.get_id() != 2 && peer.get_role() == metapb::PeerRole::Voter {
+                demoted = false;
+            }
+        }
+        if demoted {
+            break;
+        }
+        sleep_ms(200);
+    }
+    assert!(demoted);
 }

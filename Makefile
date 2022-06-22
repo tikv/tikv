@@ -55,6 +55,7 @@ endif
 
 ifeq ($(PROXY_FRAME_POINTER),1)
 # Enable frame pointers for stable CPU Profiling.
+
 export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
 export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
 export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
@@ -72,7 +73,7 @@ else ifeq ($(SYSTEM_ALLOC),1)
 else
 endif
 
-# Disable portable on MacOS to sidestep the compiler bug in clang 4.9
+# Disable portable on macOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
@@ -106,7 +107,7 @@ endif
 
 # Set the storage engines used for testing
 ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
-ENABLE_FEATURES += test-engines-rocksdb
+ENABLE_FEATURES += test-engine-kv-rocksdb test-engine-raft-raft-engine
 else
 # Caller is responsible for setting up test engine features
 endif
@@ -130,6 +131,7 @@ export PROXY_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo
 export PROXY_BUILD_RUSTC_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }')
 export PROXY_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export PROXY_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+
 export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
 export DOCKER_IMAGE_TAG ?= "latest"
 
@@ -138,6 +140,16 @@ export DOCKER_IMAGE_TAG ?= "latest"
 #
 # https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199/68
 export CARGO_BUILD_PIPELINING=true
+
+# Compiler gave us the following error message when using a specific version of gcc on
+# aarch64 architecture and TIKV_FRAME_POINTER=1:
+#     .../atomic.rs: undefined reference to __aarch64_xxx
+# This is a temporary workaround.
+# See: https://github.com/rust-lang/rust/issues/93166
+#      https://bugzilla.redhat.com/show_bug.cgi?id=1830472
+ifeq ($(TIKV_BUILD_RUSTC_TARGET),aarch64-unknown-linux-gnu)
+export RUSTFLAGS := $(RUSTFLAGS) -Ctarget-feature=-outline-atomics
+endif
 
 # Almost all the rules in this Makefile are PHONY
 # Declaring a rule as PHONY could improve correctness
@@ -183,7 +195,6 @@ debug:
 # enabled (the "sse" option)
 release:
 	./release.sh
-
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
@@ -289,13 +300,14 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
+	@cargo install -q cargo-sort 
 
 gen_proxy_ffi: pre-format
 	./gen-proxy-ffi.sh
 
 format: pre-format
-	@cargo fmt -- --check >/dev/null || \
-	cargo fmt
+	@cargo fmt
+	@cargo sort -w ./Cargo.toml ./*/Cargo.toml components/*/Cargo.toml cmd/*/Cargo.toml >/dev/null 
 
 doc:
 	@cargo doc --workspace --document-private-items \
@@ -376,10 +388,16 @@ endif
 
 export X_CARGO_ARGS:=${CARGO_ARGS}
 
+ifeq ($(TIKV_FRAME_POINTER),1)
+x-build-dist: ENABLE_FEATURES += pprof-fp
+else
+x-build-dist: ENABLE_FEATURES += pprof-dwarf
+endif
 x-build-dist: export X_CARGO_CMD=build
 x-build-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-dist: export X_CARGO_RELEASE=1
 x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
+x-build-dist: export X_CARGO_TARGET_DIR=${CARGO_TARGET_DIR}
 x-build-dist: export X_PACKAGE=tikv-server tikv-ctl
 x-build-dist:
 	bash scripts/run-cargo.sh
