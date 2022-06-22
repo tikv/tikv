@@ -45,6 +45,7 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
+mock-engine-store = { path = "../mock-engine-store", default-features = false }
 api_version = { path = "../components/api_version", default-features = false }
 batch-system = { path = "../components/batch-system", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
@@ -86,9 +87,6 @@ tipb = { git = "https://github.com/pingcap/tipb.git" }
 toml = "0.5"
 txn_types = { path = "../components/txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
-time = "0.1"
-mock-engine-store = { path = "../mock-engine-store", default-features = false }
-libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
