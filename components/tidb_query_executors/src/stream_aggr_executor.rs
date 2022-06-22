@@ -123,6 +123,17 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
         .unwrap()
     }
 
+    #[cfg(test)]
+    pub fn new_for_test_with_config(
+        config: Arc<EvalConfig>,
+        src: Src,
+        group_by_exps: Vec<RpnExpression>,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(config, src, group_by_exps, aggr_defs, aggr_def_parser).unwrap()
+    }
+
     pub fn new(
         config: Arc<EvalConfig>,
         src: Src,
