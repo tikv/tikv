@@ -342,6 +342,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
         CoprocessorHost { registry, cfg }
     }
 
+    pub fn on_empty_cmd(&self, region: &Region, index: u64, term: u64) {
+        loop_ob!(
+            region,
+            &self.registry.query_observers,
+            on_empty_cmd,
+            index,
+            term,
+        );
+    }
+
     /// Call all propose hooks until bypass is set to true.
     pub fn pre_propose(&self, region: &Region, req: &mut RaftCmdRequest) -> Result<()> {
         if !req.has_admin_request() {
@@ -623,6 +633,11 @@ mod tests {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
+
+        fn on_empty_cmd(&self, ctx: &mut ObserverContext<'_>, _index: u64, _term: u64) {
+            self.called.fetch_add(14, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
     }
 
     impl RoleObserver for TestCoprocessor {
@@ -748,6 +763,11 @@ mod tests {
         host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
         // `post_apply` + `on_flush_applied_cmd_batch` => 13 + 6 = 19
         assert_all!([&ob.called], &[74]);
+
+        let mut empty_req = RaftCmdRequest::default();
+        empty_req.set_requests(vec![Request::default()].into());
+        host.on_empty_cmd(&region, 0, 0);
+        assert_all!([&ob.called], &[88]);
     }
 
     #[test]
