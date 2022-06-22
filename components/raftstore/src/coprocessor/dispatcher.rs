@@ -441,6 +441,17 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
+    pub fn pre_apply_snapshot(&self, region: &Region, peer_id: u64, snap_key: &crate::store::SnapKey, snap: Option<&crate::store::Snapshot>) {
+        loop_ob!(
+            region,
+            &self.registry.apply_snapshot_observers,
+            pre_apply_snapshot,
+            peer_id,
+            snap_key,
+            snap,
+        );
+    }
+
     pub fn new_split_checker_host<'a>(
         &'a self,
         region: &Region,
@@ -575,6 +586,7 @@ mod tests {
     use tikv_util::box_err;
 
     use crate::coprocessor::*;
+    use crate::store::{SnapKey, Snapshot};
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {
@@ -674,6 +686,11 @@ mod tests {
             self.called.fetch_add(10, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
+
+        fn pre_apply_snapshot(&self, _: &mut ObserverContext<'_>, _peer_id: u64, _: &SnapKey, _: Option<&Snapshot>) {
+            self.called.fetch_add(17, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
@@ -768,6 +785,9 @@ mod tests {
         empty_req.set_requests(vec![Request::default()].into());
         host.on_empty_cmd(&region, 0, 0);
         assert_all!([&ob.called], &[88]);
+
+        host.pre_apply_snapshot(&region, 0, &SnapKey::new(region.get_id(), 1, 1), None);
+        assert_all!([&ob.called], &[105]);
     }
 
     #[test]

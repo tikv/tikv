@@ -342,13 +342,9 @@ where
             .observe(start.saturating_elapsed_secs());
     }
 
-    /// Applies snapshot data of the Region.
-    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
-        info!("begin apply snap data"; "region_id" => region_id);
-        fail_point!("region_apply_snap", |_| { Ok(()) });
-        check_abort(&abort)?;
+    fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_key = keys::region_state_key(region_id);
-        let mut region_state: RegionLocalState =
+        let region_state: RegionLocalState =
             match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
@@ -358,6 +354,31 @@ where
                     ));
                 }
             };
+        Ok(region_state)
+    }
+
+    fn get_apply_state(&self, region_id: u64) -> Result<RaftApplyState> {
+        let state_key = keys::apply_state_key(region_id);
+        let mut apply_state: RaftApplyState =
+            match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
+                Some(state) => state,
+                None => {
+                    return Err(box_err!(
+                            "failed to get apply_state from {}",
+                            log_wrappers::Value::key(&state_key)
+                        ));
+                }
+            };
+        Ok(apply_state)
+    }
+
+    /// Applies snapshot data of the Region.
+    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
+        info!("begin apply snap data"; "region_id" => region_id);
+        fail_point!("region_apply_snap", |_| { Ok(()) });
+        check_abort(&abort)?;
+        let region_key = keys::region_state_key(region_id);
+        let region_state = self.get_region_state(*region_id)?;
 
         // clear up origin data.
         let region = region_state.get_region().clone();
@@ -378,16 +399,8 @@ where
         fail_point!("apply_snap_cleanup_range");
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
-                Some(state) => state,
-                None => {
-                    return Err(box_err!(
-                        "failed to get raftstate from {}",
-                        log_wrappers::Value::key(&state_key)
-                    ));
-                }
-            };
+        let apply_state = self.get_apply_state(*region_id)?;
+
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
@@ -618,6 +631,41 @@ where
             box_try!(self.engine.delete_ranges_cf(cf, strategy, ranges));
         }
 
+        Ok(())
+    }
+
+    fn pre_apply_snapshot(&self, task: &Task<EK::Snapshot>) -> Result<()> {
+        let (region_id, status, peer_id) = match task {
+            Task::Apply { region_id, status, peer_id } => {
+                (region_id, status.clone(), peer_id)
+            },
+            _ => panic!("invalid apply snapshot task"),
+        };
+
+        let region_state = self.get_region_state(*region_id)?;
+        let apply_state = self.get_apply_state(*region_id)?;
+
+        let abort = status.clone();
+        let timer = Instant::now();
+        check_abort(&abort)?;
+        let region = region_state.get_region().clone();
+
+        let term = apply_state.get_truncated_state().get_term();
+        let idx = apply_state.get_truncated_state().get_index();
+        let snap_key = SnapKey::new(*region_id, term, idx);
+        let s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
+        if !s.exists() {
+            return Err(box_err!("missing snapshot file {}", s.path()));
+        }
+        check_abort(&abort)?;
+        self.coprocessor_host.pre_apply_snapshot(&region, *peer_id, &snap_key, &s);
+        info!(
+            "pre apply snapshot";
+            "region_id" => region_id,
+            "peer_id" => peer_id,
+            "state" => ?apply_state,
+            "time_takes" => ?timer.saturating_elapsed(),
+        );
         Ok(())
     }
 }
