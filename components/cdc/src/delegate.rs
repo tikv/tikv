@@ -620,7 +620,6 @@ impl Delegate {
             .max_by_key(|entry| entry.commit_ts)
             .unwrap()
             .commit_ts;
-        self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)?;
         match self.resolver {
             Some(ref mut resolver) => {
                 resolver.raw_untrack_lock(max_raw_ts.into());
@@ -631,7 +630,7 @@ impl Delegate {
                 pending.raw_resolved_ts = max_raw_ts.into();
             }
         }
-        Ok(())
+        self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)
     }
 
     fn sink_downstream(
