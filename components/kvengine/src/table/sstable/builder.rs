@@ -207,7 +207,7 @@ impl Builder {
         data_buf.extend_from_slice(self.old_builder.buf.as_slice());
         let old_index_section_size = self.old_builder.buf.len() as u32;
         let aux_index_section_size = if let Ok(filter) = BinaryFuse8::try_from(&self.key_hashes) {
-            let bin = bincode::serialize(&filter).unwrap();
+            let bin = filter.to_vec();
             let origin_len = data_buf.len();
             self.build_aux_index(data_buf, &bin);
             (data_buf.len() - origin_len) as u32
@@ -282,6 +282,7 @@ impl Builder {
 
 pub const FOOTER_SIZE: usize = mem::size_of::<Footer>();
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct Footer {
     pub old_data_offset: u32,

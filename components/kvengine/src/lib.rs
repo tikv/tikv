@@ -1,5 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![cfg_attr(test, feature(test))]
+#[cfg(test)]
+extern crate test;
+
 pub mod apply;
 pub mod compaction;
 mod concat_iterator;

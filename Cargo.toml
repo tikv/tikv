@@ -71,7 +71,7 @@ async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
 byteorder = "1.2"
-bytes = "1.0"
+bytes = "1.1"
 case_macros = { path = "components/case_macros" }
 causal_ts = { path = "components/causal_ts" }
 chrono = "0.4"

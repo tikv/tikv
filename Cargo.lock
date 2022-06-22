@@ -661,9 +661,9 @@ checksum = "08c48aae112d48ed9f069b33538ea9e3e90aa263cfa3d1c24309612b1f7472de"
 
 [[package]]
 name = "bytes"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b700ce4376041dcd0a327fd0097c41095743c4c8af8887265942faf1100bd040"
+checksum = "c4872d67bab6358e59559027aa3b9157c53d9358c51423c17554809a8858e0f8"
 dependencies = [
  "serde",
 ]
@@ -7562,9 +7562,9 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "xorf"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7afb3a52aef0211e557044386369919b033004fdcf4c56c5017710f97fa9aa3c"
+source = "git+https://github.com/youjiali1995/xorf?branch=0.8.0-custom-serde#4d2024afc27b0e3f378b3aa947c46f8048010de5"
 dependencies = [
+ "bytes",
  "libm",
  "rand 0.8.3",
  "serde",

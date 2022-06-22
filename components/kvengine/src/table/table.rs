@@ -236,6 +236,8 @@ pub enum Error {
     Io(String),
     #[error("EOF")]
     EOF,
+    #[error("{0}")]
+    Other(String),
 }
 
 impl From<io::Error> for Error {

@@ -57,7 +57,8 @@ impl SSTable {
     }
 
     pub fn get(&self, key: &[u8], version: u64, key_hash: u64) -> table::Value {
-        if let Some(filter) = self.idx.filter.as_ref() {
+        if self.filter_size() != 0 {
+            let filter = self.load_filter().expect("load filter successfully");
             if !filter.contains(&key_hash) {
                 return table::Value::new();
             }
@@ -145,37 +146,12 @@ impl SSTableCore {
             return Err(table::Error::InvalidMagicNumber);
         }
         let idx_data = file.read(start_off + footer.index_offset as u64, footer.index_len())?;
-        let mut idx = Index::new(idx_data, footer.checksum_type)?;
+        let idx = Index::new(idx_data, footer.checksum_type)?;
         let old_idx_data = file.read(
             start_off + footer.old_index_offset as u64,
             footer.old_index_len(),
         )?;
         let old_idx = Index::new(old_idx_data, footer.checksum_type)?;
-        if footer.aux_index_len() > 0 {
-            let aux_idx_data = file.read(
-                start_off + footer.aux_index_offset as u64,
-                footer.aux_index_len(),
-            )?;
-            let mut aux_idx_slice = aux_idx_data.chunk();
-            validate_checksum(aux_idx_slice, footer.checksum_type)?;
-            aux_idx_slice = &aux_idx_slice[4..];
-            assert_eq!(
-                LittleEndian::read_u32(aux_idx_slice),
-                AUX_INDEX_BINARY_FUSE8
-            );
-            aux_idx_slice = &aux_idx_slice[4..];
-            let fuse8_len = LittleEndian::read_u32(aux_idx_slice) as usize;
-            aux_idx_slice = &aux_idx_slice[4..];
-            let fuse8_data = &aux_idx_slice[..fuse8_len];
-            match bincode::deserialize::<BinaryFuse8>(fuse8_data) {
-                Ok(binary_fuse) => {
-                    idx.set_filter(Arc::new(binary_fuse));
-                }
-                Err(err) => {
-                    warn!("failed to deserialize BinaryFuse8 {:?}", err);
-                }
-            }
-        }
         let props_data = file.read(
             start_off + footer.properties_offset as u64,
             footer.properties_len(size as usize),
@@ -313,6 +289,38 @@ impl SSTableCore {
         self.load_block_by_addr_len(addr, length, buf)
     }
 
+    fn load_filter(&self) -> Result<BinaryFuse8> {
+        let data = match &self.cache {
+            Some(cache) => {
+                let cache_key = BlockCacheKey::new(self.id(), self.filter_offset());
+                cache
+                    .try_get_with(cache_key, || {
+                        crate::metrics::ENGINE_CACHE_MISS.inc_by(1);
+                        self.read_filter_data_from_file()
+                    })
+                    .map_err(|e| e.as_ref().clone())?
+            }
+            None => self.read_filter_data_from_file()?,
+        };
+        self.decode_filter(&data)
+    }
+
+    fn read_filter_data_from_file(&self) -> Result<Bytes> {
+        let mut data = self
+            .file
+            .read(self.filter_offset() as u64, self.filter_size() as usize)?;
+        validate_checksum(data.chunk(), self.footer.checksum_type)?;
+        data.get_u32_le();
+        assert_eq!(data.get_u32_le(), AUX_INDEX_BINARY_FUSE8);
+        let len = data.get_u32_le();
+        assert_eq!(len as usize, data.len());
+        Ok(data)
+    }
+
+    fn decode_filter(&self, data: &Bytes) -> Result<BinaryFuse8> {
+        BinaryFuse8::try_from_bytes(data).map_err(|e| Error::Other(e.to_string()))
+    }
+
     pub fn id(&self) -> u64 {
         self.file.id()
     }
@@ -325,11 +333,12 @@ impl SSTableCore {
         self.idx.bin.len() as u64
     }
 
+    fn filter_offset(&self) -> u32 {
+        self.start_off as u32 + self.footer.aux_index_offset
+    }
+
     pub fn filter_size(&self) -> u64 {
-        match &self.idx.filter {
-            Some(filter) => filter.len() as u64,
-            None => 0,
-        }
+        self.footer.aux_index_len() as u64
     }
 
     pub fn smallest(&self) -> &[u8] {
@@ -360,7 +369,6 @@ pub struct Index {
     block_key_offs: &'static [u8],
     block_addrs: &'static [u8],
     block_keys: Bytes,
-    filter: Option<Arc<BinaryFuse8>>,
 }
 
 impl Index {
@@ -390,17 +398,12 @@ impl Index {
             block_key_offs,
             block_addrs,
             block_keys,
-            filter: None,
         })
     }
 
     pub(crate) fn get_block_addr(&self, pos: usize) -> BlockAddress {
         let off = pos * BLOCK_ADDR_SIZE;
         BlockAddress::from_slice(&self.block_addrs[off..off + BLOCK_ADDR_SIZE])
-    }
-
-    fn set_filter(&mut self, filter: Arc<BinaryFuse8>) {
-        self.filter = Some(filter)
     }
 
     pub fn num_blocks(&self) -> usize {
@@ -924,5 +927,50 @@ mod tests {
                 it.next();
             }
         }
+    }
+
+    #[test]
+    fn test_build_and_load_filter() {
+        let kvs = generate_key_values("key", 10000);
+        let tf = build_test_table_with_kvs(kvs.clone());
+        let t = SSTable::new(tf, new_test_cache()).unwrap();
+        let cache_key = BlockCacheKey::new(t.id(), t.filter_offset());
+        assert!(t.cache.as_ref().unwrap().get(&cache_key).is_none());
+        let filter = t.load_filter().unwrap();
+        assert!(t.cache.as_ref().unwrap().get(&cache_key).is_some());
+        for (k, _) in kvs {
+            let k_h = farmhash::fingerprint64(k.as_bytes());
+            assert!(filter.contains(&k_h));
+        }
+    }
+
+    #[bench]
+    fn bench_load_filter(b: &mut test::Bencher) {
+        let file = build_test_table_with_prefix("key", 10000);
+        let t = SSTable::new(file, new_test_cache()).unwrap();
+        b.iter(|| {
+            test::black_box(t.load_filter().unwrap());
+        });
+    }
+
+    #[bench]
+    fn bench_cache_filter(b: &mut test::Bencher) {
+        let file = build_test_table_with_prefix("key", 10000);
+        let t = SSTable::new(file, new_test_cache()).unwrap();
+        t.load_filter().unwrap();
+        let cache_key = BlockCacheKey::new(t.id(), t.filter_offset());
+        b.iter(|| {
+            test::black_box(t.cache.as_ref().unwrap().get(&cache_key).unwrap());
+        });
+    }
+
+    #[bench]
+    fn bench_decode_filter(b: &mut test::Bencher) {
+        let file = build_test_table_with_prefix("key", 10000);
+        let t = SSTable::new(file, new_test_cache()).unwrap();
+        let data = t.read_filter_data_from_file().unwrap();
+        b.iter(|| {
+            test::black_box(t.decode_filter(&data).unwrap());
+        });
     }
 }
