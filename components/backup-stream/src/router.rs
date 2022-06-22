@@ -877,6 +877,7 @@ impl StreamTaskInfo {
         // if failed to write storage, we should retry write flushing_files.
         let storage = self.storage.clone();
         let files = self.flushing_files.write().await;
+        // used to limit concurrent when write to storage.
         let batch_count = 128;
 
         for batch_files in files.chunks(batch_count) {
@@ -1248,7 +1249,7 @@ mod tests {
             self.delete_event(cf, table_key);
         }
 
-        fn flush_events(&mut self) -> ApplyEvents {
+        fn finish(&mut self) -> ApplyEvents {
             let region_id = self.events.region_id;
             let region_resolved_ts = self.events.region_resolved_ts;
             std::mem::replace(
@@ -1356,7 +1357,7 @@ mod tests {
         region1.put_table(CF_WRITE, 2, b"hello", b"this isn't a write record :3");
         region1.put_table(CF_WRITE, 1, b"hello", b"still isn't a write record :3");
         region1.delete_table(CF_DEFAULT, 1, b"hello");
-        let events = region1.flush_events();
+        let events = region1.finish();
         check_on_events_result(&router.on_events(events).await);
         start_ts
     }
@@ -1428,6 +1429,55 @@ mod tests {
         assert_eq!(meta_count, 1);
         assert_eq!(log_count, 3);
         Ok(())
+    }
+
+    fn mock_build_kv_events(table_id: i64, region_id: u64, resolved_ts: u64) -> ApplyEvents {
+        let mut events_builder = KvEventsBuilder::new(region_id, resolved_ts);
+        events_builder.put_table("default", table_id, b"hello", b"world");
+        events_builder.finish()
+    }
+
+    #[tokio::test]
+    async fn test_do_flush() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let backend = external_storage_export::make_local_backend(tmp_dir.path());
+        let mut task_info = StreamBackupTaskInfo::default();
+        task_info.set_storage(backend);
+        let stream_task = StreamTask {
+            info: task_info,
+            is_paused: false,
+        };
+        let task = StreamTaskInfo::new(
+            tmp_dir.path().to_path_buf(),
+            stream_task,
+            Duration::from_secs(300),
+        )
+        .await
+        .unwrap();
+
+        // on_event
+        let region_count = 130;
+        for i in 1..=region_count {
+            let kv_events = mock_build_kv_events(i, i as _, i as _);
+            task.on_events(kv_events).await.unwrap();
+        }
+        // do_flush
+        task.set_flushing_status(true);
+        task.do_flush(1, TimeStamp::new(1)).await.unwrap();
+
+        // assert
+        let mut meta_count = 0;
+        let mut log_count = 0;
+        for entry in walkdir::WalkDir::new(tmp_dir.path()) {
+            let entry = entry.unwrap();
+            if entry.path().extension() == Some(OsStr::new("meta")) {
+                meta_count += 1;
+            } else if entry.path().extension() == Some(OsStr::new("log")) {
+                log_count += 1;
+            }
+        }
+        assert_eq!(meta_count, 1);
+        assert_eq!(log_count, region_count);
     }
 
     struct ErrorStorage<Inner> {
