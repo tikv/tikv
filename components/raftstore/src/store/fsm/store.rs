@@ -54,6 +54,7 @@ use tikv_util::{
     future::poll_future_notify,
     info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
+    sequence_number::{SequenceNumber, SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
     slow_log, sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
     time::{duration_to_sec, Instant as TiInstant},
@@ -87,10 +88,7 @@ use crate::{
         metrics::*,
         peer_storage,
         transport::Transport,
-        util::{
-            self, is_initial_msg, RegionReadProgressRegistry, SequenceNumber, SequenceNumberWindow,
-            SYNCED_MAX_SEQUENCE_NUMBER,
-        },
+        util::{self, is_initial_msg, RegionReadProgressRegistry},
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
@@ -501,7 +499,7 @@ where
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
     // region_id -> (sequence_number, applied_index)
-    pub pending_sequence_number_relation: HashMap<u64, (SequenceNumber, u64)>,
+    pub pending_seqno_relation: HashMap<u64, (SequenceNumber, u64)>,
     pub to_update_sequence: Option<SequenceNumber>,
 }
 
@@ -607,7 +605,7 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     last_unreachable_report: HashMap<u64, Instant>,
-    sequence_number_window: SequenceNumberWindow,
+    seqno_window: SequenceNumberWindow,
 }
 
 pub struct StoreFsm<EK>
@@ -632,7 +630,7 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 last_unreachable_report: HashMap::default(),
-                sequence_number_window: SequenceNumberWindow::default(),
+                seqno_window: SequenceNumberWindow::default(),
             },
             receiver: rx,
         });
@@ -948,21 +946,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         }
         let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
-        let sequence_number_relation =
-            std::mem::take(&mut self.poll_ctx.pending_sequence_number_relation);
+        let seqno_relation = std::mem::take(&mut self.poll_ctx.pending_seqno_relation);
         let mut dur = self.timer.saturating_elapsed();
 
         for inspector in &mut latency_inspect {
             inspector.record_store_process(dur);
         }
         let mut raft_wb = None;
-        if !sequence_number_relation.is_empty() {
-            let mut wb = self
-                .poll_ctx
-                .engines
-                .raft
-                .log_batch(sequence_number_relation.len());
-            for (region_id, (sn, applied_idx)) in sequence_number_relation {
+        if !seqno_relation.is_empty() {
+            let mut wb = self.poll_ctx.engines.raft.log_batch(seqno_relation.len());
+            for (region_id, (sn, applied_idx)) in seqno_relation {
                 wb.put_seqno_relation(region_id, sn.sequence, applied_idx)
                     .unwrap();
             }
@@ -1337,7 +1330,7 @@ where
             sync_write_worker,
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
-            pending_sequence_number_relation: HashMap::default(),
+            pending_seqno_relation: HashMap::default(),
             to_update_sequence: None,
         };
         ctx.update_ticks_timeout();
@@ -2505,7 +2498,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_apply_res(&mut self, res: ApplyRes<EK::Snapshot>) {
         if let Some(sequence) = res.last_sequence {
-            if let Some(committed_sn) = self.fsm.store.sequence_number_window.push(sequence) {
+            if let Some(committed_sn) = self.fsm.store.seqno_window.push(sequence) {
                 // Update global sequence
                 if let Some(last) = self.ctx.to_update_sequence.replace(committed_sn) {
                     assert!(
@@ -2517,7 +2510,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 }
             }
             self.ctx
-                .pending_sequence_number_relation
+                .pending_seqno_relation
                 .insert(res.region_id, (sequence, res.apply_state.applied_index));
         }
     }

@@ -58,7 +58,9 @@ use tikv_util::{
     debug, error, info,
     memory::HeapSize,
     mpsc::{loose_bounded, LooseBoundedSender, Receiver},
-    safe_panic, slow_log,
+    safe_panic,
+    sequence_number::SequenceNumber,
+    slow_log,
     time::{duration_to_sec, Instant},
     warn,
     worker::Scheduler,
@@ -84,7 +86,7 @@ use crate::{
         util,
         util::{
             admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
-            ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector, SequenceNumber,
+            ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
         },
         Config, RegionSnapshot, RegionTask,
     },
@@ -507,7 +509,7 @@ where
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> (bool, Option<SequenceNumber>) {
         let need_sync = self.sync_log_hint;
-        let mut sequence_number = None;
+        let mut seqno = None;
         // There may be put and delete requests after ingest request in the same fsm.
         // To guarantee the correct order, we must ingest the pending_sst first, and
         // then persist the kv write batch to engine.
@@ -532,7 +534,7 @@ where
                 panic!("failed to write to engine: {:?}", e);
             });
             sn.end(sequence);
-            sequence_number = Some(sn);
+            seqno = Some(sn);
             let trackers: Vec<_> = self
                 .applied_batch
                 .cb_batch
@@ -581,7 +583,7 @@ where
         }
         self.apply_time.flush();
         self.apply_wait.flush();
-        (need_sync, sequence_number)
+        (need_sync, seqno)
     }
 
     /// Finishes `Apply`s for the delegate.

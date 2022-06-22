@@ -4,6 +4,7 @@
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
 #![feature(vec_into_raw_parts)]
+#![feature(map_first_last)]
 
 #[cfg(test)]
 extern crate test;
@@ -52,6 +53,7 @@ pub mod memory;
 pub mod metrics;
 pub mod mpsc;
 pub mod quota_limiter;
+pub mod sequence_number;
 pub mod stream;
 pub mod sys;
 pub mod thread_group;
