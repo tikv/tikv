@@ -1082,7 +1082,10 @@ where
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
-        // TOOD(cdc): should we observe empty cmd, aka leader change?
+
+        // we should observe empty cmd, aka leader change,
+        // read index during confchange, or other situations.
+        apply_ctx.host.on_empty_cmd(&self.region, index, term);
 
         self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
