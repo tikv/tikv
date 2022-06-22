@@ -726,6 +726,11 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
                 let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
                 for msg in batch_msg.take_msgs().into_iter() {
+                    let mut ctx = msg.get_extra_ctx();
+                    let start = tikv_util::codec::number::decode_u64(&mut ctx).unwrap();
+                    let end = tikv_util::time::timespec_to_ns(tikv_util::time::system_time_now());
+                    RAFT_MESSAGE_SEND_DURATION.observe((end - start) as f64);
+  
                     if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
                         Self::handle_raft_message(store_id, &ch, msg, reject)
                     {

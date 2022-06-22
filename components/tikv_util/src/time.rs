@@ -236,6 +236,10 @@ mod inner {
     }
 }
 
+pub fn system_time_now() -> Timespec {
+    inner::get_time(libc::CLOCK_REALTIME)
+}
+
 #[cfg(target_os = "linux")]
 mod inner {
     use std::io;
@@ -258,7 +262,7 @@ mod inner {
     }
 
     #[inline]
-    fn get_time(clock: libc::clockid_t) -> Timespec {
+    pub fn get_time(clock: libc::clockid_t) -> Timespec {
         let mut t = libc::timespec {
             tv_sec: 0,
             tv_nsec: 0,

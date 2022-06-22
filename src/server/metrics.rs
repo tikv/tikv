@@ -360,6 +360,12 @@ lazy_static! {
         exponential_buckets(1f64, 2f64, 10).unwrap()
     )
     .unwrap();
+    pub static ref RAFT_MESSAGE_SEND_DURATION: Histogram = register_histogram!(
+        "tikv_server_raft_message_send_duration", // ns
+        "Raft messages batch size",
+        exponential_buckets(100000f64, 2f64, 10).unwrap()
+    )
+    .unwrap();
     pub static ref REPORT_FAILURE_MSG_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_server_report_failure_msg_total",
         "Total number of reporting failure messages",

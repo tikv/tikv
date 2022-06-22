@@ -980,7 +980,11 @@ where
     /// If the message fails to be sent, false is returned. Returning true means the message is
     /// enqueued to buffer. Caller is expected to call `flush` to ensure all buffered messages
     /// are sent out.
-    pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
+    pub fn send(&mut self, mut msg: RaftMessage) -> result::Result<(), DiscardReason> {
+        use crate::tikv_util::codec::number::NumberEncoder;
+        let mut buf = vec![];
+        buf.encode_u64(tikv_util::time::timespec_to_ns(tikv_util::time::system_time_now())).unwrap();
+        msg.set_extra_ctx(buf);
         let store_id = msg.get_to_peer().store_id;
         let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num as u64;
         let conn_id = if grpc_raft_conn_num == 1 {
