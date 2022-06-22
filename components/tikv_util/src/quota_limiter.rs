@@ -196,6 +196,10 @@ impl QuotaLimiter {
             .store(duration.0.as_nanos() as u64, Ordering::Relaxed);
     }
 
+    pub fn set_support_auto_tune(&self, support_auto_tune: bool) {
+        self.support_auto_tune.store(support_auto_tune, Ordering::Relaxed);
+    }
+
     pub fn foreground_cputime_limiter(&self) -> f64 {
         self.foreground_cputime_limiter.speed_limit()
     }
@@ -351,6 +355,9 @@ impl ConfigManager for QuotaLimitConfigManager {
         if let Some(read_bandwidth) = change.get("background_read_bandwidth") {
             self.quota_limiter
                 .set_background_read_bandwidth_limit(read_bandwidth.clone().into());
+        }
+        if let Some(support_auto_tune) = change.get("support_auto_tune") {
+            self.quota_limiter.set_support_auto_tune(support_auto_tune.clone().into());
         }
         Ok(())
     }
