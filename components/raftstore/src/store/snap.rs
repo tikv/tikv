@@ -4,7 +4,7 @@ use std::{
     cmp::{self, Ordering as CmpOrdering, Reverse},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    io::{self, ErrorKind, Read, Write},
+    io::{self, BufReader, ErrorKind, Read, Write},
     path::{Path, PathBuf},
     result, str,
     sync::{
@@ -14,6 +14,7 @@ use std::{
     thread, time, u64,
 };
 
+use crate::engine_store_ffi;
 use collections::{HashMap, HashMapEntry as Entry};
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
@@ -36,6 +37,7 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use thiserror::Error;
 use tikv_util::{
+    codec::bytes::CompactBytesFromFileDecoder,
     box_err, box_try, debug, error, info,
     time::{duration_to_sec, Instant, Limiter},
     warn, HandyRwLock,
@@ -49,6 +51,7 @@ use crate::{
             SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
         },
         peer_storage::JOB_STATUS_CANCELLING,
+        snap::snap_io::get_decrypter_reader,
     },
     Error as RaftStoreError, Result as RaftStoreResult,
 };

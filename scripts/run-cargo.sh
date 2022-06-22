@@ -71,7 +71,7 @@ if [[ -n "$X_RUSTFLAGS" ]]; then
 fi
 
 build_std_args=""
-if [[ -n "$TIKV_FRAME_POINTER" && "$TIKV_FRAME_POINTER" != "0" ]]; then
+if [[ -n "$PROXY_FRAME_POINTER" && "$PROXY_FRAME_POINTER" != "0" ]]; then
     # When `-Z build-std` is enabled, `--target` must be specified explicitly,
     # and specifying `--target` will cause the generated binary to be located
     # in the `target/${TARGET}/release` directory instead of `target/release`,
@@ -91,7 +91,7 @@ set +e
 # Print commands
 set -x
 
-if [[ -n "$TIKV_FRAME_POINTER" && "$TIKV_FRAME_POINTER" != "0" ]]; then
+if [[ -n "$PROXY_FRAME_POINTER" && "$PROXY_FRAME_POINTER" != "0" ]]; then
     rustup component add rust-src
     cargo $args $packages --features="$features" $X_CARGO_ARGS $build_std_args
 else

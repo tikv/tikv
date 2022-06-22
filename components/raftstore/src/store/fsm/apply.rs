@@ -890,7 +890,7 @@ where
     /// we decrease the priority of current fsm to reduce the impact on other normal commands.
     priority: Priority,
 
-    pending_clean_ssts: Vec<SSTMetaInfo>,
+    pending_clean_ssts: Vec<SstMetaInfo>,
 
     /// To fetch Raft entries for applying if necessary.
     #[derivative(Debug = "ignore")]
@@ -1558,7 +1558,7 @@ where
                     cmds.push(key, NONE_STR.as_ref(), WriteCmdType::Del, cf);
                 }
                 CmdType::IngestSst => {
-                    ssts.push(SSTMetaInfo {
+                    ssts.push(SstMetaInfo {
                         total_bytes: 0,
                         total_kvs: 0,
                         meta: req.get_ingest_sst().get_sst().clone(),
@@ -1807,7 +1807,7 @@ where
     fn handle_ingest_sst_for_engine_store(
         &mut self,
         ctx: &ApplyContext<EK>,
-        ssts: &Vec<SSTMetaInfo>,
+        ssts: &Vec<SstMetaInfo>,
     ) -> EngineStoreApplyRes {
         let mut ssts_wrap = vec![];
         let mut sst_views = vec![];

@@ -14,7 +14,7 @@ else
   export PROXY_BUILD_TYPE=release
   export PROXY_PROFILE=release
 
-  if [[ -n "${PROXY_BUILD_STD}" && "${PROXY_BUILD_STD}" != "0" ]]; then
+  if [[ -n "${PROXY_FRAME_POINTER}" && "${PROXY_FRAME_POINTER}" != "0" ]]; then
       # When `-Z build-std` is enabled, `--target` must be specified explicitly,
       # and specifying `--target` will cause the generated binary to be located
       # in the `target/${TARGET}/release` directory instead of `target/release`,

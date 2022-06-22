@@ -7,7 +7,7 @@ fi
 
 set -ex
 
-if [[ -n "${PROXY_BUILD_STD}" && "${PROXY_BUILD_STD}" != "0" ]]; then
+if [[ -n "${PROXY_FRAME_POINTER}" && "${PROXY_FRAME_POINTER}" != "0" ]]; then
   rustup component add rust-src
   cargo build --no-default-features --features "${PROXY_ENABLE_FEATURES}" ${cargo_build_extra_parameter} ${PROXY_BUILD_STD_ARGS}
 else

@@ -9,6 +9,7 @@ use std::{
     fmt::{self, Display, Formatter},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
         mpsc::SyncSender,
         Arc,
     },
@@ -43,7 +44,7 @@ use crate::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
             JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
         },
-        snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
+        snap::{plain_file_used, Error, PreHandledSnapshot, Result, SNAPSHOT_CFS},
         transport::CasualRouter,
         ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
     },
@@ -64,8 +65,6 @@ pub const STALE_PEER_CHECK_TICK: usize = 10; // 10000 milliseconds
 pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
 #[cfg(test)]
 pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
-
-const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
 const TIFLASH: &str = "tiflash";
 const ENGINE: &str = "engine";

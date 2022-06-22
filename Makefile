@@ -34,28 +34,20 @@
 SHELL := bash
 ENABLE_FEATURES ?=
 
-# Frame pointer is enabled by default.
+# Frame pointer is enabled by default. The purpose is to provide stable and
+# reliable stack backtraces (for CPU Profiling).
 #
 # If you want to disable frame-pointer, please manually set the environment
-# variable `PROXY_FRAME_POINTER=0 make` (this will cause CPU Profiling to get
-# only the top function and not the full call stack).
+# variable `PROXY_FRAME_POINTER=0 make` (This will fallback to `libunwind`
+# based stack backtrace.).
+#
+# Note that enabling frame-pointer means that the Rust standard library will
+# be recompiled.
 ifndef PROXY_FRAME_POINTER
 export PROXY_FRAME_POINTER=1
 endif
 
-# The Rust standard library is recompiled by default. (The purpose is to enable
-# frame pointers in std)
-#
-# If you want to avoid recompiling the Rust standard library, please manually
-# set the environment variable `PROXY_BUILD_STD=0 make` (this will lose CPU
-# Profiling samples related to Rust std functions).
-ifndef PROXY_BUILD_STD
-export PROXY_BUILD_STD=1
-endif
-
 ifeq ($(PROXY_FRAME_POINTER),1)
-# Enable frame pointers for stable CPU Profiling.
-
 export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
 export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
 export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
@@ -142,7 +134,7 @@ export DOCKER_IMAGE_TAG ?= "latest"
 export CARGO_BUILD_PIPELINING=true
 
 # Compiler gave us the following error message when using a specific version of gcc on
-# aarch64 architecture and TIKV_FRAME_POINTER=1:
+# aarch64 architecture and PROXY_FRAME_POINTER=1:
 #     .../atomic.rs: undefined reference to __aarch64_xxx
 # This is a temporary workaround.
 # See: https://github.com/rust-lang/rust/issues/93166
@@ -177,6 +169,11 @@ all: format build test error-code
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
+ifeq ($(PROXY_FRAME_POINTER),1)
+build: ENABLE_FEATURES += pprof-fp
+else
+build: ENABLE_FEATURES += pprof-dwarf
+endif
 build:
 	PROXY_ENABLE_FEATURES="${ENABLE_FEATURES}" ./build.sh
 
@@ -388,7 +385,7 @@ endif
 
 export X_CARGO_ARGS:=${CARGO_ARGS}
 
-ifeq ($(TIKV_FRAME_POINTER),1)
+ifeq ($(PROXY_FRAME_POINTER),1)
 x-build-dist: ENABLE_FEATURES += pprof-fp
 else
 x-build-dist: ENABLE_FEATURES += pprof-dwarf

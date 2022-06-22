@@ -113,8 +113,6 @@ impl QuotaLimiter {
 
         let max_delay_duration = AtomicU64::new(max_delay_duration.0.as_nanos() as u64);
 
-        let max_delay_duration = max_delay_duration.0;
-
         Self {
             cputime_limiter,
             write_bandwidth_limiter,

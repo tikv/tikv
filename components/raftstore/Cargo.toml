@@ -41,6 +41,7 @@ crossbeam = "0.8"
 derivative = "2"
 encryption = { path = "../encryption", default-features = false }
 
+engine_rocks = { path = "../engine_rocks", default-features = false }
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915
 engine_test = { path = "../engine_test", default-features = false }
@@ -94,6 +95,5 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 [dev-dependencies]
 encryption_export = { path = "../encryption/export", default-features = false }
 engine_panic = { path = "../engine_panic", default-features = false }
-engine_rocks = { path = "../engine_rocks", default-features = false }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer", default-features = false }
