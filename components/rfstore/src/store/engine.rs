@@ -33,12 +33,6 @@ impl Engines {
             meta_change_channel: Arc::new(Mutex::new(Some(meta_change_channel))),
         }
     }
-
-    pub fn write_kv(&self, wb: &mut KVWriteBatch) {
-        for batch in &mut wb.batches.values_mut() {
-            self.kv.write(batch)
-        }
-    }
 }
 
 impl From<Engines> for engine_traits::Engines<kvengine::Engine, rfengine::RfEngine> {

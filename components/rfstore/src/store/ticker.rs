@@ -28,6 +28,9 @@ impl Ticker {
             TickSchedule::new(1),
             TickSchedule::new(config.split_region_check_tick_interval.as_millis() / base_interval),
             TickSchedule::new(config.pd_heartbeat_tick_interval.as_millis() / base_interval),
+            TickSchedule::new(
+                config.switch_mem_table_check_tick_interval.as_millis() / base_interval,
+            ),
         ];
         Self { tick: 1, schedules }
     }
@@ -83,6 +86,7 @@ pub(crate) struct PeerTick {
 pub(crate) const PEER_TICK_RAFT: PeerTick = PeerTick { idx: 0 };
 pub(crate) const PEER_TICK_SPLIT_CHECK: PeerTick = PeerTick { idx: 1 };
 pub(crate) const PEER_TICK_PD_HEARTBEAT: PeerTick = PeerTick { idx: 2 };
+pub(crate) const PEER_TICK_SWITCH_MEM_TABLE_CHECK: PeerTick = PeerTick { idx: 3 };
 
 #[derive(Eq, PartialEq)]
 pub struct StoreTick {

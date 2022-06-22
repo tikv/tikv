@@ -7,15 +7,12 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering::*, *},
         Arc, RwLock,
     },
-    time::Instant,
 };
 
-use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes};
 use dashmap::DashMap;
 use kvenginepb as pb;
 use slog_global::*;
-use tikv_util::time::InstantExt;
 
 use crate::{
     table::{
@@ -42,8 +39,6 @@ pub struct Shard {
     pub(crate) properties: Properties,
     pub(crate) compacting: AtomicBool,
     pub(crate) initial_flushed: AtomicBool,
-    pub(crate) last_switch_time: RwLock<Instant>,
-    pub(crate) max_mem_table_size: AtomicU64,
 
     pub(crate) base_version: u64,
 
@@ -62,7 +57,6 @@ pub struct Shard {
     pub(crate) parent_snap: RwLock<Option<pb::Snapshot>>,
 }
 
-pub const MEM_TABLE_SIZE_KEY: &str = "_mem_table_size";
 pub const INGEST_ID_KEY: &str = "_ingest_id";
 pub const DEL_PREFIXES_KEY: &str = "_del_prefixes";
 
@@ -74,7 +68,6 @@ impl Shard {
         end: &[u8],
         opt: Arc<Options>,
     ) -> Self {
-        let base_size = opt.base_size;
         let start = Bytes::copy_from_slice(start);
         let end = Bytes::copy_from_slice(end);
         let shard = Self {
@@ -89,8 +82,6 @@ impl Shard {
             properties: Properties::new().apply_pb(props),
             compacting: Default::default(),
             initial_flushed: Default::default(),
-            last_switch_time: RwLock::new(Instant::now()),
-            max_mem_table_size: AtomicU64::new(base_size / 4),
             base_version: Default::default(),
             estimated_size: Default::default(),
             meta_seq: Default::default(),
@@ -98,9 +89,6 @@ impl Shard {
             compaction_priority: RwLock::new(None),
             parent_snap: RwLock::new(None),
         };
-        if let Some(val) = get_shard_property(MEM_TABLE_SIZE_KEY, props) {
-            shard.set_max_mem_table_size(LittleEndian::read_u64(val.as_slice()));
-        }
         if let Some(val) = get_shard_property(DEL_PREFIXES_KEY, props) {
             shard.set_del_prefix(&val);
         }
@@ -121,10 +109,9 @@ impl Shard {
         shard.meta_seq.store(cs.sequence, Release);
         shard.write_sequence.store(snap.data_sequence, Release);
         info!(
-            "ingest shard {}:{} max_table_size {}, mem_table_version {}, change {:?}",
+            "ingest shard {}:{} mem_table_version {}, change {:?}",
             cs.shard_id,
             cs.shard_ver,
-            shard.get_max_mem_table_size(),
             shard.load_mem_table_version(),
             &cs,
         );
@@ -154,10 +141,6 @@ impl Shard {
         store_u64(&self.estimated_size, size);
     }
 
-    pub(crate) fn set_max_mem_table_size(&self, size: u64) {
-        self.max_mem_table_size.store(size, Release);
-    }
-
     pub(crate) fn set_del_prefix(&self, val: &[u8]) {
         let data = self.get_data();
         let new_data = ShardData::new(
@@ -169,10 +152,6 @@ impl Shard {
             data.cfs.clone(),
         );
         self.set_data(new_data);
-    }
-
-    pub(crate) fn get_max_mem_table_size(&self) -> u64 {
-        self.max_mem_table_size.load(Acquire)
     }
 
     pub fn get_suggest_split_keys(&self, target_size: u64) -> Vec<Bytes> {
@@ -229,27 +208,6 @@ impl Shard {
 
     pub fn set_property(&self, key: &str, val: &[u8]) {
         self.properties.set(key, val);
-    }
-
-    pub(crate) fn next_mem_table_size(&self, current_size: u64, last_switch_time: Instant) -> u64 {
-        let dur = last_switch_time.saturating_elapsed();
-        let time_in_ms = dur.as_millis() as u64 + 1;
-        let bytes_per_sec = current_size * 1000 / time_in_ms;
-        let next_mem_size = bytes_per_sec * self.opt.max_mem_table_size_factor as u64;
-        Self::bounded_mem_size(next_mem_size)
-    }
-
-    pub(crate) fn bounded_mem_size(size: u64) -> u64 {
-        const MAX_MEM_SIZE_UPPER_LIMIT: u64 = 128 * 1024 * 1024;
-        const MAX_MEM_SIZE_LOWER_LIMIT: u64 = 2 * 1024 * 1024;
-        let mut bounded = size;
-        if bounded > MAX_MEM_SIZE_UPPER_LIMIT {
-            bounded = MAX_MEM_SIZE_UPPER_LIMIT;
-        }
-        if bounded < MAX_MEM_SIZE_LOWER_LIMIT {
-            bounded = MAX_MEM_SIZE_LOWER_LIMIT;
-        }
-        bounded
     }
 
     pub(crate) fn load_mem_table_version(&self) -> u64 {
@@ -361,6 +319,11 @@ impl Shard {
 
     pub fn new_snap_access(&self) -> SnapAccess {
         SnapAccess::new(self)
+    }
+
+    pub fn get_writable_mem_table_size(&self) -> usize {
+        let guard = self.data.read().unwrap();
+        guard.mem_tbls[0].size()
     }
 }
 

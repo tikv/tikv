@@ -26,6 +26,7 @@ pub const TYPE_PESSIMISTIC_ROLLBACK: CustomRaftlogType = 5;
 pub const TYPE_ONE_PC: CustomRaftlogType = 6;
 pub const TYPE_ENGINE_META: CustomRaftlogType = 7;
 pub const TYPE_RESOLVE_LOCK: CustomRaftlogType = 8;
+pub const TYPE_SWITCH_MEM_TABLE: CustomRaftlogType = 9;
 
 const HEADER_SIZE: usize = 2;
 

@@ -1,8 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 
-use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BytesMut};
 use slog_global::info;
 
@@ -16,6 +15,7 @@ pub struct WriteBatch {
     cf_batches: [memtable::WriteBatch; NUM_CFS],
     properties: HashMap<String, BytesMut>,
     sequence: u64,
+    switch_mem_table: bool,
 }
 
 impl WriteBatch {
@@ -30,6 +30,7 @@ impl WriteBatch {
             cf_batches,
             properties: HashMap::new(),
             sequence: 1,
+            switch_mem_table: false,
         }
     }
 
@@ -70,6 +71,10 @@ impl WriteBatch {
         self.sequence = seq;
     }
 
+    pub fn set_switch_mem_table(&mut self) {
+        self.switch_mem_table = true;
+    }
+
     pub fn num_entries(&self) -> usize {
         let mut num = 0;
         for wb in &self.cf_batches {
@@ -84,6 +89,7 @@ impl WriteBatch {
         }
         self.sequence = 0;
         self.properties.clear();
+        self.switch_mem_table = false;
     }
 
     pub fn get_cf_mut(&mut self, cf: usize) -> &mut memtable::WriteBatch {
@@ -117,28 +123,17 @@ impl Engine {
         );
         shard.set_data(new_data);
         info!(
-            "shard {}:{} set mem-table version {}, size {}",
+            "shard {}:{} switch mem-table version {}, size {}",
             shard.id,
             shard.ver,
             version,
             mem_table.size()
         );
-        let mut guard = shard.last_switch_time.write().unwrap();
-        let last_switch_instant = *guard;
-        *guard = Instant::now();
         let props = shard.properties.to_pb(shard.id);
         mem_table.set_properties(props);
-        if shard.is_active() && shard.get_initial_flushed() && self.opts.dynamic_mem_table_size {
-            let next_mem_tbl_size =
-                shard.next_mem_table_size(mem_table.size() as u64, last_switch_instant);
-            let mut change_size = new_change_set(shard.id, shard.ver);
-            change_size.set_property_key(MEM_TABLE_SIZE_KEY.to_string());
-            change_size.set_property_value(next_mem_tbl_size.to_le_bytes().to_vec());
-            self.meta_change_listener.on_change_set(change_size);
-        }
     }
 
-    pub fn write(&self, wb: &mut WriteBatch) {
+    pub fn write(&self, wb: &mut WriteBatch) -> usize {
         let shard = self.get_shard(wb.shard_id).unwrap();
         let snap = shard.new_snap_access();
         let version = shard.base_version + wb.sequence;
@@ -150,21 +145,17 @@ impl Engine {
         }
         for (k, v) in &wb.properties {
             shard.properties.set(k.as_str(), v.chunk());
-            if k == MEM_TABLE_SIZE_KEY {
-                let max_mem_tbl_size = LittleEndian::read_u64(v.chunk());
-                shard.set_max_mem_table_size(max_mem_tbl_size);
-                info!(
-                    "shard {}:{}, mem size changed to {}",
-                    shard.id, shard.ver, max_mem_tbl_size
-                );
-            } else if k == DEL_PREFIXES_KEY {
+            if k == DEL_PREFIXES_KEY {
                 shard.set_del_prefix(v.chunk());
             }
         }
         store_u64(&shard.write_sequence, wb.sequence);
-        if mem_tbl.size() > shard.get_max_mem_table_size() as usize {
+        if wb.switch_mem_table {
             self.switch_mem_table(&shard, version);
             self.trigger_flush(&shard);
+            0
+        } else {
+            mem_tbl.size()
         }
     }
 

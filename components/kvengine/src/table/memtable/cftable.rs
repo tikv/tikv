@@ -98,6 +98,9 @@ impl CFTableCore {
     }
 
     pub fn size(&self) -> usize {
+        if self.is_empty() {
+            return 0;
+        }
         self.arena.size()
     }
 

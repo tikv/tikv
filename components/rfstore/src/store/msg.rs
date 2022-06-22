@@ -63,6 +63,7 @@ pub(crate) enum ApplyMsg {
     ApplyChangeSet(kvengine::ChangeSet),
     PrepareChangeSet(kvenginepb::ChangeSet),
     UnsafeDestroy { region_id: u64 },
+    CheckSwitchMemTable { region_id: u64 },
 }
 
 pub enum StoreMsg {

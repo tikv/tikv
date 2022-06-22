@@ -65,6 +65,9 @@ pub struct Config {
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
 
+    // Interval (ms) to check region whether need to switch mem-table or not.
+    pub switch_mem_table_check_tick_interval: ReadableDuration,
+
     pub pd_heartbeat_tick_interval: ReadableDuration,
 
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
@@ -111,6 +114,7 @@ impl Default for Config {
             allow_remove_leader: false,
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
             split_region_check_tick_interval: ReadableDuration::secs(3),
+            switch_mem_table_check_tick_interval: ReadableDuration::minutes(1),
             region_max_size: ReadableSize::gb(1),
             region_split_size: ReadableSize::mb(640),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),

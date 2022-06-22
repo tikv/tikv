@@ -2,7 +2,6 @@
 
 use std::sync::{atomic::Ordering::Release, Arc};
 
-use byteorder::{ByteOrder, LittleEndian};
 use bytes::Buf;
 use dashmap::mapref::entry::Entry;
 use kvenginepb as pb;
@@ -50,12 +49,6 @@ impl Engine {
                 new_shard.base_version = old_shard.base_version;
                 store_u64(&new_shard.meta_seq, sequence);
                 store_u64(&new_shard.write_sequence, sequence);
-                // derived shard need larger mem-table size.
-                let mem_size = Shard::bounded_mem_size(self.opts.base_size / 2);
-                let size_bin = &mut [0u8; 8][..];
-                LittleEndian::write_u64(size_bin, mem_size as u64);
-                new_shard.set_property(MEM_TABLE_SIZE_KEY, size_bin);
-                store_u64(&new_shard.max_mem_table_size, mem_size);
             } else {
                 new_shard.base_version = old_shard.base_version + sequence;
                 store_u64(&new_shard.meta_seq, initial_seq);

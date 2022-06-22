@@ -4,18 +4,19 @@ use std::{
     collections::{HashMap, VecDeque},
     fmt::{self, Debug, Formatter},
     sync::{atomic::AtomicU64, Arc, Mutex},
+    time::Duration,
     vec::Drain,
 };
 
 use bytes::Buf;
 use fail::fail_point;
-use kvengine::{ChangeSet, SnapAccess};
+use kvengine::{ChangeSet, Engine, SnapAccess};
 use kvproto::{
     metapb,
     metapb::{PeerRole, Region},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, BatchSplitRequest, BatchSplitResponse,
-        ChangePeerRequest, RaftCmdRequest, RaftCmdResponse, RaftResponseHeader,
+        ChangePeerRequest, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, RaftResponseHeader,
     },
 };
 use prometheus::local::LocalHistogram;
@@ -41,7 +42,7 @@ use crate::{
     errors::*,
     mvcc,
     store::cmd_resp::{bind_term, err_resp},
-    RaftRouter, UserMeta,
+    RaftRouter, RaftStoreRouter, UserMeta,
 };
 
 pub(crate) struct PendingCmd {
@@ -227,6 +228,8 @@ pub(crate) struct Applier {
     pub(crate) prepared_change_sets: HashMap<u64, kvengine::ChangeSet>,
 
     pub(crate) role: raft::StateRole,
+
+    mem_table_state: Option<MemTableState>,
 }
 
 impl Applier {
@@ -449,6 +452,7 @@ impl Applier {
         if ctx.exec_log_term != self.apply_state.applied_index_term {
             wb.set_property(TERM_KEY, &ctx.exec_log_term.to_le_bytes())
         }
+        let timer = Instant::now();
         match cl.get_type() {
             TYPE_PREWRITE => cl.iterate_lock(|k, v| {
                 wb.put(mvcc::LOCK_CF, k, v, 0, &[], 0);
@@ -495,14 +499,21 @@ impl Applier {
                 TYPE_ROLLBACK => self.rollback(wb, k, ts, del_lock),
                 _ => unreachable!("unexpected custom log type: {:?}", tp),
             }),
+            TYPE_SWITCH_MEM_TABLE => {
+                wb.set_switch_mem_table();
+                self.mut_mem_table_state(engine).set_switch_time(timer);
+            }
             _ => panic!("unknown custom log type"),
         }
-        let timer = Instant::now();
-        ctx.engine.write(wb);
+        let mem_table_size = ctx.engine.write(wb) as u64;
+        wb.reset();
+        let mem_states = self.mut_mem_table_state(engine);
+        mem_states.mem_table_size = mem_table_size;
+        mem_states.last_write_time = Some(timer);
+        self.maybe_propose_switch_mem_table(ctx, timer);
         ctx.apply_time.observe(timer.saturating_elapsed_secs());
         // self.metrics.written_bytes += wb.estimated_size() as u64;
         // self.metrics.written_keys += wb.num_entries() as u64;
-        wb.reset();
         let mut resp = RaftCmdResponse::default();
         let header = RaftResponseHeader::default();
         resp.set_header(header);
@@ -1353,6 +1364,45 @@ impl Applier {
         });
     }
 
+    fn mut_mem_table_state(&mut self, engine: &Engine) -> &mut MemTableState {
+        let region_id = self.region_id();
+        self.mem_table_state.get_or_insert_with(|| {
+            let shard = engine.get_shard(region_id).unwrap();
+            let mem_table_size = shard.get_writable_mem_table_size() as u64;
+            MemTableState::new(mem_table_size)
+        })
+    }
+
+    fn maybe_propose_switch_mem_table(&mut self, ctx: &mut ApplyContext, now: Instant) {
+        if self.is_leader() && self.mut_mem_table_state(&ctx.engine).need_switch(now) {
+            let mut custom_builder = CustomBuilder::new();
+            custom_builder.set_type(TYPE_SWITCH_MEM_TABLE);
+            let mut req = self.new_raft_cmd_request();
+            req.set_custom_request(custom_builder.build());
+            ctx.router
+                .as_ref()
+                .unwrap()
+                .send_command(req, Callback::None);
+            self.mut_mem_table_state(&ctx.engine).proposed_time = Some(now);
+        }
+    }
+
+    fn handle_check_switch_mem_table(&mut self, ctx: &mut ApplyContext, region_id: u64) {
+        assert_eq!(self.region_id(), region_id);
+        self.maybe_propose_switch_mem_table(ctx, Instant::now());
+    }
+
+    fn new_raft_cmd_request(&self) -> RaftCmdRequest {
+        let mut req = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(self.region_id());
+        header.set_peer(self.peer.clone());
+        header.set_region_epoch(self.region.get_region_epoch().clone());
+        header.set_term(self.term);
+        req.set_header(header);
+        req
+    }
+
     pub(crate) fn handle_msg(&mut self, ctx: &mut ApplyContext, msg: ApplyMsg) {
         match msg {
             ApplyMsg::Apply(apply) => {
@@ -1373,7 +1423,88 @@ impl Applier {
             ApplyMsg::ApplyChangeSet(cs) => {
                 self.handle_apply_change_set(ctx, cs);
             }
+            ApplyMsg::CheckSwitchMemTable { region_id } => {
+                self.handle_check_switch_mem_table(ctx, region_id);
+            }
         }
+    }
+}
+
+struct MemTableState {
+    mem_table_size: u64,
+    init_time: Instant,
+    last_write_time: Option<Instant>,
+    last_switch_time: Option<Instant>,
+    proposed_time: Option<Instant>,
+}
+
+const BYTES_MB: u64 = 1024 * 1024;
+const MEM_TABLE_SIZE_UPPER_LIMIT: u64 = 128 * BYTES_MB;
+const MEM_TABLE_SIZE_LOWER_LIMIT: u64 = 4 * BYTES_MB;
+
+// 128MB mem-table flush at 10 seconds.
+// 32MB mem-table flush at 40 seconds.
+// 4MB mem-table flush at 320 seconds.
+const STANDARD_MEMORY_SIZE_DURATION: u64 = 128 * BYTES_MB * 10;
+
+// 1MB mem-table idle for 30 minutes get flushed.
+const STANDARD_IDLE_SECONDS: u64 = 30 * 60;
+const PROPOSE_SWITCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl MemTableState {
+    fn new(mem_table_size: u64) -> Self {
+        Self {
+            mem_table_size,
+            init_time: Instant::now(),
+            last_write_time: None,
+            last_switch_time: None,
+            proposed_time: None,
+        }
+    }
+
+    fn need_switch(&self, now: Instant) -> bool {
+        if self.mem_table_size == 0 {
+            return false;
+        }
+        if let Some(proposed_time) = self.proposed_time {
+            if now.saturating_duration_since(proposed_time) < PROPOSE_SWITCH_TIMEOUT {
+                return false;
+            }
+            // The proposal maybe failed for some reason, propose again.
+            warn!("propose switch mem-table expired, propose again");
+        }
+        if self.mem_table_size < MEM_TABLE_SIZE_LOWER_LIMIT {
+            let idle_duration = self.get_idle_duration(now);
+            return idle_duration > self.max_idle_duration();
+        }
+        if self.mem_table_size > MEM_TABLE_SIZE_UPPER_LIMIT {
+            return true;
+        }
+        let duration_secs_to_switch = STANDARD_MEMORY_SIZE_DURATION / self.mem_table_size;
+        self.get_duration_since_last_switch(now).as_secs() > duration_secs_to_switch
+    }
+
+    fn get_idle_duration(&self, now: Instant) -> Duration {
+        self.last_write_time
+            .map(|time| now.saturating_duration_since(time))
+            .unwrap_or_else(|| now.saturating_duration_since(self.init_time))
+    }
+
+    // idle duration applies to small mem-table
+    // The large mem-table has less max idle time.
+    fn max_idle_duration(&self) -> Duration {
+        Duration::from_secs(STANDARD_IDLE_SECONDS * BYTES_MB / self.mem_table_size)
+    }
+
+    fn get_duration_since_last_switch(&self, now: Instant) -> Duration {
+        self.last_switch_time
+            .map(|time| now.saturating_duration_since(time))
+            .unwrap_or_else(|| now.saturating_duration_since(self.init_time))
+    }
+
+    fn set_switch_time(&mut self, t: Instant) {
+        self.last_switch_time = Some(t);
+        self.proposed_time = None;
     }
 }
 
@@ -1547,4 +1678,101 @@ pub struct ApplyMetrics {
     pub written_keys: u64,
     pub written_query_stats: QueryStats,
     pub lock_cf_written_bytes: u64,
+}
+
+#[test]
+fn test_mem_table_state() {
+    // Test that
+    #[derive(Clone, Copy, Debug)]
+    struct Case {
+        size_mb: u64,
+        propose_time: Option<u64>,
+        write_time: Option<u64>,
+        switch_time: Option<u64>,
+        check_time: u64,
+        check_result: bool,
+    }
+    impl Case {
+        fn new(size_mb: u64) -> Self {
+            Case {
+                size_mb,
+                propose_time: None,
+                write_time: None,
+                switch_time: None,
+                check_time: 0,
+                check_result: false,
+            }
+        }
+
+        fn propose_at(&self, secs: u64) -> Self {
+            let mut c = *self;
+            c.propose_time = Some(secs);
+            c
+        }
+
+        fn write_at(&self, secs: u64) -> Self {
+            let mut c = *self;
+            c.write_time = Some(secs);
+            c
+        }
+
+        fn switch_at(&self, secs: u64) -> Self {
+            let mut c = *self;
+            c.switch_time = Some(secs);
+            c
+        }
+
+        fn check_at(&self, secs: u64) -> Self {
+            let mut c = *self;
+            c.check_time = secs;
+            c
+        }
+
+        fn result(&self, b: bool) -> Self {
+            let mut c = *self;
+            c.check_result = b;
+            c
+        }
+    }
+    let cases = vec![
+        // check mem size bound
+        Case::new(0).result(false),
+        Case::new(129).result(true),
+        // check propose
+        Case::new(129).propose_at(0).check_at(3).result(false),
+        Case::new(129).propose_at(0).check_at(11).result(true),
+        // check idle
+        Case::new(1).check_at(1700).result(false),
+        Case::new(1).check_at(1900).result(true),
+        Case::new(1).write_at(1000).check_at(1900).result(false),
+        Case::new(1).write_at(1000).check_at(2900).result(true),
+        Case::new(3).check_at(599).result(false),
+        Case::new(3).check_at(601).result(true),
+        // check switched
+        Case::new(32).check_at(39).result(false),
+        Case::new(32).check_at(41).result(true),
+        Case::new(8).switch_at(100).check_at(259).result(false),
+        Case::new(8).switch_at(100).check_at(261).result(true),
+        Case::new(4).check_at(319).result(false),
+        Case::new(4).check_at(321).result(true),
+    ];
+    for case in cases {
+        let mut states = MemTableState::new(case.size_mb * BYTES_MB);
+        states.proposed_time = case
+            .propose_time
+            .map(|secs| Instant::now() + Duration::from_secs(secs));
+        states.last_switch_time = case
+            .switch_time
+            .map(|secs| Instant::now() + Duration::from_secs(secs));
+        states.last_write_time = case
+            .write_time
+            .map(|secs| Instant::now() + Duration::from_secs(secs));
+        let check_time = Instant::now() + Duration::from_secs(case.check_time);
+        assert_eq!(
+            states.need_switch(check_time),
+            case.check_result,
+            "{:?}",
+            case
+        );
+    }
 }
