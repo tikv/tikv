@@ -70,6 +70,8 @@ pub struct EvalConfig {
     // warning is a executor stuff instead of a evaluation stuff.
     pub max_warning_cnt: usize,
     pub sql_mode: SqlMode,
+
+    pub paging_size: Option<u64>,
 }
 
 impl Default for EvalConfig {
@@ -105,6 +107,7 @@ impl EvalConfig {
             flag: Flag::empty(),
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
             sql_mode: SqlMode::empty(),
+            paging_size: None,
         }
     }
 

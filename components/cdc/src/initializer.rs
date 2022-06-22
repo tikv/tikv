@@ -564,7 +564,10 @@ mod tests {
         },
         TestEngineBuilder,
     };
-    use tikv_util::worker::{LazyWorker, Runnable};
+    use tikv_util::{
+        sys::thread::ThreadBuildWrapper,
+        worker::{LazyWorker, Runnable},
+    };
     use tokio::runtime::{Builder, Runtime};
 
     use super::*;
@@ -608,6 +611,8 @@ mod tests {
         let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
             .worker_threads(4)
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));

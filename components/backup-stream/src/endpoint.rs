@@ -29,6 +29,7 @@ use tikv_util::{
     box_err,
     config::ReadableDuration,
     debug, defer, info,
+    sys::thread::ThreadBuildWrapper,
     time::Instant,
     warn,
     worker::{Runnable, Scheduler},
@@ -1016,10 +1017,10 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         .worker_threads(thread_count)
         .enable_io()
         .enable_time()
-        .on_thread_start(|| {
+        .after_start_wrapper(|| {
             tikv_alloc::add_thread_memory_accessor();
         })
-        .on_thread_stop(|| {
+        .before_stop_wrapper(|| {
             tikv_alloc::remove_thread_memory_accessor();
         })
         .build()

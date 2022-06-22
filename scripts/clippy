@@ -33,6 +33,7 @@ CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::enum_variant_names \
         -W clippy::dbg_macro \
         -W clippy::todo \
+        -D clippy::disallowed-methods \
         -D rust-2018-idioms)
 
 cargo clippy --workspace \
