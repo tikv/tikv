@@ -102,7 +102,7 @@ pub struct Config {
     #[online_config(skip)]
     pub grpc_gzip_compression_level: usize,
     #[online_config(skip)]
-    pub grpc_compression_lower_bound: usize,
+    pub grpc_min_message_size_to_compress: usize,
     #[online_config(skip)]
     pub grpc_concurrency: usize,
     #[online_config(skip)]
