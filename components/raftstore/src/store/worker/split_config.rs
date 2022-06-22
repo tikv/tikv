@@ -53,7 +53,9 @@ pub struct SplitConfig {
     pub sample_num: usize,
     pub sample_threshold: u64,
     pub byte_threshold: usize,
+    #[doc(hidden)]
     pub grpc_thread_cpu_threshold_ratio: f64,
+    #[doc(hidden)]
     pub unified_read_pool_thread_cpu_threshold_ratio: f64,
     pub region_cpu_threshold_ratio: f64,
     // deprecated.

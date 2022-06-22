@@ -568,6 +568,12 @@ impl SplitInfo {
     }
 }
 
+pub enum SplitConfigChange {
+    Noop,
+    RegisterRegionCPUCollector,
+    DeregisterRegionCPUCollector,
+}
+
 pub struct AutoSplitController {
     // RegionID -> Recorder
     pub recorders: HashMap<u64, Recorder>,
@@ -762,9 +768,6 @@ impl AutoSplitController {
             QUERY_REGION_VEC
                 .with_label_values(&["read"])
                 .observe(qps as f64);
-            CPU_REGION_VEC
-                .with_label_values(&["read"])
-                .observe(cpu_usage);
 
             // 1. If the QPS and Byte do not meet the threshold, skip.
             // 2. If the Unified Read Pool is not busy or
@@ -890,8 +893,20 @@ impl AutoSplitController {
             });
     }
 
-    pub fn refresh_cfg(&mut self) {
+    // TODO: add some tests for SplitConfigChange.
+    pub fn refresh_and_check_cfg(&mut self) -> SplitConfigChange {
+        let mut cfg_change = SplitConfigChange::Noop;
         if let Some(incoming) = self.cfg_tracker.any_new() {
+            if self.cfg.region_cpu_threshold_ratio <= 0.0
+                && incoming.region_cpu_threshold_ratio > 0.0
+            {
+                cfg_change = SplitConfigChange::RegisterRegionCPUCollector;
+            }
+            if self.cfg.region_cpu_threshold_ratio > 0.0
+                && incoming.region_cpu_threshold_ratio <= 0.0
+            {
+                cfg_change = SplitConfigChange::DeregisterRegionCPUCollector;
+            }
             self.cfg = incoming.clone();
         }
         if let Some(rx) = &self.unified_read_pool_scale_receiver {
@@ -899,6 +914,7 @@ impl AutoSplitController {
                 self.max_unified_read_pool_thread_count = max_thread_count;
             }
         }
+        cfg_change
     }
 }
 
