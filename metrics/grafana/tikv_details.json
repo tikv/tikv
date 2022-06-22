@@ -13589,6 +13589,186 @@
           "yBucketSize": null
         },
         {
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 47
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 23763572784,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(delta(tikv_raftstore_proposal_send_wait_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le)",
+              "format": "heatmap",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "metric": "tikv_raftstore_request_wait_time_duration_secs_bucket",
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Proposal send wait duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": false
+          },
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 0,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "grid": {},
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 47
+          },
+          "hiddenSeries": false,
+          "id": 23763572783,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 2,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.11",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_proposal_send_wait_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}",
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "99% Proposal send wait duration per server",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "$$hashKey": "object:106",
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "$$hashKey": "object:107",
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -13605,7 +13785,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 46
+            "y": 54
           },
           "hiddenSeries": false,
           "id": 1975,
@@ -13651,7 +13831,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Raft log speed",
+          "title": "Raft propose speed",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -13708,7 +13888,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 46
+            "y": 54
           },
           "hiddenSeries": false,
           "id": 1976,
@@ -17526,6 +17706,239 @@
           "yBucketBound": "auto",
           "yBucketNumber": null,
           "yBucketSize": null
+        },
+        {
+          "type": "graph",
+          "title": "Storage async snapshot duration",
+          "gridPos": {
+            "x": 0,
+            "y": 35,
+            "w": 12,
+            "h": 8
+          },
+          "id": 20000,
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"snapshot\"}[1m])) by (le))",
+              "legendFormat": "99%",
+              "interval": "",
+              "exemplar": true,
+              "refId": "A",
+              "queryType": "randomWalk",
+              "intervalFactor": 2
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"snapshot\"}[1m])) by (le))",
+              "legendFormat": "95%",
+              "interval": "",
+              "exemplar": true,
+              "refId": "B",
+              "hide": false,
+              "intervalFactor": 2
+            },
+            {
+              "expr": "sum(rate(tikv_storage_engine_async_request_duration_seconds_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"snapshot\"}[1m])) / sum(rate(tikv_storage_engine_async_request_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"snapshot\"}[1m]))",
+              "legendFormat": "avg",
+              "interval": "",
+              "exemplar": true,
+              "refId": "C",
+              "hide": false,
+              "intervalFactor": 2
+            }
+          ],
+          "options": {
+            "alertThreshold": true
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "pluginVersion": "7.5.10",
+          "renderer": "flot",
+          "yaxes": [
+            {
+              "label": null,
+              "show": true,
+              "logBase": 1,
+              "min": null,
+              "max": null,
+              "format": "s",
+              "$$hashKey": "object:295"
+            },
+            {
+              "label": null,
+              "show": true,
+              "logBase": 1,
+              "min": null,
+              "max": null,
+              "format": "short",
+              "$$hashKey": "object:296"
+            }
+          ],
+          "xaxis": {
+            "show": true,
+            "mode": "time",
+            "name": null,
+            "values": [],
+            "buckets": null
+          },
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          },
+          "lines": true,
+          "fill": 1,
+          "linewidth": 1,
+          "dashLength": 10,
+          "spaceLength": 10,
+          "pointradius": 2,
+          "legend": {
+            "show": true,
+            "values": false,
+            "min": false,
+            "max": false,
+            "current": false,
+            "total": false,
+            "avg": false
+          },
+          "nullPointMode": "null",
+          "tooltip": {
+            "value_type": "individual",
+            "shared": true,
+            "sort": 0
+          },
+          "aliasColors": {},
+          "seriesOverrides": [],
+          "thresholds": [],
+          "timeRegions": [],
+          "description": "The storage async snapshot duration",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "fillGradient": 0,
+          "dashes": false,
+          "hiddenSeries": false,
+          "points": false,
+          "bars": false,
+          "stack": false,
+          "percentage": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null
+        },
+        {
+          "type": "graph",
+          "title": "Storage async write duration",
+          "gridPos": {
+            "x": 12,
+            "y": 35,
+            "w": 12,
+            "h": 8
+          },
+          "id": 20001,
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"write\"}[1m])) by (le))",
+              "legendFormat": "99%",
+              "interval": "",
+              "exemplar": true,
+              "refId": "A",
+              "intervalFactor": 1
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"write\"}[1m])) by (le))",
+              "legendFormat": "95%",
+              "interval": "",
+              "exemplar": true,
+              "refId": "B",
+              "hide": false,
+              "intervalFactor": 1
+            },
+            {
+              "expr": "sum(rate(tikv_storage_engine_async_request_duration_seconds_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"write\"}[1m])) / sum(rate(tikv_storage_engine_async_request_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"write\"}[1m]))",
+              "legendFormat": "avg",
+              "interval": "",
+              "exemplar": true,
+              "refId": "C",
+              "hide": false,
+              "intervalFactor": 1
+            }
+          ],
+          "options": {
+            "alertThreshold": true
+          },
+          "datasource": "${DS_TEST-CLUSTER}",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "pluginVersion": "7.5.10",
+          "renderer": "flot",
+          "yaxes": [
+            {
+              "label": null,
+              "show": true,
+              "logBase": 1,
+              "min": null,
+              "max": null,
+              "format": "s",
+              "$$hashKey": "object:494"
+            },
+            {
+              "label": null,
+              "show": true,
+              "logBase": 1,
+              "min": null,
+              "max": null,
+              "format": "short",
+              "$$hashKey": "object:495"
+            }
+          ],
+          "xaxis": {
+            "show": true,
+            "mode": "time",
+            "name": null,
+            "values": [],
+            "buckets": null
+          },
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          },
+          "lines": true,
+          "fill": 2,
+          "linewidth": 1,
+          "dashLength": 10,
+          "spaceLength": 10,
+          "pointradius": 2,
+          "legend": {
+            "show": true,
+            "values": false,
+            "min": false,
+            "max": false,
+            "current": false,
+            "total": false,
+            "avg": false
+          },
+          "nullPointMode": "null",
+          "tooltip": {
+            "value_type": "individual",
+            "shared": true,
+            "sort": 0
+          },
+          "aliasColors": {},
+          "seriesOverrides": [],
+          "thresholds": [],
+          "timeRegions": [],
+          "description": "The storage async write duration",
+          "fillGradient": 0,
+          "dashes": false,
+          "hiddenSeries": false,
+          "points": false,
+          "bars": false,
+          "stack": false,
+          "percentage": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null
         }
       ],
       "repeat": null,
@@ -22912,9 +23325,9 @@
           "color": {
             "cardColor": "#5195ce",
             "colorScale": "linear",
-            "colorScheme": "interpolateBlues",
+            "colorScheme": "interpolateSpectral",
             "exponent": 0.5,
-            "min": 0,
+            "min": null,
             "mode": "spectrum"
           },
           "dataFormat": "tsbuckets",
@@ -22927,7 +23340,7 @@
             "y": 22
           },
           "heatmap": {},
-          "hideZeroBuckets": false,
+          "hideZeroBuckets": true,
           "highlightCards": true,
           "id": 3062,
           "legend": {
@@ -22937,14 +23350,13 @@
             "max": true,
             "min": false,
             "rightSide": true,
-            "show": true,
+            "show": false,
             "sort": "current",
             "sortDesc": true,
             "total": false,
             "values": true
           },
           "links": [],
-          "reverseYBuckets": false,
           "targets": [
             {
               "expr": "sum(rate(tikv_coprocessor_request_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le)",
@@ -22958,15 +23370,13 @@
           "title": "Request duration",
           "tooltip": {
             "show": true,
-            "showHistogram": true
+            "showHistogram": false
           },
           "tooltipDecimals": 1,
           "type": "heatmap",
           "xAxis": {
             "show": true
           },
-          "xBucketNumber": null,
-          "xBucketSize": null,
           "yAxis": {
             "decimals": 1,
             "format": "s",
@@ -22977,6 +23387,13 @@
             "splitFactor": null
           },
           "yBucketBound": "upper",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "reverseYBuckets": false,
+          "xBucketNumber": null,
+          "xBucketSize": null,
           "yBucketNumber": null,
           "yBucketSize": null
         },

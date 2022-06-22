@@ -61,11 +61,17 @@ use tikv::{
         ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
-    storage::{self, kv::SnapContext, txn::flow_controller::FlowController, Engine},
+    storage::{
+        self,
+        kv::SnapContext,
+        txn::flow_controller::{EngineFlowController, FlowController},
+        Engine,
+    },
 };
 use tikv_util::{
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
+    sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker},
     HandyRwLock,
@@ -385,7 +391,7 @@ impl ServerCluster {
             lock_mgr.clone(),
             concurrency_manager.clone(),
             lock_mgr.get_storage_dynamic_configs(),
-            Arc::new(FlowController::empty()),
+            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             pd_sender,
             res_tag_factory.clone(),
             quota_limiter.clone(),
@@ -449,6 +455,8 @@ impl ServerCluster {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()
                 .unwrap(),
         );

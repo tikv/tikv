@@ -97,8 +97,11 @@ use tikv::{
         GRPC_THREAD_PREFIX,
     },
     storage::{
-        self, config_manager::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
-        txn::flow_controller::FlowController, Engine,
+        self,
+        config_manager::StorageConfigManger,
+        mvcc::MvccConsistencyCheckObserver,
+        txn::flow_controller::{EngineFlowController, FlowController},
+        Engine,
     },
 };
 use tikv_util::{
@@ -113,7 +116,10 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
-use crate::{memory::*, raft_engine_switch::*, setup::*, signal_handler};
+use crate::{
+    memory::*, raft_engine_switch::*, setup::*, signal_handler,
+    tikv_util::sys::thread::ThreadBuildWrapper,
+};
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
@@ -555,11 +561,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     }
 
     fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
-        let flow_controller = Arc::new(FlowController::new(
+        let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
             self.flow_info_receiver.take().unwrap(),
-        ));
+        )));
         let gc_worker = self.init_gc_worker();
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
@@ -622,11 +628,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .on_thread_start(move || {
+                .after_start_wrapper(move || {
                     tikv_alloc::add_thread_memory_accessor();
                     tikv_util::thread_group::set_properties(props.clone());
                 })
-                .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
+                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
         );

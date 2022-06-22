@@ -41,6 +41,7 @@ use security::SecurityManager;
 use tikv::{config::CdcConfig, storage::Statistics};
 use tikv_util::{
     debug, error, impl_display_as_debug, info,
+    sys::thread::ThreadBuildWrapper,
     time::Limiter,
     timer::SteadyTimer,
     warn,
@@ -385,12 +386,16 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
             .worker_threads(config.incremental_scan_threads)
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         let tso_worker = Builder::new_multi_thread()
             .thread_name("tso")
             .worker_threads(config.tso_worker_threads)
             .enable_time()
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
 
