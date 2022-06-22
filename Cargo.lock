@@ -1472,6 +1472,7 @@ dependencies = [
  "log_wrappers",
  "num_cpus",
  "online_config",
+ "parking_lot_core 0.9.1",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -2752,7 +2753,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/5kbpers/rust-rocksdb.git?branch=seq#04a0e935fe555342d724d78b252950dae0403825"
+source = "git+https://github.com/5kbpers/rust-rocksdb.git?branch=seq#b0d30b15237f1d620f1539217595633c009cec4a"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2771,7 +2772,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/5kbpers/rust-rocksdb.git?branch=seq#04a0e935fe555342d724d78b252950dae0403825"
+source = "git+https://github.com/5kbpers/rust-rocksdb.git?branch=seq#b0d30b15237f1d620f1539217595633c009cec4a"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4574,7 +4575,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/5kbpers/rust-rocksdb.git?branch=seq#04a0e935fe555342d724d78b252950dae0403825"
+source = "git+https://github.com/5kbpers/rust-rocksdb.git?branch=seq#b0d30b15237f1d620f1539217595633c009cec4a"
 dependencies = [
  "libc 0.2.125",
  "librocksdb_sys",

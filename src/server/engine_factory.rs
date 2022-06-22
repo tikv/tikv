@@ -7,8 +7,8 @@ use std::{
 
 use engine_rocks::{
     raw::{Cache, Env},
-    CompactionListener, FlowListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine,
-    RocksEventListener,
+    CompactionListener, FlowListener, FlushListener, RocksCompactedEvent, RocksCompactionJobInfo,
+    RocksEngine, RocksEventListener,
 };
 use engine_traits::{
     CompactionJobInfo, RaftEngine, Result, TabletAccessor, TabletFactory, CF_DEFAULT, CF_WRITE,
@@ -152,6 +152,7 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
             "kv",
             self.inner.sst_recovery_sender.clone(),
         ));
+        kv_db_opts.add_event_listener(FlushListener::default());
         if let Some(filter) = self.create_raftstore_compaction_listener() {
             kv_db_opts.add_event_listener(filter);
         }
