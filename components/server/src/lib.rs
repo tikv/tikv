@@ -10,7 +10,7 @@ mod setup;
 pub mod memory;
 mod proxy;
 pub mod raft_engine_switch;
-mod server;
+pub mod server;
 mod util;
 
 fn proxy_version_info() -> String {

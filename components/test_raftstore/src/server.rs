@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex, RwLock},
+    sync::{atomic::{AtomicBool, AtomicUsize}, Arc, Mutex, RwLock},
     thread,
     time::Duration,
     usize,

@@ -3017,6 +3017,7 @@ name = "mock-engine-store"
 version = "0.0.1"
 dependencies = [
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "keys",
  "kvproto",

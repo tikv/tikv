@@ -4,7 +4,7 @@ use std::{
     collections::hash_map::Entry as MapEntry,
     error::Error as StdError,
     result,
-    sync::{mpsc, Arc, Mutex, RwLock},
+    sync::{atomic::{AtomicBool, AtomicU8}, mpsc, Arc, Mutex, RwLock},
     thread,
     time::Duration,
 };
@@ -49,6 +49,7 @@ use raftstore::{
 use tempfile::TempDir;
 use tikv::server::Result as ServerResult;
 use tikv_util::{
+    sys::SysQuota,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
@@ -306,9 +307,9 @@ impl<T: Simulator> Cluster<T> {
     pub fn make_ffi_helper_set(
         &mut self,
         id: u64,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RaftTestEngine>,
         key_mgr: &Option<Arc<DataKeyManager>>,
-        router: &RaftRouter<RocksEngine, RocksEngine>,
+        router: &RaftRouter<RocksEngine, RaftTestEngine>,
     ) -> (FFIHelperSet, Config) {
         let proxy = Box::new(raftstore::engine_store_ffi::RaftStoreProxy::new(
             AtomicU8::new(raftstore::engine_store_ffi::RaftProxyStatus::Idle as u8),

@@ -16,6 +16,7 @@ use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
 use tikv_util::{debug, info, warn};
+use engine_test::raft::RaftTestEngine;
 // use kvproto::raft_serverpb::{
 //     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
 // };
@@ -31,12 +32,12 @@ pub struct Region {
 
 pub struct EngineStoreServer {
     pub id: u64,
-    pub engines: Option<Engines<RocksEngine, RocksEngine>>,
+    pub engines: Option<Engines<RocksEngine, RaftTestEngine>>,
     pub kvstore: HashMap<RegionId, Box<Region>>,
 }
 
 impl EngineStoreServer {
-    pub fn new(id: u64, engines: Option<Engines<RocksEngine, RocksEngine>>) -> Self {
+    pub fn new(id: u64, engines: Option<Engines<RocksEngine, RaftTestEngine>>) -> Self {
         EngineStoreServer {
             id,
             engines,

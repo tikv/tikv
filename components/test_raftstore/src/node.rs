@@ -313,17 +313,6 @@ impl Simulator for NodeCluster {
             CollectorRegHandle::new_for_test(),
         )?;
 
-        let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.validate().unwrap();
-        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
-        cfg_controller.register(
-            Module::Raftstore,
-            Box::new(RaftstoreConfigManager::new(
-                node.refresh_config_scheduler(),
-                raft_store,
-            )),
-        );
-
         assert!(
             engines
                 .kv
