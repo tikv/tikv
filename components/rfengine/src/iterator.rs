@@ -71,7 +71,7 @@ impl WALIterator {
         }
     }
 
-    fn check_wal_header(&mut self, reader: &mut BufReader<File>) -> Result<WalHeader> {
+    pub(crate) fn check_wal_header(&mut self, reader: &mut BufReader<File>) -> Result<WalHeader> {
         let mut buf = [0u8; WalHeader::len()];
         reader.read_exact(&mut buf)?;
         self.offset += WalHeader::len() as u64;

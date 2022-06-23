@@ -478,6 +478,8 @@ pub struct RegionStats {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs::OpenOptions, io::BufReader, os::unix::prelude::FileExt};
+
     use bytes::{BufMut, BytesMut};
     use engine_traits::{Error as TraitError, RaftEngineReadOnly};
     use eraftpb::{Entry, EntryType};
@@ -851,5 +853,83 @@ mod tests {
                 .dependents
                 .contains(&1)
         );
+    }
+
+    #[test]
+    fn test_rfengine_wal() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let wal_size = 128 * 1024_usize;
+        let dir_path = tmp_dir.path();
+        let mut engine = RfEngine::open(dir_path, wal_size).unwrap();
+        let mut wb = WriteBatch::new();
+        for region_id in 1..=10_u64 {
+            let (key, val) = make_state_kv(2, 1);
+            wb.set_state(region_id, key.chunk(), val.chunk());
+        }
+        engine.write(wb).unwrap();
+        for idx in 1..=1050_u64 {
+            let mut wb = WriteBatch::new();
+            for region_id in 1..=10_u64 {
+                wb.append_raft_log(region_id, &make_log_data(idx, 128));
+                let (key, val) = make_state_kv(1, idx);
+                wb.set_state(region_id, key.chunk(), val.chunk());
+            }
+            engine.write(wb).unwrap();
+        }
+        assert_eq!(engine.regions.len(), 10);
+        engine.stop_worker();
+        for _ in 0..2 {
+            let mut engine = RfEngine::open(dir_path, wal_size).unwrap();
+            assert_eq!(engine.regions.len(), 10);
+            engine.stop_worker();
+        }
+        let epoches = read_epoches(dir_path).unwrap();
+        let mut wal_epoches = Vec::new();
+        for ep in &epoches {
+            if ep.has_wal_file {
+                wal_epoches.push(ep);
+            }
+        }
+        assert!(!wal_epoches.is_empty());
+        for ep in &wal_epoches {
+            let filename = wal_file_name(dir_path, ep.id);
+            let mut it = WALIterator::new(dir_path.to_owned(), ep.id);
+            let fd = fs::File::open(filename.clone()).unwrap();
+            let mut buf_reader = BufReader::new(fd);
+            let wal_header = it.check_wal_header(&mut buf_reader).unwrap();
+            let mut offsets = vec![it.offset];
+            loop {
+                match it.read_batch(&mut buf_reader, &wal_header) {
+                    Err(err) => {
+                        if let Error::EOF = err {
+                            break;
+                        }
+                        panic!("{:?}", err);
+                    }
+                    Ok(_data) => offsets.push(it.offset),
+                }
+            }
+            offsets.pop().unwrap();
+            for (idx, offset) in offsets.iter().enumerate() {
+                if idx == 0 || idx == offsets.len() / 2 || idx == offsets.len() - 1 {
+                    for pos in &vec![0, 4, 8, 12] {
+                        let fd = OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .open(filename.as_path())
+                            .unwrap();
+                        let mut buf = [0u8; 4096];
+                        fd.read_exact_at(&mut buf, *offset).unwrap();
+                        buf[*pos] += 1;
+                        fd.write_all_at(buf.as_ref(), *offset).unwrap();
+                        fd.sync_data().unwrap();
+                        assert!(RfEngine::open(dir_path, wal_size).is_err());
+                        buf[*pos] -= 1;
+                        fd.write_all_at(buf.as_ref(), *offset).unwrap();
+                        fd.sync_data().unwrap();
+                    }
+                }
+            }
+        }
     }
 }
