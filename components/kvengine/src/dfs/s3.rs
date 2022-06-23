@@ -139,6 +139,21 @@ impl S3FSCore {
             RusotoError::Blocking => false,
         }
     }
+
+    async fn sleep_for_retry(&self, retry_cnt: &mut u32, file_id: u64) -> bool {
+        if *retry_cnt < MAX_RETRY_COUNT {
+            *retry_cnt += 1;
+            let retry_sleep = 2u64.pow(*retry_cnt) * 100;
+            tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
+            true
+        } else {
+            error!(
+                "read file {}, reach max retry count {}",
+                file_id, MAX_RETRY_COUNT
+            );
+            false
+        }
+    }
 }
 
 #[async_trait]
@@ -167,23 +182,18 @@ impl DFS for S3FS {
                         );
                         Ok(Bytes::from(buf))
                     }
-                    Err(err) => Err(crate::dfs::Error::S3(err.to_string())),
+                    Err(err) => {
+                        if self.sleep_for_retry(&mut retry_cnt, file_id).await {
+                            continue;
+                        }
+                        Err(crate::dfs::Error::S3(err.to_string()))
+                    }
                 };
             }
             let err = result.unwrap_err();
             if self.is_err_retryable(&err) {
-                if retry_cnt < MAX_RETRY_COUNT {
-                    retry_cnt += 1;
-                    let retry_sleep = 2u64.pow(retry_cnt) * 100;
-                    tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
+                if self.sleep_for_retry(&mut retry_cnt, file_id).await {
                     continue;
-                } else {
-                    error!(
-                        "read file {}, takes {:?}, reach max retry count {}",
-                        file_id,
-                        start_time.saturating_elapsed(),
-                        MAX_RETRY_COUNT
-                    );
                 }
             }
             return Err(err.into());
