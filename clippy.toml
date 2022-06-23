@@ -1,0 +1,9 @@
+disallowed-methods = [
+    { path = "std::thread::Builder::spawn", reason = "Wrapper function `<std::thread::Builder as tikv_util::sys::thread::StdThreadBuildWrapper>::spawn_wrapper` should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+
+    { path = "tokio::runtime::builder::Builder::on_thread_start", reason = "Wrapper function `<tokio::runtime::builder::Builder as tikv_util::sys::thread::ThreadBuildWrapper>::after_start_wrapper` should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+    { path = "tokio::runtime::builder::Builder::on_thread_stop", reason = "Wrapper function `<tokio::runtime::builder::Builder as tikv_util::sys::thread::ThreadBuildWrapper>::before_stop_wrapper` should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+
+    { path = "futures_executor::thread_pool::ThreadPoolBuilder::after_start", reason = "Wrapper function `<futures_executor::thread_pool::ThreadPoolBuilder as tikv_util::sys::thread::ThreadBuildWrapper>::after_start_wrapper` should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+    { path = "futures_executor::thread_pool::ThreadPoolBuilder::before_stop", reason = "Wrapper function `<futures_executor::thread_pool::ThreadPoolBuilder as tikv_util::sys::thread::ThreadBuildWrapper>::before_stop_wrapper` should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
+]

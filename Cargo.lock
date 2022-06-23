@@ -5961,7 +5961,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.1.0-alpha"
+version = "6.2.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -5995,6 +5995,7 @@ dependencies = [
  "futures-executor",
  "futures-timer",
  "futures-util",
+ "getset",
  "grpcio",
  "grpcio-health",
  "hex 0.4.2",

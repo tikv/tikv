@@ -108,7 +108,7 @@ use crate::{
         mvcc::{MvccReader, PointGetterBuilder},
         txn::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
-            flow_controller::FlowController,
+            flow_controller::{EngineFlowController, FlowController},
             scheduler::Scheduler as TxnScheduler,
             Command,
         },
@@ -655,7 +655,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .as_ref()
                             .map_or(0, |v| v.len());
                     sample.add_read_bytes(read_bytes);
-                    let quota_delay = quota_limiter.async_consume(sample).await;
+                    let quota_delay = quota_limiter.consume_sample(sample, true).await;
                     if !quota_delay.is_zero() {
                         TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                             .get(CMD)
@@ -996,7 +996,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         + stats.cf_statistics(CF_LOCK).flow_stats.read_bytes
                         + stats.cf_statistics(CF_WRITE).flow_stats.read_bytes;
                     sample.add_read_bytes(read_bytes);
-                    let quota_delay = quota_limiter.async_consume(sample).await;
+                    let quota_delay = quota_limiter.consume_sample(sample, true).await;
                     if !quota_delay.is_zero() {
                         TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                             .get(CMD)
@@ -2811,7 +2811,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
             },
-            Arc::new(FlowController::empty()),
+            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
             self.resource_tag_factory,
             Arc::new(QuotaLimiter::default()),
@@ -2839,7 +2839,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
             },
-            Arc::new(FlowController::empty()),
+            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),

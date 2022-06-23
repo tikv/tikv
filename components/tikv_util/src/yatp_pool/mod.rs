@@ -100,6 +100,7 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
     type TaskCell = TaskCell;
 
     fn start(&mut self, local: &mut Local<Self::TaskCell>) {
+        crate::sys::thread::add_thread_name_to_map();
         if let Some(props) = self.props.take() {
             crate::thread_group::set_properties(Some(props));
         }
@@ -138,7 +139,8 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
         }
         self.ticker.on_tick();
         self.inner.end(local);
-        tikv_alloc::remove_thread_memory_accessor()
+        tikv_alloc::remove_thread_memory_accessor();
+        crate::sys::thread::remove_thread_name_from_map()
     }
 }
 
