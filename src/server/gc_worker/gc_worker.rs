@@ -831,10 +831,10 @@ where
                 match self.gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
-                            .with_label_values(&["tidb"])
+                            .with_label_values(&["txn"])
                             .inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED
-                            .with_label_values(&["tidb"])
+                            .with_label_values(&["txn"])
                             .inc_by(wasted as _);
                         update_metrics(false);
                     }
@@ -916,7 +916,7 @@ where
                 }
                 info!("write GcTask::OrphanVersions success"; "id" => id);
                 GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-                    .with_label_values(&["tidb", "cleaned"])
+                    .with_label_values(&["txn", "cleaned"])
                     .inc_by(wb.count() as u64);
                 update_metrics(false);
             }

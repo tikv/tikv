@@ -243,11 +243,11 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         drop(gc_context_option);
 
         GC_COMPACTION_FILTER_PERFORM
-            .with_label_values(&["tidb"])
+            .with_label_values(&["txn"])
             .inc();
         if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
-            GC_COMPACTION_FILTER_SKIP.with_label_values(&["tidb"]).inc();
+            GC_COMPACTION_FILTER_SKIP.with_label_values(&["txn"]).inc();
             return std::ptr::null_mut();
         }
 
@@ -359,12 +359,12 @@ impl WriteCompactionFilter {
                 match e {
                     ScheduleError::Full(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&["tidb", "full"])
+                            .with_label_values(&["txn", "full"])
                             .inc();
                     }
                     ScheduleError::Stopped(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&["tidb", "stopped"])
+                            .with_label_values(&["txn", "stopped"])
                             .inc();
                     }
                 }
@@ -435,7 +435,7 @@ impl WriteCompactionFilter {
                     if self.is_bottommost_level {
                         self.mvcc_deletion_overlaps = Some(0);
                         GC_COMPACTION_FILTER_MVCC_DELETION_MET
-                            .with_label_values(&["tidb"])
+                            .with_label_values(&["txn"])
                             .inc();
                     }
                 }
@@ -519,7 +519,7 @@ impl WriteCompactionFilter {
         }
         if self.filtered != 0 {
             self.filtered_hist
-                .with_label_values(&["tidb"])
+                .with_label_values(&["txn"])
                 .observe(self.filtered as f64);
             self.total_filtered += self.filtered;
             self.filtered = 0;
@@ -528,13 +528,13 @@ impl WriteCompactionFilter {
 
     fn flush_metrics(&self) {
         GC_COMPACTION_FILTERED
-            .with_label_values(&["tidb"])
+            .with_label_values(&["txn"])
             .inc_by(self.total_filtered as u64);
         GC_COMPACTION_MVCC_ROLLBACK
-            .with_label_values(&["tidb"])
+            .with_label_values(&["txn"])
             .inc_by(self.mvcc_rollback_and_locks as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-            .with_label_values(&["tidb", "generated"])
+            .with_label_values(&["generated", "txn"])
             .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
@@ -626,7 +626,7 @@ impl CompactionFilter for WriteCompactionFilter {
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
                 GC_COMPACTION_FAILURE
-                    .with_label_values(&["tidb", "filter"])
+                    .with_label_values(&["txn", "filter"])
                     .inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep

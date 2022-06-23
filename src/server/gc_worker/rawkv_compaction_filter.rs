@@ -129,7 +129,7 @@ impl CompactionFilter for RawCompactionFilter {
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
                 GC_COMPACTION_FAILURE
-                    .with_label_values(&["raw", "filter"])
+                    .with_label_values(&["filter", "raw"])
                     .inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
@@ -248,12 +248,12 @@ impl RawCompactionFilter {
                 match e {
                     ScheduleError::Full(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&["raw", "full"])
+                            .with_label_values(&["full", "raw"])
                             .inc();
                     }
                     ScheduleError::Stopped(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&["raw", "stopped"])
+                            .with_label_values(&["stopped", "raw"])
                             .inc();
                     }
                 }
@@ -288,7 +288,7 @@ impl RawCompactionFilter {
             .with_label_values(&["raw"])
             .inc_by(self.total_filtered as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-            .with_label_values(&["raw", "generated"])
+            .with_label_values(&["generated", "raw"])
             .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);

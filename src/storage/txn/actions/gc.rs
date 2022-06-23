@@ -15,7 +15,7 @@ pub fn gc<'a, S: Snapshot>(
 ) -> MvccResult<GcInfo> {
     let gc = Gc::new(txn, reader, key);
     let info = gc.run(safe_point)?;
-    info.report_metrics("tidb");
+    info.report_metrics("txn");
 
     Ok(info)
 }
