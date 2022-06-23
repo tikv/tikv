@@ -183,15 +183,12 @@ impl QuotaLimiter {
     }
 
     pub fn set_cpu_time_limit(&self, quota_limit: usize, is_foreground: bool) {
-        if is_foreground {
-            self.foreground_limiters
-                .cputime_limiter
-                .set_speed_limit(Self::speed_limit(quota_limit as f64 * 1000_f64));
-        } else {
-            self.background_limiters
-                .cputime_limiter
-                .set_speed_limit(Self::speed_limit(quota_limit as f64 * 1000_f64));
-        }
+        let limiters = if is_foreground {&self.foreground_limiters} else {
+            &self.background_limiters
+        };
+
+        limiters.cputime_limiter.set_speed_limit(Self::speed_limit(quota_limit as f64 * 1000_f64));
+
     }
 
     pub fn set_write_bandwidth_limit(&self, write_bandwidth: ReadableSize, is_foreground: bool) {
