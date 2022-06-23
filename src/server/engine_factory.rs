@@ -94,6 +94,8 @@ pub struct KvEngineFactory<ER: RaftEngine> {
     router: Option<RaftRouter<RocksEngine, ER>>,
 }
 
+unsafe impl<ER: RaftEngine> Sync for KvEngineFactory<ER> {}
+
 impl<ER: RaftEngine> KvEngineFactory<ER> {
     pub fn create_raftstore_compaction_listener(&self) -> Option<CompactionListener> {
         let ch = match &self.router {

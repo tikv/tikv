@@ -1495,13 +1495,13 @@ pub enum DBType {
 }
 
 pub struct DBConfigManger<T: TabletFactory<RocksEngine>> {
-    tablet_factory: T,
+    tablet_factory: Arc<T>,
     db_type: DBType,
     shared_block_cache: bool,
 }
 
 impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
-    pub fn new(tablet_factory: T, db_type: DBType, shared_block_cache: bool) -> Self {
+    pub fn new(tablet_factory: Arc<T>, db_type: DBType, shared_block_cache: bool) -> Self {
         DBConfigManger {
             tablet_factory,
             db_type,
@@ -4296,7 +4296,11 @@ mod tests {
         };
         cfg_controller.register(
             Module::Rocksdb,
-            Box::new(DBConfigManger::new(dummy_tablet, DBType::Kv, shared)),
+            Box::new(DBConfigManger::new(
+                Arc::new(dummy_tablet),
+                DBType::Kv,
+                shared,
+            )),
         );
         let (scheduler, receiver) = dummy_scheduler();
         cfg_controller.register(
