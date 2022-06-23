@@ -3901,8 +3901,10 @@ mod tests {
     use crate::{
         server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
-            config_manager::StorageConfigManger, lock_manager::DummyLockManager,
-            txn::flow_controller::FlowController, Storage, TestStorageBuilder,
+            config_manager::StorageConfigManger,
+            lock_manager::DummyLockManager,
+            txn::flow_controller::{EngineFlowController, FlowController},
+            Storage, TestStorageBuilder,
         },
     };
 
@@ -4258,6 +4260,7 @@ mod tests {
         assert_eq!(res.get("raftstore.store-pool-size"), Some(&"17".to_owned()));
     }
 
+    #[allow(clippy::type_complexity)]
     fn new_engines<F: KvFormat>(
         cfg: TiKvConfig,
     ) -> (
@@ -4287,11 +4290,11 @@ mod tests {
                 .unwrap();
         let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
-        let flow_controller = Arc::new(FlowController::new(
+        let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &cfg.storage.flow_control,
             engine.clone(),
             rx,
-        ));
+        )));
 
         let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
         let dummy_tablet = DummyFactory {

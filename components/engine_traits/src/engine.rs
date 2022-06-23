@@ -141,7 +141,7 @@ pub trait TabletFactory<EK> {
 
 pub struct DummyFactory<EK>
 where
-    EK: KvEngine,
+    EK: Clone + Send + 'static,
 {
     pub engine: Option<EK>,
     pub root_path: String,
@@ -149,7 +149,7 @@ where
 
 impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
-    EK: KvEngine,
+    EK: Clone + Send + 'static,
 {
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
@@ -194,18 +194,15 @@ where
 
 impl<EK> DummyFactory<EK>
 where
-    EK: KvEngine,
+    EK: Clone + Send + 'static,
 {
-    pub fn new() -> DummyFactory<EK> {
-        DummyFactory {
-            engine: None,
-            root_path: "/dummy_root".to_string(),
-        }
+    pub fn new(engine: Option<EK>, root_path: String) -> DummyFactory<EK> {
+        DummyFactory { engine, root_path }
     }
 }
 
-impl<EK: KvEngine> Default for DummyFactory<EK> {
+impl<EK: Clone + Send + 'static> Default for DummyFactory<EK> {
     fn default() -> Self {
-        Self::new()
+        Self::new(None, "/tmp".to_string())
     }
 }

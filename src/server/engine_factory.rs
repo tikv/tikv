@@ -130,7 +130,12 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
         ))
     }
 
-    pub fn create_tablet(&self, tablet_path: &Path) -> Result<RocksEngine> {
+    pub fn create_tablet(
+        &self,
+        tablet_path: &Path,
+        region_id: u64,
+        suffix: u64,
+    ) -> Result<RocksEngine> {
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
         kv_db_opts.set_env(self.inner.env.clone());
@@ -142,7 +147,7 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
             kv_db_opts.add_event_listener(filter);
         }
         if let Some(listener) = &self.inner.flow_listener {
-            kv_db_opts.add_event_listener(listener.clone());
+            kv_db_opts.add_event_listener(listener.clone_with(region_id, suffix));
         }
         let kv_cfs_opts = self.inner.rocksdb_config.build_cf_opts(
             &self.inner.block_cache,
@@ -165,6 +170,13 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
         Ok(kv_engine)
+    }
+
+    pub fn on_tablet_created(&self, region_id: u64, suffix: u64) {
+        if let Some(listener) = &self.inner.flow_listener {
+            let listener = listener.clone_with(region_id, suffix);
+            listener.on_created();
+        }
     }
 
     pub fn destroy_tablet(&self, tablet_path: &Path) -> engine_traits::Result<()> {
@@ -191,6 +203,13 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
         Ok(())
     }
 
+    pub fn on_tablet_destroy(&self, region_id: u64, suffix: u64) {
+        if let Some(listener) = &self.inner.flow_listener {
+            let listener = listener.clone_with(region_id, suffix);
+            listener.on_destroyed();
+        }
+    }
+
     pub fn store_path(&self) -> PathBuf {
         self.inner.store_path.clone()
     }
@@ -205,7 +224,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     #[inline]
     fn create_shared_db(&self) -> Result<RocksEngine> {
         let root_path = self.kv_engine_path();
-        let tablet = self.create_tablet(&root_path)?;
+        let tablet = self.create_tablet(&root_path, 0, 0)?;
         let mut root_db = self.inner.root_db.lock().unwrap();
         root_db.replace(tablet.clone());
         Ok(tablet)

@@ -30,9 +30,10 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
             ));
         }
         let tablet_path = self.tablet_path(id, suffix);
-        let kv_engine = self.inner.create_tablet(&tablet_path)?;
+        let kv_engine = self.inner.create_tablet(&tablet_path, id, suffix)?;
         debug!("inserting tablet"; "key" => ?(id, suffix));
         reg.insert((id, suffix), kv_engine.clone());
+        self.inner.on_tablet_created(id, suffix);
         Ok(kv_engine)
     }
 
@@ -123,7 +124,9 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
         let path = self.tablet_path(id, suffix);
         self.registry.lock().unwrap().remove(&(id, suffix));
-        self.inner.destroy_tablet(&path)
+        self.inner.destroy_tablet(&path)?;
+        self.inner.on_tablet_destroy(id, suffix);
+        Ok(())
     }
 
     #[inline]
