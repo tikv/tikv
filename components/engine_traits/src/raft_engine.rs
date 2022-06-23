@@ -2,7 +2,9 @@
 
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+    },
 };
 use raft::eraftpb::Entry;
 
@@ -159,8 +161,7 @@ pub trait RaftLogBatch: Send {
     fn put_seqno_relation(
         &mut self,
         raft_group_id: u64,
-        sequence: u64,
-        applied_idx: u64,
+        relation: &RegionSequenceNumberRelation,
     ) -> Result<()>;
 
     /// The data size of this RaftLogBatch.

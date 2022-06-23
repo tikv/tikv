@@ -38,7 +38,9 @@ use kvproto::{
     metapb::{self, Region, RegionEpoch},
     pdpb::{self, QueryStats, StoreStats},
     raft_cmdpb::{AdminCmdType, AdminRequest},
-    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
+    raft_serverpb::{
+        ExtraMessageType, PeerState, RaftMessage, RegionLocalState, RegionSequenceNumberRelation,
+    },
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
 use pd_client::{Feature, FeatureGate, PdClient};
@@ -499,7 +501,7 @@ where
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
     // region_id -> (sequence_number, applied_index)
-    pub pending_seqno_relation: HashMap<u64, (SequenceNumber, u64)>,
+    pub pending_seqno_relations: Vec<RegionSequenceNumberRelation>,
     pub to_update_sequence: Option<SequenceNumber>,
 }
 
@@ -946,17 +948,17 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         }
         let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
-        let seqno_relation = std::mem::take(&mut self.poll_ctx.pending_seqno_relation);
+        let seqno_relations = std::mem::take(&mut self.poll_ctx.pending_seqno_relations);
         let mut dur = self.timer.saturating_elapsed();
 
         for inspector in &mut latency_inspect {
             inspector.record_store_process(dur);
         }
         let mut raft_wb = None;
-        if !seqno_relation.is_empty() {
-            let mut wb = self.poll_ctx.engines.raft.log_batch(seqno_relation.len());
-            for (region_id, (sn, applied_idx)) in seqno_relation {
-                wb.put_seqno_relation(region_id, sn.sequence, applied_idx)
+        if !seqno_relations.is_empty() {
+            let mut wb = self.poll_ctx.engines.raft.log_batch(seqno_relations.len());
+            for relation in seqno_relations {
+                wb.put_seqno_relation(relation.region_id, &relation)
                     .unwrap();
             }
             raft_wb = Some(wb);
@@ -981,7 +983,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
             if let Some(sn) = self.poll_ctx.to_update_sequence.take() {
-                SYNCED_MAX_SEQUENCE_NUMBER.store(sn.sequence, Ordering::SeqCst);
+                SYNCED_MAX_SEQUENCE_NUMBER.store(sn.seqno, Ordering::SeqCst);
             }
         } else {
             let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
@@ -1330,7 +1332,7 @@ where
             sync_write_worker,
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
-            pending_seqno_relation: HashMap::default(),
+            pending_seqno_relations: vec![],
             to_update_sequence: None,
         };
         ctx.update_ticks_timeout();
@@ -2496,23 +2498,28 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         )
     }
 
-    fn on_apply_res(&mut self, res: ApplyRes<EK::Snapshot>) {
-        if let Some(sequence) = res.last_sequence {
-            if let Some(committed_sn) = self.fsm.store.seqno_window.push(sequence) {
-                // Update global sequence
-                if let Some(last) = self.ctx.to_update_sequence.replace(committed_sn) {
-                    assert!(
-                        last.sequence < committed_sn.sequence,
-                        "last {:?}, committed: {:?}",
-                        last,
-                        committed_sn
-                    );
+    fn on_apply_res(&mut self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+        for res in &apply_res {
+            if let Some(seq) = res.last_sequence {
+                if let Some(committed_sn) = self.fsm.store.seqno_window.push(seq) {
+                    // Update global sequence
+                    if let Some(last) = self.ctx.to_update_sequence.replace(committed_sn) {
+                        assert!(
+                            last.seqno < committed_sn.seqno,
+                            "last {:?}, committed: {:?}",
+                            last,
+                            committed_sn
+                        );
+                    }
                 }
+                let mut relation = RegionSequenceNumberRelation::default();
+                relation.set_region_id(res.region_id);
+                relation.set_sequence_number(seq.seqno);
+                relation.set_apply_state(res.apply_state.clone());
+                self.ctx.pending_seqno_relations.push(relation);
             }
-            self.ctx
-                .pending_seqno_relation
-                .insert(res.region_id, (sequence, res.apply_state.applied_index));
         }
+        self.ctx.router.notify(apply_res);
     }
 }
 

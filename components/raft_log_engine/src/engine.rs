@@ -15,7 +15,9 @@ use engine_traits::{
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+    },
 };
 use raft::eraftpb::Entry;
 use raft_engine::{
@@ -305,13 +307,11 @@ impl RaftLogBatchTrait for RaftLogBatch {
     fn put_seqno_relation(
         &mut self,
         raft_group_id: u64,
-        sequence: u64,
-        applied_idx: u64,
+        relation: &RegionSequenceNumberRelation,
     ) -> Result<()> {
-        let mut v = sequence.to_be_bytes().to_vec();
-        v.append(&mut applied_idx.to_be_bytes().to_vec());
-        self.0.put(raft_group_id, SEQNO_RELATION_KEY.to_vec(), v);
-        Ok(())
+        self.0
+            .put_message(raft_group_id, SEQNO_RELATION_KEY.to_vec(), relation)
+            .map_err(transfer_error)
     }
 
     fn persist_size(&self) -> usize {

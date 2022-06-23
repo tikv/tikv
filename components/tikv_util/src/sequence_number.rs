@@ -13,7 +13,7 @@ lazy_static! {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SequenceNumber {
-    pub sequence: u64,
+    pub seqno: u64,
     start_counter: usize,
     end_counter: usize,
 }
@@ -21,19 +21,19 @@ pub struct SequenceNumber {
 impl SequenceNumber {
     pub fn start() -> Self {
         SequenceNumber {
-            sequence: 0,
+            seqno: 0,
             start_counter: SEQUENCE_NUMBER_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst),
             end_counter: 0,
         }
     }
 
     pub fn end(&mut self, number: u64) {
-        self.sequence = number;
+        self.seqno = number;
         self.end_counter = SEQUENCE_NUMBER_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
     }
 
     pub fn max(left: Self, right: Self) -> Self {
-        match left.sequence.cmp(&right.sequence) {
+        match left.seqno.cmp(&right.seqno) {
             cmp::Ordering::Less | cmp::Ordering::Equal => right,
             cmp::Ordering::Greater => left,
         }

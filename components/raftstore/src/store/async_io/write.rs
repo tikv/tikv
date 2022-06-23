@@ -492,7 +492,7 @@ where
                 self.handle_raft_write(raft_wb);
                 if let Some(sn) = to_update_sequence {
                     self.batch.raft_db_callbacks.push(Box::new(move || {
-                        SYNCED_MAX_SEQUENCE_NUMBER.store(sn.sequence, Ordering::SeqCst);
+                        SYNCED_MAX_SEQUENCE_NUMBER.store(sn.seqno, Ordering::SeqCst);
                     }));
                 }
             }

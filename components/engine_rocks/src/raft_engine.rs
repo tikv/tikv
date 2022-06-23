@@ -8,7 +8,9 @@ use engine_traits::{
 };
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+    },
 };
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -363,12 +365,9 @@ impl RaftLogBatch for RocksWriteBatch {
     fn put_seqno_relation(
         &mut self,
         raft_group_id: u64,
-        sequence: u64,
-        applied_idx: u64,
+        relation: &RegionSequenceNumberRelation,
     ) -> Result<()> {
-        let mut v = sequence.to_be_bytes().to_vec();
-        v.append(&mut applied_idx.to_be_bytes().to_vec());
-        self.put(&keys::sequence_number_relation_key(raft_group_id), &v)
+        self.put_msg(&keys::sequence_number_relation_key(raft_group_id), relation)
     }
 
     fn persist_size(&self) -> usize {
