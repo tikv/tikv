@@ -541,6 +541,7 @@ where
                 .iter()
                 .flat_map(|task| task.trackers.iter().flat_map(|t| t.as_tracker_token()))
                 .collect();
+            // TODO: Add a different perf context for raft engine.
             self.perf_context.report_metrics(&trackers);
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);

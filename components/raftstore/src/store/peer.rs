@@ -1575,7 +1575,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msgs: Vec<RaftMessage>,
     ) {
-        let now = monotonic_raw_now();
+        let mut now = None;
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgSnapshot {
@@ -1591,7 +1591,7 @@ where
                 // network partition from the new leader.
                 // For lease safety during leader transfer, transit `leader_lease`
                 // to suspect.
-                self.leader_lease.suspect(now);
+                self.leader_lease.suspect(*now.insert(monotonic_raw_now()));
             }
 
             let to_peer_id = msg.get_to_peer().get_id();
@@ -1621,7 +1621,7 @@ where
                     let proposal = &self.proposals.queue[idx];
                     if term == proposal.term
                         && let Some(propose_time) = proposal.propose_time
-                        && let Ok(dur) = (now - propose_time).to_std() {
+                        && let Ok(dur) = ((*now.get_or_insert(monotonic_raw_now())) - propose_time).to_std() {
                         ctx.raft_metrics
                             .proposal_send_wait
                             .observe(dur.as_secs_f64());
