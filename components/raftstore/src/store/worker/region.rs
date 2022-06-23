@@ -416,7 +416,7 @@ where
         let timer = Instant::now();
         let options = ApplyOptions {
             db: self.engine.clone(),
-            region.clone(),
+            region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
             coprocessor_host: self.coprocessor_host.clone(),
