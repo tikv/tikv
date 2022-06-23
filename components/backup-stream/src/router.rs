@@ -56,7 +56,12 @@ use crate::{
     utils::{self, SegmentMap, Slot, SlotMap, StopWatch},
 };
 
-pub const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
+const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
+
+/// FLUSH_LOG_CONCURRENT_BATCH_COUNT specifies the concurrent count to write to storage.
+/// 'Log backup' will produce a large mount of small files during flush interval,
+/// and storage could take mistaken if writing all of these files to storage concurrently.
+const FLUSH_LOG_CONCURRENT_BATCH_COUNT: usize = 128;
 
 #[derive(Debug)]
 pub struct ApplyEvent {
@@ -877,10 +882,8 @@ impl StreamTaskInfo {
         // if failed to write storage, we should retry write flushing_files.
         let storage = self.storage.clone();
         let files = self.flushing_files.write().await;
-        // used to limit concurrent when write to storage.
-        let batch_count = 128;
 
-        for batch_files in files.chunks(batch_count) {
+        for batch_files in files.chunks(FLUSH_LOG_CONCURRENT_BATCH_COUNT) {
             let futs = batch_files
                 .iter()
                 .map(|(_, v)| Self::flush_log_file_to(storage.clone(), v));
@@ -1456,16 +1459,19 @@ mod tests {
         .unwrap();
 
         // on_event
-        let region_count = 130;
+        let region_count = FLUSH_LOG_CONCURRENT_BATCH_COUNT + 5;
         for i in 1..=region_count {
-            let kv_events = mock_build_kv_events(i, i as _, i as _);
+            let kv_events = mock_build_kv_events(i as _, i as _, i as _);
             task.on_events(kv_events).await.unwrap();
         }
         // do_flush
         task.set_flushing_status(true);
         task.do_flush(1, TimeStamp::new(1)).await.unwrap();
+        assert_eq!(task.flush_failure_count(), 0);
+        assert_eq!(task.files.read().await.is_empty(), true);
+        assert_eq!(task.flushing_files.read().await.is_empty(), true);
 
-        // assert
+        // assert backup log files
         let mut meta_count = 0;
         let mut log_count = 0;
         for entry in walkdir::WalkDir::new(tmp_dir.path()) {
