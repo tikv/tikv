@@ -441,7 +441,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn pre_apply_snapshot(&self, region: &Region, peer_id: u64, snap_key: &crate::store::SnapKey, snap: Option<&crate::store::Snapshot>) {
+    pub fn pre_apply_snapshot(
+        &self,
+        region: &Region,
+        peer_id: u64,
+        snap_key: &crate::store::SnapKey,
+        snap: Option<&crate::store::Snapshot>,
+    ) {
         loop_ob!(
             region,
             &self.registry.apply_snapshot_observers,
@@ -585,8 +591,10 @@ mod tests {
     };
     use tikv_util::box_err;
 
-    use crate::coprocessor::*;
-    use crate::store::{SnapKey, Snapshot};
+    use crate::{
+        coprocessor::*,
+        store::{SnapKey, Snapshot},
+    };
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {
@@ -687,7 +695,13 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn pre_apply_snapshot(&self, _: &mut ObserverContext<'_>, _peer_id: u64, _: &SnapKey, _: Option<&Snapshot>) {
+        fn pre_apply_snapshot(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _peer_id: u64,
+            _: &SnapKey,
+            _: Option<&Snapshot>,
+        ) {
             self.called.fetch_add(17, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }

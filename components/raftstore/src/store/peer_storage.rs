@@ -1734,6 +1734,7 @@ where
         let task = RegionTask::Apply {
             region_id: self.get_region_id(),
             status,
+            peer_id: self.peer_id,
         };
 
         // Don't schedule the snapshot to region worker.

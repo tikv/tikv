@@ -364,21 +364,21 @@ where
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
-                            "failed to get apply_state from {}",
-                            log_wrappers::Value::key(&state_key)
-                        ));
+                        "failed to get apply_state from {}",
+                        log_wrappers::Value::key(&state_key)
+                    ));
                 }
             };
         Ok(apply_state)
     }
 
     /// Applies snapshot data of the Region.
-    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
+    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>, peer_id: u64) -> Result<()> {
         info!("begin apply snap data"; "region_id" => region_id);
         fail_point!("region_apply_snap", |_| { Ok(()) });
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
-        let region_state = self.get_region_state(*region_id)?;
+        let region_state = self.get_region_state(region_id)?;
 
         // clear up origin data.
         let region = region_state.get_region().clone();
@@ -399,7 +399,7 @@ where
         fail_point!("apply_snap_cleanup_range");
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state = self.get_apply_state(*region_id)?;
+        let apply_state = self.get_apply_state(region_id)?;
 
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
@@ -439,7 +439,7 @@ where
     }
 
     /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
-    fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
+    fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>, peer_id: u64) {
         let _ = status.compare_exchange(
             JOB_STATUS_PENDING,
             JOB_STATUS_RUNNING,
@@ -451,7 +451,7 @@ where
         // let timer = apply_histogram.start_coarse_timer();
         let start = Instant::now();
 
-        match self.apply_snap(region_id, Arc::clone(&status)) {
+        match self.apply_snap(region_id, Arc::clone(&status), peer_id) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.success.inc();
@@ -636,9 +636,11 @@ where
 
     fn pre_apply_snapshot(&self, task: &Task<EK::Snapshot>) -> Result<()> {
         let (region_id, status, peer_id) = match task {
-            Task::Apply { region_id, status, peer_id } => {
-                (region_id, status.clone(), peer_id)
-            },
+            Task::Apply {
+                region_id,
+                status,
+                peer_id,
+            } => (region_id, status.clone(), peer_id),
             _ => panic!("invalid apply snapshot task"),
         };
 
@@ -658,7 +660,8 @@ where
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
         check_abort(&abort)?;
-        self.coprocessor_host.pre_apply_snapshot(&region, *peer_id, &snap_key, &s);
+        self.coprocessor_host
+            .pre_apply_snapshot(&region, *peer_id, &snap_key, Some(&s));
         info!(
             "pre apply snapshot";
             "region_id" => region_id,
@@ -732,7 +735,7 @@ where
             if self.ctx.ingest_maybe_stall() {
                 break;
             }
-            if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
+            if let Some(Task::Apply { region_id, status, peer_id }) = self.pending_applies.pop_front() {
                 self.ctx.handle_apply(region_id, status);
             }
         }
@@ -1145,6 +1148,7 @@ mod tests {
                 .schedule(Task::Apply {
                     region_id: id,
                     status,
+                    peer_id: 1,
                 })
                 .unwrap();
         };

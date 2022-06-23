@@ -118,7 +118,14 @@ pub trait ApplySnapshotObserver: Coprocessor {
     fn apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
 
     /// Hook when receiving Task::Apply.
-    fn pre_apply_snapshot(&self, _: &mut ObserverContext<'_>, _peer_id: u64, _: &crate::store::SnapKey, _: Option<&crate::store::Snapshot>) {}
+    fn pre_apply_snapshot(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _peer_id: u64,
+        _: &crate::store::SnapKey,
+        _: Option<&crate::store::Snapshot>,
+    ) {
+    }
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use
