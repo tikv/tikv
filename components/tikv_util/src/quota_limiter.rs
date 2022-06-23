@@ -34,7 +34,7 @@ pub struct QuotaLimiter {
     background_read_bandwidth_limiter: Limiter,
     // max delay nano seconds
     max_delay_duration: AtomicU64,
-    // if supports auto tune
+    // if auto tune is enabled
     enable_auto_tune: AtomicBool,
 }
 
@@ -213,7 +213,7 @@ impl QuotaLimiter {
         Duration::from_nanos(self.max_delay_duration.load(Ordering::Relaxed))
     }
 
-    pub fn supports_auto_tune(&self) -> bool {
+    pub fn auto_tune_enabled(&self) -> bool {
         self.enable_auto_tune.load(Ordering::Relaxed)
     }
 
@@ -231,15 +231,11 @@ impl QuotaLimiter {
     // To consume a sampler and return delayed duration.
     // If the sampler is null, the speed limiter will just return ZERO.
     pub async fn consume_sample(&self, sample: Sample, is_foreground: bool) -> Duration {
-        let mut cpu_limiter = self.background_cputime_limiter.clone();
-        let mut write_limiter = self.background_write_bandwidth_limiter.clone();
-        let mut read_limiter = self.background_read_bandwidth_limiter.clone();
-
-        if is_foreground {
-            cpu_limiter = self.foreground_cputime_limiter.clone();
-            write_limiter = self.foreground_write_bandwidth_limiter.clone();
-            read_limiter = self.foreground_read_bandwidth_limiter.clone();
-        }
+        let (cpu_limiter, write_limiter, read_limiter) = if is_foreground {
+            (&self.foreground_cputime_limiter, &self.foreground_write_bandwidth_limiter, &self.foreground_read_bandwidth_limiter)
+        } else {
+            (&self.background_cputime_limiter, &self.background_write_bandwidth_limiter, &self.background_read_bandwidth_limiter)
+        };
 
         let cpu_dur = if sample.cpu_time > Duration::ZERO {
             cpu_limiter.consume_duration(sample.cpu_time.as_micros() as usize)

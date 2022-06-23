@@ -61,7 +61,7 @@
 # background-read-bandwidth = "0B"
 ## Limitation of max delay duration, default value is 0 which means unlimited.
 # max-delay-duration = "500ms"
-## If quota auto tune for background request is supported
+## Whether to enable quota auto tune
 # enable-auto-tune = false
 
 [log]

@@ -1282,7 +1282,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         self.background_worker.spawn_interval_task(
             DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL,
             move || {
-                if quota_limiter.supports_auto_tune() {
+                if quota_limiter.auto_tune_enabled() {
                     let old_quota = quota_limiter.background_cputime_limiter() / 1000_f64;
                     let cpu_usage = match proc_stats.cpu_usage() {
                         Ok(r) => r,
