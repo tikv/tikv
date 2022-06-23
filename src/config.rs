@@ -1517,7 +1517,7 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                 if r.is_err() {
                     result = Err(Box::from(r.err().unwrap()));
                     error!(
-                        "set_db_config failed on tablet {} {}. err:{:?}",
+                        "set_db_config failed on tablet {}_{}. err:{:?}",
                         region_id, suffix, &result
                     );
                 }
@@ -1534,8 +1534,8 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                 if r.is_err() {
                     result = Err(Box::from(r.err().unwrap()));
                     error!(
-                        "set_cf_config failed on tablet {} {}. err:{:?}",
-                        region_id, suffix, &result
+                        "set_cf_config {} failed on tablet {}_{}. err:{:?}",
+                        cf, region_id, suffix, &result
                     );
                 }
             }));
@@ -1574,7 +1574,7 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                     if r.is_err() {
                         result = Err(Box::from(r.err().unwrap()));
                         error!(
-                            "set_block_cache_size {} failed on tablet {} {}. err:{:?}",
+                            "opt.set_block_cache_capacity {} failed on tablet {}_{}. err:{:?}",
                             size.as_mb(),
                             region_id,
                             suffix,
@@ -1583,6 +1583,10 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                     }
                 } else {
                     result = Err(Box::from(r.err().unwrap()));
+                    error!(
+                        "get_options_cf {} failed on tablet {}_{}. err:{:?}",
+                        cf, region_id, suffix, &result
+                    );
                 }
             }));
         // Write config to metric
@@ -1601,7 +1605,7 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                 if r.is_err() {
                     result = Err(Box::from(r.err().unwrap()));
                     error!(
-                        "set_rate_bytes_per_sec {} failed on tablet {} {}. err:{:?}",
+                        "set_rate_bytes_per_sec {} failed on tablet {}_{}. err:{:?}",
                         rate_bytes_per_sec, region_id, suffix, &result
                     );
                 }
@@ -1621,7 +1625,7 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                 if r.is_err() {
                     result = Err(Box::from(r.err().unwrap()));
                     error!(
-                        "set_rate_limiter_auto_tuned {} failed on tablet {} {}. err:{:?}",
+                        "set_rate_limiter_auto_tuned {} failed on tablet {}_{}. err:{:?}",
                         rate_limiter_auto_tuned, region_id, suffix, &result
                     );
                 }
@@ -1630,7 +1634,7 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                 if new_auto_tuned.is_none() || new_auto_tuned.unwrap() != rate_limiter_auto_tuned {
                     result = Err("fail to set rate_limiter_auto_tuned".into());
                     error!(
-                        "set_rate_limiter_auto_tuned {} failed on tablet {} {}. err:{:?}",
+                        "set_rate_limiter_auto_tuned {} failed on tablet {}_{}. err:{:?}",
                         rate_limiter_auto_tuned, region_id, suffix, &result
                     );
                 }
