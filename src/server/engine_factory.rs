@@ -83,22 +83,29 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
     pub fn build(self) -> KvEngineFactory<ER> {
         KvEngineFactory {
             inner: Arc::new(self.inner),
-            router: self.router,
+            router: Mutex::new(self.router),
         }
     }
 }
 
-#[derive(Clone)]
 pub struct KvEngineFactory<ER: RaftEngine> {
     inner: Arc<FactoryInner>,
-    router: Option<RaftRouter<RocksEngine, ER>>,
+    router: Mutex<Option<RaftRouter<RocksEngine, ER>>>,
 }
 
-unsafe impl<ER: RaftEngine> Sync for KvEngineFactory<ER> {}
+impl<ER: RaftEngine> Clone for KvEngineFactory<ER> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            router: Mutex::new(self.router.lock().unwrap().clone()),
+        }
+    }
+}
 
 impl<ER: RaftEngine> KvEngineFactory<ER> {
     pub fn create_raftstore_compaction_listener(&self) -> Option<CompactionListener> {
-        let ch = match &self.router {
+        let router = self.router.lock().unwrap();
+        let ch = match &*router {
             Some(r) => Mutex::new(r.clone()),
             None => return None,
         };
