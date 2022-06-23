@@ -1679,8 +1679,8 @@ mod tests {
                 i.storage = Arc::new(ErrorStorage::with_always_error(i.storage.clone()))
             })
             .await;
-        for i in 0..=16 {
-            check_on_events_result(&router.on_events(build_kv_event(i * 10, 10)).await);
+        for i in 0..=FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
+            check_on_events_result(&router.on_events(build_kv_event((i * 10) as _, 10)).await);
             assert_eq!(
                 router
                     .do_flush("flush_failure", 42, TimeStamp::zero())
