@@ -118,22 +118,24 @@ pub trait ApplySnapshotObserver: Coprocessor {
     fn apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
 
     /// Hook when receiving Task::Apply.
+    /// Should pass valid _snapshot, the option is only for testing.
     fn pre_apply_snapshot(
         &self,
         _: &mut ObserverContext<'_>,
         _peer_id: u64,
         _: &crate::store::SnapKey,
-        _: &crate::store::Snapshot,
+        _: Option<&crate::store::Snapshot>,
     ) {
     }
 
-    /// Hook when the whole snapshot is applied
+    /// Hook when the whole snapshot is applied.
+    /// Should pass valid _snapshot, the option is only for testing.
     fn post_apply_snapshot(
         &self,
         _: &mut ObserverContext<'_>,
         _: u64,
         _: &crate::store::SnapKey,
-        _: &crate::store::Snapshot,
+        _snapshot: Option<&crate::store::Snapshot>,
     ) {
     }
 }
