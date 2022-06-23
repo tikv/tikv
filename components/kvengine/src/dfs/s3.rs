@@ -101,13 +101,20 @@ impl S3FSCore {
         Self::new_with_s3_client(prefix, bucket, s3c)
     }
 
-    pub fn new_with_s3_client(prefix: String, bucket: String, s3c: rusoto_s3::S3Client) -> Self {
+    pub fn new_with_s3_client(
+        mut prefix: String,
+        bucket: String,
+        s3c: rusoto_s3::S3Client,
+    ) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .thread_name("s3")
             .build()
             .unwrap();
+        if prefix.is_empty() {
+            prefix.push_str("default")
+        }
         Self {
             prefix,
             s3c,
