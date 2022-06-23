@@ -182,37 +182,30 @@ impl QuotaLimiter {
         }
     }
 
-    pub fn set_cpu_time_limit(&self, quota_limit: usize, is_foreground: bool) {
-        let limiters = if is_foreground {&self.foreground_limiters} else {
+    fn get_limiters(&self, is_foreground: bool) -> &LimiterItems {
+        if is_foreground {
+            &self.foreground_limiters
+        } else {
             &self.background_limiters
-        };
+        }
+    }
 
-        limiters.cputime_limiter.set_speed_limit(Self::speed_limit(quota_limit as f64 * 1000_f64));
-
+    pub fn set_cpu_time_limit(&self, quota_limit: usize, is_foreground: bool) {
+        self.get_limiters(is_foreground)
+            .cputime_limiter
+            .set_speed_limit(Self::speed_limit(quota_limit as f64 * 1000_f64));
     }
 
     pub fn set_write_bandwidth_limit(&self, write_bandwidth: ReadableSize, is_foreground: bool) {
-        if is_foreground {
-            self.foreground_limiters
-                .write_bandwidth_limiter
-                .set_speed_limit(Self::speed_limit(write_bandwidth.0 as f64));
-        } else {
-            self.background_limiters
-                .write_bandwidth_limiter
-                .set_speed_limit(Self::speed_limit(write_bandwidth.0 as f64));
-        }
+        self.get_limiters(is_foreground)
+            .write_bandwidth_limiter
+            .set_speed_limit(Self::speed_limit(write_bandwidth.0 as f64));
     }
 
     pub fn set_read_bandwidth_limit(&self, read_bandwidth: ReadableSize, is_foreground: bool) {
-        if is_foreground {
-            self.foreground_limiters
-                .read_bandwidth_limiter
-                .set_speed_limit(Self::speed_limit(read_bandwidth.0 as f64));
-        } else {
-            self.background_limiters
-                .read_bandwidth_limiter
-                .set_speed_limit(Self::speed_limit(read_bandwidth.0 as f64));
-        }
+        self.get_limiters(is_foreground)
+            .read_bandwidth_limiter
+            .set_speed_limit(Self::speed_limit(read_bandwidth.0 as f64));
     }
 
     pub fn set_max_delay_duration(&self, duration: ReadableDuration) {
@@ -225,8 +218,10 @@ impl QuotaLimiter {
             .store(enable_auto_tune, Ordering::Relaxed);
     }
 
-    pub fn background_cputime_limiter(&self) -> f64 {
-        self.background_limiters.cputime_limiter.speed_limit()
+    pub fn cputime_limiter(&self, is_foreground: bool) -> f64 {
+        self.get_limiters(is_foreground)
+            .cputime_limiter
+            .speed_limit()
     }
 
     fn max_delay_duration(&self) -> Duration {

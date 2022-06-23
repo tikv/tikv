@@ -1255,7 +1255,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         // Determine the base cpu quota
         let base_cpu_quota = {
             // if cpu quota is not specified, start from optimistic case
-            if quota_limiter.background_cputime_limiter().is_infinite() {
+            if quota_limiter.cputime_limiter(false).is_infinite() {
                 let quota = 1000_f64
                     * f64::max(
                         BACKGROUND_REQUEST_CORE_LOWER_BOUND,
@@ -1264,7 +1264,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 quota_limiter.set_cpu_time_limit(quota as usize, false);
                 quota
             } else {
-                quota_limiter.background_cputime_limiter() / 1000_f64
+                quota_limiter.cputime_limiter(false) / 1000_f64
             }
         };
 
@@ -1283,7 +1283,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL,
             move || {
                 if quota_limiter.auto_tune_enabled() {
-                    let old_quota = quota_limiter.background_cputime_limiter() / 1000_f64;
+                    let old_quota = quota_limiter.cputime_limiter(false) / 1000_f64;
                     let cpu_usage = match proc_stats.cpu_usage() {
                         Ok(r) => r,
                         Err(_e) => 0.0,
