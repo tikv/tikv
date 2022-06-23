@@ -32,6 +32,7 @@ struct FactoryInner {
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
     root_db: Mutex<Option<RocksEngine>>,
+    flush_listener: Option<FlushListener>,
 }
 
 pub struct KvEngineFactoryBuilder<ER: RaftEngine> {
@@ -52,6 +53,7 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
                 flow_listener: None,
                 sst_recovery_sender: None,
                 root_db: Mutex::default(),
+                flush_listener: None,
             },
             router: None,
         }
@@ -69,6 +71,11 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
 
     pub fn flow_listener(mut self, listener: FlowListener) -> Self {
         self.inner.flow_listener = Some(listener);
+        self
+    }
+
+    pub fn flush_listener(mut self, listener: FlushListener) -> Self {
+        self.inner.flush_listener = Some(listener);
         self
     }
 
@@ -152,7 +159,9 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
             "kv",
             self.inner.sst_recovery_sender.clone(),
         ));
-        kv_db_opts.add_event_listener(FlushListener::default());
+        if let Some(listener) = &self.inner.flush_listener {
+            kv_db_opts.add_event_listener(listener.clone());
+        }
         if let Some(filter) = self.create_raftstore_compaction_listener() {
             kv_db_opts.add_event_listener(filter);
         }

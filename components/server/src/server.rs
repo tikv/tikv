@@ -37,7 +37,7 @@ use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     from_rocks_compression_type,
     raw::{Cache, Env},
-    FlowInfo, RocksEngine,
+    FlowInfo, FlushListener, RocksEngine,
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
@@ -1614,6 +1614,9 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             .region_info_accessor(self.region_info_accessor.clone())
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
+        if self.config.raft_store.disable_kv_wal {
+            builder = builder.flush_listener(FlushListener::default());
+        }
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);
         }
