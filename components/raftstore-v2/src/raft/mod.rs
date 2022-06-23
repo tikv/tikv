@@ -4,4 +4,4 @@ mod peer;
 mod storage;
 
 pub use peer::Peer;
-pub use storage::Storage;
+pub use storage::{write_initial_states, Storage};
