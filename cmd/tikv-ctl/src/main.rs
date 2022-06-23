@@ -41,13 +41,13 @@ use kvproto::{
 };
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
+use raft_log_engine::ManagedFileSystem;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
 use tikv::{config::TiKvConfig, server::debug::BottommostLevelCompaction};
 use tikv_util::{escape, run_and_wait_child_process, unescape};
 use txn_types::Key;
-use raft_log_engine::ManagedFileSystem;
 
 use crate::{cmd::*, executor::*, util::*};
 
@@ -104,9 +104,13 @@ fn main() {
             }
         }
         Cmd::RaftEngineCtl { args } => {
-            let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+            let key_manager =
+                data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .expect("data_key_manager_from_config should success");
-            let file_system = Arc::new(ManagedFileSystem::new(key_manager.map(|m| Arc::new(m)), None));
+            let file_system = Arc::new(ManagedFileSystem::new(
+                key_manager.map(|m| Arc::new(m)),
+                None,
+            ));
             raft_engine_ctl::run_command(args, file_system);
         }
         Cmd::BadSsts { manifest, pd } => {
@@ -189,7 +193,7 @@ fn main() {
                     path.map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
                 DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
             }
-        }
+        },
         Cmd::CleanupEncryptionMeta {} => {
             let key_manager =
                 match data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
@@ -201,9 +205,7 @@ fn main() {
                         return;
                     }
                 };
-            key_manager.retain_encrypted_files(|fname| {
-                Path::new(fname).exists()
-            })
+            key_manager.retain_encrypted_files(|fname| Path::new(fname).exists())
         }
         Cmd::CompactCluster {
             db,

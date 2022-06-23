@@ -9,8 +9,8 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineDebug, RaftEngineReadOnly,
-    RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result, EncryptionMethod,
+    CacheStats, EncryptionKeyManager, EncryptionMethod, RaftEngine, RaftEngineDebug,
+    RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::raft_serverpb::RaftLocalState;
@@ -205,9 +205,7 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn new_reader(&self, handle: Arc<Self::Handle>) -> IoResult<Self::Reader> {
-        let base_reader = self
-            .base_file_system
-            .new_reader(handle.base.clone())?;
+        let base_reader = self.base_file_system.new_reader(handle.base.clone())?;
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedReader {
                 inner: Either::Right(key_manager.open_file_with_reader(&handle.path, base_reader)?),
@@ -222,9 +220,7 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn new_writer(&self, handle: Arc<Self::Handle>) -> IoResult<Self::Writer> {
-        let base_writer = self
-            .base_file_system
-            .new_writer(handle.base.clone())?;
+        let base_writer = self.base_file_system.new_writer(handle.base.clone())?;
 
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedWriter {

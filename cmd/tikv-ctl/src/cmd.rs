@@ -542,7 +542,6 @@ pub enum Cmd {
         pd: String,
     },
     RaftEngineCtl {
-        #[structopt(last = true)]
         args: Vec<String>,
     },
     #[structopt(external_subcommand)]
