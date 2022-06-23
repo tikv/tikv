@@ -40,6 +40,7 @@ impl From<engine_traits::WriteOptions> for RocksWriteOptions {
         let mut r = RawWriteOptions::default();
         r.set_sync(opts.sync());
         r.set_no_slowdown(opts.no_slowdown());
+        r.disable_wal(opts.disable_wal());
         RocksWriteOptions(r)
     }
 }

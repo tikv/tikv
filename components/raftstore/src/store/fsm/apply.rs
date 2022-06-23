@@ -352,8 +352,11 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
 }
 
 pub trait Notifier<EK: KvEngine>: Send {
+    // Notify apply res to regions.
     fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
+    // Notify apply res to store.
+    fn notify_store(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
     fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
 
@@ -384,6 +387,8 @@ where
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+    // Whether to disable WAL.
+    disable_wal: bool,
 
     perf_context: EK::PerfContext,
 
@@ -467,6 +472,7 @@ where
             apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
             apply_time: APPLY_TIME_HISTOGRAM.local(),
             key_buffer: Vec::with_capacity(1024),
+            disable_wal: cfg.disable_kv_wal,
         }
     }
 
@@ -508,8 +514,8 @@ where
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> (bool, Option<SequenceNumber>) {
-        let need_sync = self.sync_log_hint;
-        let mut seqno = None;
+        let need_sync = self.sync_log_hint && !self.disable_wal;
+        let mut sequence = None;
         // There may be put and delete requests after ingest request in the same fsm.
         // To guarantee the correct order, we must ingest the pending_sst first, and
         // then persist the kv write batch to engine.
@@ -529,12 +535,17 @@ where
             self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            let mut sn = SequenceNumber::start();
-            let sequence = self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
+            write_opts.set_disable_wal(self.disable_wal);
+            if self.disable_wal {
+                let sn = SequenceNumber::start();
+                sequence = Some(sn);
+            }
+            let seqno = self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            sn.end(sequence);
-            seqno = Some(sn);
+            if let Some(seq) = sequence.as_mut() {
+                seq.end(seqno)
+            }
             let trackers: Vec<_> = self
                 .applied_batch
                 .cb_batch
@@ -583,7 +594,7 @@ where
         }
         self.apply_time.flush();
         self.apply_wait.flush();
-        (need_sync, seqno)
+        (need_sync, sequence)
     }
 
     /// Finishes `Apply`s for the delegate.
@@ -643,7 +654,11 @@ where
 
         if !self.apply_res.is_empty() {
             let apply_res = mem::take(&mut self.apply_res);
-            self.notifier.notify(apply_res);
+            if self.disable_wal {
+                self.notifier.notify_store(apply_res);
+            } else {
+                self.notifier.notify(apply_res);
+            }
         }
 
         let elapsed = t.saturating_elapsed();
@@ -4366,6 +4381,9 @@ mod tests {
                 let res = TaskRes::Apply(r);
                 let _ = self.tx.send(PeerMsg::ApplyRes { res });
             }
+        }
+        fn notify_store(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+            self.notify(apply_res)
         }
         fn notify_one(&self, _: u64, msg: PeerMsg<EK>) {
             let _ = self.tx.send(msg);

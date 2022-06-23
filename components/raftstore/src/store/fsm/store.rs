@@ -302,6 +302,10 @@ where
         self.router.try_send(region_id, msg);
     }
 
+    fn notify_store(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+        let _ = self.router.send_control(StoreMsg::ApplyRes(apply_res));
+    }
+
     fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
         Box::new(self.clone())
     }

@@ -219,6 +219,7 @@ reactive-memory-lock-timeout-tick = 8
 report-min-resolved-ts-interval = "233ms"
 report-region-buckets-tick-interval = "1234s"
 max-snapshot-file-raw-size = "10GB"
+disbale_kv_wal = true
 
 [coprocessor]
 split-region-on-table = false

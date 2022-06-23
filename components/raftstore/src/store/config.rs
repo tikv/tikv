@@ -278,6 +278,10 @@ pub struct Config {
 
     #[doc(hidden)]
     pub max_snapshot_file_raw_size: ReadableSize,
+
+    #[online_config(skip)]
+    /// Whether to disable write-ahead log for kv rocksdb. Once enable it, Raft CF of kv rocksdb will also be removed.
+    pub disable_kv_wal: bool,
 }
 
 impl Default for Config {
@@ -367,6 +371,7 @@ impl Default for Config {
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
+            disable_kv_wal: false,
         }
     }
 }
