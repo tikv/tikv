@@ -182,6 +182,7 @@ impl QuotaLimiter {
         }
     }
 
+    #[inline]
     fn get_limiters(&self, is_foreground: bool) -> &LimiterItems {
         if is_foreground {
             &self.foreground_limiters
@@ -254,11 +255,7 @@ impl QuotaLimiter {
     // To consume a sampler and return delayed duration.
     // If the sampler is null, the speed limiter will just return ZERO.
     pub async fn consume_sample(&self, sample: Sample, is_foreground: bool) -> Duration {
-        let limiters = if is_foreground {
-            &self.foreground_limiters
-        } else {
-            &self.background_limiters
-        };
+        let limiters = self.get_limiters(is_foreground);
 
         let cpu_dur = if sample.cpu_time > Duration::ZERO {
             limiters
