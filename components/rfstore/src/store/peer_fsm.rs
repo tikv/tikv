@@ -39,7 +39,7 @@ use crate::{
         StoreMsg, Ticker, PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_SPLIT_CHECK,
         PEER_TICK_SWITCH_MEM_TABLE_CHECK,
     },
-    Error, RaftStoreRouter, Result,
+    DiscardReason, Error, RaftStoreRouter, Result,
 };
 
 /// Limits the maximum number of regions returned by error.
@@ -899,7 +899,7 @@ impl<'a> PeerMsgHandler<'a> {
             ));
         }
         if !self.peer.get_store().initial_flushed {
-            return Err(Error::RegionNotInitialized(self.region_id()));
+            return Err(Error::Transport(DiscardReason::Full));
         }
         Ok(())
     }
