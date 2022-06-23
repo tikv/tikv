@@ -231,38 +231,30 @@ impl QuotaLimiter {
     // To consume a sampler and return delayed duration.
     // If the sampler is null, the speed limiter will just return ZERO.
     pub async fn consume_sample(&self, sample: Sample, is_foreground: bool) -> Duration {
+        let mut cpu_limiter = self.background_cputime_limiter.clone();
+        let mut write_limiter = self.background_write_bandwidth_limiter.clone();
+        let mut read_limiter = self.background_read_bandwidth_limiter.clone();
+
+        if is_foreground {
+            cpu_limiter = self.foreground_cputime_limiter.clone();
+            write_limiter = self.foreground_write_bandwidth_limiter.clone();
+            read_limiter = self.foreground_read_bandwidth_limiter.clone();
+        }
+
         let cpu_dur = if sample.cpu_time > Duration::ZERO {
-            if is_foreground {
-                self.foreground_cputime_limiter
-                    .consume_duration(sample.cpu_time.as_micros() as usize)
-            } else {
-                self.background_cputime_limiter
-                    .consume_duration(sample.cpu_time.as_micros() as usize)
-            }
+            cpu_limiter.consume_duration(sample.cpu_time.as_micros() as usize)
         } else {
             Duration::ZERO
         };
 
         let w_bw_dur = if sample.write_bytes > 0 {
-            if is_foreground {
-                self.foreground_write_bandwidth_limiter
-                    .consume_duration(sample.write_bytes)
-            } else {
-                self.background_write_bandwidth_limiter
-                    .consume_duration(sample.write_bytes)
-            }
+            write_limiter.consume_duration(sample.write_bytes)
         } else {
             Duration::ZERO
         };
 
         let r_bw_dur = if sample.read_bytes > 0 {
-            if is_foreground {
-                self.foreground_read_bandwidth_limiter
-                    .consume_duration(sample.read_bytes)
-            } else {
-                self.background_read_bandwidth_limiter
-                    .consume_duration(sample.read_bytes)
-            }
+            read_limiter.consume_duration(sample.read_bytes)
         } else {
             Duration::ZERO
         };
