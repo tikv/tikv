@@ -18,7 +18,7 @@ use tikv_util::{box_err, box_try};
 use crate::{raft::write_initial_states, Result};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
-const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
+const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
 
 /// A struct for bootstrapping the store.
 ///
@@ -135,9 +135,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
                     warn!(self.logger, "check cluster bootstrapped failed"; "err" => ?e);
                 }
             }
-            thread::sleep(Duration::from_secs(
-                CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
-            ));
+            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
         }
         Err(box_err!("check cluster bootstrapped failed"))
     }
@@ -212,9 +210,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
                 }
             }
             retry += 1;
-            thread::sleep(Duration::from_secs(
-                CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
-            ));
+            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
         }
         Err(box_err!("bootstrapped cluster failed"))
     }
