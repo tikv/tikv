@@ -6,7 +6,10 @@ use engine_traits::{
     RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, Result, SyncMutable, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+};
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
@@ -116,6 +119,34 @@ impl RaftEngineReadOnly for RocksEngine {
             },
         )?;
         Ok(())
+    }
+
+    fn is_empty(&self) -> Result<bool> {
+        let mut is_empty = true;
+        self.scan_cf(CF_DEFAULT, b"", b"", false, |_, _| {
+            is_empty = false;
+            Ok(false)
+        })?;
+
+        Ok(is_empty)
+    }
+
+    fn get_store_ident(&self) -> Result<Option<StoreIdent>> {
+        self.get_msg_cf(CF_DEFAULT, keys::STORE_IDENT_KEY)
+    }
+
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
+        self.get_msg_cf(CF_DEFAULT, keys::PREPARE_BOOTSTRAP_KEY)
+    }
+
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+        let key = keys::region_state_key(raft_group_id);
+        self.get_msg_cf(CF_DEFAULT, &key)
+    }
+
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+        let key = keys::apply_state_key(raft_group_id);
+        self.get_msg_cf(CF_DEFAULT, &key)
     }
 }
 
@@ -303,6 +334,10 @@ impl RaftEngine for RocksEngine {
 
         Ok(used_size)
     }
+
+    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
+        self.put_msg(keys::STORE_IDENT_KEY, ident)
+    }
 }
 
 impl RaftLogBatch for RocksWriteBatch {
@@ -335,6 +370,26 @@ impl RaftLogBatch for RocksWriteBatch {
 
     fn merge(&mut self, src: Self) -> Result<()> {
         WriteBatch::merge(self, src)
+    }
+
+    fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()> {
+        self.put_msg(keys::STORE_IDENT_KEY, ident)
+    }
+
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
+        self.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region)
+    }
+
+    fn remove_prepare_bootstrap_region(&mut self) -> Result<()> {
+        self.delete(keys::PREPARE_BOOTSTRAP_KEY)
+    }
+
+    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+        self.put_msg(&keys::region_state_key(raft_group_id), state)
+    }
+
+    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+        self.put_msg(&keys::apply_state_key(raft_group_id), state)
     }
 }
 
