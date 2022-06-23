@@ -1,17 +1,17 @@
 use std::{
     cmp,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, VecDeque},
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 use lazy_static::lazy_static;
 
 lazy_static! {
-    pub static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicUsize = AtomicUsize::new(1);
+    pub static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
     pub static ref SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SequenceNumber {
     pub seqno: u64,
     start_counter: usize,
@@ -22,7 +22,7 @@ impl SequenceNumber {
     pub fn start() -> Self {
         SequenceNumber {
             seqno: 0,
-            start_counter: SEQUENCE_NUMBER_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst),
+            start_counter: SEQUENCE_NUMBER_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst) + 1,
             end_counter: 0,
         }
     }
@@ -44,48 +44,100 @@ impl SequenceNumber {
 pub struct SequenceNumberWindow {
     // The sequence number doesn't be received in order, we need a ordered set to
     // store received start counters which are bigger than last_start_counter + 1.
-    pending_start_counter: BTreeSet<usize>,
-    // end_counter => (sequence number, region id)
+    pending_start_counter: VecDeque<bool>,
+    // counter start from 1, so 0 means no start counter received.
+    last_ack_counter: usize,
+    // (end_counter, sequence number)
     pending_sequence: BTreeMap<usize, SequenceNumber>,
-    last_start_counter: usize,
     last_sequence: Option<SequenceNumber>,
 }
 
 impl SequenceNumberWindow {
     pub fn push(&mut self, sn: SequenceNumber) -> Option<SequenceNumber> {
-        if sn.start_counter == self.last_start_counter + 1 {
-            self.last_start_counter += 1;
-            while let Some(start_counter) = self.pending_start_counter.first().copied() {
-                if start_counter == self.last_start_counter + 1 {
-                    self.last_start_counter += 1;
-                    self.pending_start_counter.remove(&start_counter);
+        let start_delta = sn.start_counter.checked_sub(self.last_ack_counter).unwrap();
+        if start_delta > self.pending_start_counter.len() {
+            self.pending_start_counter.resize(start_delta, false);
+        }
+        self.pending_sequence
+            .entry(sn.end_counter)
+            .and_modify(|value| {
+                *value = SequenceNumber::max(*value, sn);
+            })
+            .or_insert(sn);
+        self.pending_start_counter[start_delta - 1] = true;
+        if start_delta == 1 {
+            let mut acks = 0;
+            for received in self.pending_start_counter.iter() {
+                if *received {
+                    acks += 1;
                 } else {
                     break;
                 }
             }
-
-            while let Some((end_counter, sequence)) = self
+            self.pending_start_counter.drain(0..acks);
+            self.last_ack_counter += acks;
+            let mut sequences = self
                 .pending_sequence
-                .first_key_value()
-                .map(|(k, v)| (*k, *v))
-            {
-                if end_counter <= self.last_start_counter {
-                    match self.last_sequence {
-                        Some(last_sequence) => {
-                            self.last_sequence = Some(SequenceNumber::max(last_sequence, sequence));
-                        }
-                        None => self.last_sequence = Some(sequence),
-                    }
-                    self.pending_sequence.remove(&end_counter);
-                } else {
-                    break;
-                }
+                .split_off(&(self.last_ack_counter + 1));
+            std::mem::swap(&mut sequences, &mut self.pending_sequence);
+            if sequences.is_empty() {
+                return None;
+            }
+            for (_, pending) in sequences {
+                self.last_sequence = self
+                    .last_sequence
+                    .map(|sn| SequenceNumber::max(sn, pending))
+                    .or(Some(pending));
             }
             self.last_sequence
         } else {
-            assert!(self.pending_start_counter.insert(sn.start_counter));
-            self.pending_sequence.insert(sn.end_counter, sn).unwrap();
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sequence_number_window() {
+        let mut window = SequenceNumberWindow::default();
+        let mut sn1 = SequenceNumber::start();
+        sn1.end(1);
+        assert_eq!(
+            window.push(sn1),
+            Some(SequenceNumber {
+                seqno: 1,
+                start_counter: 1,
+                end_counter: 1,
+            })
+        );
+        let mut sn2 = SequenceNumber::start();
+        let mut sn3 = SequenceNumber::start();
+        let mut sn4 = SequenceNumber::start();
+        sn2.end(4);
+        sn3.end(3);
+        sn4.end(2);
+        assert_eq!(window.push(sn2), None);
+        assert_eq!(window.push(sn3), None);
+        assert_eq!(
+            window.push(sn4),
+            Some(SequenceNumber {
+                seqno: 4,
+                start_counter: 2,
+                end_counter: 4,
+            })
+        );
+        let mut sn5 = SequenceNumber::start();
+        sn5.end(10);
+        assert_eq!(
+            window.push(sn5),
+            Some(SequenceNumber {
+                seqno: 10,
+                start_counter: 5,
+                end_counter: 5,
+            })
+        );
     }
 }
