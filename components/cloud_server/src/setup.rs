@@ -4,7 +4,10 @@ use std::{
     borrow::ToOwned,
     io,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Once,
+    },
 };
 
 use chrono::Local;
@@ -216,20 +219,22 @@ pub fn initial_logger(config: &TiKvConfig) {
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
 }
 
-#[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig) {
-    tikv_util::metrics::monitor_process()
-        .unwrap_or_else(|e| fatal!("failed to start process monitor: {}", e));
-    tikv_util::metrics::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start thread monitor: {}", e));
-    tikv_util::metrics::monitor_allocator_stats("tikv")
-        .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
-    write_empty_metrics_for_metrics_checker();
-    if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
-        return;
-    }
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        tikv_util::metrics::monitor_process()
+            .unwrap_or_else(|e| fatal!("failed to start process monitor: {}", e));
+        tikv_util::metrics::monitor_threads("tikv")
+            .unwrap_or_else(|e| fatal!("failed to start thread monitor: {}", e));
+        tikv_util::metrics::monitor_allocator_stats("tikv")
+            .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
+        write_empty_metrics_for_metrics_checker();
+        if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
+            return;
+        }
 
-    warn!("metrics push is not supported any more.");
+        warn!("metrics push is not supported any more.");
+    });
 }
 
 // Some metrics not applicable for cloud engine but will be checked by some test,

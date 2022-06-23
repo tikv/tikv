@@ -88,8 +88,6 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 
-static INIT: Once = Once::new();
-
 /// A complete TiKV server.
 pub struct TiKVServer {
     config: TiKvConfig,
@@ -386,6 +384,7 @@ impl TiKVServer {
     }
 
     fn init_yatp(&self) {
+        static INIT: Once = Once::new();
         INIT.call_once(|| {
             yatp::metrics::set_namespace(Some("tikv"));
             prometheus::register(Box::new(yatp::metrics::MULTILEVEL_LEVEL0_CHANCE.clone()))
@@ -639,9 +638,7 @@ impl TiKVServer {
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
-        INIT.call_once(|| {
-            initial_metric(&self.config.metric);
-        });
+        initial_metric(&self.config.metric);
 
         self.servers = Some(Servers {
             lock_mgr,
