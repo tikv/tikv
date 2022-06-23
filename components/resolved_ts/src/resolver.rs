@@ -163,16 +163,12 @@ impl Resolver {
 
     // untrack all timestamps smaller than input ts, depend on the raw ts in one region is non-decreasing
     pub fn raw_untrack_lock(&mut self, ts: TimeStamp) {
-        let mut last_min_ts = None;
         debug!("raw untrack ts before {}, region {}", ts, self.region_id);
         while let Some(&Reverse(min_ts)) = self.raw_lock_ts_heap.peek() {
             if min_ts > ts {
                 break;
             }
-            last_min_ts = self.raw_lock_ts_heap.pop();
-        }
-        if let Some(last_min_ts) = last_min_ts {
-            self.resolved_ts = last_min_ts.0;
+            self.raw_lock_ts_heap.pop();
         }
     }
 
@@ -248,6 +244,10 @@ mod tests {
         Lock(u64, Key),
         // key
         Unlock(Key),
+        // raw ts
+        RawLock(u64),
+        // raw ts
+        RawUnlock(u64),
         // min_ts, expect
         Resolve(u64, u64),
     }
@@ -301,6 +301,40 @@ mod tests {
                 Event::Unlock(Key::from_raw(b"b")),
                 Event::Unlock(Key::from_raw(b"a")),
             ],
+            // raw track lock
+            vec![Event::RawLock(1), Event::Resolve(2, 1)],
+            vec![Event::RawLock(1), Event::RawUnlock(1), Event::Resolve(2, 2)],
+            vec![Event::RawLock(1), Event::RawUnlock(2), Event::Resolve(5, 5)],
+            vec![
+                Event::RawLock(1),
+                Event::RawUnlock(2),
+                Event::RawLock(3),
+                Event::Resolve(5, 3),
+            ],
+            vec![
+                Event::RawLock(1),
+                Event::RawUnlock(2),
+                Event::RawLock(3),
+                Event::RawLock(4),
+                Event::Resolve(5, 3),
+            ],
+            // raw and txn mixed
+            vec![
+                Event::Lock(1, Key::from_raw(b"a")),
+                Event::RawLock(2),
+                Event::RawUnlock(3),
+                Event::Resolve(5, 1),
+                Event::Unlock(Key::from_raw(b"a")),
+                Event::Resolve(6, 6),
+            ],
+            vec![
+                Event::Lock(1, Key::from_raw(b"a")),
+                Event::RawLock(2),
+                Event::RawLock(3),
+                Event::Resolve(5, 1),
+                Event::Unlock(Key::from_raw(b"a")),
+                Event::Resolve(6, 2),
+            ],
         ];
 
         for (i, case) in cases.into_iter().enumerate() {
@@ -311,6 +345,8 @@ mod tests {
                         resolver.track_lock(start_ts.into(), key.into_raw().unwrap(), None)
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
+                    Event::RawLock(ts) => resolver.raw_track_lock(ts.into()),
+                    Event::RawUnlock(ts) => resolver.raw_untrack_lock(ts.into()),
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
                     }
