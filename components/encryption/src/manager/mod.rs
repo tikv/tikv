@@ -464,6 +464,17 @@ impl DataKeyManager {
         Ok(Some(Self::from_dicts(dicts, args.method, master_key)?))
     }
 
+    pub fn retain_encrypted_files(&self, f: impl Fn(&str) -> bool) {
+        let mut dict = self.dicts.file_dict.lock().unwrap();
+        dict.files.retain(|fname, info| {
+            if info.method != EncryptionMethod::Plaintext {
+                f(fname)
+            } else {
+                false
+            }
+        });
+    }
+
     fn load_dicts(master_key: &dyn Backend, args: &DataKeyManagerArgs) -> Result<LoadDicts> {
         if args.method != EncryptionMethod::Plaintext && !master_key.is_secure() {
             return Err(box_err!(

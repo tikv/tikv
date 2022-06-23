@@ -10,7 +10,7 @@ use std::{
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
     CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineDebug, RaftEngineReadOnly,
-    RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
+    RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result, EncryptionMethod,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::raft_serverpb::RaftLocalState;
@@ -33,7 +33,7 @@ impl MessageExt for MessageExtTyped {
     }
 }
 
-struct ManagedReader {
+pub struct ManagedReader {
     inner: Either<
         <DefaultFileSystem as FileSystem>::Reader,
         DecrypterReader<<DefaultFileSystem as FileSystem>::Reader>,
@@ -63,7 +63,7 @@ impl Read for ManagedReader {
     }
 }
 
-struct ManagedWriter {
+pub struct ManagedWriter {
     inner: Either<
         <DefaultFileSystem as FileSystem>::Writer,
         EncrypterWriter<<DefaultFileSystem as FileSystem>::Writer>,
@@ -121,26 +121,26 @@ impl WriteExt for ManagedWriter {
     }
 }
 
-struct ManagedFileSystem {
-    base_level_file_system: DefaultFileSystem,
+pub struct ManagedFileSystem {
+    base_file_system: DefaultFileSystem,
     key_manager: Option<Arc<DataKeyManager>>,
     rate_limiter: Option<Arc<IORateLimiter>>,
 }
 
 impl ManagedFileSystem {
-    fn new(
+    pub fn new(
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IORateLimiter>>,
     ) -> Self {
         Self {
-            base_level_file_system: DefaultFileSystem,
+            base_file_system: DefaultFileSystem,
             key_manager,
             rate_limiter,
         }
     }
 }
 
-struct ManagedHandle {
+pub struct ManagedHandle {
     path: PathBuf,
     base: Arc<<DefaultFileSystem as FileSystem>::Handle>,
 }
@@ -161,7 +161,7 @@ impl FileSystem for ManagedFileSystem {
     type Writer = ManagedWriter;
 
     fn create<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
-        let base = Arc::new(self.base_level_file_system.create(path.as_ref())?);
+        let base = Arc::new(self.base_file_system.create(path.as_ref())?);
         if let Some(ref manager) = self.key_manager {
             manager.new_file(path.as_ref().to_str().unwrap())?;
         }
@@ -174,13 +174,39 @@ impl FileSystem for ManagedFileSystem {
     fn open<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
         Ok(ManagedHandle {
             path: path.as_ref().to_path_buf(),
-            base: Arc::new(self.base_level_file_system.open(path.as_ref())?),
+            base: Arc::new(self.base_file_system.open(path.as_ref())?),
         })
+    }
+
+    fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        if let Some(ref manager) = self.key_manager {
+            manager.delete_file(path.as_ref().to_str().unwrap())?;
+        }
+        self.base_file_system.delete(path)
+    }
+
+    fn exists_metadata<P: AsRef<Path>>(&self, path: P) -> bool {
+        if let Some(ref manager) = self.key_manager {
+            if let Ok(info) = manager.get_file(path.as_ref().to_str().unwrap()) {
+                if info.method != EncryptionMethod::Plaintext {
+                    return true;
+                }
+            }
+        }
+        self.base_file_system.exists_metadata(path)
+    }
+
+    fn delete_metadata<P: AsRef<Path>>(&self, path: P) -> IoResult<bool> {
+        if let Some(ref manager) = self.key_manager {
+            // Note: no error if the file doesn't exist.
+            manager.delete_file(path.as_ref().to_str().unwrap())?
+        }
+        self.base_file_system.delete_metadata(path)
     }
 
     fn new_reader(&self, handle: Arc<Self::Handle>) -> IoResult<Self::Reader> {
         let base_reader = self
-            .base_level_file_system
+            .base_file_system
             .new_reader(handle.base.clone())?;
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedReader {
@@ -197,7 +223,7 @@ impl FileSystem for ManagedFileSystem {
 
     fn new_writer(&self, handle: Arc<Self::Handle>) -> IoResult<Self::Writer> {
         let base_writer = self
-            .base_level_file_system
+            .base_file_system
             .new_writer(handle.base.clone())?;
 
         if let Some(ref key_manager) = self.key_manager {

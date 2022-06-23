@@ -21,4 +21,4 @@
 extern crate tikv_util;
 
 mod engine;
-pub use engine::{RaftEngineConfig, RaftLogBatch, RaftLogEngine, ReadableSize, RecoveryMode};
+pub use engine::{RaftEngineConfig, ManagedFileSystem, RaftLogBatch, RaftLogEngine, ReadableSize, RecoveryMode};
