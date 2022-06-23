@@ -210,6 +210,13 @@ mod tests {
         let tablet_path = factory.tablet_path(1, 10);
         let tablet2 = factory.open_tablet_raw(&tablet_path, false).unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
+        let mut count = 0;
+        factory.loop_tablet_cache(Box::new(|id, suffix, _tablet| {
+            assert!(id == 0);
+            assert!(suffix == 0);
+            count += 1;
+        }));
+        assert_eq!(count, 1);
     }
 
     #[test]

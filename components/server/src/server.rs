@@ -42,7 +42,7 @@ use engine_rocks::{
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
-    RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE, DummyFactory,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -1431,7 +1431,10 @@ impl ConfiguredRaftEngine for RocksEngine {
     fn register_config(&self, cfg_controller: &mut ConfigController, share_cache: bool) {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(self.clone(), DBType::Raft, share_cache)),
+            Box::new(DBConfigManger::new(DummyFactory{
+                                        self.clone(), 
+                                        "",
+            }, DBType::Raft, share_cache)),
         );
     }
 }
@@ -1514,7 +1517,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
-                engines.kv.clone(),
+                factory,
                 DBType::Kv,
                 self.config.storage.block_cache.shared,
             )),

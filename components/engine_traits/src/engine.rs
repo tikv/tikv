@@ -185,7 +185,11 @@ where
             root_path: self.root_path.clone(),
         })
     }
-    fn loop_tablet_cache(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>) {}
+    fn loop_tablet_cache(&self, mut f: Box<dyn FnMut(u64, u64, &EK) + '_>) {
+        if let Some(engine) = &self.engine {
+            f(0, 0, engine);
+        }
+    }
 }
 
 impl<EK> DummyFactory<EK>
