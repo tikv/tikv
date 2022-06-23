@@ -1261,7 +1261,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                         BACKGROUND_REQUEST_CORE_LOWER_BOUND,
                         SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_DEFAULT_RATIO,
                     );
-                quota_limiter.set_background_cpu_time_limit(quota as usize);
+                quota_limiter.set_cpu_time_limit(quota as usize, false);
                 quota
             } else {
                 quota_limiter.background_cputime_limiter() / 1000_f64
@@ -1306,7 +1306,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                         }
 
                         if old_quota != target_quota {
-                            quota_limiter.set_background_cpu_time_limit(target_quota as usize);
+                            quota_limiter.set_cpu_time_limit(target_quota as usize, false);
                             debug!(
                                 "cpu_time_limiter tuned for backend request";
                                 "cpu_util" => ?cpu_util,
