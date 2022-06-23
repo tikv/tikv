@@ -754,6 +754,7 @@ impl<'a> PeerMsgHandler<'a> {
             let region_max_size = self.ctx.cfg.region_max_size.0;
             let region_split_size = self.ctx.cfg.region_split_size.0;
             let estimated_size = shard.get_estimated_size();
+            raftstore::coprocessor::metrics::REGION_SIZE_HISTOGRAM.observe(estimated_size as f64);
             if estimated_size < region_max_size {
                 return;
             }
@@ -933,6 +934,7 @@ impl<'a> PeerMsgHandler<'a> {
     fn on_pd_heartbeat_tick(&mut self) {
         self.ticker.schedule(PEER_TICK_PD_HEARTBEAT);
         self.fsm.peer.check_peers();
+        self.update_max_lag_metrics();
 
         if !self.fsm.peer.is_leader() {
             return;
@@ -1065,6 +1067,33 @@ impl<'a> PeerMsgHandler<'a> {
             .apply_msgs
             .msgs
             .push(ApplyMsg::ApplyChangeSet(res.unwrap()));
+    }
+
+    pub(crate) fn update_max_lag_metrics(&mut self) {
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+        let last_idx = self.peer.get_store().last_index();
+        let replicated_idx = self
+            .peer
+            .raft_group
+            .raft
+            .prs()
+            .iter()
+            .map(|(_, pr)| pr.matched)
+            .min()
+            .unwrap_or_default();
+        // When an election happened or a new peer is added, replicated_idx can be 0.
+        if replicated_idx > 0 {
+            assert!(
+                last_idx >= replicated_idx,
+                "expect last index {} >= replicated index {}",
+                last_idx,
+                replicated_idx
+            );
+            raftstore::store::metrics::REGION_MAX_LOG_LAG
+                .observe((last_idx - replicated_idx) as f64);
+        }
     }
 }
 

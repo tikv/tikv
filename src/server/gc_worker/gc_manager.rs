@@ -374,7 +374,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             Ordering::Greater => {
                 debug!("gc_worker: update safe point"; "safe_point" => safe_point);
                 self.save_safe_point(safe_point);
-                AUTO_GC_SAFE_POINT_GAUGE.set(safe_point.into_inner() as i64);
+                raftstore::store::metrics::AUTO_GC_SAFE_POINT_GAUGE
+                    .set(safe_point.into_inner() as i64);
                 true
             }
         }

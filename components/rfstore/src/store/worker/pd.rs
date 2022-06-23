@@ -865,6 +865,7 @@ impl PdRunner {
             match pd_client.get_gc_safe_point().await {
                 Ok(ts) => {
                     kv.update_managed_safe_ts(ts);
+                    raftstore::store::metrics::AUTO_GC_SAFE_POINT_GAUGE.set(ts as i64);
                     info!("update safe ts {}", ts);
                 }
                 Err(err) => {

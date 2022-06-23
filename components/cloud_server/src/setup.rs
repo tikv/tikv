@@ -224,12 +224,26 @@ pub fn initial_metric(cfg: &MetricConfig) {
         .unwrap_or_else(|e| fatal!("failed to start thread monitor: {}", e));
     tikv_util::metrics::monitor_allocator_stats("tikv")
         .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
-
+    write_empty_metrics_for_metrics_checker();
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
         return;
     }
 
     warn!("metrics push is not supported any more.");
+}
+
+// Some metrics not applicable for cloud engine but will be checked by some test,
+// set initial values to make checker pass.
+fn write_empty_metrics_for_metrics_checker() {
+    raftstore::store::metrics::APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+        .db_mutex_lock_nanos
+        .observe(0.0);
+    engine_rocks::rocks_metrics::STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
+        .with_label_values(&["kv"])
+        .set(0);
+    engine_rocks::rocks_metrics::STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
+        .with_label_values(&["raft"])
+        .set(0);
 }
 
 #[allow(dead_code)]

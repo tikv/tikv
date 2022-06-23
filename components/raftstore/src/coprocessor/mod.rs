@@ -21,7 +21,7 @@ pub mod config;
 mod consistency_check;
 pub mod dispatcher;
 mod error;
-mod metrics;
+pub mod metrics;
 pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;

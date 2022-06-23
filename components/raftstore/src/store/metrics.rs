@@ -727,3 +727,11 @@ lazy_static! {
     pub static ref RAFT_LOG_GC_SKIPPED: RaftLogGcSkippedVec =
         auto_flush_from!(RAFT_LOG_GC_SKIPPED_VEC, RaftLogGcSkippedVec);
 }
+
+lazy_static! {
+    pub static ref AUTO_GC_SAFE_POINT_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_gcworker_autogc_safe_point",
+        "Safe point used for auto gc"
+    )
+    .unwrap();
+}
