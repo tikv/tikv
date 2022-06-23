@@ -11,7 +11,7 @@ use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use txn_types::TimeStamp;
 
-use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
+use crate::metrics::{RTS_RAW_FORCE_ADVANCE_TS_COUNT, RTS_RESOLVED_FAIL_ADVANCE_VEC};
 
 const RAW_LOCK_TS_TTL: u64 = 60_1000; // 60s
 
@@ -192,14 +192,6 @@ impl Resolver {
 
         // No more commit happens before the ts.
         let mut new_resolved_ts = cmp::min(min_start_ts, min_ts);
-
-        if self.resolved_ts >= new_resolved_ts {
-            let label = if has_lock { "has_lock" } else { "stale_ts" };
-            RTS_RESOLVED_FAIL_ADVANCE_VEC
-                .with_label_values(&[label])
-                .inc();
-        }
-
         let min_raw_ts = self
             .raw_lock_ts_heap
             .peek()
@@ -210,8 +202,16 @@ impl Resolver {
         // The final solution should be move append_ts & track_lock to storage and untrack it in callback, need more discussion.
         if min_ts.physical().saturating_sub(min_raw_ts.physical()) > RAW_LOCK_TS_TTL {
             self.raw_untrack_lock(TimeStamp::compose(min_ts.physical() - RAW_LOCK_TS_TTL, 0));
+            RTS_RAW_FORCE_ADVANCE_TS_COUNT.inc();
         }
         new_resolved_ts = cmp::min(new_resolved_ts, min_raw_ts);
+
+        if self.resolved_ts >= new_resolved_ts {
+            let label = if has_lock { "has_lock" } else { "stale_ts" };
+            RTS_RESOLVED_FAIL_ADVANCE_VEC
+                .with_label_values(&[label])
+                .inc();
+        }
 
         // Resolved ts never decrease.
         self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);

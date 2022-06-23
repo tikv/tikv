@@ -47,6 +47,11 @@ lazy_static! {
         &["reason"]
     )
     .unwrap();
+    pub static ref RTS_RAW_FORCE_ADVANCE_TS_COUNT: IntGauge = register_int_gauge!(
+        "tikv_raw_resolved_ts_force_advance_count",
+        "The count of force advance raw resolved-ts",
+    )
+    .unwrap();
     pub static ref RTS_SCAN_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_resolved_ts_scan_duration_seconds",
         "Bucketed histogram of resolved-ts async scan duration",

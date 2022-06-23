@@ -1028,18 +1028,19 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 }
                 min_ts_min_lock = min_mem_lock_ts;
             }
-            // If flush_causal_timestamp fails, cannot schedule RegisterMinTsEvent task
-            // as new coming raw data may use timestamp smaller than min_ts
-            if let Err(e) = observer.flush_causal_timestamp() {
-                error!("cdc flush causal timestamp failed"; "err" => ?e);
-                return;
-            }
 
             match scheduler.schedule(Task::RegisterMinTsEvent) {
                 Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                 // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                 // advance normally.
                 Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+            }
+
+            // If flush_causal_timestamp fails, cannot schedule MinTS task
+            // as new coming raw data may use timestamp smaller than min_ts
+            if let Err(e) = observer.flush_causal_timestamp() {
+                error!("cdc flush causal timestamp failed"; "err" => ?e);
+                return;
             }
 
             let gate = pd_client.feature_gate();
@@ -1142,6 +1143,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         if let Some(ref mut delegate) = self.capture_regions.get_mut(&region_id) {
             if let Some(resolver) = delegate.resolver.as_mut() {
                 resolver.raw_track_lock(ts);
+            } else if let Err(e) = delegate.push_pending_raw_track_lock(ts) {
+                error!("push pending raw track failed"; "error" => ?e);
             }
         }
     }

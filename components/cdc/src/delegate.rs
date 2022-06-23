@@ -30,7 +30,7 @@ use raftstore::{
 };
 use resolved_ts::Resolver;
 use tikv::storage::{txn::TxnEntry, Statistics};
-use tikv_util::{debug, info, warn};
+use tikv_util::{box_err, debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
@@ -214,7 +214,6 @@ struct Pending {
     pub downstreams: Vec<Downstream>,
     pub locks: Vec<PendingLock>,
     pub pending_bytes: usize,
-    pub raw_resolved_ts: TimeStamp,
 }
 
 impl Drop for Pending {
@@ -226,6 +225,8 @@ impl Drop for Pending {
 enum PendingLock {
     Track { key: Vec<u8>, start_ts: TimeStamp },
     Untrack { key: Vec<u8> },
+    RawTrack { ts: TimeStamp },
+    RawUntrack { ts: TimeStamp },
 }
 
 /// A CDC delegate of a raftstore region peer.
@@ -386,7 +387,6 @@ impl Delegate {
 
         // Mark the delegate as initialized.
         let mut pending = self.pending.take().unwrap();
-        resolver.resolve(pending.raw_resolved_ts);
         self.region = Some(region);
         info!("cdc region is ready"; "region_id" => self.region_id);
 
@@ -394,6 +394,8 @@ impl Delegate {
             match lock {
                 PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key, None),
                 PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
+                PendingLock::RawTrack { ts } => resolver.raw_track_lock(ts),
+                PendingLock::RawUntrack { ts } => resolver.raw_untrack_lock(ts),
             }
         }
         self.resolver = Some(resolver);
@@ -606,31 +608,38 @@ impl Delegate {
             rows.push(v);
         }
         self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
-        self.sink_raw_downstream(raw_rows, index)?;
-
-        Ok(())
+        self.sink_raw_downstream(raw_rows, index)
     }
 
     fn sink_raw_downstream(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
-        let max_raw_ts = entries
-            .iter()
-            .max_by_key(|entry| entry.commit_ts)
-            .unwrap()
-            .commit_ts;
+        // the entry's timestamp is non-decreasing, the last has the max ts.
+        let max_raw_ts = TimeStamp::from(entries.last().unwrap().commit_ts);
         match self.resolver {
             Some(ref mut resolver) => {
-                resolver.raw_untrack_lock(max_raw_ts.into());
+                resolver.raw_untrack_lock(max_raw_ts);
             }
             None => {
                 assert!(self.pending.is_some(), "region resolver not ready");
                 let pending = self.pending.as_mut().unwrap();
-                pending.raw_resolved_ts = max_raw_ts.into();
+                pending
+                    .locks
+                    .push(PendingLock::RawUntrack { ts: max_raw_ts });
             }
         }
         self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)
+    }
+
+    pub fn push_pending_raw_track_lock(&mut self, ts: TimeStamp) -> Result<()> {
+        self.pending.as_mut().map_or_else(
+            || Err(box_err!("pending is none")),
+            |pending| {
+                pending.locks.push(PendingLock::RawTrack { ts });
+                Ok(())
+            },
+        )
     }
 
     fn sink_downstream(
