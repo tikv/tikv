@@ -132,9 +132,9 @@ impl Default for QuotaLimiter {
     fn default() -> Self {
         let foreground_limiters = LimiterItems::default();
         let background_limiters = LimiterItems::default();
-     Self {
-         foreground_limiters,
-         background_limiters,
+        Self {
+            foreground_limiters,
+            background_limiters,
             max_delay_duration: AtomicU64::new(0),
             enable_auto_tune: AtomicBool::new(false),
         }
@@ -153,8 +153,16 @@ impl QuotaLimiter {
         max_delay_duration: ReadableDuration,
         enable_auto_tune: bool,
     ) -> Self {
-        let foreground_limiters = LimiterItems::new(foreground_cpu_quota, foreground_write_bandwidth, foreground_read_bandwidth);
-        let background_limiters = LimiterItems::new(background_cpu_quota, background_write_bandwidth, background_read_bandwidth);
+        let foreground_limiters = LimiterItems::new(
+            foreground_cpu_quota,
+            foreground_write_bandwidth,
+            foreground_read_bandwidth,
+        );
+        let background_limiters = LimiterItems::new(
+            background_cpu_quota,
+            background_write_bandwidth,
+            background_read_bandwidth,
+        );
         let max_delay_duration = AtomicU64::new(max_delay_duration.0.as_nanos() as u64);
         let enable_auto_tune = AtomicBool::new(enable_auto_tune);
 
@@ -176,30 +184,36 @@ impl QuotaLimiter {
 
     pub fn set_cpu_time_limit(&self, quota_limit: usize, is_foreground: bool) {
         if is_foreground {
-            self.foreground_limiters.cputime_limiter
+            self.foreground_limiters
+                .cputime_limiter
                 .set_speed_limit(Self::speed_limit(quota_limit as f64 * 1000_f64));
         } else {
-            self.background_limiters.cputime_limiter
+            self.background_limiters
+                .cputime_limiter
                 .set_speed_limit(Self::speed_limit(quota_limit as f64 * 1000_f64));
         }
     }
 
     pub fn set_write_bandwidth_limit(&self, write_bandwidth: ReadableSize, is_foreground: bool) {
         if is_foreground {
-            self.foreground_limiters.write_bandwidth_limiter
+            self.foreground_limiters
+                .write_bandwidth_limiter
                 .set_speed_limit(Self::speed_limit(write_bandwidth.0 as f64));
         } else {
-            self.background_limiters.write_bandwidth_limiter
+            self.background_limiters
+                .write_bandwidth_limiter
                 .set_speed_limit(Self::speed_limit(write_bandwidth.0 as f64));
         }
     }
 
     pub fn set_read_bandwidth_limit(&self, read_bandwidth: ReadableSize, is_foreground: bool) {
         if is_foreground {
-            self.foreground_limiters.read_bandwidth_limiter
+            self.foreground_limiters
+                .read_bandwidth_limiter
                 .set_speed_limit(Self::speed_limit(read_bandwidth.0 as f64));
         } else {
-            self.background_limiters.read_bandwidth_limiter
+            self.background_limiters
+                .read_bandwidth_limiter
                 .set_speed_limit(Self::speed_limit(read_bandwidth.0 as f64));
         }
     }
@@ -232,8 +246,16 @@ impl QuotaLimiter {
             read_bytes: 0,
             write_bytes: 0,
             cpu_time: Duration::ZERO,
-            enable_cpu_limit: !self.foreground_limiters.cputime_limiter.speed_limit().is_infinite()
-                || !self.background_limiters.cputime_limiter.speed_limit().is_infinite(),
+            enable_cpu_limit: !self
+                .foreground_limiters
+                .cputime_limiter
+                .speed_limit()
+                .is_infinite()
+                || !self
+                    .background_limiters
+                    .cputime_limiter
+                    .speed_limit()
+                    .is_infinite(),
         }
     }
 
@@ -247,19 +269,25 @@ impl QuotaLimiter {
         };
 
         let cpu_dur = if sample.cpu_time > Duration::ZERO {
-            limiters.cputime_limiter.consume_duration(sample.cpu_time.as_micros() as usize)
+            limiters
+                .cputime_limiter
+                .consume_duration(sample.cpu_time.as_micros() as usize)
         } else {
             Duration::ZERO
         };
 
         let w_bw_dur = if sample.write_bytes > 0 {
-            limiters.write_bandwidth_limiter.consume_duration(sample.write_bytes)
+            limiters
+                .write_bandwidth_limiter
+                .consume_duration(sample.write_bytes)
         } else {
             Duration::ZERO
         };
 
         let r_bw_dur = if sample.read_bytes > 0 {
-            limiters.read_bandwidth_limiter.consume_duration(sample.read_bytes)
+            limiters
+                .read_bandwidth_limiter
+                .consume_duration(sample.read_bytes)
         } else {
             Duration::ZERO
         };
@@ -299,7 +327,7 @@ impl ConfigManager for QuotaLimitConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if let Some(cpu_limit) = change.get("foreground_cpu_time") {
             self.quota_limiter
-                .set_cpu_time_limit(cpu_limit.into(),true);
+                .set_cpu_time_limit(cpu_limit.into(), true);
         }
 
         if let Some(write_bandwidth) = change.get("foreground_write_bandwidth") {
@@ -314,7 +342,7 @@ impl ConfigManager for QuotaLimitConfigManager {
 
         if let Some(cpu_limit) = change.get("background_cpu_time") {
             self.quota_limiter
-                .set_cpu_time_limit(cpu_limit.into(),false);
+                .set_cpu_time_limit(cpu_limit.into(), false);
         }
 
         if let Some(write_bandwidth) = change.get("background_write_bandwidth") {
