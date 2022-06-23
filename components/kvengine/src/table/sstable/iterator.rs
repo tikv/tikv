@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::slice;
+use std::mem;
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
@@ -8,6 +8,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use super::{builder::META_HAS_OLD, SSTable};
 use crate::table::{search, sstable::BLOCK_FORMAT_V1, table, LocalAddr};
 
+#[derive(Default)]
 pub struct BlockIterator {
     b: Bytes,
     idx: i32,
@@ -22,29 +23,12 @@ pub struct BlockIterator {
     val_addr: LocalAddr,
 
     // entry index fields.
-    entry_offs: &'static [u32],
+    entry_offs: Bytes,
     common_prefix_addr: LocalAddr,
     entries_data_addr: LocalAddr,
 }
 
 impl BlockIterator {
-    fn new() -> Self {
-        Self {
-            b: Bytes::new(),
-            idx: 0,
-            err: None,
-            diff_key_addr: LocalAddr::default(),
-            meta: 0,
-            user_meta_len: 0,
-            ver: 0,
-            old_ver: 0,
-            val_addr: LocalAddr::default(),
-            entry_offs: &[],
-            common_prefix_addr: LocalAddr::default(),
-            entries_data_addr: LocalAddr::default(),
-        }
-    }
-
     fn set_block(&mut self, b: Bytes) {
         self.b = b;
         self.err = None;
@@ -63,19 +47,24 @@ impl BlockIterator {
     }
 
     fn load_entries(&mut self) {
-        let data = self.b.chunk();
-        assert_eq!(LittleEndian::read_u32(data), BLOCK_FORMAT_V1);
-        let num_entries = LittleEndian::read_u32(&data[4..]) as usize;
-        self.entry_offs = unsafe {
-            let ptr = data[8..].as_ptr() as *mut u32;
-            slice::from_raw_parts(ptr, num_entries as usize)
-        };
-        let common_prefix_len_off = 8 + 4 * num_entries;
-        let common_prefix_len = LittleEndian::read_u16(&data[common_prefix_len_off..]) as usize;
-        let common_prefix_off = common_prefix_len_off + 2;
+        let mut data = self.b.clone();
+        assert_eq!(data.get_u32_le(), BLOCK_FORMAT_V1);
+        let num_entries = data.get_u32_le() as usize;
+        self.entry_offs = data.slice(..num_entries * mem::size_of::<u32>());
+        data.advance(self.entry_offs.len());
+        let common_prefix_len = data.get_u16_le() as usize;
+        let common_prefix_off = self.b.len() - data.len();
         let entries_data_off = common_prefix_off + common_prefix_len;
         self.common_prefix_addr = LocalAddr::new(common_prefix_off, entries_data_off);
-        self.entries_data_addr = LocalAddr::new(entries_data_off, data.len());
+        self.entries_data_addr = LocalAddr::new(entries_data_off, self.b.len());
+    }
+
+    fn num_entries(&self) -> usize {
+        self.entry_offs.len() / mem::size_of::<u32>()
+    }
+
+    fn get_entry_off(&self, i: usize) -> usize {
+        (&self.entry_offs[i * mem::size_of::<u32>()..]).get_u32_le() as usize
     }
 
     fn get_common_prefix(&self) -> &[u8] {
@@ -92,7 +81,7 @@ impl BlockIterator {
             if key <= common_prefix {
                 self.set_idx(0);
             } else {
-                self.set_idx(self.entry_offs.len() as i32);
+                self.set_idx(self.num_entries() as i32);
             }
             return;
         }
@@ -103,13 +92,13 @@ impl BlockIterator {
                 return;
             }
             Greater => {
-                self.set_idx(self.entry_offs.len() as i32);
+                self.set_idx(self.num_entries() as i32);
                 return;
             }
             Equal => {}
         };
         let diff_key = &key[common_prefix.len()..];
-        let found_idx = search(self.entry_offs.len(), |i| {
+        let found_idx = search(self.num_entries(), |i| {
             self.set_idx(i as i32);
             self.get_diff_key() >= diff_key
         });
@@ -121,14 +110,14 @@ impl BlockIterator {
     }
 
     fn seek_to_last(&mut self) {
-        self.set_idx(self.entry_offs.len() as i32 - 1);
+        self.set_idx(self.num_entries() as i32 - 1);
     }
 
     fn get_entry_addr(&self, i: usize) -> LocalAddr {
         let addr = self.entries_data_addr;
-        let start = addr.start + self.entry_offs[i] as usize;
-        if i + 1 < self.entry_offs.len() {
-            let end = addr.start + self.entry_offs[i + 1] as usize;
+        let start = addr.start + self.get_entry_off(i);
+        if i + 1 < self.num_entries() {
+            let end = addr.start + self.get_entry_off(i + 1);
             return LocalAddr::new(start, end);
         }
         LocalAddr::new(start, addr.end)
@@ -136,7 +125,7 @@ impl BlockIterator {
 
     fn set_idx(&mut self, i: i32) {
         self.idx = i;
-        if i >= self.entry_offs.len() as i32 || i < 0 {
+        if i >= self.num_entries() as i32 || i < 0 {
             self.err = Some(table::Error::EOF);
             return;
         }
@@ -199,9 +188,9 @@ impl TableIterator {
         Self {
             t,
             b_pos: 0,
-            bi: BlockIterator::new(),
+            bi: BlockIterator::default(),
             old_b_pos: 0,
-            old_bi: BlockIterator::new(),
+            old_bi: BlockIterator::default(),
             reversed,
             err: None,
             key_buf: BytesMut::new(),

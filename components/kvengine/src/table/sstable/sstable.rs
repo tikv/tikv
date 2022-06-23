@@ -366,32 +366,27 @@ impl SSTableCore {
 pub struct Index {
     bin: Bytes,
     common_prefix: Bytes,
-    block_key_offs: &'static [u8],
-    block_addrs: &'static [u8],
+    block_key_offs: Bytes,
+    block_addrs: Bytes,
     block_keys: Bytes,
 }
 
 impl Index {
     fn new(bin: Bytes, checksum_type: u8) -> Result<Self> {
-        let data = bin.chunk();
-        validate_checksum(data, checksum_type)?;
-        let mut offset = 4_usize;
-        assert_eq!(LittleEndian::read_u32(&data[offset..]), INDEX_FORMAT_V1);
-        offset += 4;
-        let num_blocks = LittleEndian::read_u32(&data[offset..]) as usize;
-        offset += 4;
-        let block_key_offs = unsafe { std::mem::transmute(&data[offset..offset + num_blocks * 4]) };
-        offset += 4 * num_blocks;
-        let block_addrs: &'static [u8] =
-            unsafe { std::mem::transmute(&data[offset..offset + num_blocks * BLOCK_ADDR_SIZE]) };
-        offset += block_addrs.len();
-        let common_prefix_len = LittleEndian::read_u16(&data[offset..]) as usize;
-        offset += 2;
-        let common_prefix = bin.slice(offset..offset + common_prefix_len);
-        offset += common_prefix_len;
-        let block_key_len = LittleEndian::read_u32(&data[offset..]) as usize;
-        offset += 4;
-        let block_keys = bin.slice(offset..offset + block_key_len);
+        let mut data = bin.clone();
+        validate_checksum(data.chunk(), checksum_type)?;
+        let _checksum = data.get_u32_le();
+        assert_eq!(data.get_u32_le(), INDEX_FORMAT_V1);
+        let num_blocks = data.get_u32_le() as usize;
+        let block_key_offs = data.slice(..num_blocks * 4);
+        data.advance(block_key_offs.len());
+        let block_addrs = data.slice(..num_blocks * BLOCK_ADDR_SIZE);
+        data.advance(block_addrs.len());
+        let common_prefix_len = data.get_u16_le() as usize;
+        let common_prefix = data.slice(..common_prefix_len);
+        data.advance(common_prefix.len());
+        let block_key_len = data.get_u32_le() as usize;
+        let block_keys = data.slice(..block_key_len);
         Ok(Self {
             bin,
             common_prefix,
@@ -439,7 +434,7 @@ impl Index {
     }
 
     fn get_block_key_off(&self, i: usize) -> usize {
-        LittleEndian::read_u32(&self.block_key_offs[i * 4..]) as usize
+        (&self.block_key_offs[i * 4..]).get_u32_le() as usize
     }
 }
 
