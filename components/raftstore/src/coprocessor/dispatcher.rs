@@ -446,7 +446,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         region: &Region,
         peer_id: u64,
         snap_key: &crate::store::SnapKey,
-        snap: Option<&crate::store::Snapshot>,
+        snap: &crate::store::Snapshot,
     ) {
         loop_ob!(
             region,
@@ -717,7 +717,7 @@ mod tests {
             ctx: &mut ObserverContext<'_>,
             _: u64,
             _: &SnapKey,
-            _: Option<&Snapshot>,
+            _: &Snapshot,
         ) {
             self.called.fetch_add(17, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
@@ -832,7 +832,7 @@ mod tests {
         unsafe {
             let snap = &*(std::ptr::null() as *const crate::store::Snapshot);
 
-            host.pre_apply_snapshot(&region, 0, &key, Some(&snap));
+            host.pre_apply_snapshot(&region, 0, &key, &snap);
             assert_all!([&ob.called], &[105]); // 17
 
             host.post_apply_snapshot(&region, 0, &key, &snap);

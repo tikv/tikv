@@ -123,7 +123,7 @@ pub trait ApplySnapshotObserver: Coprocessor {
         _: &mut ObserverContext<'_>,
         _peer_id: u64,
         _: &crate::store::SnapKey,
-        _: Option<&crate::store::Snapshot>,
+        _: &crate::store::Snapshot,
     ) {
     }
 

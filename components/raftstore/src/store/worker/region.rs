@@ -636,7 +636,7 @@ where
         Ok(())
     }
 
-    fn pre_apply_snapshot(&self, task: &Task<EK::Snapshot>) -> Result<()> {
+    fn pre_apply_snapshot(&self, task: &Task<EK::Snapshot>) {
         let (region_id, status, peer_id) = match task {
             Task::Apply {
                 region_id,
@@ -659,11 +659,11 @@ where
         let snap_key = SnapKey::new(*region_id, term, idx);
         let s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         if !s.exists() {
-            return Err(box_err!("missing snapshot file {}", s.path()));
+            return;
         }
         check_abort(&abort)?;
         self.coprocessor_host
-            .pre_apply_snapshot(&region, *peer_id, &snap_key, Some(&s));
+            .pre_apply_snapshot(&region, *peer_id, &snap_key, &s);
         info!(
             "pre apply snapshot";
             "region_id" => region_id,
