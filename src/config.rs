@@ -1539,23 +1539,23 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                     );
                 }
             }));
-        if result.is_err() {
-            return result;
-        }
-        // Write config to metric
-        for (cfg_name, cfg_value) in opts {
-            let cfg_value = match cfg_value {
-                v if *v == "true" => Ok(1f64),
-                v if *v == "false" => Ok(0f64),
-                v => v.parse::<f64>(),
-            };
-            if let Ok(v) = cfg_value {
-                CONFIG_ROCKSDB_GAUGE
-                    .with_label_values(&[cf, cfg_name])
-                    .set(v);
+        
+        if result.is_ok() {
+            // Write config to metric
+            for (cfg_name, cfg_value) in opts {
+                let cfg_value = match cfg_value {
+                    v if *v == "true" => Ok(1f64),
+                    v if *v == "false" => Ok(0f64),
+                    v => v.parse::<f64>(),
+                };
+                if let Ok(v) = cfg_value {
+                    CONFIG_ROCKSDB_GAUGE
+                        .with_label_values(&[cf, cfg_name])
+                        .set(v);
+                }
             }
         }
-        Ok(())
+        result 
     }
 
     fn set_block_cache_size(&self, cf: &str, size: ReadableSize) -> Result<(), Box<dyn Error>> {
