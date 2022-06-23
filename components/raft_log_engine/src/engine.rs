@@ -370,10 +370,7 @@ impl RaftEngineReadOnly for RaftLogEngine {
     }
 
     fn is_empty(&self) -> Result<bool> {
-        self.0
-            .get_message(STORE_REGION_ID, STORE_IDENT_KEY)
-            .map(|a: Option<StoreIdent>| a.is_none())
-            .map_err(transfer_error)
+        self.get_store_ident().map(|i| i.is_none())
     }
 
     fn get_store_ident(&self) -> Result<Option<StoreIdent>> {
