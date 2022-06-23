@@ -803,6 +803,7 @@ where
             }
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
+                self.ctx.pre_apply_snapshot(&task);
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
                 self.handle_pending_applies();
