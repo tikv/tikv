@@ -71,6 +71,7 @@ grpcio = { version = "0.10", default-features = false, features = ["openssl-vend
 hex = "0.4"
 rand = "0.8.0"
 tempdir = "0.3"
+tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
 url = "2"
