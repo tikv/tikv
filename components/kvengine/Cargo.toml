@@ -13,6 +13,7 @@ protobuf-codec = [
 
 [dependencies]
 async-trait = "0.1"
+aws = { path = "../cloud/aws" }
 bincode = "1.3"
 byteorder = "1.2"
 bytes = "1.0"

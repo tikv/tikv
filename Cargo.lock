@@ -2797,6 +2797,7 @@ name = "kvengine"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "aws",
  "bincode",
  "byteorder",
  "bytes",

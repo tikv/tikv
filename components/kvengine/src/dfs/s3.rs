@@ -68,7 +68,6 @@ impl S3FSCore {
         region: String,
         bucket: String,
     ) -> Self {
-        let credential = rusoto_credential::StaticProvider::new(key_id, secret_key, None, None);
         let http_connector = hyper::client::connect::HttpConnector::new();
         let mut config = rusoto_core::HttpConfig::new();
         config.read_buf_size(256 * 1024);
@@ -83,7 +82,19 @@ impl S3FSCore {
             name: region,
             endpoint: end_point,
         };
-        let mut s3c = rusoto_s3::S3Client::new_with(http_client, credential, region);
+        let mut s3c = if key_id.is_empty() {
+            rusoto_s3::S3Client::new_with(
+                http_client,
+                aws::CredentialsProvider::new().unwrap(),
+                region,
+            )
+        } else {
+            rusoto_s3::S3Client::new_with(
+                http_client,
+                rusoto_credential::StaticProvider::new(key_id, secret_key, None, None),
+                region,
+            )
+        };
         s3c.set_config(S3Config {
             addressing_style: AddressingStyle::Path,
         });

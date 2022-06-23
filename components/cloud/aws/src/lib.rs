@@ -8,3 +8,4 @@ mod s3;
 pub use s3::{Config, S3Storage, STORAGE_VENDOR_NAME_AWS};
 
 mod util;
+pub use util::CredentialsProvider;
