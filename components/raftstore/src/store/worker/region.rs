@@ -735,7 +735,12 @@ where
             if self.ctx.ingest_maybe_stall() {
                 break;
             }
-            if let Some(Task::Apply { region_id, status, peer_id }) = self.pending_applies.pop_front() {
+            if let Some(Task::Apply {
+                region_id,
+                status,
+                peer_id,
+            }) = self.pending_applies.pop_front()
+            {
                 self.ctx.handle_apply(region_id, status);
             }
         }
