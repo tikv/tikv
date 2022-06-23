@@ -116,10 +116,10 @@ use raftstore::engine_store_ffi::{
     RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8};
-use crate::{memory::*, raft_engine_switch::*, setup::*, signal_handler};
+use crate::{memory::*, raft_engine_switch::*, setup::*};
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig, engine_store_server_helper: &EngineStoreServerHelper) {
     let mut tikv = TiKvServer::<CER>::init(config);
 
     // Must be called after `TiKvServer::init`.
@@ -205,7 +205,6 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
         engine_store_server_helper.handle_get_engine_store_server_status()
     );
 
-    signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
     tikv.stop();
 
     proxy.set_status(RaftProxyStatus::Stopped);
@@ -243,9 +242,9 @@ pub unsafe fn run_tikv(config: TiKvConfig, engine_store_server_helper: &EngineSt
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<RocksEngine, API>(config)
+            run_impl::<RocksEngine, API>(config, engine_store_server_helper)
         } else {
-            run_impl::<RaftLogEngine, API>(config)
+            run_impl::<RaftLogEngine, API>(config, engine_store_server_helper)
         }
     })
 }
@@ -295,9 +294,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
     node: Node<RpcClient, EK, ER>,
-    cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
-    cdc_memory_quota: MemoryQuota,
-    rsmeter_pubsub_service: resource_metering::PubSubService,
+    importer: Arc<SstImporter>,
 }
 
 type LocalServer<EK, ER> =
@@ -657,10 +654,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         // let lock_mgr = LockManager::new(&self.config.pessimistic_txn);
         let lock_mgr = LockManager::new();
-        cfg_controller.register(
-            tikv::config::Module::PessimisticTxn,
-            Box::new(lock_mgr.config_manager()),
-        );
+        // cfg_controller.register(
+        //     tikv::config::Module::PessimisticTxn,
+        //     Box::new(lock_mgr.config_manager()),
+        // );
         // lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
 
         let engines = self.engines.as_ref().unwrap();

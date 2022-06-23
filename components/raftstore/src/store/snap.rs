@@ -522,8 +522,12 @@ impl Snapshot {
     ) -> PreHandledSnapshot {
         let mut sst_views = vec![];
         for cf_file in &self.cf_files {
-            if cf_file.size == 0 {
+            if cf_file.size.len() == 0 {
                 // Skip empty cf file.
+                continue;
+            }
+
+            if cf_file.size[0] == 0 {
                 continue;
             }
 

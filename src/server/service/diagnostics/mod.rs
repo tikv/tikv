@@ -23,7 +23,7 @@ use tikv_util::{sys::SystemExt, timer::GLOBAL_TIMER_HANDLE};
 use tokio::runtime::Handle;
 
 use crate::server::Error;
-mod ioload;
+pub mod ioload;
 mod log;
 pub mod sys;
 

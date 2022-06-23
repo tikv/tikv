@@ -54,7 +54,7 @@ use tikv::{
         create_raft_storage,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
-        lock_manager::LockManager,
+        lock_manager::HackedLockManager as LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
         service::DebugService,

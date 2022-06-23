@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::import::SSTImporter;
 use crate::server::lock_manager::HackedLockManager as LockManager;
 use std::{
     sync::{Arc, Mutex},

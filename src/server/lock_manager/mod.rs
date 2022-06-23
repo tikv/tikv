@@ -17,7 +17,6 @@ use std::{
 };
 
 use crate::server::lock_manager::waiter_manager::Callback;
-use crate::storage::lock_manager::DiagnosticContext;
 use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_traits::KvEngine;
