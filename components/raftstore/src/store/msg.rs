@@ -683,7 +683,7 @@ where
 
     GcSnapshotFinish,
 
-    ApplyRes(Vec<ApplyRes<EK::Snapshot>>),
+    ApplyRes(Vec<Box<ApplyRes<EK::Snapshot>>>),
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>

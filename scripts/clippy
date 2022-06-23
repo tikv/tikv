@@ -31,6 +31,7 @@ CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::bool_assert_comparison \
 	-A clippy::self_named_constructors \
 	-A clippy::enum_variant_names \
+	-A clippy::vec_box \
         -W clippy::dbg_macro \
         -W clippy::todo \
         -D clippy::disallowed-methods \

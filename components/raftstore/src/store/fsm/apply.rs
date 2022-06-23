@@ -353,10 +353,10 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
 
 pub trait Notifier<EK: KvEngine>: Send {
     // Notify apply res to regions.
-    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
+    fn notify(&self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>);
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
     // Notify apply res to store.
-    fn notify_store(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
+    fn notify_store(&self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>);
     fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
 
@@ -373,7 +373,7 @@ where
     notifier: Box<dyn Notifier<EK>>,
     engine: EK,
     applied_batch: ApplyCallbackBatch<EK::Snapshot>,
-    apply_res: Vec<ApplyRes<EK::Snapshot>>,
+    apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>,
     exec_log_index: u64,
     exec_log_term: u64,
 
@@ -607,15 +607,32 @@ where
             delegate.write_apply_state(self.kv_wb_mut());
         }
         self.commit_opt(delegate, false);
-        self.apply_res.push(ApplyRes {
+        // TODO: keep region local state in memory.
+        let region_local_state = if !results.is_empty() {
+            let region_state_key = keys::region_state_key(delegate.region_id());
+            let state = match self.engine.get_msg_cf(CF_RAFT, &region_state_key) {
+                Ok(Some(s)) => s,
+                e => panic!(
+                    "{} failed to get regions state of {:?}: {:?}",
+                    self.tag,
+                    delegate.region_id(),
+                    e
+                ),
+            };
+            Some(state)
+        } else {
+            None
+        };
+        self.apply_res.push(Box::new(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
             last_sequence: delegate.last_sequence,
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
-            bucket_stat: delegate.buckets.clone().map(Box::new),
-        });
+            bucket_stat: delegate.buckets.clone(),
+            region_local_state,
+        }));
     }
 
     pub fn delta_bytes(&self) -> u64 {
@@ -3265,8 +3282,9 @@ where
     pub applied_index_term: u64,
     pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
-    pub bucket_stat: Option<Box<BucketStat>>,
+    pub bucket_stat: Option<BucketStat>,
     pub last_sequence: Option<SequenceNumber>,
+    pub region_local_state: Option<RegionLocalState>,
 }
 
 #[derive(Debug)]
@@ -3274,7 +3292,7 @@ pub enum TaskRes<S>
 where
     S: Snapshot,
 {
-    Apply(ApplyRes<S>),
+    Apply(Box<ApplyRes<S>>),
     Destroy {
         // ID of region that has been destroyed.
         region_id: u64,
@@ -4376,13 +4394,13 @@ mod tests {
     }
 
     impl<EK: KvEngine> Notifier<EK> for TestNotifier<EK> {
-        fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+        fn notify(&self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
             for r in apply_res {
                 let res = TaskRes::Apply(r);
                 let _ = self.tx.send(PeerMsg::ApplyRes { res });
             }
         }
-        fn notify_store(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+        fn notify_store(&self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
             self.notify(apply_res)
         }
         fn notify_one(&self, _: u64, msg: PeerMsg<EK>) {
@@ -4545,7 +4563,7 @@ mod tests {
             Ok(PeerMsg::ApplyRes {
                 res: TaskRes::Apply(res),
                 ..
-            }) => res,
+            }) => *res,
             e => panic!("unexpected res {:?}", e),
         }
     }
@@ -5518,7 +5536,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply2));
 
         let res = fetch_apply_res(&rx);
-        let bucket_version = res.bucket_stat.unwrap().as_ref().meta.version;
+        let bucket_version = res.bucket_stat.unwrap().meta.version;
 
         assert_eq!(bucket_version, 2);
 

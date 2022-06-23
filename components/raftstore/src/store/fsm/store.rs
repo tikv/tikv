@@ -288,7 +288,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+    fn notify(&self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
         for r in apply_res {
             self.router.try_send(
                 r.region_id,
@@ -302,7 +302,7 @@ where
         self.router.try_send(region_id, msg);
     }
 
-    fn notify_store(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+    fn notify_store(&self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
         let _ = self.router.send_control(StoreMsg::ApplyRes(apply_res));
     }
 
@@ -2502,7 +2502,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         )
     }
 
-    fn on_apply_res(&mut self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+    fn on_apply_res(&mut self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
         for res in &apply_res {
             if let Some(seq) = res.last_sequence {
                 if let Some(committed_sn) = self.fsm.store.seqno_window.push(seq) {
