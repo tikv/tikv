@@ -62,7 +62,7 @@
 ## Limitation of max delay duration, default value is 0 which means unlimited.
 # max-delay-duration = "500ms"
 ## If quota auto tune for background request is supported
-# support-auto-tune = false
+# enable-auto-tune = false
 
 [log]
 ## Log levels: debug, info, warn, error, fatal.

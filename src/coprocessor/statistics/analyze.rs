@@ -51,7 +51,7 @@ pub struct AnalyzeContext<S: Snapshot> {
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
     quota_limiter: Arc<QuotaLimiter>,
-    is_auto: bool,
+    is_auto_analyze: bool,
 }
 
 impl<S: Snapshot> AnalyzeContext<S> {
@@ -72,7 +72,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req_ctx.access_locks.clone(),
             false,
         );
-        let is_auto = req.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0;
+        let is_auto_analyze = req.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0;
 
         Ok(Self {
             req,
@@ -80,7 +80,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             ranges,
             storage_stats: Statistics::default(),
             quota_limiter,
-            is_auto,
+            is_auto_analyze,
         })
     }
 
@@ -282,7 +282,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                     storage,
                     ranges,
                     self.quota_limiter.clone(),
-                    self.is_auto,
+                    self.is_auto_analyze,
                 )?;
 
                 let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
@@ -447,9 +447,9 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
             let quota_delay = {
                 if !self.is_quota_auto_tune {
-                    self.quota_limiter.async_foreground_consume(sample).await
+                    self.quota_limiter.consume_sample(sample, true).await
                 } else {
-                    self.quota_limiter.async_background_consume(sample).await
+                    self.quota_limiter.consume_sample(sample, false).await
                 }
             };
 

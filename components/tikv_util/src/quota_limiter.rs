@@ -35,7 +35,7 @@ pub struct QuotaLimiter {
     // max delay nano seconds
     max_delay_duration: AtomicU64,
     // if supports auto tune
-    support_auto_tune: AtomicBool,
+    enable_auto_tune: AtomicBool,
 }
 
 // Throttle must be consumed in quota limiter.
@@ -99,7 +99,7 @@ impl Default for QuotaLimiter {
             background_write_bandwidth_limiter: Limiter::new(f64::INFINITY),
             background_read_bandwidth_limiter: Limiter::new(f64::INFINITY),
             max_delay_duration: AtomicU64::new(0),
-            support_auto_tune: AtomicBool::new(false),
+            enable_auto_tune: AtomicBool::new(false),
         }
     }
 }
@@ -114,7 +114,7 @@ impl QuotaLimiter {
         background_write_bandwidth: ReadableSize,
         background_read_bandwidth: ReadableSize,
         max_delay_duration: ReadableDuration,
-        support_auto_tune: bool,
+        enable_auto_tune: bool,
     ) -> Self {
         let foreground_cputime_limiter =
             Limiter::builder(Self::speed_limit(foreground_cpu_quota as f64 * 1000_f64))
@@ -139,7 +139,7 @@ impl QuotaLimiter {
             Limiter::new(Self::speed_limit(background_read_bandwidth.0 as f64));
 
         let max_delay_duration = AtomicU64::new(max_delay_duration.0.as_nanos() as u64);
-        let support_auto_tune = AtomicBool::new(support_auto_tune);
+        let enable_auto_tune = AtomicBool::new(enable_auto_tune);
 
         Self {
             foreground_cputime_limiter,
@@ -149,7 +149,7 @@ impl QuotaLimiter {
             background_write_bandwidth_limiter,
             background_read_bandwidth_limiter,
             max_delay_duration,
-            support_auto_tune,
+            enable_auto_tune,
         }
     }
 
@@ -196,9 +196,9 @@ impl QuotaLimiter {
             .store(duration.0.as_nanos() as u64, Ordering::Relaxed);
     }
 
-    pub fn set_support_auto_tune(&self, support_auto_tune: bool) {
-        self.support_auto_tune
-            .store(support_auto_tune, Ordering::Relaxed);
+    pub fn set_enable_auto_tune(&self, enable_auto_tune: bool) {
+        self.enable_auto_tune
+            .store(enable_auto_tune, Ordering::Relaxed);
     }
 
     pub fn foreground_cputime_limiter(&self) -> f64 {
@@ -214,7 +214,7 @@ impl QuotaLimiter {
     }
 
     pub fn supports_auto_tune(&self) -> bool {
-        self.support_auto_tune.load(Ordering::Relaxed)
+        self.enable_auto_tune.load(Ordering::Relaxed)
     }
 
     // To generate a sampler.
@@ -230,7 +230,7 @@ impl QuotaLimiter {
 
     // To consume a sampler and return delayed duration.
     // If the sampler is null, the speed limiter will just return ZERO.
-    fn consume_sample(&self, sample: Sample, is_foreground: bool) -> Duration {
+    pub async fn consume_sample(&self, sample: Sample, is_foreground: bool) -> Duration {
         let cpu_dur = if sample.cpu_time > Duration::ZERO {
             if is_foreground {
                 self.foreground_cputime_limiter
@@ -273,13 +273,6 @@ impl QuotaLimiter {
             exec_delay = std::cmp::min(delay_duration, exec_delay);
         };
 
-        exec_delay
-    }
-
-    // To consume a sampler and return delayed duration for background request.
-    // If the sampler is null, the speed limiter will just return ZERO.
-    pub async fn async_background_consume(&self, sample: Sample) -> Duration {
-        let exec_delay = self.consume_sample(sample, false);
         if !exec_delay.is_zero() {
             GLOBAL_TIMER_HANDLE
                 .delay(std::time::Instant::now() + exec_delay)
@@ -287,20 +280,7 @@ impl QuotaLimiter {
                 .await
                 .unwrap();
         }
-        exec_delay
-    }
 
-    // To consume a sampler and return delayed duration for foreground request.
-    // If the sampler is null, the speed limiter will just return ZERO.
-    pub async fn async_foreground_consume(&self, sample: Sample) -> Duration {
-        let exec_delay = self.consume_sample(sample, true);
-        if !exec_delay.is_zero() {
-            GLOBAL_TIMER_HANDLE
-                .delay(std::time::Instant::now() + exec_delay)
-                .compat()
-                .await
-                .unwrap();
-        }
         exec_delay
     }
 }
@@ -351,9 +331,9 @@ impl ConfigManager for QuotaLimitConfigManager {
             self.quota_limiter
                 .set_background_read_bandwidth_limit(read_bandwidth.clone().into());
         }
-        if let Some(support_auto_tune) = change.get("support_auto_tune") {
+        if let Some(enable_auto_tune) = change.get("enable_auto_tune") {
             self.quota_limiter
-                .set_support_auto_tune(support_auto_tune.clone().into());
+                .set_enable_auto_tune(enable_auto_tune.clone().into());
         }
         Ok(())
     }
@@ -391,26 +371,26 @@ mod tests {
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(60));
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::ZERO);
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(50));
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::from_millis(110));
 
         std::thread::sleep(Duration::from_millis(10));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(20));
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         // should less 60+50+20
         assert!(should_delay < Duration::from_millis(130));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(200));
         sample.add_write_bytes(256);
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::from_millis(250));
 
         // ThreadTime elapsed time is not long.
@@ -419,45 +399,45 @@ mod tests {
         quota_limiter.set_foreground_cpu_time_limit(2000);
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(200));
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::from_millis(100));
 
         quota_limiter.set_foreground_read_bandwidth_limit(ReadableSize(512));
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(128);
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::from_millis(250));
 
         quota_limiter.set_foreground_write_bandwidth_limit(ReadableSize::kb(2));
         let mut sample = quota_limiter.new_sample();
         sample.add_write_bytes(256);
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::from_millis(125));
 
         quota_limiter.set_max_delay_duration(ReadableDuration::millis(40));
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(256);
         sample.add_write_bytes(512);
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::from_millis(40));
 
         // test change limiter to 0
         quota_limiter.set_foreground_cpu_time_limit(0);
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(100));
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::ZERO);
 
         quota_limiter.set_foreground_write_bandwidth_limit(ReadableSize::kb(0));
         let mut sample = quota_limiter.new_sample();
         sample.add_write_bytes(256);
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::ZERO);
 
         quota_limiter.set_foreground_read_bandwidth_limit(ReadableSize::kb(0));
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(256);
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::ZERO);
 
         // set bandwidth back
@@ -465,31 +445,31 @@ mod tests {
         quota_limiter.set_max_delay_duration(ReadableDuration::millis(0));
         let mut sample = quota_limiter.new_sample();
         sample.add_write_bytes(128);
-        let should_delay = block_on(quota_limiter.async_foreground_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         check_duration(should_delay, Duration::from_millis(125));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(60));
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::ZERO);
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(50));
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::from_millis(110));
 
         std::thread::sleep(Duration::from_millis(10));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(20));
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         // should less 60+50+20
         assert!(should_delay < Duration::from_millis(130));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(200));
         sample.add_write_bytes(256);
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::from_millis(250));
 
         // ThreadTime elapsed time is not long.
@@ -498,45 +478,45 @@ mod tests {
         quota_limiter.set_background_cpu_time_limit(2000);
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(200));
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::from_millis(100));
 
         quota_limiter.set_background_read_bandwidth_limit(ReadableSize(512));
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(128);
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::from_millis(250));
 
         quota_limiter.set_background_write_bandwidth_limit(ReadableSize::kb(2));
         let mut sample = quota_limiter.new_sample();
         sample.add_write_bytes(256);
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::from_millis(125));
 
         quota_limiter.set_max_delay_duration(ReadableDuration::millis(40));
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(256);
         sample.add_write_bytes(512);
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::from_millis(40));
 
         // test change limiter to 0
         quota_limiter.set_background_cpu_time_limit(0);
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(100));
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::ZERO);
 
         quota_limiter.set_background_write_bandwidth_limit(ReadableSize::kb(0));
         let mut sample = quota_limiter.new_sample();
         sample.add_write_bytes(256);
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::ZERO);
 
         quota_limiter.set_background_read_bandwidth_limit(ReadableSize::kb(0));
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(256);
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::ZERO);
 
         // set bandwidth back
@@ -544,7 +524,7 @@ mod tests {
         quota_limiter.set_max_delay_duration(ReadableDuration::millis(0));
         let mut sample = quota_limiter.new_sample();
         sample.add_write_bytes(128);
-        let should_delay = block_on(quota_limiter.async_background_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         check_duration(should_delay, Duration::from_millis(125));
     }
 }

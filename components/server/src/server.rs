@@ -295,7 +295,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
-        // use different quota limiters for front-end and back-end requests
+        // use different quota for front-end and back-end requests
         let quota_limiter = Arc::new(QuotaLimiter::new(
             config.quota.foreground_cpu_time,
             config.quota.foreground_write_bandwidth,
@@ -304,7 +304,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             config.quota.background_write_bandwidth,
             config.quota.background_read_bandwidth,
             config.quota.max_delay_duration,
-            config.quota.support_auto_tune,
+            config.quota.enable_auto_tune,
         ));
 
         TiKvServer {
@@ -1283,7 +1283,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL,
             move || {
                 if quota_limiter.supports_auto_tune() {
-                    let mut target_quota = quota_limiter.background_cputime_limiter() / 1000_f64;
+                    let old_quota = quota_limiter.background_cputime_limiter() / 1000_f64;
                     let cpu_usage = match proc_stats.cpu_usage() {
                         Ok(r) => r,
                         Err(_e) => 0.0,
@@ -1294,7 +1294,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                     //      2) if instance cpu usage is healthy, no op;
                     //      3) if instance is idle, increase cpu quota by one quota pace  until upper bound is hit.
                     if cpu_usage > 0.0f64 {
-                        let old_quota = target_quota;
+                        let mut target_quota = old_quota;
 
                         let cpu_util = cpu_usage / SysQuota::cpu_cores_quota();
                         if cpu_util >= SYSTEM_BUSY_THRESHOLD {
