@@ -1539,7 +1539,7 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                     );
                 }
             }));
-        
+
         if result.is_ok() {
             // Write config to metric
             for (cfg_name, cfg_value) in opts {
@@ -1555,7 +1555,7 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                 }
             }
         }
-        result 
+        result
     }
 
     fn set_block_cache_size(&self, cf: &str, size: ReadableSize) -> Result<(), Box<dyn Error>> {
@@ -1574,7 +1574,8 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                     if r.is_err() {
                         result = Err(Box::from(r.err().unwrap()));
                         error!(
-                            "opt.set_block_cache_capacity {} failed on tablet {}_{}. err:{:?}",
+                            "opt.set_block_cache_capacity on cf {} with size {}MB failed on tablet {}_{}. err:{:?}",
+                            cf,
                             size.as_mb(),
                             region_id,
                             suffix,
