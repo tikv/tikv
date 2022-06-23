@@ -84,13 +84,13 @@ lazy_static! {
     static ref GC_COMPACTION_FILTER_SKIP: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_skip",
         "Skip to create compaction filter for GC because of table properties",
-                &["key_mode"]
+        &["key_mode"]
     )
     .unwrap();
     static ref GC_COMPACTION_FILTER_PERFORM: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_perform",
         "perfrom GC in compaction filter",
-                &["key_mode"]
+        &["key_mode"]
     )
     .unwrap();
 
@@ -99,7 +99,7 @@ lazy_static! {
     pub static ref GC_COMPACTION_MVCC_ROLLBACK: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_mvcc_rollback",
         "Compaction of mvcc rollbacks",
-                &["key_mode"]
+        &["key_mode"]
     )
     .unwrap();
 

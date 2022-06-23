@@ -51,11 +51,10 @@ use super::{
     gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
     Callback, Error, ErrorInner, Result,
 };
-pub use crate::storage::kv::metrics::GcKeyMode;
 use crate::{
     server::metrics::*,
     storage::{
-        kv::{Engine, ScanMode, Statistics},
+        kv::{metrics::GcKeyMode, Engine, ScanMode, Statistics},
         mvcc::{GcInfo, MvccReader, MvccTxn},
         txn::{gc, Error as TxnError},
     },
@@ -213,7 +212,6 @@ where
     cfg: GcConfig,
     cfg_tracker: Tracker<GcConfig>,
 
-    stats: Statistics,
     stats_map: HashMap<GcKeyMode, Statistics>,
 }
 
@@ -306,7 +304,6 @@ where
             limiter,
             cfg,
             cfg_tracker,
-            stats: Statistics::default(),
             stats_map: Default::default(),
         }
     }
@@ -339,8 +336,7 @@ where
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
         let stats = mem::take(&mut reader.statistics);
-        self.stats.add(&stats);
-        self.update_stats_map(GcKeyMode::tidb, stats);
+        self.get_stats(GcKeyMode::txn).add(&stats);
         Ok(())
     }
 
@@ -387,8 +383,7 @@ where
             self.gc_keys(keys, safe_point, None)?;
         }
 
-        self.stats.add(&reader.statistics);
-        self.update_stats_map(GcKeyMode::tidb, reader.statistics);
+        self.get_stats(GcKeyMode::txn).add(&reader.statistics);
         debug!(
             "gc has finished";
             "start_key" => log_wrappers::Value::key(start_key),
@@ -545,6 +540,7 @@ where
         }
 
         Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+
         Ok((handled_keys, wasted_keys))
     }
 
@@ -573,8 +569,8 @@ where
             }
 
             if raw_modifies.write_size >= MAX_RAW_WRITE_SIZE {
-                self.stats.data.add(&statistics);
-                self.update_cf_stats_map(GcKeyMode::raw, statistics, CF_DEFAULT);
+                let cf_stats = self.get_stats(GcKeyMode::raw).mut_cf_statistics(CF_DEFAULT);
+                cf_stats.add(&statistics);
                 return Ok(());
             }
 
@@ -594,8 +590,8 @@ where
 
         gc_info.is_completed = true;
 
-        self.stats.data.add(&statistics);
-        self.update_cf_stats_map(GcKeyMode::raw, statistics, CF_DEFAULT);
+        let cf_stats = self.get_stats(GcKeyMode::raw).mut_cf_statistics(CF_DEFAULT);
+        cf_stats.add(&statistics);
 
         if let Some(to_del_key) = latest_version_key {
             self.delete_raws(to_del_key, raw_modifies, gc_info);
@@ -604,46 +600,12 @@ where
         Ok(())
     }
 
-    fn update_cf_stats_map(&mut self, key_mode: GcKeyMode, cf_static: CfStatistics, cf: &str) {
-        match self.stats_map.get_mut(&key_mode) {
-            None => {
-                let mut cfstatistics_insert = CfStatistics::default();
-
-                cfstatistics_insert.add(&cf_static);
-
-                let mut statistics_insert = Statistics::default();
-                statistics_insert.data.add(&cfstatistics_insert);
-                self.stats_map.insert(key_mode, statistics_insert);
-            }
-            Some(stats) => {
-                stats.mut_cf_statistics(cf).add(&cf_static);
-            }
-        };
-    }
-
-    fn get_from_cf_stats_map(
-        &mut self,
-        key_mode: GcKeyMode,
-        cf: &str,
-        metric_detail: GcKeysDetail,
-    ) -> usize {
-        return match self.stats_map.get(&key_mode) {
-            None => 0,
-            Some(stats) => stats.cf_statistics(cf).get_by_enum(metric_detail),
-        };
-    }
-
-    fn update_stats_map(&mut self, key_mode: GcKeyMode, statistics: Statistics) {
-        match self.stats_map.get_mut(&key_mode) {
-            None => {
-                let mut statistics_new = Statistics::default();
-                statistics_new.add(&statistics);
-                self.stats_map.insert(key_mode, statistics_new);
-            }
-            Some(stats) => {
-                stats.add(&statistics);
-            }
-        };
+    fn get_stats(&mut self, key_mode: GcKeyMode) -> &mut Statistics {
+        let stats = self
+            .stats_map
+            .entry(key_mode)
+            .or_insert_with(Statistics::default);
+        stats
     }
 
     fn delete_raws(&mut self, key: Key, raw_modifies: &mut MvccRaw, gc_info: &mut GcInfo) {
@@ -781,7 +743,7 @@ where
     }
 
     fn update_statistics_metrics(&mut self, key_mode: GcKeyMode) {
-        let stats_map = self.stats_map.get_mut(&key_mode);
+        let stats_map = self.stats_map.get(&key_mode);
         match stats_map {
             None => {}
             Some(stats) => {
@@ -850,7 +812,7 @@ where
                 let res = self.gc(&start_key, &end_key, safe_point);
                 update_metrics(res.is_err());
                 callback(res);
-                self.update_statistics_metrics(GcKeyMode::tidb);
+                self.update_statistics_metrics(GcKeyMode::txn);
                 slow_log!(
                     T timer,
                     "GC on range [{}, {}), safe_point {}",
@@ -865,11 +827,7 @@ where
                 store_id,
                 region_info_provider,
             } => {
-                let old_seek_tombstone = self.get_from_cf_stats_map(
-                    GcKeyMode::tidb,
-                    CF_WRITE,
-                    GcKeysDetail::seek_tombstone,
-                );
+                let old_seek_tombstone = self.get_stats(GcKeyMode::txn).write.seek_tombstone;
                 match self.gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
@@ -885,10 +843,10 @@ where
                         update_metrics(true);
                     }
                 }
-                let new_seek_tombstone = self.stats.write.seek_tombstone;
+                let new_seek_tombstone = self.get_stats(GcKeyMode::txn).write.seek_tombstone;
                 let seek_tombstone = new_seek_tombstone - old_seek_tombstone;
                 slow_log!(T timer, "GC keys, seek_tombstone {}", seek_tombstone);
-                self.update_statistics_metrics(GcKeyMode::tidb);
+                self.update_statistics_metrics(GcKeyMode::txn);
             }
             GcTask::RawGcKeys {
                 keys,
@@ -1868,13 +1826,13 @@ mod tests {
         }
         db.flush_cf(cf, true).unwrap();
 
-        assert_eq!(runner.stats.write.seek, 0);
-        assert_eq!(runner.stats.write.next, 0);
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.seek, 0);
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.next, 0);
         runner
             .gc_keys(keys, TimeStamp::new(200), Some((1, Arc::new(ri_provider))))
             .unwrap();
-        assert_eq!(runner.stats.write.seek, 1);
-        assert_eq!(runner.stats.write.next, 100 * 2);
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.seek, 1);
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.next, 100 * 2);
     }
 
     #[test]
@@ -1966,16 +1924,8 @@ mod tests {
             .raw_gc_keys(to_gc_keys, TimeStamp::new(120), Some((1, ri_provider)))
             .unwrap();
 
-        let stats = runner.stats_map.get(&GcKeyMode::raw);
-        match stats {
-            None => {
-                unreachable!();
-            }
-            Some(state) => {
-                assert_eq!(7, state.data.next);
-                assert_eq!(2, state.data.seek);
-            }
-        }
+        assert_eq!(7, runner.get_stats(GcKeyMode::raw).data.next);
+        assert_eq!(2, runner.get_stats(GcKeyMode::raw).data.seek);
 
         let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
 
@@ -2028,7 +1978,8 @@ mod tests {
         must_gc(&prefixed_engine, b"k2\x00", 30);
 
         // Test tombstone counter works
-        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.seek_tombstone, 0);
+
         runner
             .gc_keys(
                 vec![Key::from_raw(b"k2\x00")],
@@ -2036,11 +1987,15 @@ mod tests {
                 Some((1, ri_provider.clone())),
             )
             .unwrap();
-        assert_eq!(runner.stats.write.seek_tombstone, 20);
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.seek_tombstone, 20);
 
         // gc_keys with single key
-        runner.stats.write.seek_tombstone = 0;
-        assert_eq!(runner.stats.write.seek_tombstone, 0);
+
+        runner
+            .get_stats(GcKeyMode::txn)
+            .mut_cf_statistics(CF_WRITE)
+            .seek_tombstone = 0;
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.seek_tombstone, 0);
         runner
             .gc_keys(
                 vec![Key::from_raw(b"k2")],
@@ -2048,11 +2003,14 @@ mod tests {
                 Some((1, ri_provider.clone())),
             )
             .unwrap();
-        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.seek_tombstone, 0);
 
         // gc_keys with multiple key
-        runner.stats.write.seek_tombstone = 0;
-        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        runner
+            .get_stats(GcKeyMode::txn)
+            .mut_cf_statistics(CF_WRITE)
+            .seek_tombstone = 0;
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.seek_tombstone, 0);
         runner
             .gc_keys(
                 vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
@@ -2060,7 +2018,7 @@ mod tests {
                 Some((1, ri_provider.clone())),
             )
             .unwrap();
-        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.seek_tombstone, 0);
 
         // Test rebuilding snapshot when GC write batch limit reached (gc_info.is_completed == false).
         // Build a key with versions that will just reach the limit `MAX_TXN_WRITE_SIZE`.
@@ -2078,7 +2036,10 @@ mod tests {
         db.flush_cf(cf, true).unwrap();
         let safepoint = versions as u64 * 2;
 
-        runner.stats.write.seek_tombstone = 0;
+        runner
+            .get_stats(GcKeyMode::txn)
+            .mut_cf_statistics(CF_DEFAULT)
+            .seek_tombstone = 0;
         runner
             .gc_keys(
                 vec![Key::from_raw(b"k2")],
@@ -2089,9 +2050,12 @@ mod tests {
         // The first batch will leave tombstones that will be seen while processing the second
         // batch, but it will be seen in `next` after seeking the latest unexpired version,
         // therefore `seek_tombstone` is not affected.
-        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        assert_eq!(runner.get_stats(GcKeyMode::txn).write.seek_tombstone, 0);
         // ... and next_tombstone indicates there's indeed more than one batches.
-        assert_eq!(runner.stats.write.next_tombstone, versions - 3);
+        assert_eq!(
+            runner.get_stats(GcKeyMode::txn).write.next_tombstone,
+            versions - 3
+        );
     }
 
     #[test]
