@@ -126,6 +126,16 @@ pub trait ApplySnapshotObserver: Coprocessor {
         _: Option<&crate::store::Snapshot>,
     ) {
     }
+
+    /// Hook when the whole snapshot is applied
+    fn post_apply_snapshot(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: u64,
+        _: &crate::store::SnapKey,
+        _: &crate::store::Snapshot,
+    ) {
+    }
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use

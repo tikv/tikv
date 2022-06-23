@@ -83,6 +83,7 @@ pub enum Task<S> {
     Apply {
         region_id: u64,
         status: Arc<AtomicUsize>,
+        peer_id: u64,
     },
     /// Destroy data between [start_key, end_key).
     ///
@@ -359,7 +360,7 @@ where
 
     fn get_apply_state(&self, region_id: u64) -> Result<RaftApplyState> {
         let state_key = keys::apply_state_key(region_id);
-        let mut apply_state: RaftApplyState =
+        let apply_state: RaftApplyState =
             match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
@@ -378,7 +379,7 @@ where
         fail_point!("region_apply_snap", |_| { Ok(()) });
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
-        let region_state = self.get_region_state(region_id)?;
+        let mut region_state = self.get_region_state(region_id)?;
 
         // clear up origin data.
         let region = region_state.get_region().clone();
@@ -398,7 +399,6 @@ where
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
-        let state_key = keys::apply_state_key(region_id);
         let apply_state = self.get_apply_state(region_id)?;
 
         let term = apply_state.get_truncated_state().get_term();
@@ -422,6 +422,8 @@ where
             coprocessor_host: self.coprocessor_host.clone(),
         };
         s.apply(options)?;
+        self.coprocessor_host
+            .post_apply_snapshot(&region, peer_id, &snap_key, &s);
 
         let mut wb = self.engine.write_batch();
         region_state.set_state(PeerState::Normal);
@@ -741,7 +743,7 @@ where
                 peer_id,
             }) = self.pending_applies.pop_front()
             {
-                self.ctx.handle_apply(region_id, status);
+                self.ctx.handle_apply(region_id, status, peer_id);
             }
         }
     }

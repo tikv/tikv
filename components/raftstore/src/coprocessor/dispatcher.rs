@@ -458,6 +458,23 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
+    pub fn post_apply_snapshot(
+        &self,
+        region: &Region,
+        peer_id: u64,
+        snap_key: &crate::store::SnapKey,
+        snap: &crate::store::Snapshot,
+    ) {
+        loop_ob!(
+            region,
+            &self.registry.apply_snapshot_observers,
+            post_apply_snapshot,
+            peer_id,
+            snap_key,
+            snap,
+        );
+    }
+
     pub fn new_split_checker_host<'a>(
         &'a self,
         region: &Region,
@@ -698,11 +715,22 @@ mod tests {
         fn pre_apply_snapshot(
             &self,
             ctx: &mut ObserverContext<'_>,
-            _peer_id: u64,
+            _: u64,
             _: &SnapKey,
             _: Option<&Snapshot>,
         ) {
             self.called.fetch_add(17, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn post_apply_snapshot(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: u64,
+            _: &crate::store::SnapKey,
+            _: &crate::store::Snapshot,
+        ) {
+            self.called.fetch_add(18, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
@@ -800,8 +828,16 @@ mod tests {
         host.on_empty_cmd(&region, 0, 0);
         assert_all!([&ob.called], &[88]);
 
-        host.pre_apply_snapshot(&region, 0, &SnapKey::new(region.get_id(), 1, 1), None);
-        assert_all!([&ob.called], &[105]);
+        let key = SnapKey::new(region.get_id(), 1, 1);
+        unsafe {
+            let snap = &*(std::ptr::null() as *const crate::store::Snapshot);
+
+            host.pre_apply_snapshot(&region, 0, &key, Some(&snap));
+            assert_all!([&ob.called], &[105]); // 17
+
+            host.post_apply_snapshot(&region, 0, &key, &snap);
+            assert_all!([&ob.called], &[123]); // 18
+        };
     }
 
     #[test]
