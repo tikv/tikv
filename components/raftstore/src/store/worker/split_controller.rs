@@ -577,7 +577,7 @@ pub enum SplitConfigChange {
 pub struct AutoSplitController {
     // RegionID -> Recorder
     pub recorders: HashMap<u64, Recorder>,
-    cfg: SplitConfig,
+    pub cfg: SplitConfig,
     cfg_tracker: Tracker<SplitConfig>,
     // Thread-related info
     max_grpc_thread_count: usize,
