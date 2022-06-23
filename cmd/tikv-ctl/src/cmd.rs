@@ -28,7 +28,7 @@ pub struct Opt {
     /// Set the address of pd
     pub pd: Option<String>,
 
-    #[structopt(long, default_value = "info")]
+    #[structopt(long, default_value = "warn")]
     /// Set the log level
     pub log_level: String,
 
@@ -533,10 +533,6 @@ pub enum Cmd {
     },
     /// Print bad ssts related infos
     BadSsts {
-        #[structopt(long)]
-        /// db directory.
-        db: String,
-
         #[structopt(long)]
         /// specify manifest, if not set, it will look up manifest file in db path
         manifest: Option<String>,
