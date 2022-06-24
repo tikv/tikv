@@ -296,7 +296,7 @@ struct WriteCompactionFilter {
     total_filtered: usize,
     mvcc_rollback_and_locks: usize,
     orphan_versions: usize,
-    versions_hist: LocalHistogram,
+    versions_hist: LocalHistogramVec,
     filtered_hist: LocalHistogramVec,
 
     #[cfg(any(test, feature = "failpoints"))]
@@ -359,12 +359,12 @@ impl WriteCompactionFilter {
                 match e {
                     ScheduleError::Full(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&["txn", "full"])
+                            .with_label_values(&["full", "txn"])
                             .inc();
                     }
                     ScheduleError::Stopped(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&["txn", "stopped"])
+                            .with_label_values(&["stopped", "txn"])
                             .inc();
                     }
                 }
@@ -513,7 +513,9 @@ impl WriteCompactionFilter {
 
     fn switch_key_metrics(&mut self) {
         if self.versions != 0 {
-            self.versions_hist.observe(self.versions as f64);
+            self.versions_hist
+                .with_label_values(&["txn"])
+                .observe(self.versions as f64);
             self.total_versions += self.versions;
             self.versions = 0;
         }
@@ -626,7 +628,7 @@ impl CompactionFilter for WriteCompactionFilter {
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
                 GC_COMPACTION_FAILURE
-                    .with_label_values(&["txn", "filter"])
+                    .with_label_values(&["filter", "txn"])
                     .inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep

@@ -16,7 +16,7 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
-use prometheus::local::{LocalHistogram, LocalHistogramVec};
+use prometheus::local::LocalHistogramVec;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::Key;
@@ -87,7 +87,7 @@ struct RawCompactionFilter {
     total_versions: usize,
     total_filtered: usize,
     orphan_versions: usize,
-    versions_hist: LocalHistogram,
+    versions_hist: LocalHistogramVec,
     filtered_hist: LocalHistogramVec,
 
     encountered_errors: bool,
@@ -270,7 +270,9 @@ impl RawCompactionFilter {
     // TODO some refactor to avoid duplicated codes.
     fn switch_key_metrics(&mut self) {
         if self.versions != 0 {
-            self.versions_hist.observe(self.versions as f64);
+            self.versions_hist
+                .with_label_values(&["raw"])
+                .observe(self.versions as f64);
             self.total_versions += self.versions;
             self.versions = 0;
         }

@@ -147,23 +147,6 @@ impl CfStatistics {
         ]
     }
 
-    pub fn get_by_enum(&self, detail_type: GcKeysDetail) -> usize {
-        match detail_type {
-            GcKeysDetail::processed_keys => self.processed_keys,
-            GcKeysDetail::get => self.get,
-            GcKeysDetail::next => self.next,
-            GcKeysDetail::prev => self.prev,
-            GcKeysDetail::seek => self.seek,
-            GcKeysDetail::seek_for_prev => self.seek_for_prev,
-            GcKeysDetail::over_seek_bound => self.over_seek_bound,
-            GcKeysDetail::next_tombstone => self.next_tombstone,
-            GcKeysDetail::prev_tombstone => self.prev_tombstone,
-            GcKeysDetail::seek_tombstone => self.seek_tombstone,
-            GcKeysDetail::seek_for_prev_tombstone => self.seek_for_prev_tombstone,
-            GcKeysDetail::raw_value_tombstone => self.raw_value_tombstone,
-        }
-    }
-
     pub fn add(&mut self, other: &Self) {
         self.processed_keys = self.processed_keys.saturating_add(other.processed_keys);
         self.get = self.get.saturating_add(other.get);

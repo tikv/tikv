@@ -21,7 +21,9 @@ pub struct GcInfo {
 
 impl GcInfo {
     pub fn report_metrics(&self, key_mode: &str) {
-        MVCC_VERSIONS_HISTOGRAM.observe(self.found_versions as f64);
+        MVCC_VERSIONS_HISTOGRAM
+            .with_label_values(&[key_mode])
+            .observe(self.found_versions as f64);
         if self.deleted_versions > 0 {
             GC_DELETE_VERSIONS_HISTOGRAM
                 .with_label_values(&[key_mode])
