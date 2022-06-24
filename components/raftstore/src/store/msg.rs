@@ -22,8 +22,9 @@ use pd_client::BucketMeta;
 use raft::{GetEntriesContext, SnapshotStatus};
 use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
+use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
-use super::{AbstractPeer, RegionSnapshot};
+use super::{local_metrics::TimeTracker, AbstractPeer, RegionSnapshot};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
@@ -98,7 +99,7 @@ pub enum Callback<S: Snapshot> {
         /// `committed_cb` is called after a request is committed and before it's being applied, and
         /// it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
-        request_times: SmallVec<[Instant; 4]>,
+        trackers: SmallVec<[TimeTracker; 4]>,
     },
     #[cfg(any(test, feature = "testexport"))]
     /// Test purpose callback
@@ -120,17 +121,28 @@ where
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Self {
+        let tracker_token = get_tls_tracker_token();
+        let now = std::time::Instant::now();
+        let tracker = if tracker_token == INVALID_TRACKER_TOKEN {
+            TimeTracker::Instant(now)
+        } else {
+            GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
+                tracker.metrics.write_instant = Some(now);
+            });
+            TimeTracker::Tracker(tracker_token)
+        };
+
         Callback::Write {
             cb,
             proposed_cb,
             committed_cb,
-            request_times: smallvec![Instant::now()],
+            trackers: smallvec![tracker],
         }
     }
 
-    pub fn get_request_times(&self) -> Option<&SmallVec<[Instant; 4]>> {
+    pub fn get_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
         match self {
-            Callback::Write { request_times, .. } => Some(request_times),
+            Callback::Write { trackers, .. } => Some(trackers),
             _ => None,
         }
     }
