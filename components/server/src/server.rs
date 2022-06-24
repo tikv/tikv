@@ -37,12 +37,12 @@ use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     from_rocks_compression_type,
     raw::{Cache, Env},
-    FlowInfo, RocksEngine,
+    DummyRocksEngineFactory, FlowInfo, RocksEngine,
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, DummyRocksEngineFactory, Engines, FlowControlFactorsExt, KvEngine,
-    MiscExt, RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
+    RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{

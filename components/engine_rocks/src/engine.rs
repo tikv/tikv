@@ -203,21 +203,27 @@ impl TabletFactory<RocksEngine> for DummyRocksEngineFactory {
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<RocksEngine> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
+
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
+
     fn create_shared_db(&self) -> Result<RocksEngine> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
+
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> Result<()> {
         Ok(())
     }
+
     fn exists_raw(&self, _path: &Path) -> bool {
         true
     }
+
     fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
+
     fn tablets_path(&self) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
@@ -235,7 +241,7 @@ impl TabletFactory<RocksEngine> for DummyRocksEngineFactory {
         })
     }
 
-    fn loop_tablet_cache(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
+    fn for_each_opened_tablet(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
         if let Some(engine) = &self.engine {
             f(0, 0, engine);
         }

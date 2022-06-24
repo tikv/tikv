@@ -123,7 +123,7 @@ pub trait TabletFactory<EK> {
 
     /// Loop visit all opened tablets cached by the specified function.
     /// Once the tablet is opened/created, it will be cached in a hashmap
-    fn loop_tablet_cache(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>);
+    fn for_each_opened_tablet(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>);
 
     /// Load the tablet from path for id and suffix--for scenarios such as applying snapshot
     fn load_tablet(&self, _path: &Path, _id: u64, _suffix: u64) -> Result<EK> {
@@ -191,7 +191,7 @@ where
             root_path: self.root_path.clone(),
         })
     }
-    fn loop_tablet_cache(&self, mut f: Box<dyn FnMut(u64, u64, &EK) + '_>) {
+    fn for_each_opened_tablet(&self, mut f: Box<dyn FnMut(u64, u64, &EK) + '_>) {
         if let Some(engine) = &self.engine {
             f(0, 0, engine);
         }

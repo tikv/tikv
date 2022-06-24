@@ -35,8 +35,7 @@ use engine_rocks::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, TabletFactory,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CFOptionsExt, DBOptionsExt, TabletFactory, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::{IOPriority, IORateLimiter};
 use keys::region_raft_prefix_len;
@@ -1511,8 +1510,8 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
 
     fn set_db_config(&self, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
         let mut result = Ok(());
-        self.tablet_factory
-            .loop_tablet_cache(Box::new(|region_id, suffix, db: &RocksEngine| {
+        self.tablet_factory.for_each_opened_tablet(Box::new(
+            |region_id, suffix, db: &RocksEngine| {
                 let r = db.set_db_options(opts);
                 if r.is_err() {
                     result = Err(Box::from(r.err().unwrap()));
@@ -1521,15 +1520,16 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                         region_id, suffix, &result
                     );
                 }
-            }));
+            },
+        ));
         result
     }
 
     fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
         let mut result = Ok(());
         self.validate_cf(cf)?;
-        self.tablet_factory
-            .loop_tablet_cache(Box::new(|region_id, suffix, db: &RocksEngine| {
+        self.tablet_factory.for_each_opened_tablet(Box::new(
+            |region_id, suffix, db: &RocksEngine| {
                 let r = db.set_options_cf(cf, opts);
                 if r.is_err() {
                     result = Err(Box::from(r.err().unwrap()));
@@ -1538,7 +1538,8 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                         cf, region_id, suffix, &result
                     );
                 }
-            }));
+            },
+        ));
 
         if result.is_ok() {
             // Write config to metric
@@ -1577,8 +1578,8 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
 
     fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {
         let mut result = Ok(());
-        self.tablet_factory
-            .loop_tablet_cache(Box::new(|region_id, suffix, db: &RocksEngine| {
+        self.tablet_factory.for_each_opened_tablet(Box::new(
+            |region_id, suffix, db: &RocksEngine| {
                 let mut opt = db.as_inner().get_db_options();
                 let r = opt.set_rate_bytes_per_sec(rate_bytes_per_sec);
                 if r.is_err() {
@@ -1588,7 +1589,8 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                         rate_bytes_per_sec, region_id, suffix, &result
                     );
                 }
-            }));
+            },
+        ));
         result
     }
 
@@ -1597,8 +1599,8 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
         rate_limiter_auto_tuned: bool,
     ) -> Result<(), Box<dyn Error>> {
         let mut result = Ok(());
-        self.tablet_factory
-            .loop_tablet_cache(Box::new(|region_id, suffix, db: &RocksEngine| {
+        self.tablet_factory.for_each_opened_tablet(Box::new(
+            |region_id, suffix, db: &RocksEngine| {
                 let mut opt = db.as_inner().get_db_options();
                 let r = opt.set_auto_tuned(rate_limiter_auto_tuned);
                 if r.is_err() {
@@ -1617,7 +1619,8 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                         rate_limiter_auto_tuned, region_id, suffix, &result
                     );
                 }
-            }));
+            },
+        ));
 
         result
     }
@@ -3868,7 +3871,10 @@ mod tests {
 
     use api_version::{ApiV1, KvFormat};
     use case_macros::*;
-    use engine_traits::{DBOptions as DBOptionsTrait, DummyFactory, ALL_CFS};
+    use engine_traits::{
+        ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as DBOptionsTrait, DummyFactory,
+        ALL_CFS,
+    };
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
     use itertools::Itertools;

@@ -130,7 +130,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     }
 
     #[inline]
-    fn loop_tablet_cache(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
+    fn for_each_opened_tablet(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
         let reg = self.registry.lock().unwrap();
         for ((id, suffix), tablet) in &*reg {
             f(*id, *suffix, tablet)
@@ -216,7 +216,7 @@ mod tests {
         let tablet2 = factory.open_tablet_raw(&tablet_path, false).unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
         let mut count = 0;
-        factory.loop_tablet_cache(Box::new(|id, suffix, _tablet| {
+        factory.for_each_opened_tablet(Box::new(|id, suffix, _tablet| {
             assert!(id == 0);
             assert!(suffix == 0);
             count += 1;
@@ -256,7 +256,7 @@ mod tests {
         let tablet2 = factory.open_tablet_raw(&tablet_path, false).unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
         let mut count = 0;
-        factory.loop_tablet_cache(Box::new(|id, suffix, _tablet| {
+        factory.for_each_opened_tablet(Box::new(|id, suffix, _tablet| {
             assert!(id == 0);
             assert!(suffix == 0);
             count += 1;
@@ -323,7 +323,7 @@ mod tests {
         factory.create_tablet(1, 10).unwrap();
         factory.create_tablet(2, 10).unwrap();
         let mut count = 0;
-        factory.loop_tablet_cache(Box::new(|id, suffix, _tablet| {
+        factory.for_each_opened_tablet(Box::new(|id, suffix, _tablet| {
             assert!(id == 1 || id == 2);
             assert!(suffix == 10);
             count += 1;
