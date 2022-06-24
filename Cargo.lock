@@ -1050,7 +1050,7 @@ dependencies = [
  "clap 2.33.0",
  "criterion-plot",
  "csv",
- "itertools 0.10.0",
+ "itertools",
  "lazy_static",
  "num-traits",
  "oorandom",
@@ -1092,7 +1092,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d00996de9f2f7559f7f4dc286073197f83e92256a59ed395f9aac01fe717da57"
 dependencies = [
  "cast",
- "itertools 0.10.0",
+ "itertools",
 ]
 
 [[package]]
@@ -2550,15 +2550,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37d572918e350e82412fe766d24b15e6682fb2ed2bbe018280caa810397cb319"
@@ -2752,7 +2743,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#773784178a0e8e5fdad81f4fd85448a3014a3700"
+source = "git+https://github.com/tikv/rust-rocksdb.git#19f2b746fb628df958c2dda5925c4d5b6f98f06d"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2771,7 +2762,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#773784178a0e8e5fdad81f4fd85448a3014a3700"
+source = "git+https://github.com/tikv/rust-rocksdb.git#19f2b746fb628df958c2dda5925c4d5b6f98f06d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3913,7 +3904,7 @@ checksum = "355f634b43cdd80724ee7848f95770e7e70eefa6dcf14fea676216573b8fd603"
 dependencies = [
  "bytes",
  "heck 0.3.1",
- "itertools 0.10.0",
+ "itertools",
  "log",
  "multimap",
  "petgraph",
@@ -3930,7 +3921,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "600d2f334aa05acb02a755e217ef1ab6dea4d51b58b7846588b747edec04efba"
 dependencies = [
  "anyhow",
- "itertools 0.10.0",
+ "itertools",
  "proc-macro2",
  "quote",
  "syn",
@@ -4024,7 +4015,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#4e89901a3eff850a47ea0e6b44bc74d9fed84769"
+source = "git+https://github.com/tikv/raft-engine.git#07dcadbf51b43fed70346e33b5db07723e655828"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4055,7 +4046,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#4e89901a3eff850a47ea0e6b44bc74d9fed84769"
+source = "git+https://github.com/tikv/raft-engine.git#07dcadbf51b43fed70346e33b5db07723e655828"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -4122,7 +4113,7 @@ dependencies = [
  "getset",
  "grpcio-health",
  "into_other",
- "itertools 0.10.0",
+ "itertools",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4572,7 +4563,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#773784178a0e8e5fdad81f4fd85448a3014a3700"
+source = "git+https://github.com/tikv/rust-rocksdb.git#19f2b746fb628df958c2dda5925c4d5b6f98f06d"
 dependencies = [
  "libc 0.2.125",
  "librocksdb_sys",
@@ -5903,7 +5894,7 @@ dependencies = [
  "collections",
  "fail",
  "futures 0.3.15",
- "itertools 0.10.0",
+ "itertools",
  "kvproto",
  "log_wrappers",
  "match_template",
@@ -6004,7 +5995,7 @@ dependencies = [
  "hyper-openssl",
  "hyper-tls",
  "into_other",
- "itertools 0.10.0",
+ "itertools",
  "keys",
  "kvproto",
  "lazy_static",
@@ -7077,12 +7068,10 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.19+zstd.1.4.8"
+version = "2.0.1+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec24a9273d24437afb8e71b16f3d9a5d569193cccdb7896213b59f552f387674"
+checksum = "9fd07cbbc53846d9145dbffdf6dd09a7a0aa52be46741825f5c97bdd4f73f12b"
 dependencies = [
  "cc",
- "glob",
- "itertools 0.9.0",
  "libc 0.2.125",
 ]
