@@ -983,4 +983,6 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     fail::remove("txn_before_process_write");
     let resp = resp.join().unwrap();
     assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
+
+    fail::remove("on_split_invalidate_locks");
 }
