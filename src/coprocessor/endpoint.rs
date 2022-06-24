@@ -274,6 +274,7 @@ impl<E: Engine> Endpoint<E> {
                 });
 
                 self.check_memory_locks(&req_ctx)?;
+
                 let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {

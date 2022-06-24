@@ -57,6 +57,7 @@ command! {
 impl CommandExt for ResolveLock {
     ctx!();
     tag!(resolve_lock);
+    request_type!(KvResolveLock);
     property!(is_sys_cmd);
 
     fn write_bytes(&self) -> usize {

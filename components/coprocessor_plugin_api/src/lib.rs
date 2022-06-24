@@ -1,5 +1,4 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-#![feature(const_fn_fn_ptr_basics)]
 
 //! This crate contains some necessary types and traits for implementing a custom coprocessor plugin
 //! for TiKV.

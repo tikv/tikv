@@ -37,6 +37,7 @@ command! {
 impl CommandExt for Commit {
     ctx!();
     tag!(commit);
+    request_type!(KvCommit);
     ts!(commit_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);

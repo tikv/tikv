@@ -5,13 +5,13 @@ use std::{collections::HashMap, string::ToString};
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
 use tikv_util::{
     config::KIB,
-    sys::{cpu_time::LiunxStyleCpuTime, SysQuota, *},
+    sys::{cpu_time::LinuxStyleCpuTime, SysQuota, *},
 };
 use walkdir::WalkDir;
 
 use crate::server::service::diagnostics::{ioload, SYS_INFO};
 
-type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
+type CpuTimeSnapshot = Option<LinuxStyleCpuTime>;
 
 #[derive(Clone, Debug)]
 pub struct NicSnapshot {
@@ -87,7 +87,7 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
         return;
     }
 
-    let t2 = LiunxStyleCpuTime::current();
+    let t2 = LinuxStyleCpuTime::current();
     if t2.is_err() {
         return;
     }
@@ -265,7 +265,7 @@ fn io_load_info(prev_io: HashMap<String, ioload::IoLoad>, collector: &mut Vec<Se
 }
 
 pub fn cpu_time_snapshot() -> CpuTimeSnapshot {
-    let t1 = LiunxStyleCpuTime::current();
+    let t1 = LinuxStyleCpuTime::current();
     if t1.is_err() {
         return None;
     }

@@ -615,7 +615,7 @@ where
         Ok(())
     }
 
-    fn unsafe_destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
+    fn unsafe_destroy_range(&self, ctx: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
         info!(
             "unsafe destroy range started";
             "start_key" => %start_key, "end_key" => %end_key
@@ -624,7 +624,7 @@ where
         fail_point!("unsafe_destroy_range");
 
         self.flow_info_sender
-            .send(FlowInfo::BeforeUnsafeDestroyRange)
+            .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
         let local_storage = self.engine.kv_engine();
 
@@ -691,7 +691,7 @@ where
             "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
         );
         self.flow_info_sender
-            .send(FlowInfo::AfterUnsafeDestroyRange)
+            .send(FlowInfo::AfterUnsafeDestroyRange(ctx.region_id))
             .unwrap();
 
         self.raft_store_router

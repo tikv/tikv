@@ -415,6 +415,7 @@ pub struct RaftMetrics {
     pub wf_persist_log: LocalHistogram,
     pub wf_commit_log: LocalHistogram,
     pub wf_commit_not_persist_log: LocalHistogram,
+    pub proposal_send_wait: LocalHistogram,
     pub raft_log_gc_skipped: RaftLogGcSkippedMetrics,
 }
 
@@ -439,6 +440,7 @@ impl RaftMetrics {
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            proposal_send_wait: PROPOSAL_SEND_WAIT_DURATION_HISTOGRAM.local(),
             raft_log_gc_skipped: RaftLogGcSkippedMetrics::default(),
         }
     }
@@ -461,6 +463,7 @@ impl RaftMetrics {
             self.wf_persist_log.flush();
             self.wf_commit_log.flush();
             self.wf_commit_not_persist_log.flush();
+            self.proposal_send_wait.flush();
         }
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);

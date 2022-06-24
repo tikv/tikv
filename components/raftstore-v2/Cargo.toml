@@ -1,0 +1,56 @@
+[package]
+name = "raftstore-v2"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+failpoints = ["raftstore/failpoints"]
+testexport = ["raftstore/testexport"]
+test-engine-kv-rocksdb = [
+  "raftstore/test-engine-kv-rocksdb",
+  "engine_test/test-engine-kv-rocksdb",
+]
+test-engine-raft-raft-engine = [
+  "raftstore/test-engine-raft-raft-engine",
+  "engine_test/test-engine-raft-raft-engine",
+]
+test-engines-rocksdb = [
+  "raftstore/test-engines-rocksdb",
+  "engine_test/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "raftstore/test-engines-panic",
+  "engine_test/test-engines-panic",
+]
+
+cloud-aws = ["raftstore/cloud-aws"]
+cloud-gcp = ["raftstore/cloud-gcp"]
+cloud-azure = ["raftstore/cloud-azure"]
+
+[dependencies]
+collections = { path = "../collections" }
+crossbeam = "0.8"
+engine_traits = { path = "../engine_traits" }
+error_code = { path = "../error_code" }
+fail = "0.5"
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+pd_client = { path = "../pd_client" }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft-proto = { version = "0.7.0" }
+raftstore = { path = "../raftstore" }
+slog = "2.3"
+smallvec = "1.4"
+tikv_util = { path = "../tikv_util", default-features = false }
+
+[dev-dependencies]
+engine_test = { path = "../engine_test", default-features = false }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tempfile = "3.0"
+test_pd = { path = "../test_pd" }
+test_util = { path = "../test_util" }
+
+[[test]]
+name = "raftstore-v2-failpoints"
+path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]

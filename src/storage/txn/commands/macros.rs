@@ -139,6 +139,14 @@ macro_rules! tag {
     };
 }
 
+macro_rules! request_type {
+    ($req_type:ident) => {
+        fn request_type(&self) -> ::tracker::RequestType {
+            ::tracker::RequestType::$req_type
+        }
+    };
+}
+
 macro_rules! write_bytes {
     ($field: ident) => {
         fn write_bytes(&self) -> usize {
