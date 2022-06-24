@@ -2498,6 +2498,7 @@ where
             &self.ctx.engines,
             &mut self.ctx.perf_context,
             merged_by_target,
+            &self.ctx.pending_create_peers,
         ) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
@@ -2522,21 +2523,6 @@ where
         }
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
-        }
-
-        if self.fsm.peer.local_first_replicate {
-            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-            if is_initialized {
-                assert!(pending_create_peers.get(&region_id).is_none());
-            } else {
-                // If this region's data in `pending_create_peers` is not equal to `(peer_id, false)`,
-                // it means this peer will be replaced by the split one.
-                if let Some(status) = pending_create_peers.get(&region_id) {
-                    if *status == (self.fsm.peer_id(), false) {
-                        pending_create_peers.remove(&region_id);
-                    }
-                }
-            }
         }
 
         // Clear merge related structures.
@@ -2575,6 +2561,8 @@ where
             }
         }
         meta.leaders.remove(&region_id);
+
+        fail_point!("raft_store_finish_destroy_peer");
 
         true
     }
