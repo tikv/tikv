@@ -3871,9 +3871,9 @@ mod tests {
 
     use api_version::{ApiV1, KvFormat};
     use case_macros::*;
+    use engine_rocks::DummyRocksEngineFactory;
     use engine_traits::{
-        ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as DBOptionsTrait, DummyFactory,
-        ALL_CFS,
+        ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as DBOptionsTrait, ALL_CFS,
     };
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
@@ -4290,7 +4290,7 @@ mod tests {
         )));
 
         let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
-        let dummy_tablet = DummyFactory {
+        let dummy_tablet = DummyRocksEngineFactory {
             engine: Some(engine.clone()),
             root_path: "/tmp".to_string(),
         };
