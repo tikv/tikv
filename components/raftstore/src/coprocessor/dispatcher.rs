@@ -829,13 +829,11 @@ mod tests {
         assert_all!([&ob.called], &[88]);
 
         let key = SnapKey::new(region.get_id(), 1, 1);
-        unsafe {
-            host.pre_apply_snapshot(&region, 0, &key, None);
-            assert_all!([&ob.called], &[105]); // 17
+        host.pre_apply_snapshot(&region, 0, &key, None);
+        assert_all!([&ob.called], &[105]); // 17
 
-            host.post_apply_snapshot(&region, 0, &key, None);
-            assert_all!([&ob.called], &[123]); // 18
-        };
+        host.post_apply_snapshot(&region, 0, &key, None);
+        assert_all!([&ob.called], &[123]); // 18
     }
 
     #[test]
