@@ -11,7 +11,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::metapb::RegionEpoch;
 use pd_client::PdClient;
 use raft::StateRole;
-use raftstore::coprocessor::{ObserverContext, RoleObserver};
+use raftstore::coprocessor::{ObserverContext, RoleChange, RoleObserver};
 use test_raftstore::sleep_ms;
 
 #[test]
@@ -91,7 +91,7 @@ fn test_region_ready_after_deregister() {
         .obs
         .get(&leader.get_store_id())
         .unwrap()
-        .on_role_change(&mut context, StateRole::Follower);
+        .on_role_change(&mut context, &RoleChange::new(StateRole::Follower));
 
     // Then CDC should not panic
     fail::remove(fp);
