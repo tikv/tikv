@@ -148,7 +148,7 @@ impl Monitor {
         let (tx, rx) = mpsc::channel();
         let h = Builder::new()
             .name(thd_name!("time-monitor"))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 crate::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 while rx.try_recv().is_err() {
@@ -205,6 +205,7 @@ use self::inner::monotonic_coarse_now;
 pub use self::inner::monotonic_now;
 /// Returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
+use crate::sys::thread::StdThreadBuildWrapper;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;
