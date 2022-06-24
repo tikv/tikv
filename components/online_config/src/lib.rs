@@ -363,7 +363,7 @@ mod tests {
         assert_eq!(config, updated);
 
         let mut diff = HashMap::new();
-        diff.insert("f1".to_owned(), ConfigValue::String("invalid".into()));
+        diff.insert("e".to_owned(), ConfigValue::String("invalid".into()));
         assert!(config.update(diff).is_err());
     }
 }
