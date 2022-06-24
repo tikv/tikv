@@ -109,7 +109,8 @@ use crate::{
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
-const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
+#[doc(hidden)]
+pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -724,6 +725,9 @@ where
     #[getset(get = "pub")]
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
+    /// Record the propose instants to calculate the wait duration before
+    /// the proposal is sent through the Raft client.
+    pending_propose_instants: VecDeque<(u64, Instant)>,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -781,6 +785,8 @@ where
     last_urgent_proposal_idx: u64,
     /// The index of the latest committed split command.
     last_committed_split_idx: u64,
+    /// The index of last sent snapshot
+    last_sent_snapshot_idx: u64,
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
@@ -924,6 +930,7 @@ where
             raft_max_inflight_msgs: cfg.raft_max_inflight_msgs,
             proposals: ProposalQueue::new(tag.clone()),
             pending_reads: Default::default(),
+            pending_propose_instants: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -950,6 +957,7 @@ where
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
+            last_sent_snapshot_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
@@ -1570,8 +1578,15 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msgs: Vec<RaftMessage>,
     ) {
+        let now = Instant::now();
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
+            if msg_type == MessageType::MsgSnapshot {
+                let snap_index = msg.get_message().get_snapshot().get_metadata().get_index();
+                if snap_index > self.last_sent_snapshot_idx {
+                    self.last_sent_snapshot_idx = snap_index;
+                }
+            }
             if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
                 // After a leader transfer procedure is triggered, the lease for
                 // the old leader may be expired earlier than usual, since a new leader
@@ -1594,6 +1609,26 @@ where
                 "to" => to_peer_id,
                 "disk_usage" => ?msg.get_disk_usage(),
             );
+
+            for index in msg
+                .get_message()
+                .get_entries()
+                .iter()
+                .map(|e| e.get_index())
+            {
+                while let Some((propose_idx, instant)) = self.pending_propose_instants.front() {
+                    if index == *propose_idx {
+                        ctx.raft_metrics
+                            .proposal_send_wait
+                            .observe(now.saturating_duration_since(*instant).as_secs_f64());
+                    }
+                    if index >= *propose_idx {
+                        self.pending_propose_instants.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+            }
 
             if let Err(e) = ctx.trans.send(msg) {
                 // We use metrics to observe failure on production.
@@ -2026,6 +2061,7 @@ where
                     // prewrites or commits will be just a waste.
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
+                    self.last_sent_snapshot_idx = self.raft_group.raft.raft_log.last_index();
 
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
@@ -2047,6 +2083,7 @@ where
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
                     self.clear_in_memory_pessimistic_locks();
+                    self.pending_propose_instants.clear();
                 }
                 _ => {}
             }
@@ -4003,12 +4040,14 @@ where
             || min_committed == 0
             || last_index - min_matched > ctx.cfg.merge_max_log_gap
             || last_index - min_committed > ctx.cfg.merge_max_log_gap * 2
+            || min_matched < self.last_sent_snapshot_idx
         {
             return Err(box_err!(
-                "log gap from matched: {} or committed: {} to last index: {} is too large, skip merge",
+                "log gap too large, skip merge: matched: {}, committed: {}, last index: {}, last_snapshot: {}",
                 min_matched,
                 min_committed,
-                last_index
+                last_index,
+                self.last_sent_snapshot_idx
             ));
         }
         let mut entry_size = 0;
@@ -4303,6 +4342,9 @@ where
                 _ => {}
             }
         }
+
+        self.pending_propose_instants
+            .push_back((propose_index, Instant::now()));
 
         Ok(Either::Left(propose_index))
     }

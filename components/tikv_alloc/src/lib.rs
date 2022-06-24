@@ -82,6 +82,10 @@
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
 
+#![cfg_attr(test, feature(test))]
+#![cfg_attr(test, feature(custom_test_frameworks))]
+#![cfg_attr(test, test_runner(runner::run_env_conditional_tests))]
+
 #[cfg(feature = "jemalloc")]
 #[macro_use]
 extern crate lazy_static;
@@ -124,3 +128,38 @@ pub use crate::{imp::*, trace::*};
 
 #[global_allocator]
 static ALLOC: imp::Allocator = imp::allocator();
+
+#[cfg(test)]
+mod runner {
+    extern crate test;
+    use test::*;
+
+    /// Check for ignored test cases with ignore message "#ifdef <VAR_NAME>". The test
+    /// case will be enabled if the specific environment variable is set.
+    pub fn run_env_conditional_tests(cases: &[&TestDescAndFn]) {
+        let cases: Vec<_> = cases
+            .iter()
+            .map(|case| {
+                let mut desc = case.desc.clone();
+                let testfn = match case.testfn {
+                    TestFn::StaticTestFn(f) => TestFn::StaticTestFn(f),
+                    TestFn::StaticBenchFn(f) => TestFn::StaticBenchFn(f),
+                    ref f => panic!("unexpected testfn {:?}", f),
+                };
+                if let Some(msg) = desc.ignore_message {
+                    let keyword = "#ifdef";
+                    if let Some(s) = msg.strip_prefix(keyword) {
+                        let var_name = s.trim();
+                        if var_name.is_empty() || std::env::var(var_name).is_ok() {
+                            desc.ignore = false;
+                            desc.ignore_message = None;
+                        }
+                    }
+                }
+                TestDescAndFn { desc, testfn }
+            })
+            .collect();
+        let args = std::env::args().collect::<Vec<_>>();
+        test_main(&args, cases, None)
+    }
+}

@@ -11,6 +11,7 @@ use engine_traits::{
     IterOptions, Iterable, Iterator, Mutable, SeekKey, WriteBatch, WriteBatchExt, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
 };
+use tikv_util::sys::thread::StdThreadBuildWrapper;
 use txn_types::{Key, TimeStamp, Write, WriteRef};
 
 use super::Result;
@@ -218,7 +219,7 @@ impl ResetToVersionManager {
         }
         *self.worker_handle.borrow_mut() = Some(std::thread::Builder::new()
             .name("reset_to_version".to_string())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
 
@@ -232,7 +233,7 @@ impl ResetToVersionManager {
                 *worker.state.lock()
                         .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch_lock`")
                     = ResetToVersionState::Done;
-
+                info!("Reset to version done!");
                 tikv_alloc::remove_thread_memory_accessor();
             })
             .expect("failed to spawn reset_to_version thread"));
