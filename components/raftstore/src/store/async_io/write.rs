@@ -353,7 +353,7 @@ where
     raft_write_size_limit: usize,
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
-    perf_context: EK::PerfContext,
+    perf_context: ER::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
 }
 
@@ -378,7 +378,7 @@ where
             engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE),
         );
         let perf_context = engines
-            .kv
+            .raft
             .get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
         let cfg_tracker = cfg.clone().tracker(tag.clone());
         Self {
