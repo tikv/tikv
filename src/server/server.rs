@@ -93,6 +93,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
+        health_service: HealthService,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -143,7 +144,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             .keepalive_time(cfg.value().grpc_keepalive_time.into())
             .keepalive_timeout(cfg.value().grpc_keepalive_timeout.into())
             .build_args();
-        let health_service = HealthService::default();
+
         let builder = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
                 .channel_args(channel_args)
@@ -306,8 +307,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             let _ = pool.shutdown_background();
         }
         let _ = self.yatp_read_pool.take();
-        self.health_service
-            .set_serving_status("", ServingStatus::NotServing);
+        self.health_service.shutdown();
         Ok(())
     }
 
@@ -533,6 +533,7 @@ mod tests {
             env,
             None,
             debug_thread_pool,
+            HealthService::default(),
         )
         .unwrap();
 

@@ -53,9 +53,12 @@ use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
-use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
+use crate::store::worker::{
+    HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
+};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
+    RAFT_INIT_LOG_INDEX,
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
@@ -515,6 +518,8 @@ where
     last_urgent_proposal_idx: u64,
     /// The index of the latest committed split command.
     last_committed_split_idx: u64,
+    /// The index of last sent snapshot
+    last_sent_snapshot_idx: u64,
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
@@ -659,6 +664,7 @@ where
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
+            last_sent_snapshot_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
@@ -933,7 +939,11 @@ where
         // Set Tombstone state explicitly
         let mut kv_wb = engines.kv.write_batch();
         let mut raft_wb = engines.raft.log_batch(1024);
-        self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
+        // Raft log gc should be flushed before being destroyed, so last_compacted_idx has to be
+        // the minimal index that may still have logs.
+        let last_compacted_idx = self.last_compacted_idx;
+        self.mut_store()
+            .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
 
         // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
         // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
@@ -1207,6 +1217,12 @@ where
     ) {
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
+            if msg_type == MessageType::MsgSnapshot {
+                let snap_index = msg.get_message().get_snapshot().get_metadata().get_index();
+                if snap_index > self.last_sent_snapshot_idx {
+                    self.last_sent_snapshot_idx = snap_index;
+                }
+            }
             if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
                 // After a leader transfer procedure is triggered, the lease for
                 // the old leader may be expired earlier than usual, since a new leader
@@ -1628,6 +1644,7 @@ where
                     // prewrites or commits will be just a waste.
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
+                    self.last_sent_snapshot_idx = self.raft_group.raft.raft_log.last_index();
 
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
@@ -1811,6 +1828,31 @@ where
         self.replication_mode_version > 0
             && self.dr_auto_sync_state != DrAutoSyncState::Async
             && !self.replication_sync
+    }
+
+    pub fn schedule_raftlog_gc<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        to: u64,
+    ) -> bool {
+        let task = RaftlogGcTask::gc(self.region_id, self.last_compacted_idx, to);
+        debug!(
+            "scheduling raft log gc task";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer_id(),
+            "task" => %task,
+        );
+        if let Err(e) = ctx.raftlog_gc_scheduler.schedule(task) {
+            error!(
+                "failed to schedule raft log gc task";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer_id(),
+                "err" => %e,
+            );
+            false
+        } else {
+            true
+        }
     }
 
     /// Check the current snapshot status.
@@ -2182,6 +2224,7 @@ where
             msgs,
             snap_region,
             destroy_regions,
+            last_first_index,
         } = res
         {
             // When applying snapshot, there is no log applied and not compacted yet.
@@ -2197,6 +2240,14 @@ where
                     destroy_regions,
                 }),
             });
+            if self.last_compacted_idx == 0 && last_first_index >= RAFT_INIT_LOG_INDEX {
+                // There may be stale logs in raft engine, so schedule a task to clean it
+                // up. This is a best effort, if TiKV is shutdown before the task is
+                // handled, there can still be stale logs not being deleted until next
+                // log gc command is executed. This will delete range [0, last_first_index).
+                self.schedule_raftlog_gc(ctx, last_first_index);
+                self.last_compacted_idx = last_first_index;
+            }
             // Pause `read_progress` to prevent serving stale read while applying snapshot
             self.read_progress.pause();
         }
@@ -2632,7 +2683,7 @@ where
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else {
-            self.pending_reads.advance_leader_reads(states);
+            self.pending_reads.advance_leader_reads(&self.tag, states);
             propose_time = self.pending_reads.last_ready().map(|r| r.propose_time);
             if self.ready_to_handle_read() {
                 while let Some(mut read) = self.pending_reads.pop_front() {
@@ -3456,12 +3507,14 @@ where
             || min_committed == 0
             || last_index - min_matched > ctx.cfg.merge_max_log_gap
             || last_index - min_committed > ctx.cfg.merge_max_log_gap * 2
+            || min_matched < self.last_sent_snapshot_idx
         {
             return Err(box_err!(
-                "log gap from matched: {} or committed: {} to last index: {} is too large, skip merge",
+                "log gap too large, skip merge: matched: {}, committed: {}, last index: {}, last_snapshot: {}",
                 min_matched,
                 min_committed,
-                last_index
+                last_index,
+                self.last_sent_snapshot_idx
             ));
         }
         let mut entry_size = 0;
@@ -4294,6 +4347,17 @@ where
         };
 
         send_msg.set_to_peer(to_peer);
+
+        if msg.get_from() != self.peer.get_id() {
+            debug!(
+                "redirecting message";
+                "msg_type" => ?msg.get_msg_type(),
+                "from" => msg.get_from(),
+                "to" => msg.get_to(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+        }
 
         // There could be two cases:
         // 1. Target peer already exists but has not established communication with leader yet
