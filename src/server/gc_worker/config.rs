@@ -55,7 +55,7 @@ impl ConfigManager for GcWorkerConfigManager {
         {
             let change = change.clone();
             self.0
-                .try_update(move |cfg: &mut GcConfig| cfg.update(change))?;
+                .update(move |cfg: &mut GcConfig| cfg.update(change))?;
         }
         info!(
             "GC worker config changed";

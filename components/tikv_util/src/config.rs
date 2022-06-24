@@ -1108,22 +1108,16 @@ impl<T> VersionTrack<T> {
         }
     }
 
-    /// Update the value
-    pub fn update<F>(&self, f: F)
+    pub fn update<F, U>(&self, f: F) -> U
     where
-        F: FnOnce(&mut T),
+        F: FnOnce(&mut T) -> U,
+        U: CfgChanged,
     {
-        f(&mut self.value.write().unwrap());
-        self.version.fetch_add(1, Ordering::Release);
-    }
-
-    pub fn try_update<F>(&self, f: F) -> Result<(), Box<dyn std::error::Error>>
-    where
-        F: FnOnce(&mut T) -> Result<(), Box<dyn std::error::Error>>,
-    {
-        f(&mut self.value.write().unwrap())?;
-        self.version.fetch_add(1, Ordering::Release);
-        Ok(())
+        let res = f(&mut self.value.write().unwrap());
+        if res.changed() {
+            self.version.fetch_add(1, Ordering::Release);
+        }
+        res
     }
 
     pub fn value(&self) -> RwLockReadGuard<'_, T> {
@@ -1136,6 +1130,24 @@ impl<T> VersionTrack<T> {
             version: self.version.load(Ordering::Relaxed),
             inner: self,
         }
+    }
+}
+
+/// CfgChanged is used to determine after call `VersionTrack::update`,
+/// whether the config is changed.
+pub trait CfgChanged: 'static {
+    fn changed(&self) -> bool;
+}
+
+impl CfgChanged for () {
+    fn changed(&self) -> bool {
+        true
+    }
+}
+
+impl<T: 'static, E: 'static> CfgChanged for std::result::Result<T, E> {
+    fn changed(&self) -> bool {
+        self.is_ok()
     }
 }
 

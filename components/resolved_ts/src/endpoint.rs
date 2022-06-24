@@ -579,7 +579,7 @@ where
     fn handle_change_config(&mut self, change: ConfigChange) {
         let prev = format!("{:?}", self.cfg);
         let prev_advance_ts_interval = self.cfg.advance_ts_interval;
-        if let Err(e) = self.cfg.update(change).unwrap() {
+        if let Err(e) = self.cfg.update(change) {
             error!("update resolved-ts config unexpectly failed"; "err" => ?e);
             return;
         }

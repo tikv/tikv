@@ -421,7 +421,7 @@ impl ConfigManager for ServerConfigManager {
     fn dispatch(&mut self, c: ConfigChange) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = c.clone();
-            self.config.try_update(move |cfg| cfg.update(change))?;
+            self.config.update(move |cfg| cfg.update(change))?;
             if let Some(value) = c.get("grpc_memory_pool_quota") {
                 let mem_quota: ReadableSize = value.clone().into();
                 // the resize is done inplace indeed, but grpc-rs's api need self, so we just
