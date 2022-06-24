@@ -29,7 +29,7 @@ dashmap = "5"
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code" }
-etcd-client = { version = "0.7", features = ["pub-response-field"] }
+etcd-client = { version = "0.7", features = ["pub-response-field", "tls"] }
 external_storage = { path = "../external_storage", default-features = false }
 external_storage_export = { path = "../external_storage/export", default-features = false }
 fail = { version = "0.5", optional = true }
@@ -59,6 +59,7 @@ tikv_util = { path = "../tikv_util" }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] } 
+tonic = "0.5"
 txn_types = { path = "../txn_types", default-features = false }
 uuid = "0.8"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
@@ -70,6 +71,7 @@ grpcio = { version = "0.10", default-features = false, features = ["openssl-vend
 hex = "0.4"
 rand = "0.8.0"
 tempdir = "0.3"
+tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
 url = "2"

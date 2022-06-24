@@ -15,10 +15,21 @@ use crate::{debug, metrics::TRACK_REGION, utils};
 #[derive(Clone, Default, Debug)]
 pub struct SubscriptionTracer(Arc<DashMap<u64, RegionSubscription>>);
 
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum SubscriptionState {
+    /// When it is newly added (maybe after split or leader transfered from other store), without any flush.
+    Fresh,
+    /// It has been flushed, and running normally.
+    Normal,
+    /// It has been moved to other store.
+    Removal,
+}
+
 pub struct RegionSubscription {
     pub meta: Region,
     pub(crate) handle: ObserveHandle,
-    resolver: TwoPhaseResolver,
+    pub(crate) resolver: TwoPhaseResolver,
+    state: SubscriptionState,
 }
 
 impl std::fmt::Debug for RegionSubscription {
@@ -31,17 +42,32 @@ impl std::fmt::Debug for RegionSubscription {
 }
 
 impl RegionSubscription {
+    /// move self out.
+    fn take(&mut self) -> Self {
+        Self {
+            meta: self.meta.clone(),
+            handle: self.handle.clone(),
+            resolver: std::mem::replace(&mut self.resolver, TwoPhaseResolver::new(0, None)),
+            state: self.state,
+        }
+    }
+
     pub fn new(region: Region, handle: ObserveHandle, start_ts: Option<TimeStamp>) -> Self {
         let resolver = TwoPhaseResolver::new(region.get_id(), start_ts);
         Self {
             handle,
             meta: region,
             resolver,
+            state: SubscriptionState::Fresh,
         }
     }
 
-    pub fn stop_observing(&self) {
-        self.handle.stop_observing()
+    pub fn stop(&mut self) {
+        if self.state == SubscriptionState::Removal {
+            return;
+        }
+        self.handle.stop_observing();
+        self.state = SubscriptionState::Removal;
     }
 
     pub fn is_observing(&self) -> bool {
@@ -72,7 +98,7 @@ impl SubscriptionTracer {
     /// clear the current `SubscriptionTracer`.
     pub fn clear(&self) {
         self.0.retain(|_, v| {
-            v.stop_observing();
+            v.stop();
             TRACK_REGION.with_label_values(&["dec"]).inc();
             false
         });
@@ -90,13 +116,15 @@ impl SubscriptionTracer {
     ) {
         info!("start listen stream from store"; "observer" => ?handle, "region_id" => %region.get_id());
         TRACK_REGION.with_label_values(&["inc"]).inc();
-        if let Some(o) = self.0.insert(
+        if let Some(mut o) = self.0.insert(
             region.get_id(),
             RegionSubscription::new(region.clone(), handle, start_ts),
         ) {
-            TRACK_REGION.with_label_values(&["dec"]).inc();
-            warn!("register region which is already registered"; "region_id" => %region.get_id());
-            o.stop_observing();
+            if o.state != SubscriptionState::Removal {
+                TRACK_REGION.with_label_values(&["dec"]).inc();
+                warn!("register region which is already registered"; "region_id" => %region.get_id());
+            }
+            o.stop();
         }
     }
 
@@ -104,6 +132,8 @@ impl SubscriptionTracer {
     pub fn resolve_with(&self, min_ts: TimeStamp) -> TimeStamp {
         self.0
             .iter_mut()
+            // Don't advance the checkpoint ts of removed region.
+            .filter(|s| s.state != SubscriptionState::Removal)
             .map(|mut s| s.resolver.resolve(min_ts))
             .min()
             // If there isn't any region observed, the `min_ts` can be used as resolved ts safely.
@@ -130,24 +160,29 @@ impl SubscriptionTracer {
         }
     }
 
+    /// destroy subscription if the subscription is stopped.
+    pub fn destroy_stopped_region(&self, region_id: u64) {
+        self.0
+            .remove_if(&region_id, |_, sub| sub.state == SubscriptionState::Removal);
+    }
+
     /// try to mark a region no longer be tracked by this observer.
     /// returns whether success (it failed if the region hasn't been observed when calling this.)
-    pub fn deregister_region(
+    pub fn deregister_region_if(
         &self,
         region: &Region,
         if_cond: impl FnOnce(&RegionSubscription, &Region) -> bool,
     ) -> bool {
         let region_id = region.get_id();
-        let remove_result = self
-            .0
-            .remove_if(&region_id, |_, old_region| if_cond(old_region, region));
+        let remove_result = self.0.get_mut(&region_id);
         match remove_result {
-            Some(o) => {
+            Some(mut o) if if_cond(o.value(), region) => {
                 TRACK_REGION.with_label_values(&["dec"]).inc();
-                o.1.stop_observing();
-                info!("stop listen stream from store"; "observer" => ?o.1, "region_id"=> %region_id);
+                o.value_mut().stop();
+                info!("stop listen stream from store"; "observer" => ?o.value(), "region_id"=> %region_id);
                 true
             }
+            Some(_) => false,
             None => {
                 warn!("trying to deregister region not registered"; "region_id" => %region_id);
                 false
@@ -181,22 +216,47 @@ impl SubscriptionTracer {
         false
     }
 
+    /// Remove and collect the subscriptions have been marked as removed.
+    pub fn collect_removal_subs(&self) -> Vec<RegionSubscription> {
+        let mut result = vec![];
+        self.0.retain(|_k, v| {
+            if v.state == SubscriptionState::Removal {
+                result.push(v.take());
+                false
+            } else {
+                true
+            }
+        });
+        result
+    }
+
+    /// Collect the fresh subscriptions, and mark them as Normal.
+    pub fn collect_fresh_subs(&self) -> Vec<Region> {
+        self.0
+            .iter_mut()
+            .filter_map(|mut s| {
+                let v = s.value_mut();
+                if v.state == SubscriptionState::Fresh {
+                    v.state = SubscriptionState::Normal;
+                    Some(v.meta.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// check whether the region_id should be observed by this observer.
     pub fn is_observing(&self, region_id: u64) -> bool {
-        let mut exists = false;
-
-        // The region traced, check it whether is still be observing,
-        // if not, remove it.
-        let still_observing = self
-            .0
-            // Assuming this closure would be called iff the key exists.
-            // So we can elide a `contains` check.
-            .remove_if(&region_id, |_, o| {
-                exists = true;
-                !o.is_observing()
-            })
-            .is_none();
-        exists && still_observing
+        let sub = self.0.get_mut(&region_id);
+        match sub {
+            Some(mut sub) if !sub.is_observing() => {
+                sub.value_mut().stop();
+                false
+            }
+            Some(_) => true,
+            None => false,
+        }
     }
 
     pub fn get_subscription_of(
@@ -328,7 +388,18 @@ impl TwoPhaseResolver {
         for lock in std::mem::take(&mut self.future_locks).into_iter() {
             self.handle_future_lock(lock);
         }
-        self.stable_ts = None
+        let ts = self.stable_ts.take();
+        match ts {
+            Some(ts) => {
+                // advance the internal resolver.
+                // the start ts of initial scanning would be a safe ts for min ts
+                // -- because is used to be a resolved ts.
+                self.resolver.resolve(ts);
+            }
+            None => {
+                warn!("BUG: a two-phase resolver is executing phase_one_done when not in phase one"; "resolver" => ?self)
+            }
+        }
     }
 }
 
