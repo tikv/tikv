@@ -204,9 +204,11 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
         }
 
-        // TODO: How to handle this when aggressively locking?
-        // Check data constraint when acquiring pessimistic lock.
-        check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
+        // Check data constraint when acquiring pessimistic lock. But in case we are going to lock
+        // it with write conflict, we do not check it since the statement will then retry.
+        if locked_with_conflict_ts.is_none() {
+            check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
+        }
 
         if need_value || need_check_existence || locked_with_conflict_ts.is_some() {
             val = match write.write_type {
