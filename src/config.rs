@@ -1565,36 +1565,14 @@ impl<T: TabletFactory<RocksEngine>> DBConfigManger<T> {
                  block-cache.capacity in storage module instead"
                 .into());
         }
-        let mut result = Ok(());
+        // for multi-rocks, shared block cache has to be enabled.
         self.tablet_factory
-            .loop_tablet_cache(Box::new(|region_id, suffix, db: &RocksEngine| {
-                let r = db.get_options_cf(cf);
-                if let Ok(opt) = r {
-                    let r = opt.set_block_cache_capacity(size.0);
-                    if r.is_err() {
-                        result = Err(Box::from(r.err().unwrap()));
-                        error!(
-                            "opt.set_block_cache_capacity on cf {} with size {}MB failed on tablet {}_{}. err:{:?}",
-                            cf,
-                            size.as_mb(),
-                            region_id,
-                            suffix,
-                            &result
-                        );
-                    }
-                } else {
-                    result = Err(Box::from(r.err().unwrap()));
-                    error!(
-                        "get_options_cf {} failed on tablet {}_{}. err:{:?}",
-                        cf, region_id, suffix, &result
-                    );
-                }
-            }));
+            .set_shared_db_block_cache_size(cf, size)?;
         // Write config to metric
         CONFIG_ROCKSDB_GAUGE
             .with_label_values(&[cf, "block_cache_size"])
             .set(size.0 as f64);
-        result
+        Ok(())
     }
 
     fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {

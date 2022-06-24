@@ -41,7 +41,7 @@ use engine_rocks::{
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, DummyFactory, Engines, FlowControlFactorsExt, KvEngine,
+    CFOptionsExt, ColumnFamilyOptions, DummyRocksEngineFactory, Engines, FlowControlFactorsExt, KvEngine,
     MiscExt, RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
@@ -1532,7 +1532,7 @@ impl ConfiguredRaftEngine for RocksEngine {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
             Box::new(DBConfigManger::new(
-                Arc::new(DummyFactory {
+                Arc::new(DummyRocksEngineFactory {
                     engine: Some(self.clone()),
                     root_path: "".to_string(),
                 }),

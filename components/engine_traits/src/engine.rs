@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use tikv_util::config::ReadableSize;
+
 use crate::*;
 
 // FIXME: Revisit the remaining types and methods on KvEngine. Some of these are
@@ -135,6 +137,10 @@ pub trait TabletFactory<EK> {
 
     /// Check if the tablet with specified id and suffix tombostone
     fn is_tombstoned(&self, _region_id: u64, _suffix: u64) -> bool {
+        unimplemented!();
+    }
+
+    fn set_shared_db_block_cache_size(&self, _cf: &str, _size: ReadableSize) -> crate::Result<()> {
         unimplemented!();
     }
 }
