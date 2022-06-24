@@ -30,7 +30,7 @@ use raftstore::{
 };
 use resolved_ts::Resolver;
 use tikv::storage::{txn::TxnEntry, Statistics};
-use tikv_util::{box_err, debug, info, warn};
+use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
@@ -632,14 +632,17 @@ impl Delegate {
         self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)
     }
 
-    pub fn push_pending_raw_track_lock(&mut self, ts: TimeStamp) -> Result<()> {
-        self.pending.as_mut().map_or_else(
-            || Err(box_err!("pending is none")),
-            |pending| {
+    pub fn raw_track_ts(&mut self, ts: TimeStamp) {
+        match self.resolver {
+            Some(ref mut resolver) => {
+                resolver.raw_track_lock(ts);
+            }
+            None => {
+                assert!(self.pending.is_some(), "region resolver not ready");
+                let pending = self.pending.as_mut().unwrap();
                 pending.locks.push(PendingLock::RawTrack { ts });
-                Ok(())
-            },
-        )
+            }
+        }
     }
 
     fn sink_downstream(

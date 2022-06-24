@@ -1141,11 +1141,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
     fn on_raw_track_ts(&mut self, region_id: u64, ts: TimeStamp) {
         if let Some(ref mut delegate) = self.capture_regions.get_mut(&region_id) {
-            if let Some(resolver) = delegate.resolver.as_mut() {
-                resolver.raw_track_lock(ts);
-            } else if let Err(e) = delegate.push_pending_raw_track_lock(ts) {
-                error!("push pending raw track failed"; "error" => ?e);
-            }
+            delegate.raw_track_ts(ts);
+        } else {
+            // delegate should not be none, as region is is checked in CdcObserver::track_ts.
+            warn!("no delegate is found."; "region_id" => region_id);
         }
     }
 }
@@ -1920,11 +1919,10 @@ mod tests {
 
         let ts = TimeStamp::from(10);
         suite.run(Task::RawTrackTs { region_id, ts });
-        let delegate = &suite.endpoint.capture_regions[&region_id];
-        let resolver = delegate.resolver.as_ref().unwrap();
-        let resolver_locks = resolver.locks();
-        assert_eq!(resolver_locks.len(), 1);
-        assert_eq!(resolver_locks.get(&ts).unwrap().len(), 1);
+        let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
+        let resolver = delegate.resolver.as_mut().unwrap();
+        let raw_resolved_ts = resolver.resolve(20.into());
+        assert_eq!(raw_resolved_ts, ts);
     }
 
     #[test]
