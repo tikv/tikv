@@ -1117,6 +1117,15 @@ impl<T> VersionTrack<T> {
         self.version.fetch_add(1, Ordering::Release);
     }
 
+    pub fn try_update<F>(&self, f: F) -> Result<(), Box<dyn std::error::Error>>
+    where 
+        F: FnOnce(&mut T) -> Result<(), Box<dyn std::error::Error>>
+    {
+        f(&mut self.value.write().unwrap())?;
+        self.version.fetch_add(1, Ordering::Release);
+        Ok(())
+    }
+
     pub fn value(&self) -> RwLockReadGuard<'_, T> {
         self.value.read().unwrap()
     }

@@ -579,7 +579,7 @@ where
     fn handle_change_config(&mut self, change: ConfigChange) {
         let prev = format!("{:?}", self.cfg);
         let prev_advance_ts_interval = self.cfg.advance_ts_interval;
-        self.cfg.update(change);
+        self.cfg.update(change).unwrap();
         if self.cfg.advance_ts_interval != prev_advance_ts_interval {
             // Increase the `cfg_version` to reject advance event that registered before
             self.cfg_version += 1;

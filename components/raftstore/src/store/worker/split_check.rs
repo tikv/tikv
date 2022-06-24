@@ -547,7 +547,7 @@ where
             "split check config updated";
             "change" => ?change
         );
-        self.coprocessor.cfg.update(change);
+        self.coprocessor.cfg.update(change).unwrap();
     }
 }
 

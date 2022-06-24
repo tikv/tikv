@@ -54,7 +54,7 @@ impl ConfigManager for GcWorkerConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.0.update(move |cfg: &mut GcConfig| cfg.update(change));
+            self.0.try_update(move |cfg: &mut GcConfig| cfg.update(change))?;
         }
         info!(
             "GC worker config changed";
