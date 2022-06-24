@@ -545,7 +545,7 @@ where
     fn change_cfg(&mut self, change: ConfigChange) {
         if let Err(e) = self.coprocessor.cfg.update(change) {
             error!("update split check config failed"; "err" => ?e);
-            retrun;
+            return;
         };
         info!(
             "split check config updated";
