@@ -32,7 +32,7 @@ fn link_sys_lib(lib: &str, tool: &cc::Tool) {
     }
     // remove lib prefix and .a postfix.
     let libname = &lib[3..lib.len() - 2];
-    println!("cargo:rustc-link-lib=static={}", &libname);
+    println!("cargo:rustc-link-lib=static:+whole-archive={}", &libname);
     println!(
         "cargo:rustc-link-search=native={}",
         path.parent().unwrap().display()
