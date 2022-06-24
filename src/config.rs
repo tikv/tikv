@@ -3758,6 +3758,7 @@ impl ConfigController {
                     // dispatched to corresponding config manager, to avoid dispatch change twice
                     if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
+                            // we already verified the correctness at the beginning of this function.
                             inner.current.update(to_update).unwrap();
                             return Err(e);
                         }
@@ -3770,6 +3771,7 @@ impl ConfigController {
             }
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
+        // we already verified the correctness at the beginning of this function.
         inner.current.update(to_update).unwrap();
         // Write change to the config file
         if let Some(change) = change {

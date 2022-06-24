@@ -946,7 +946,8 @@ impl ConfigManager for RaftstoreConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.config.try_update(move |cfg: &mut Config| cfg.update(change))?;
+            self.config
+                .try_update(move |cfg: &mut Config| cfg.update(change))?;
         }
         if let Some(ConfigValue::Module(raft_batch_system_change)) =
             change.get("store_batch_system")

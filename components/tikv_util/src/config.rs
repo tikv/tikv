@@ -1118,8 +1118,8 @@ impl<T> VersionTrack<T> {
     }
 
     pub fn try_update<F>(&self, f: F) -> Result<(), Box<dyn std::error::Error>>
-    where 
-        F: FnOnce(&mut T) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: FnOnce(&mut T) -> Result<(), Box<dyn std::error::Error>>,
     {
         f(&mut self.value.write().unwrap())?;
         self.version.fetch_add(1, Ordering::Release);

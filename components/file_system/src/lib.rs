@@ -18,11 +18,14 @@ mod metrics;
 mod metrics_manager;
 mod rate_limiter;
 
-pub use std::{convert::TryFrom, fs::{
-    canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
-    remove_dir_all, remove_file, rename, set_permissions, symlink_metadata, DirBuilder, DirEntry,
-    FileType, Metadata, Permissions, ReadDir,
-}};
+pub use std::{
+    convert::TryFrom,
+    fs::{
+        canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link,
+        remove_dir, remove_dir_all, remove_file, rename, set_permissions, symlink_metadata,
+        DirBuilder, DirEntry, FileType, Metadata, Permissions, ReadDir,
+    },
+};
 use std::{
     io::{self, ErrorKind, Read, Write},
     path::Path,

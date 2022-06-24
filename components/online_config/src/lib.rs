@@ -296,8 +296,6 @@ mod tests {
         );
     }
 
-
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
     pub enum TestEnum {
         First,
@@ -326,7 +324,7 @@ mod tests {
                 match s.as_str() {
                     "first" => Ok(Self::First),
                     "second" => Ok(Self::Second),
-                    s => Err(format!("invalid config value: {}", s))
+                    s => Err(format!("invalid config value: {}", s)),
                 }
             } else {
                 panic!("expect ConfigValue::String, got: {:?}", v);
@@ -342,7 +340,10 @@ mod tests {
 
     impl Default for TestEnumConfig {
         fn default() -> Self {
-            Self { f1: 0, e: TestEnum::First, }
+            Self {
+                f1: 0,
+                e: TestEnum::First,
+            }
         }
     }
 
