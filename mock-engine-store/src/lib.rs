@@ -11,7 +11,7 @@ use protobuf::Message;
 use raftstore::engine_store_ffi;
 use raftstore::engine_store_ffi::RawCppPtr;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{HashSet, HashMap};
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -24,10 +24,36 @@ use engine_test::raft::RaftTestEngine;
 type RegionId = u64;
 #[derive(Default, Clone)]
 pub struct Region {
-    region: kvproto::metapb::Region,
+    pub region: kvproto::metapb::Region,
+    // Which peer is me?
     peer: kvproto::metapb::Peer,
-    data: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
-    apply_state: kvproto::raft_serverpb::RaftApplyState,
+    // in-memory data
+    pub data: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
+    // If we a key is deleted, it will immediately be removed from data,
+    // We will record the key in pending_delete, so we can delete it from disk when flushing.
+    pub pending_delete: [HashSet<Vec<u8>>; 3],
+    pub pending_write: [BTreeMap<Vec<u8>, Vec<u8>>; 3],
+    pub apply_state: kvproto::raft_serverpb::RaftApplyState,
+    pub applied_term: u64,
+}
+
+impl Region {
+    fn set_applied(&mut self, index: u64, term:u64) {
+        self.apply_state.set_applied_index(index);
+        self.applied_term = term;
+    }
+
+    fn new(meta: kvproto::metapb::Region) -> Self {
+        Region {
+            region: meta,
+            peer: Default::default(),
+            data: Default::default(),
+            pending_delete: Default::default(),
+            pending_write: Default::default(),
+            apply_state: Default::default(),
+            applied_term: 0,
+        }
+    }
 }
 
 pub struct EngineStoreServer {
@@ -44,6 +70,16 @@ impl EngineStoreServer {
             kvstore: Default::default(),
         }
     }
+
+    pub fn get_mem(&self, region_id: u64, cf: ffi_interfaces::ColumnFamilyType, key: &Vec<u8>) -> Option<&Vec<u8>> {
+        match self.kvstore.get(&region_id) {
+            Some(region) => {
+                let bmap = &region.data[cf as usize];
+                bmap.get(key)
+            },
+            None => None
+        }
+    }
 }
 
 pub struct EngineStoreServerWrap {
@@ -51,6 +87,58 @@ pub struct EngineStoreServerWrap {
     pub maybe_proxy_helper: std::option::Option<*mut RaftStoreProxyFFIHelper>,
     // Call `gen_cluster(cluster_ptr)`, and get which cluster this Server belong to.
     pub cluster_ptr: isize,
+}
+
+fn set_new_region_peer(new_region: &mut Region, store_id: u64) {
+    if let Some(peer) = new_region
+        .region
+        .get_peers()
+        .iter()
+        .find(|&peer| peer.get_store_id() == store_id)
+    {
+        new_region.peer = peer.clone();
+    } else {
+        // This happens when region is not found.
+    }
+}
+
+pub fn make_new_region(
+    maybe_from_region: Option<kvproto::metapb::Region>,
+    maybe_store_id: Option<u64>,
+) -> Region {
+    let mut region = Region {
+        region: maybe_from_region.unwrap_or(Default::default()),
+        ..Default::default()
+    };
+    if let Some(store_id) = maybe_store_id {
+        set_new_region_peer(&mut region, store_id);
+    }
+    region
+        .apply_state
+        .mut_truncated_state()
+        .set_index(raftstore::store::RAFT_INIT_LOG_INDEX);
+    region
+        .apply_state
+        .mut_truncated_state()
+        .set_term(raftstore::store::RAFT_INIT_LOG_TERM);
+    region.set_applied(raftstore::store::RAFT_INIT_LOG_INDEX, raftstore::store::RAFT_INIT_LOG_TERM);
+    region
+}
+
+fn write_kv_in_mem(region: &mut Box<Region>, cf_index: usize, k: &[u8], v: &[u8]) {
+    let data = &mut region.data[cf_index];
+    let pending_delete = &mut region.pending_delete[cf_index];
+    let pending_write = &mut region.pending_write[cf_index];
+    pending_delete.remove(k);
+    data.insert(k.to_vec(), v.to_vec());
+    pending_write.insert(k.to_vec(), v.to_vec());
+}
+
+fn delete_kv_in_mem(region: &mut Box<Region>, cf_index: usize, k: &[u8]) {
+    let data = &mut region.data[cf_index];
+    let pending_delete = &mut region.pending_delete[cf_index];
+    pending_delete.insert(k.to_vec());
+    data.remove(k);
 }
 
 impl EngineStoreServerWrap {
@@ -73,6 +161,7 @@ impl EngineStoreServerWrap {
         header: ffi_interfaces::RaftCmdHeader,
     ) -> ffi_interfaces::EngineStoreApplyRes {
         let region_id = header.region_id;
+        let node_id = (*self.engine_store_server).id;
         info!("handle admin raft cmd"; "request"=>?req, "response"=>?resp, "index"=>header.index, "region-id"=>header.region_id);
         let do_handle_admin_raft_cmd = move |region: &mut Region| {
             if region.apply_state.get_applied_index() >= header.index {
@@ -470,19 +559,8 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
 
     let req_id = req.id;
 
-    let mut region = Region {
-        region: req,
-        peer: Default::default(),
-        data: Default::default(),
-        apply_state: Default::default(),
-    };
-
-    {
-        region.apply_state.set_applied_index(index);
-        region.apply_state.mut_truncated_state().set_index(index);
-        region.apply_state.mut_truncated_state().set_term(term);
-    }
-    debug!("apply snaps with len {}", snaps.len);
+    let mut region = Box::new(Region::new(req));
+    debug!("pre handle snaps with len {} peer_id {} region {:?}", snaps.len, peer_id, region.region);
     for i in 0..snaps.len {
         let mut snapshot = snaps.views.add(i as usize);
         let view = &*(snapshot as *mut ffi_interfaces::SSTView);
@@ -502,10 +580,14 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
             sst_reader.next();
         }
     }
-
+    {
+        region.set_applied(index, term);
+        region.apply_state.mut_truncated_state().set_index(index);
+        region.apply_state.mut_truncated_state().set_term(term);
+    }
     ffi_interfaces::RawCppPtr {
         ptr: Box::into_raw(Box::new(PrehandledSnapshot {
-            region: Some(region),
+            region: Some(*region),
         })) as *const Region as ffi_interfaces::RawVoidPtr,
         type_: RawCppPtrTypeImpl::PreHandledSnapshotWithBlock.into(),
     }
@@ -586,7 +668,7 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
     }
 
     {
-        region.apply_state.set_applied_index(index);
+        region.set_applied(header.index, header.term);
         region.apply_state.mut_truncated_state().set_index(index);
         region.apply_state.mut_truncated_state().set_term(term);
     }
