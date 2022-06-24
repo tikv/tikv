@@ -1614,15 +1614,11 @@ fn test_old_value_cache_hit_impl<F: KvFormat>() {
 
 #[test]
 fn test_old_value_cache_hit_pessimistic() {
-<<<<<<< HEAD
-    let mut suite = TestSuite::new(1);
-=======
     test_kv_format_impl!(test_old_value_cache_hit_pessimistic_impl<ApiV1 ApiV2>);
 }
 
 fn test_old_value_cache_hit_pessimistic_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(1, F::TAG);
->>>>>>> tikv/release-6.1
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
