@@ -1,22 +1,22 @@
 #![feature(slice_take)]
 
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    pin::Pin,
+    sync::Mutex,
+    time::Duration,
+};
+
 use engine_rocks::RocksEngine;
-use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
-use engine_store_ffi::EngineStoreServerHelper;
-use engine_store_ffi::RaftStoreProxyFFIHelper;
-use engine_store_ffi::UnwrapExternCFunc;
-use engine_traits::{Engines, SyncMutable};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use protobuf::Message;
-use raftstore::engine_store_ffi;
-use raftstore::engine_store_ffi::RawCppPtr;
-use std::collections::BTreeMap;
-use std::collections::{HashSet, HashMap};
-use std::pin::Pin;
-use std::sync::Mutex;
-use std::time::Duration;
-use tikv_util::{debug, info, warn};
+use engine_store_ffi::{
+    interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper, RaftStoreProxyFFIHelper,
+    UnwrapExternCFunc,
+};
 use engine_test::raft::RaftTestEngine;
+use engine_traits::{Engines, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use protobuf::Message;
+use raftstore::{engine_store_ffi, engine_store_ffi::RawCppPtr};
+use tikv_util::{debug, info, warn};
 // use kvproto::raft_serverpb::{
 //     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
 // };
@@ -38,7 +38,7 @@ pub struct Region {
 }
 
 impl Region {
-    fn set_applied(&mut self, index: u64, term:u64) {
+    fn set_applied(&mut self, index: u64, term: u64) {
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
     }
@@ -71,13 +71,18 @@ impl EngineStoreServer {
         }
     }
 
-    pub fn get_mem(&self, region_id: u64, cf: ffi_interfaces::ColumnFamilyType, key: &Vec<u8>) -> Option<&Vec<u8>> {
+    pub fn get_mem(
+        &self,
+        region_id: u64,
+        cf: ffi_interfaces::ColumnFamilyType,
+        key: &Vec<u8>,
+    ) -> Option<&Vec<u8>> {
         match self.kvstore.get(&region_id) {
             Some(region) => {
                 let bmap = &region.data[cf as usize];
                 bmap.get(key)
-            },
-            None => None
+            }
+            None => None,
         }
     }
 }
@@ -121,7 +126,10 @@ pub fn make_new_region(
         .apply_state
         .mut_truncated_state()
         .set_term(raftstore::store::RAFT_INIT_LOG_TERM);
-    region.set_applied(raftstore::store::RAFT_INIT_LOG_INDEX, raftstore::store::RAFT_INIT_LOG_TERM);
+    region.set_applied(
+        raftstore::store::RAFT_INIT_LOG_INDEX,
+        raftstore::store::RAFT_INIT_LOG_TERM,
+    );
     region
 }
 
@@ -560,18 +568,18 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
     let req_id = req.id;
 
     let mut region = Box::new(Region::new(req));
-    debug!("pre handle snaps with len {} peer_id {} region {:?}", snaps.len, peer_id, region.region);
+    debug!(
+        "pre handle snaps with len {} peer_id {} region {:?}",
+        snaps.len, peer_id, region.region
+    );
     for i in 0..snaps.len {
         let mut snapshot = snaps.views.add(i as usize);
         let view = &*(snapshot as *mut ffi_interfaces::SSTView);
-        debug!("apply snaps cf file {:?} {:?}", view, view.path.to_slice());
-        let mut sst_reader =
-            SSTReader::new(proxy_helper, view);
+        let mut sst_reader = SSTReader::new(proxy_helper, view);
 
         while sst_reader.remained() {
             let key = sst_reader.key();
             let value = sst_reader.value();
-            debug!("apply snaps cf file {:?} {:?}", key.to_slice(), value.to_slice());
 
             let cf_index = (*snapshot).type_ as u8;
             let data = &mut region.data[cf_index as usize];

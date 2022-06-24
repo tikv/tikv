@@ -4,18 +4,23 @@ pub mod interfaces;
 mod read_index_helper;
 mod utils;
 
+use std::{
+    pin::Pin,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
+    time,
+};
+
 use encryption::DataKeyManager;
-use engine_rocks::encryption::get_env;
-use engine_rocks::{RocksSstIterator, RocksSstReader};
+use engine_rocks::{encryption::get_env, RocksSstIterator, RocksSstReader};
 use engine_traits::{
     EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo, Iterator, Peekable, SeekKey,
     SstReader, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use kvproto::{kvrpcpb, metapb, raft_cmdpb};
 use protobuf::Message;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
-
 pub use read_index_helper::ReadIndexClient;
 
 pub use crate::engine_store_ffi::interfaces::root::DB::{
@@ -24,14 +29,14 @@ pub use crate::engine_store_ffi::interfaces::root::DB::{
     KVGetStatus, RaftCmdHeader, RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr,
     RawCppStringPtr, RawVoidPtr, SSTReaderPtr, StoreStats, WriteCmdType, WriteCmdsView,
 };
-use crate::engine_store_ffi::interfaces::root::DB::{
-    ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawRustPtr,
-    SSTReaderInterfaces, SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER,
-    RAFT_STORE_PROXY_VERSION,
+use crate::{
+    engine_store_ffi::interfaces::root::DB::{
+        ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawRustPtr,
+        SSTReaderInterfaces, SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER,
+        RAFT_STORE_PROXY_VERSION,
+    },
+    store::LockCFFileReader,
 };
-use crate::store::LockCFFileReader;
-use std::pin::Pin;
-use std::time;
 
 impl From<&[u8]> for BaseBuffView {
     fn from(s: &[u8]) -> Self {
@@ -632,11 +637,10 @@ impl SSTFileReader {
         let sst_reader = sst_reader_res.unwrap();
         sst_reader.verify_checksum().unwrap();
         match sst_reader.verify_checksum() {
-            Err(e) =>
-            {
+            Err(e) => {
                 tikv_util::error!("verify_checksum sst file error {:?}", e);
                 panic!("verify_checksum sst file error {:?}", e);
-            },
+            }
             Ok(_) => (),
         }
         let mut iter = sst_reader.iter();

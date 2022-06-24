@@ -31,7 +31,6 @@ use kvproto::{
     raft_serverpb::RaftMessage,
     replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
 };
-
 use ordered_float::OrderedFloat;
 use pd_client::{merge_bucket_stats, metrics::*, BucketStat, Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;

@@ -1,15 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::compat::Future01CompatExt;
-use futures::executor::block_on;
+use std::time::{Duration, Instant};
+
+use futures::{compat::Future01CompatExt, executor::block_on};
 use kvproto::diagnosticspb::{ServerInfoRequest, ServerInfoResponse, ServerInfoType};
 use protobuf::Message;
 use raftstore::engine_store_ffi::interfaces::root::DB::{
     BaseBuffView, RaftStoreProxyPtr, RawVoidPtr,
 };
-use std::time::{Duration, Instant};
-use tikv::server::service::diagnostics::sys;
-use tikv::server::service::diagnostics::{ioload, SYS_INFO};
+use tikv::server::service::diagnostics::{ioload, sys, SYS_INFO};
 use tikv_util::{sys::SystemExt, timer::GLOBAL_TIMER_HANDLE};
 
 fn server_info_for_ffi(req: ServerInfoRequest) -> ServerInfoResponse {

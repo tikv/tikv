@@ -14,7 +14,6 @@ use std::{
     thread, time, u64,
 };
 
-use crate::engine_store_ffi;
 use collections::{HashMap, HashMapEntry as Entry};
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
@@ -37,14 +36,16 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use thiserror::Error;
 use tikv_util::{
+    box_err, box_try,
     codec::bytes::CompactBytesFromFileDecoder,
-    box_err, box_try, debug, error, info,
+    debug, error, info,
     time::{duration_to_sec, Instant, Limiter},
     warn, HandyRwLock,
 };
 
 use crate::{
     coprocessor::CoprocessorHost,
+    engine_store_ffi,
     store::{
         metrics::{
             CfNames, INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM,
@@ -537,17 +538,17 @@ impl Snapshot {
             }
 
             // We have only one cf file.
-            let full_path = format!("{}/{}", cf_file.path.to_str().unwrap(), cf_file.file_names[0]);
+            let full_path = format!(
+                "{}/{}",
+                cf_file.path.to_str().unwrap(),
+                cf_file.file_names[0]
+            );
             {
-                full_paths.push((full_path,
-                engine_store_ffi::name_to_cf(cf_file.cf)));
+                full_paths.push((full_path, engine_store_ffi::name_to_cf(cf_file.cf)));
             }
         }
         for (s, cf) in full_paths.iter() {
-            sst_views.push(
-                (s.as_bytes(),
-                 *cf,
-                ));
+            sst_views.push((s.as_bytes(), *cf));
         }
 
         let res = engine_store_server_helper

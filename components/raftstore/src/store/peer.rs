@@ -53,7 +53,6 @@ use raft::{
 use raft_proto::ConfChangeI;
 use rand::seq::SliceRandom;
 use smallvec::SmallVec;
-
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err,

@@ -38,7 +38,6 @@ use kvproto::{
     },
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
-
 use parking_lot::RwLockWriteGuard;
 use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
@@ -61,7 +60,6 @@ use tikv_util::{
 use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
-
 #[cfg(any(test, feature = "testexport"))]
 use crate::store::PeerInternalStat;
 use crate::{

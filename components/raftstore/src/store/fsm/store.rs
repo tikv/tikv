@@ -2793,7 +2793,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             panic!(
                 "Unsafe recovery, fail to add peer state for {:?} into write batch, the error is {:?}",
                 region, e,
-
             );
         }
         let mut write_opts = WriteOptions::new();

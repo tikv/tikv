@@ -4,7 +4,10 @@ use std::{
     collections::hash_map::Entry as MapEntry,
     error::Error as StdError,
     result,
-    sync::{atomic::{AtomicBool, AtomicU8}, mpsc, Arc, Mutex, RwLock},
+    sync::{
+        atomic::{AtomicBool, AtomicU8},
+        mpsc, Arc, Mutex, RwLock,
+    },
     thread,
     time::Duration,
 };
@@ -19,7 +22,6 @@ use engine_traits::{
     WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
-use mock_engine_store::EngineStoreServerWrap;
 use futures::executor::block_on;
 use kvproto::{
     errorpb::Error as PbError,
@@ -32,6 +34,7 @@ use kvproto::{
         RegionLocalState,
     },
 };
+use mock_engine_store::EngineStoreServerWrap;
 use pd_client::{BucketStat, PdClient};
 use raft::eraftpb::ConfChangeType;
 use raftstore::{

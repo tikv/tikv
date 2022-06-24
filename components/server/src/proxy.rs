@@ -1,13 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(proc_macro_hygiene)]
-use std::{path::Path, process};
+use std::{
+    ffi::CStr,
+    os::raw::{c_char, c_int},
+    path::Path,
+    process,
+};
+
+use clap::{App, Arg};
+use tikv::config::TiKvConfig;
 
 use crate::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
-use clap::{App, Arg};
-use std::ffi::CStr;
-use std::os::raw::{c_char, c_int};
-use tikv::config::TiKvConfig;
 
 pub unsafe fn run_proxy(
     argc: c_int,
@@ -220,13 +224,13 @@ pub unsafe fn run_proxy(
                     None
                 },
             )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "invalid auto generated configuration file {}, err {}",
-                        path.display(),
-                        e
-                    );
-                })
+            .unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {}, err {}",
+                    path.display(),
+                    e
+                );
+            })
         });
 
     check_engine_label(&matches);

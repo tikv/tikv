@@ -10,7 +10,6 @@ use std::{
 use collections::HashMap;
 use lazy_static::lazy_static;
 use libc::{self, pid_t};
-
 use procinfo::pid;
 use prometheus::{
     self,
@@ -47,15 +46,15 @@ impl Metrics {
                 "Total user and system CPU time spent in \
                  seconds by threads.",
             )
-                .namespace(ns.clone()),
+            .namespace(ns.clone()),
             &["name", "tid"],
         )
-            .unwrap();
+        .unwrap();
         let threads_state = IntGaugeVec::new(
             Opts::new("threads_state", "Number of threads in each state.").namespace(ns.clone()),
             &["state"],
         )
-            .unwrap();
+        .unwrap();
         let io_totals = GaugeVec::new(
             Opts::new(
                 "threads_io_bytes_total",
@@ -69,19 +68,19 @@ impl Metrics {
                 "thread_voluntary_context_switches",
                 "Number of thread voluntary context switches.",
             )
-                .namespace(ns.clone()),
+            .namespace(ns.clone()),
             &["name", "tid"],
         )
-            .unwrap();
+        .unwrap();
         let nonvoluntary_ctxt_switches = IntGaugeVec::new(
             Opts::new(
                 "thread_nonvoluntary_context_switches",
                 "Number of thread nonvoluntary context switches.",
             )
-                .namespace(ns),
+            .namespace(ns),
             &["name", "tid"],
         )
-            .unwrap();
+        .unwrap();
 
         Metrics {
             cpu_totals,

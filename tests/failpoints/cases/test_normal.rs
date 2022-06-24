@@ -1,10 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{Arc, RwLock};
+
+use kvproto::kvrpcpb::ApiVersion;
 use mock_engine_store;
 use raftstore::engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
-use std::sync::{Arc, RwLock};
 use test_raftstore::*;
-use kvproto::kvrpcpb::ApiVersion;
 
 #[test]
 fn test_normal() {

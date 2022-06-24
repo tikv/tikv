@@ -10,7 +10,6 @@
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
 //! We keep these components in the `TiKvServer` struct.
 
-use std::thread;
 use std::{
     cmp,
     convert::TryFrom,
@@ -19,9 +18,10 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering},
         mpsc, Arc, Mutex,
     },
+    thread,
     time::Duration,
     u64,
 };
@@ -61,6 +61,10 @@ use raftstore::{
         config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
         CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
     },
+    engine_store_ffi::{
+        EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus, RaftStoreProxy,
+        RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient,
+    },
     router::ServerRaftStoreRouter,
     store::{
         config::RaftstoreConfigManager,
@@ -83,8 +87,8 @@ use tikv::{
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
         create_raft_storage,
-        lock_manager::HackedLockManager as LockManager,
         gc_worker::{AutoGcConfig, GcWorker},
+        lock_manager::HackedLockManager as LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
@@ -110,16 +114,13 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
-use crate::util::ffi_server_info;
-use raftstore::engine_store_ffi::{
-    EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus, RaftStoreProxy,
-    RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient,
-};
-use std::sync::atomic::{AtomicBool, AtomicU8};
-use crate::{memory::*, raft_engine_switch::*, setup::*};
+use crate::{memory::*, raft_engine_switch::*, setup::*, util::ffi_server_info};
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig, engine_store_server_helper: &EngineStoreServerHelper) {
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
+    config: TiKvConfig,
+    engine_store_server_helper: &EngineStoreServerHelper,
+) {
     let mut tikv = TiKvServer::<CER>::init(config);
 
     // Must be called after `TiKvServer::init`.
@@ -1400,7 +1401,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             raft_db_opts.set_env(env.clone());
             let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
             let raftdb = engine_rocks::raw_util::new_engine_opt(
-        &config.raft_store.raftdb_path,
+                &config.raft_store.raftdb_path,
                 raft_db_opts,
                 raft_cf_opts,
             )

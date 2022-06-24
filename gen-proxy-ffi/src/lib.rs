@@ -1,11 +1,12 @@
-use std::collections::HashMap;
-use std::fs;
-use std::io::{Read, Write};
-use std::path::Path;
-use walkdir::WalkDir;
+use std::{
+    collections::{hash_map::DefaultHasher, HashMap},
+    fs,
+    hash::{Hash, Hasher},
+    io::{Read, Write},
+    path::Path,
+};
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use walkdir::WalkDir;
 
 type VersionType = u64;
 

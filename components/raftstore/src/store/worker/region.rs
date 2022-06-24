@@ -29,7 +29,6 @@ use tikv_util::{
     warn,
     worker::{Runnable, RunnableWithTimer},
 };
-
 use yatp::{
     pool::{Builder, ThreadPool},
     task::future::TaskCell,

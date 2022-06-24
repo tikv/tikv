@@ -1,7 +1,6 @@
-use futures_util::compat::Future01CompatExt;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
 use std::time;
+
+use futures_util::{compat::Future01CompatExt, future::BoxFuture, FutureExt};
 
 pub type ArcNotifyWaker = std::sync::Arc<NotifyWaker>;
 

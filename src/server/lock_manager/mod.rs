@@ -16,7 +16,6 @@ use std::{
     thread::JoinHandle,
 };
 
-use crate::server::lock_manager::waiter_manager::Callback;
 use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_traits::KvEngine;
@@ -37,7 +36,7 @@ use self::{
     waiter_manager::WaiterManager,
 };
 use crate::{
-    server::{resolve::StoreAddrResolver, Error, Result},
+    server::{lock_manager::waiter_manager::Callback, resolve::StoreAddrResolver, Error, Result},
     storage::{
         lock_manager::{DiagnosticContext, Lock, LockManager as LockManagerTrait, WaitTimeout},
         DynamicConfigs as StorageDynamicConfigs, ProcessResult, StorageCallback,

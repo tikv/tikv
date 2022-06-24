@@ -513,8 +513,10 @@ impl Worker {
     }
 }
 
-use futures::future::BoxFuture;
-use futures::task::{self, ArcWake, Context, Poll};
+use futures::{
+    future::BoxFuture,
+    task::{self, ArcWake, Context, Poll},
+};
 
 struct NotifyWaker {
     future: Mutex<Option<BoxFuture<'static, ()>>>,

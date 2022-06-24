@@ -69,12 +69,12 @@ use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
 use super::metrics::*;
-use crate::engine_store_ffi::{
-    ColumnFamilyType, EngineStoreApplyRes, RaftCmdHeader, WriteCmdType, WriteCmds,
-};
 use crate::{
     bytes_capacity,
     coprocessor::{Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel},
+    engine_store_ffi::{
+        ColumnFamilyType, EngineStoreApplyRes, RaftCmdHeader, WriteCmdType, WriteCmds,
+    },
     store::{
         cmd_resp,
         fsm::RaftPollerBuilder,

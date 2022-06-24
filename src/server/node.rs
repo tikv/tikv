@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::lock_manager::HackedLockManager as LockManager;
 use std::{
     sync::{Arc, Mutex},
     thread,
@@ -36,7 +35,7 @@ use super::{RaftKv, Result};
 use crate::{
     import::SstImporter,
     read_pool::ReadPoolHandle,
-    server::{Config as ServerConfig},
+    server::{lock_manager::HackedLockManager as LockManager, Config as ServerConfig},
     storage::{
         config::Config as StorageConfig, kv::FlowStatsReporter,
         txn::flow_controller::FlowController, DynamicConfigs as StorageDynamicConfigs, Storage,
