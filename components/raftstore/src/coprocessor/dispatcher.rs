@@ -668,7 +668,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             false
         }
-        
+
         fn on_empty_cmd(&self, ctx: &mut ObserverContext<'_>, _index: u64, _term: u64) {
             self.called.fetch_add(14, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
