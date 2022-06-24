@@ -521,9 +521,10 @@ impl Snapshot {
         term: u64,
     ) -> PreHandledSnapshot {
         let mut sst_views = vec![];
+        let mut full_paths = vec![];
         for cf_file in &self.cf_files {
+            // Skip empty cf file.
             if cf_file.size.len() == 0 {
-                // Skip empty cf file.
                 continue;
             }
 
@@ -535,10 +536,18 @@ impl Snapshot {
                 assert!(cf_file.cf == CF_LOCK);
             }
 
-            sst_views.push((
-                cf_file.path.to_str().unwrap().as_bytes(),
-                engine_store_ffi::name_to_cf(cf_file.cf),
-            ));
+            // We have only one cf file.
+            let full_path = format!("{}/{}", cf_file.path.to_str().unwrap(), cf_file.file_names[0]);
+            {
+                full_paths.push((full_path,
+                engine_store_ffi::name_to_cf(cf_file.cf)));
+            }
+        }
+        for (s, cf) in full_paths.iter() {
+            sst_views.push(
+                (s.as_bytes(),
+                 *cf,
+                ));
         }
 
         let res = engine_store_server_helper

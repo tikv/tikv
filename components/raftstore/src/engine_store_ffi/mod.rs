@@ -624,8 +624,21 @@ pub struct SSTFileReader {
 impl SSTFileReader {
     fn ffi_get_cf_file_reader(path: &str, key_manager: Option<Arc<DataKeyManager>>) -> RawVoidPtr {
         let env = get_env(None, key_manager).unwrap();
-        let sst_reader = RocksSstReader::open_with_env(path, Some(env)).unwrap();
+        let sst_reader_res = RocksSstReader::open_with_env(path, Some(env));
+        match sst_reader_res {
+            Err(ref e) => tikv_util::error!("Can not open sst file {:?}", e),
+            Ok(_) => (),
+        };
+        let sst_reader = sst_reader_res.unwrap();
         sst_reader.verify_checksum().unwrap();
+        match sst_reader.verify_checksum() {
+            Err(e) =>
+            {
+                tikv_util::error!("verify_checksum sst file error {:?}", e);
+                panic!("verify_checksum sst file error {:?}", e);
+            },
+            Ok(_) => (),
+        }
         let mut iter = sst_reader.iter();
         let remained = iter.seek(SeekKey::Start).unwrap();
 

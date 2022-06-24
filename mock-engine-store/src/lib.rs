@@ -477,21 +477,23 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
         apply_state: Default::default(),
     };
 
+    {
+        region.apply_state.set_applied_index(index);
+        region.apply_state.mut_truncated_state().set_index(index);
+        region.apply_state.mut_truncated_state().set_term(term);
+    }
     debug!("apply snaps with len {}", snaps.len);
     for i in 0..snaps.len {
         let mut snapshot = snaps.views.add(i as usize);
+        let view = &*(snapshot as *mut ffi_interfaces::SSTView);
+        debug!("apply snaps cf file {:?} {:?}", view, view.path.to_slice());
         let mut sst_reader =
-            SSTReader::new(proxy_helper, &*(snapshot as *mut ffi_interfaces::SSTView));
-
-        {
-            region.apply_state.set_applied_index(index);
-            region.apply_state.mut_truncated_state().set_index(index);
-            region.apply_state.mut_truncated_state().set_term(term);
-        }
+            SSTReader::new(proxy_helper, view);
 
         while sst_reader.remained() {
             let key = sst_reader.key();
             let value = sst_reader.value();
+            debug!("apply snaps cf file {:?} {:?}", key.to_slice(), value.to_slice());
 
             let cf_index = (*snapshot).type_ as u8;
             let data = &mut region.data[cf_index as usize];

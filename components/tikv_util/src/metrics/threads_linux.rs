@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
 use std::{
+    fs,
     io::{Error, ErrorKind, Result},
     sync::Mutex,
     time::Duration,
@@ -10,8 +10,6 @@ use std::{
 use collections::HashMap;
 use lazy_static::lazy_static;
 use libc::{self, pid_t};
-
-use crate::time::Instant;
 
 use procinfo::pid;
 use prometheus::{
