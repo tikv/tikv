@@ -209,23 +209,16 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
     let store2_peer = find_peer(&region, nodes[1]).unwrap().to_owned();
     cluster.must_transfer_leader(region.get_id(), store2_peer);
     cluster.stop_node(nodes[1]);
-    let (raft_gc_triggered_tx, raft_gc_triggered_rx) = mpsc::bounded::<()>(1);
-    let (raft_gc_finished_tx, raft_gc_finished_rx) = mpsc::bounded::<()>(1);
-    fail::cfg_callback("worker_gc_raft_log", move || {
-        let _ = raft_gc_triggered_rx.recv();
-    })
-    .unwrap();
+    let (raft_gc_finished_tx, raft_gc_finished_rx) = std::sync::mpsc::sync_channel(0);
     fail::cfg_callback("worker_gc_raft_log_finished", move || {
         let _ = raft_gc_finished_tx.send(());
     })
     .unwrap();
     // Add at least 4m data
     (0..10).for_each(|_| cluster.must_put(b"random_k", b"random_v"));
-    // Unblock raft log GC.
-    drop(raft_gc_triggered_tx);
     // Wait until logs are GCed.
     raft_gc_finished_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(Duration::from_secs(3))
         .unwrap();
     // Makes the group lose its quorum.
     cluster.stop_node(nodes[2]);
@@ -269,7 +262,7 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
         sleep_ms(100);
     }
     assert_ne!(store_report, None);
-    fail::remove("worker_gc_raft_log");
+
     fail::remove("worker_gc_raft_log_finished");
     fail::remove("region_apply_snap");
 }
