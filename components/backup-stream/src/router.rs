@@ -606,20 +606,24 @@ impl TempFileKey {
         return dt.format("%Y%m%d");
     }
 
+    /// path_to_log_file specifies the path of record log.
+    /// eg. "v1/20220625/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
     fn path_to_log_file(&self, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/t{:08}/{}-{:012}-{}.log",
-            self.table_id,
+            "v1/{}/t{:08}/{:012}-{}.log",
             // We may delete a range of files, so using the max_ts for preventing remove some records wrong.
             Self::format_date_time(max_ts),
+            self.table_id,
             min_ts,
             uuid::Uuid::new_v4()
         )
     }
 
+    /// path_to_schema_file specifies the path of schema log.
+    /// eg. "v1/20220625/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
     fn path_to_schema_file(min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/schema-meta/{}-{:012}-{}.log",
+            "v1/{}/schema-meta/{:012}-{}.log",
             Self::format_date_time(max_ts),
             min_ts,
             uuid::Uuid::new_v4(),
