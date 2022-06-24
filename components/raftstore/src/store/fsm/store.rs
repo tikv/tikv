@@ -21,6 +21,7 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
+use grpcio_health::HealthService;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -834,20 +835,48 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
-        let dur = if self.poll_ctx.has_ready {
+        if self.poll_ctx.has_ready {
             // Only enable the fail point when the store id is equal to 3, which is
             // the id of slow store in tests.
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
+        }
+        let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
+        let mut dur = self.timer.saturating_elapsed();
 
-            if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+        for inspector in &mut latency_inspect {
+            inspector.record_store_process(dur);
+        }
+        let write_begin = TiInstant::now();
+        if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+            if self.poll_ctx.has_ready {
                 write_worker.write_to_db(false);
+
+                for mut inspector in latency_inspect {
+                    inspector.record_store_write(write_begin.saturating_elapsed());
+                    inspector.finish();
+                }
 
                 for peer in peers.iter_mut().flatten() {
                     PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
                 }
+            } else {
+                for inspector in latency_inspect {
+                    inspector.finish();
+                }
             }
-
-            let dur = self.timer.saturating_elapsed();
+        } else {
+            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
+            if let Err(err) =
+                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+                    send_time: write_begin,
+                    inspector: latency_inspect,
+                })
+            {
+                warn!("send latency inspecting to write workers failed"; "err" => ?err);
+            }
+        }
+        dur = self.timer.saturating_elapsed();
+        if self.poll_ctx.has_ready {
             if !self.poll_ctx.store_stat.is_busy {
                 let election_timeout = Duration::from_millis(
                     self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
@@ -869,40 +898,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.message,
                 self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.snapshot
             );
-            dur
-        } else {
-            self.timer.saturating_elapsed()
-        };
+        }
 
         self.poll_ctx.current_time = None;
         self.poll_ctx
             .raft_metrics
             .process_ready
             .observe(duration_to_sec(dur));
-
-        if !self.poll_ctx.pending_latency_inspect.is_empty() {
-            let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
-            for inspector in &mut latency_inspect {
-                inspector.record_store_process(dur);
-            }
-            if self.poll_ctx.sync_write_worker.is_some() {
-                for mut inspector in latency_inspect {
-                    inspector.record_store_write(dur);
-                    inspector.finish();
-                }
-            } else {
-                let now = TiInstant::now();
-                let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-                if let Err(err) =
-                    self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
-                        send_time: now,
-                        inspector: latency_inspect,
-                    })
-                {
-                    warn!("send latency inspecting to write workers failed"; "err" => ?err);
-                }
-            }
-        }
     }
 
     fn pause(&mut self) {
@@ -1296,6 +1298,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1411,6 +1414,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 mgr,
                 pd_client,
                 collector_reg_handle,
+                health_service,
             )?;
         } else {
             self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
@@ -1422,6 +1426,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 mgr,
                 pd_client,
                 collector_reg_handle,
+                health_service,
             )?;
         }
         Ok(())
@@ -1437,6 +1442,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         snap_mgr: SnapManager,
         pd_client: Arc<C>,
         collector_reg_handle: CollectorRegHandle,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1514,6 +1520,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_mgr,
             workers.pd_worker.remote(),
             collector_reg_handle,
+            health_service,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 

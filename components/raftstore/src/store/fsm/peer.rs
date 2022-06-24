@@ -1353,6 +1353,12 @@ where
     }
 
     fn on_raft_base_tick(&mut self) {
+        fail_point!(
+            "on_raft_base_tick_idle",
+            self.fsm.hibernate_state.group_state() == GroupState::Idle,
+            |_| {}
+        );
+
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_cache_metrics();
             return;
@@ -1386,11 +1392,19 @@ where
                 // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
                 // to others. As long as the leader can wake up and broadcast hearbeats in one `raft_heartbeat_ticks`
                 // time(default 2s), no more followers will wake up and sends vote msg again.
-                if self.fsm.missing_ticks + 2 + self.ctx.cfg.raft_heartbeat_ticks
+                if self.fsm.missing_ticks + 1 /* for the next tick after the peer isn't Idle */
+                    + self.fsm.peer.raft_group.raft.election_elapsed
+                    + self.ctx.cfg.raft_heartbeat_ticks
                     < self.ctx.cfg.raft_election_timeout_ticks
                 {
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
+                } else {
+                    debug!("follower hibernates";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed,
+                        "missing_ticks" => self.fsm.missing_ticks);
                 }
                 return;
             }
@@ -1430,7 +1444,10 @@ where
             return;
         }
 
-        debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
+        debug!("stop ticking"; "res" => ?res,
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed);
         self.fsm.reset_hibernate_state(GroupState::Idle);
         // Followers will stop ticking at L789. Keep ticking for followers
         // to allow it to campaign quickly when abnormal situation is detected.
@@ -2318,6 +2335,14 @@ where
             return Some(DelayReason::UnPersistedReady);
         }
 
+        let is_initialized = self.fsm.peer.is_initialized();
+        if !is_initialized {
+            // If the peer is uninitialized, then it can't receive any logs from leader. So
+            // no need to gc. If there was a peer with same region id on the store, and it had
+            // logs written, then it must be initialized, hence its log should be gc either
+            // before it's destroyed or during node restarts.
+            self.fsm.logs_gc_flushed = true;
+        }
         if !self.fsm.logs_gc_flushed {
             let start_index = self.fsm.peer.last_compacted_idx;
             let mut end_index = start_index;
@@ -4438,9 +4463,13 @@ where
             if group_state == GroupState::Idle {
                 self.fsm.peer.ping();
                 if !self.fsm.peer.is_leader() {
-                    // If leader is able to receive message but can't send out any,
-                    // follower should be able to start an election.
-                    self.fsm.reset_hibernate_state(GroupState::PreChaos);
+                    // The peer will keep tick some times after its state becomes
+                    // GroupState::Idle, in which case its state shouldn't be changed.
+                    if !self.fsm.tick_registry.contains(PeerTicks::RAFT) {
+                        // If leader is able to receive message but can't send out any,
+                        // follower should be able to start an election.
+                        self.fsm.reset_hibernate_state(GroupState::PreChaos);
+                    }
                 } else {
                     self.fsm.has_ready = true;
                     // Schedule a pd heartbeat to discover down and pending peer when
