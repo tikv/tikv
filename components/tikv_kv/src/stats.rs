@@ -254,6 +254,12 @@ impl Statistics {
         detail_v2.set_total_versions(self.write.total_op_count() as u64);
         detail_v2.set_processed_versions_size(self.processed_size as u64);
     }
+
+    pub fn clean(&mut self) {
+        self.data = CfStatistics::default();
+        self.lock = CfStatistics::default();
+        self.write = CfStatistics::default();
+    }
 }
 
 #[derive(Default, Debug)]

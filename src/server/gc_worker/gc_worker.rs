@@ -469,6 +469,7 @@ where
             }
         }
         Self::flush_txn(txn, &self.limiter, &self.engine)?;
+
         Ok((handled_keys, wasted_keys))
     }
 
@@ -540,7 +541,6 @@ where
         }
 
         Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
-
         Ok((handled_keys, wasted_keys))
     }
 
@@ -743,7 +743,7 @@ where
     }
 
     fn update_statistics_metrics(&mut self, key_mode: GcKeyMode) {
-        let stats_map = self.stats_map.get(&key_mode);
+        let stats_map = self.stats_map.get_mut(&key_mode);
         match stats_map {
             None => {}
             Some(stats) => {
@@ -756,6 +756,7 @@ where
                             .inc_by(*count as u64);
                     }
                 }
+                stats.clean();
             }
         }
     }
