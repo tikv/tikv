@@ -55,7 +55,7 @@ use crate::{
 };
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
-/// CHECKPOINT_TS_SAFE_POINT_TTL specifies the safe point TTL(12 hour) for checkpoint-ts.
+/// CHECKPOINT_SAFEPOINT_TTL_IF_NOT_ADVANCE specifies the safe point TTL(12 hour) for checkpoint-ts.
 /// If the checkpoint-ts advances, the safe-point of old checkpoint-ts will be overwrite by new one.
 const CHECKPOINT_SAFEPOINT_TTL_IF_NOT_ADVANCE: u64 = 12;
 /// CHECKPOINT_SAFEPOINT_TTL_IF_ERROR specifies the safe point TTL(24 hour) if task has fatal error.
