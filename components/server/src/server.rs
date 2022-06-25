@@ -37,7 +37,7 @@ use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     from_rocks_compression_type,
     raw::{Cache, Env},
-    DummyRocksEngineFactory, FlowInfo, RocksEngine,
+    FlowInfo, RocksEngine,
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
@@ -1532,10 +1532,7 @@ impl ConfiguredRaftEngine for RocksEngine {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
             Box::new(DBConfigManger::new(
-                Arc::new(DummyRocksEngineFactory {
-                    engine: Some(self.clone()),
-                    root_path: "".to_string(),
-                }),
+                Arc::new(self.clone()),
                 DBType::Raft,
                 share_cache,
             )),

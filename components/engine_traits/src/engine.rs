@@ -5,8 +5,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use tikv_util::config::ReadableSize;
-
 use crate::*;
 
 // FIXME: Revisit the remaining types and methods on KvEngine. Some of these are
@@ -63,11 +61,24 @@ pub trait KvEngine:
     fn bad_downcast<T: 'static>(&self) -> &T;
 }
 
+/// TabletAccessor is the trait to access all the tablets with provided accessor
+///
+/// For single rocksdb instance, it essentially accesses the global kvdb with the accessor
+/// For multi rocksdb instances, it accesses all the tablets with the accessor
+pub trait TabletAccessor<EK> {
+    /// Loop visit all opened tablets by the specified function.
+    fn for_each_opened_tablet(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>);
+
+    /// return true if it's single engine;
+    /// return false if it's a multi-tablet factory;
+    fn is_single_engine(&self) -> bool;
+}
+
 /// A factory trait to create new engine.
 ///
 // It should be named as `EngineFactory` for consistency, but we are about to rename
 // engine to tablet, so always use tablet for new traits/types.
-pub trait TabletFactory<EK> {
+pub trait TabletFactory<EK>: TabletAccessor<EK> {
     /// Create an tablet by id and suffix. If the tablet exists, it will fail.
     /// The id is likely the region Id, the suffix could be the current raft log index.
     /// They together could specify a unique path for a region's tablet.
@@ -121,10 +132,6 @@ pub trait TabletFactory<EK> {
     /// Here we don't use Clone traint because it will break the trait's object safty
     fn clone(&self) -> Box<dyn TabletFactory<EK> + Send>;
 
-    /// Loop visit all opened tablets cached by the specified function.
-    /// Once the tablet is opened/created, it will be cached in a hashmap
-    fn for_each_opened_tablet(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>);
-
     /// Load the tablet from path for id and suffix--for scenarios such as applying snapshot
     fn load_tablet(&self, _path: &Path, _id: u64, _suffix: u64) -> Result<EK> {
         unimplemented!();
@@ -137,10 +144,6 @@ pub trait TabletFactory<EK> {
 
     /// Check if the tablet with specified id and suffix tombostone
     fn is_tombstoned(&self, _region_id: u64, _suffix: u64) -> bool {
-        unimplemented!();
-    }
-
-    fn set_shared_db_block_cache_size(&self, _cf: &str, _size: ReadableSize) -> crate::Result<()> {
         unimplemented!();
     }
 }
@@ -191,10 +194,19 @@ where
             root_path: self.root_path.clone(),
         })
     }
+}
+impl<EK> TabletAccessor<EK> for DummyFactory<EK>
+where
+    EK: Clone + Send + 'static,
+{
     fn for_each_opened_tablet(&self, mut f: Box<dyn FnMut(u64, u64, &EK) + '_>) {
         if let Some(engine) = &self.engine {
             f(0, 0, engine);
         }
+    }
+
+    fn is_single_engine(&self) -> bool {
+        true
     }
 }
 

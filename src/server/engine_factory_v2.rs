@@ -7,7 +7,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{RaftEngine, Result, TabletFactory};
+use engine_traits::{RaftEngine, Result, TabletAccessor, TabletFactory};
 
 use crate::server::engine_factory::KvEngineFactory;
 
@@ -130,14 +130,6 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     }
 
     #[inline]
-    fn for_each_opened_tablet(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
-        let reg = self.registry.lock().unwrap();
-        for ((id, suffix), tablet) in &*reg {
-            f(*id, *suffix, tablet)
-        }
-    }
-
-    #[inline]
     fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<RocksEngine> {
         {
             let reg = self.registry.lock().unwrap();
@@ -160,11 +152,24 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     }
 }
 
+impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactoryV2<ER> {
+    #[inline]
+    fn for_each_opened_tablet(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
+        let reg = self.registry.lock().unwrap();
+        for ((id, suffix), tablet) in &*reg {
+            f(*id, *suffix, tablet)
+        }
+    }
+
+    // it have multi tablets.
+    fn is_single_engine(&self) -> bool {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use engine_rocks::DummyRocksEngineFactory;
-    use engine_traits::{CFOptionsExt, ColumnFamilyOptions, TabletFactory, CF_DEFAULT};
-    use tikv_util::config::ReadableSize;
+    use engine_traits::TabletFactory;
 
     use super::*;
     use crate::{config::TiKvConfig, server::KvEngineFactoryBuilder};
@@ -222,56 +227,8 @@ mod tests {
             count += 1;
         }));
         assert_eq!(count, 1);
-        factory
-            .set_shared_db_block_cache_size(CF_DEFAULT, ReadableSize::mb(123))
-            .unwrap();
-        let opt = shared_db.get_options_cf(CF_DEFAULT).unwrap();
-        assert_eq!(opt.get_block_cache_capacity(), ReadableSize::mb(123).0);
-    }
-
-    #[test]
-    fn test_dummy_rocksengine_factory() {
-        let cfg = TEST_CONFIG.clone();
-        let dir = test_util::temp_dir("test_kvengine_factory", false);
-        let env = cfg.build_shared_rocks_env(None, None).unwrap();
-
-        let builder = KvEngineFactoryBuilder::<RocksEngine>::new(env, &cfg, dir.path());
-        let factory = builder.build();
-        let shared_db = factory.create_shared_db().unwrap();
-        let factory = DummyRocksEngineFactory::new(Some(shared_db), "".to_string());
-        let tablet = TabletFactory::create_tablet(&factory, 1, 10);
-        assert!(tablet.is_ok());
-        let tablet = tablet.unwrap();
-        let tablet2 = factory.open_tablet(1, 10).unwrap();
-        assert_eq!(
-            tablet.as_inner().path(),
-            factory.engine.as_ref().unwrap().as_inner().path()
-        );
-        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let tablet2 = factory.open_tablet_cache(1, 10).unwrap();
-        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let tablet2 = factory.open_tablet_cache_any(1).unwrap();
-        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let tablet_path = factory.tablet_path(1, 10);
-        let tablet2 = factory.open_tablet_raw(&tablet_path, false).unwrap();
-        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let mut count = 0;
-        factory.for_each_opened_tablet(Box::new(|id, suffix, _tablet| {
-            assert!(id == 0);
-            assert!(suffix == 0);
-            count += 1;
-        }));
-        assert_eq!(count, 1);
-        factory
-            .set_shared_db_block_cache_size(CF_DEFAULT, ReadableSize::mb(123))
-            .unwrap();
-        let opt = factory
-            .engine
-            .as_ref()
-            .unwrap()
-            .get_options_cf(CF_DEFAULT)
-            .unwrap();
-        assert_eq!(opt.get_block_cache_capacity(), ReadableSize::mb(123).0);
+        assert!(factory.is_single_engine());
+        assert!(shared_db.is_single_engine());
     }
 
     #[test]
@@ -309,6 +266,7 @@ mod tests {
         factory.destroy_tablet(1, 20).unwrap();
         let result = factory.open_tablet(1, 20);
         assert!(result.is_err());
+        assert!(!factory.is_single_engine());
     }
 
     #[test]

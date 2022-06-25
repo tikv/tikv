@@ -1,18 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    any::Any,
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{any::Any, fs, path::Path, sync::Arc};
 
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, Error, IterOptions, Iterable, KvEngine, Peekable,
-    ReadOptions, Result, SyncMutable, TabletFactory,
+    Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
+    TabletAccessor,
 };
 use rocksdb::{DBIterator, Writable, DB};
-use tikv_util::config::ReadableSize;
 
 use crate::{
     db_vector::RocksDBVector,
@@ -117,6 +111,16 @@ impl KvEngine for RocksEngine {
     }
 }
 
+impl TabletAccessor<RocksEngine> for RocksEngine {
+    fn for_each_opened_tablet(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
+        f(0, 0, self);
+    }
+
+    fn is_single_engine(&self) -> bool {
+        true
+    }
+}
+
 impl Iterable for RocksEngine {
     type Iterator = RocksEngineIterator;
 
@@ -191,78 +195,6 @@ impl SyncMutable for RocksEngine {
         self.db
             .delete_range_cf(handle, begin_key, end_key)
             .map_err(Error::Engine)
-    }
-}
-
-pub struct DummyRocksEngineFactory {
-    pub engine: Option<RocksEngine>,
-    pub root_path: String,
-}
-
-impl TabletFactory<RocksEngine> for DummyRocksEngineFactory {
-    fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<RocksEngine> {
-        Ok(self.engine.as_ref().unwrap().clone())
-    }
-
-    fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
-        Ok(self.engine.as_ref().unwrap().clone())
-    }
-
-    fn create_shared_db(&self) -> Result<RocksEngine> {
-        Ok(self.engine.as_ref().unwrap().clone())
-    }
-
-    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> Result<()> {
-        Ok(())
-    }
-
-    fn exists_raw(&self, _path: &Path) -> bool {
-        true
-    }
-
-    fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
-        PathBuf::from(&self.root_path)
-    }
-
-    fn tablets_path(&self) -> PathBuf {
-        PathBuf::from(&self.root_path)
-    }
-
-    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
-        if self.engine.is_none() {
-            return Box::<DummyRocksEngineFactory>::new(DummyRocksEngineFactory {
-                engine: None,
-                root_path: self.root_path.clone(),
-            });
-        }
-        Box::<DummyRocksEngineFactory>::new(DummyRocksEngineFactory {
-            engine: Some(self.engine.as_ref().unwrap().clone()),
-            root_path: self.root_path.clone(),
-        })
-    }
-
-    fn for_each_opened_tablet(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
-        if let Some(engine) = &self.engine {
-            f(0, 0, engine);
-        }
-    }
-
-    fn set_shared_db_block_cache_size(&self, cf: &str, size: ReadableSize) -> Result<()> {
-        let opt = self.engine.as_ref().unwrap().get_options_cf(cf)?;
-        opt.set_block_cache_capacity(size.0)
-            .map_err(|err| err.into())
-    }
-}
-
-impl DummyRocksEngineFactory {
-    pub fn new(engine: Option<RocksEngine>, root_path: String) -> DummyRocksEngineFactory {
-        DummyRocksEngineFactory { engine, root_path }
-    }
-}
-
-impl Default for DummyRocksEngineFactory {
-    fn default() -> Self {
-        Self::new(None, "/tmp".to_string())
     }
 }
 

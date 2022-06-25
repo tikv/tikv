@@ -11,15 +11,14 @@ use engine_rocks::{
     RocksEventListener,
 };
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, CompactionJobInfo, RaftEngine, Result, TabletFactory,
-    CF_DEFAULT, CF_WRITE,
+    CompactionJobInfo, RaftEngine, Result, TabletAccessor, TabletFactory, CF_DEFAULT, CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::{
     store::{RaftRouter, StoreMsg},
     RegionInfoAccessor,
 };
-use tikv_util::{config::ReadableSize, worker::Scheduler};
+use tikv_util::worker::Scheduler;
 
 use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
@@ -269,7 +268,9 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
         Box::new(std::clone::Clone::clone(self))
     }
+}
 
+impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactory<ER> {
     fn for_each_opened_tablet(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
         if let Ok(db) = self.inner.root_db.lock() {
             let db = db.as_ref().unwrap();
@@ -277,18 +278,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
         }
     }
 
-    fn set_shared_db_block_cache_size(
-        &self,
-        cf: &str,
-        size: ReadableSize,
-    ) -> engine_traits::Result<()> {
-        if let Ok(db) = self.inner.root_db.lock() {
-            let db = db.as_ref().unwrap();
-            let opt = db.get_options_cf(cf)?;
-            return opt
-                .set_block_cache_capacity(size.0)
-                .map_err(|err| err.into());
-        }
-        Ok(())
+    fn is_single_engine(&self) -> bool {
+        true
     }
 }
