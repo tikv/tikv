@@ -225,7 +225,12 @@ pub enum BlobRunMode {
 
 impl From<BlobRunMode> for ConfigValue {
     fn from(mode: BlobRunMode) -> ConfigValue {
-        ConfigValue::String(format!("k{:?}", mode))
+        let str_value = match mode {
+            BlobRunMode::Normal => "normal",
+            BlobRunMode::ReadOnly => "read-only",
+            BlobRunMode::Fallback => "fallback",
+        };
+        ConfigValue::String(str_value.into())
     }
 }
 

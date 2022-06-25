@@ -4518,7 +4518,7 @@ mod tests {
         let diff = config_value_to_string(diff.into_iter().collect());
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].0.as_str(), "blob_run_mode");
-        assert_eq!(diff[0].1.as_str(), "kFallback");
+        assert_eq!(diff[0].1.as_str(), "fallback");
     }
 
     #[test]
