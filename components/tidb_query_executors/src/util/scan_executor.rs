@@ -103,7 +103,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
         assert!(scan_rows > 0);
 
         for i in 0..scan_rows {
-            let some_row = self.scanner.next_row(i == scan_rows - 1)?;
+            let some_row = self.scanner.next_opt(i == scan_rows - 1)?;
             if let Some((key, value)) = some_row {
                 // Retrieved one row from point range or non-point range.
 
