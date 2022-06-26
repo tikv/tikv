@@ -1108,13 +1108,12 @@ impl<T> VersionTrack<T> {
         }
     }
 
-    pub fn update<F, U>(&self, f: F) -> U
+    pub fn update<F, O, E>(&self, f: F) -> Result<O, E>
     where
-        F: FnOnce(&mut T) -> U,
-        U: CfgChanged,
+        F: FnOnce(&mut T) -> Result<O, E>,
     {
         let res = f(&mut self.value.write().unwrap());
-        if res.changed() {
+        if res.is_ok() {
             self.version.fetch_add(1, Ordering::Release);
         }
         res
@@ -1130,24 +1129,6 @@ impl<T> VersionTrack<T> {
             version: self.version.load(Ordering::Relaxed),
             inner: self,
         }
-    }
-}
-
-/// CfgChanged is used to determine after call `VersionTrack::update`,
-/// whether the config is changed.
-pub trait CfgChanged: 'static {
-    fn changed(&self) -> bool;
-}
-
-impl CfgChanged for () {
-    fn changed(&self) -> bool {
-        true
-    }
-}
-
-impl<T: 'static, E: 'static> CfgChanged for std::result::Result<T, E> {
-    fn changed(&self) -> bool {
-        self.is_ok()
     }
 }
 
@@ -1987,9 +1968,10 @@ mod tests {
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
 
-        vc.update(|v| {
+        let _ = vc.update(|v| -> Result<(), ()> {
             v.v1 = 1000;
             v.v2 = true;
+            Ok(())
         });
         for tr in trackers.iter_mut() {
             let incoming = tr.any_new();
