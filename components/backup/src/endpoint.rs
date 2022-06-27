@@ -338,7 +338,8 @@ impl BackupRange {
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
             .observe(start_snapshot.saturating_elapsed().as_secs_f64());
-        let cloud_store = CloudStore::new(snapshot, backup_ts.into_inner(), Default::default());
+        let cloud_store =
+            CloudStore::new(snapshot, backup_ts.into_inner(), Default::default(), false);
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
         // Incremental backup needs to output delete records.
@@ -835,8 +836,8 @@ impl<E: Engine, K: KvEngine, R: RegionInfoProvider + Clone + 'static> Endpoint<E
 
         self.pool.borrow_mut().spawn(async move {
             loop {
-                // when get the guard, release it until we finish scanning a batch, 
-                // because if we were suspended during scanning, 
+                // when get the guard, release it until we finish scanning a batch,
+                // because if we were suspended during scanning,
                 // the region info have higher possibility to change (then we must compensate that by the fine-grained backup).
                 let guard = limit.guard().await;
                 if let Err(e) = guard {

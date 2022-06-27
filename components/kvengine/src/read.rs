@@ -104,6 +104,7 @@ impl SnapAccessCore {
         reversed: bool,
         all_versions: bool,
         read_ts: Option<u64>,
+        fill_cache: bool,
     ) -> Iterator {
         let read_ts = if let Some(ts) = read_ts {
             ts
@@ -118,7 +119,7 @@ impl SnapAccessCore {
             read_ts,
             key: BytesMut::new(),
             val: table::Value::new(),
-            inner: self.new_table_iterator(cf, reversed),
+            inner: self.new_table_iterator(cf, reversed, fill_cache),
             start: self.clone_start_key(),
             end: self.clone_end_key(),
             bound: None,
@@ -193,14 +194,19 @@ impl SnapAccessCore {
         self.managed_ts = managed_ts;
     }
 
-    fn new_table_iterator(&self, cf: usize, reversed: bool) -> Box<dyn table::Iterator> {
+    fn new_table_iterator(
+        &self,
+        cf: usize,
+        reversed: bool,
+        fill_cache: bool,
+    ) -> Box<dyn table::Iterator> {
         let mut iters: Vec<Box<dyn table::Iterator>> = Vec::new();
         for mem_tbl in &self.data.mem_tbls {
             iters.push(Box::new(mem_tbl.get_cf(cf).new_iterator(reversed)));
         }
         for l0 in &self.data.l0_tbls {
             if let Some(tbl) = &l0.get_cf(cf) {
-                iters.push(tbl.new_iterator(reversed));
+                iters.push(tbl.new_iterator(reversed, fill_cache));
             }
         }
         let scf = self.data.get_cf(cf);
@@ -209,10 +215,14 @@ impl SnapAccessCore {
                 continue;
             }
             if lh.tables.len() == 1 {
-                iters.push(lh.tables[0].new_iterator(reversed));
+                iters.push(lh.tables[0].new_iterator(reversed, fill_cache));
                 continue;
             }
-            iters.push(Box::new(ConcatIterator::new(lh.clone(), reversed)));
+            iters.push(Box::new(ConcatIterator::new(
+                lh.clone(),
+                reversed,
+                fill_cache,
+            )));
         }
         table::new_merge_iterator(iters, reversed)
     }
@@ -316,7 +326,7 @@ impl SnapAccessCore {
         if self.data.del_prefixes.cover_prefix(prefix) {
             return false;
         }
-        let mut it = self.new_iterator(0, false, false, Some(u64::MAX));
+        let mut it = self.new_iterator(0, false, false, Some(u64::MAX), true);
         it.seek(prefix);
         if !it.valid() {
             return false;

@@ -62,16 +62,12 @@ impl<S: Snapshot> AnalyzeContext<S> {
         req_ctx: &ReqContext,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
-        // let store = SnapshotStore::new(
-        //     snap,
-        //     start_ts.into(),
-        //     req_ctx.context.get_isolation_level(),
-        //     !req_ctx.context.get_not_fill_cache(),
-        //     req_ctx.bypass_locks.clone(),
-        //     req_ctx.access_locks.clone(),
-        //     false,
-        // );
-        let store = CloudStore::new(snap, start_ts, req_ctx.bypass_locks.clone());
+        let store = CloudStore::new(
+            snap,
+            start_ts,
+            req_ctx.bypass_locks.clone(),
+            !req_ctx.context.get_not_fill_cache(),
+        );
         Ok(Self {
             req,
             storage: Some(TiKvStorage::new(store, false)),

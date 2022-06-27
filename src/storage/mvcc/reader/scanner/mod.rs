@@ -407,7 +407,7 @@ pub fn has_data_in_range<S: Snapshot>(
     if let Some(snap) = snapshot.get_kvengine_snap() {
         let raw_left = left.to_raw().unwrap();
         let raw_right = right.to_raw().unwrap();
-        let mut iter = snap.new_iterator(WRITE_CF, false, false, Some(u64::MAX));
+        let mut iter = snap.new_iterator(WRITE_CF, false, false, Some(u64::MAX), true);
         iter.seek(&raw_left);
         return Ok(iter.valid() && iter.key() < raw_right.as_slice());
     }

@@ -16,26 +16,29 @@ pub(crate) struct ConcatIterator {
     iter: Option<Box<TableIterator>>,
     level: LevelHandler,
     reversed: bool,
+    fill_cache: bool,
 }
 
 #[allow(dead_code)]
 impl ConcatIterator {
-    pub(crate) fn new(level: LevelHandler, reversed: bool) -> Self {
+    pub(crate) fn new(level: LevelHandler, reversed: bool, fill_cache: bool) -> Self {
         ConcatIterator {
             idx: -1,
             iter: None,
             level,
             reversed,
+            fill_cache,
         }
     }
 
-    pub(crate) fn new_with_tables(tables: Vec<SSTable>, reversed: bool) -> Self {
+    pub(crate) fn new_with_tables(tables: Vec<SSTable>, reversed: bool, fill_cache: bool) -> Self {
         let level = LevelHandler::new(1, tables);
         ConcatIterator {
             idx: -1,
             iter: None,
             level,
             reversed,
+            fill_cache,
         }
     }
 
@@ -55,7 +58,9 @@ impl ConcatIterator {
         if idx < 0 || idx as usize >= self.num_tables() {
             self.iter = None;
         } else {
-            let mut iter = self.get_table(idx as usize).new_iterator(self.reversed);
+            let mut iter = self
+                .get_table(idx as usize)
+                .new_iterator(self.reversed, self.fill_cache);
             iter.rewind();
             self.iter = Some(iter);
         }
@@ -173,7 +178,7 @@ mod tests {
         ]);
         let t = SSTable::new(tf, new_test_cache()).unwrap();
         let tables = vec![t];
-        let mut it = ConcatIterator::new_with_tables(tables, false);
+        let mut it = ConcatIterator::new_with_tables(tables, false, true);
         it.rewind();
         assert_eq!(it.valid(), true);
         assert_eq!(it.key(), "k1".as_bytes());
@@ -192,7 +197,7 @@ mod tests {
         let t3 = SSTable::new(tf3, new_test_cache()).unwrap();
         let tables = vec![t1, t2, t3];
         {
-            let mut it = ConcatIterator::new_with_tables(tables.clone(), false);
+            let mut it = ConcatIterator::new_with_tables(tables.clone(), false, true);
             it.rewind();
             assert_eq!(it.valid(), true);
             let mut cnt = 0;
@@ -220,7 +225,7 @@ mod tests {
             assert_eq!(it.valid(), false);
         }
         {
-            let mut it = ConcatIterator::new_with_tables(tables, true);
+            let mut it = ConcatIterator::new_with_tables(tables, true, true);
             it.rewind();
             assert_eq!(it.valid(), true);
             let mut cnt = 0;

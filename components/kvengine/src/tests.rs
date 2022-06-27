@@ -431,7 +431,7 @@ fn check_iterater(begin: usize, end: usize, en: &Engine) {
         for id in ids {
             let shard = en.get_shard(id).unwrap();
             let snap = SnapAccess::new(&shard);
-            let mut iter = snap.new_iterator(cf, false, false, None);
+            let mut iter = snap.new_iterator(cf, false, false, None, true);
             iter.seek(shard.start.chunk());
             while iter.valid() {
                 if iter.key.chunk() >= shard.end.chunk() {

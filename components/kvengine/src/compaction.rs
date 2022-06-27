@@ -669,12 +669,12 @@ fn build_compact_l0_iterator(
     let mut iters: Vec<Box<dyn table::Iterator>> = vec![];
     for top_tbl in top_tbls {
         if let Some(tbl) = top_tbl.get_cf(cf) {
-            let iter = tbl.new_iterator(false);
+            let iter = tbl.new_iterator(false, false);
             iters.push(iter);
         }
     }
     if !bot_tbls.is_empty() {
-        let iter = ConcatIterator::new_with_tables(bot_tbls, false);
+        let iter = ConcatIterator::new_with_tables(bot_tbls, false, false);
         iters.push(Box::new(iter));
     }
     let mut iter = table::new_merge_iterator(iters, false);
@@ -791,8 +791,8 @@ pub(crate) fn compact_tables(
     let bot_files = load_table_files(&req.bottoms, fs.clone(), opts)?;
     let mut bot_tables = in_mem_files_to_tables(&bot_files);
     bot_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
-    let top_iter = Box::new(ConcatIterator::new_with_tables(top_tables, false));
-    let bot_iter = Box::new(ConcatIterator::new_with_tables(bot_tables, false));
+    let top_iter = Box::new(ConcatIterator::new_with_tables(top_tables, false, false));
+    let bot_iter = Box::new(ConcatIterator::new_with_tables(bot_tables, false, false));
     let mut iter = table::new_merge_iterator(vec![top_iter, bot_iter], false);
     iter.seek(&req.start);
 

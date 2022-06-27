@@ -39,7 +39,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     pub fn new(start_ts: TimeStamp, snapshot: S, fill_cache: bool) -> Self {
         let cloud_reader = snapshot
             .get_kvengine_snap()
-            .map(|snap| CloudReader::new(snap.clone()));
+            .map(|snap| CloudReader::new(snap.clone(), fill_cache));
         SnapshotReader {
             reader: MvccReader::new(snapshot, None, fill_cache),
             start_ts,
@@ -50,7 +50,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     pub fn new_with_ctx(start_ts: TimeStamp, snapshot: S, ctx: &Context) -> Self {
         let cloud_reader = snapshot
             .get_kvengine_snap()
-            .map(|snap| CloudReader::new(snap.clone()));
+            .map(|snap| CloudReader::new(snap.clone(), !ctx.get_not_fill_cache()));
         SnapshotReader {
             reader: MvccReader::new_with_ctx(snapshot, None, ctx),
             start_ts,

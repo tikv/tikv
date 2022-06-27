@@ -604,8 +604,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let (result, delta) = {
                         let _guard = sample.observe_cpu();
                         let perf_statistics = ReadPerfInstant::new();
-                        let snap_store =
-                            CloudStore::new(snapshot, start_ts.into_inner(), bypass_locks);
+                        let snap_store = CloudStore::new(
+                            snapshot,
+                            start_ts.into_inner(),
+                            bypass_locks,
+                            !ctx.get_not_fill_cache(),
+                        );
                         let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
@@ -795,8 +799,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     match snap.await {
                         Ok(snapshot) => {
                             if snapshot.get_kvengine_snap().is_some() {
-                                let cloud_store =
-                                    CloudStore::new(snapshot, start_ts.into_inner(), bypass_locks);
+                                let cloud_store = CloudStore::new(
+                                    snapshot,
+                                    start_ts.into_inner(),
+                                    bypass_locks,
+                                    fill_cache,
+                                );
                                 let mut stat = Statistics::default();
                                 let perf_statistics = ReadPerfInstant::new();
                                 let v = cloud_store.get(&key, &mut stat);
@@ -943,8 +951,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let (result, delta, stats) = {
                         let _guard = sample.observe_cpu();
                         let perf_statistics = ReadPerfInstant::new();
-                        let snap_store =
-                            CloudStore::new(snapshot, start_ts.into_inner(), bypass_locks);
+                        let snap_store = CloudStore::new(
+                            snapshot,
+                            start_ts.into_inner(),
+                            bypass_locks,
+                            !ctx.get_not_fill_cache(),
+                        );
                         let mut stats = Statistics::default();
                         let result = snap_store
                             .batch_get(&keys, &mut statistics)
@@ -1158,16 +1170,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let perf_statistics = ReadPerfInstant::new();
                     let buckets = snapshot.ext().get_buckets();
 
-                    // let snap_store = SnapshotStore::new(
-                    //     snapshot,
-                    //     start_ts,
-                    //     ctx.get_isolation_level(),
-                    //     !ctx.get_not_fill_cache(),
-                    //     bypass_locks,
-                    //     access_locks,
-                    //     false,
-                    // );
-                    let snap_store = CloudStore::new(snapshot, start_ts.into_inner(), bypass_locks);
+                    let snap_store = CloudStore::new(
+                        snapshot,
+                        start_ts.into_inner(),
+                        bypass_locks,
+                        !ctx.get_not_fill_cache(),
+                    );
                     let mut scanner =
                         snap_store.scanner(reverse_scan, key_only, false, start_key, end_key)?;
                     let res = scanner.scan(limit, sample_step);
@@ -1308,8 +1316,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let mut statistics = Statistics::default();
                     let perf_statistics = ReadPerfInstant::new();
                     let buckets = snapshot.ext().get_buckets();
-                    let mut reader =
-                        mvcc::CloudReader::new(snapshot.get_kvengine_snap().unwrap().clone());
+                    let mut reader = mvcc::CloudReader::new(
+                        snapshot.get_kvengine_snap().unwrap().clone(),
+                        !ctx.get_not_fill_cache(),
+                    );
                     let result = reader
                         .scan_locks(
                             start_key.as_ref(),

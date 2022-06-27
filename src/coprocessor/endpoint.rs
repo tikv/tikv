@@ -210,16 +210,12 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
                 builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
-                    // let store = SnapshotStore::new(
-                    //     snap,
-                    //     start_ts.into(),
-                    //     req_ctx.context.get_isolation_level(),
-                    //     !req_ctx.context.get_not_fill_cache(),
-                    //     req_ctx.bypass_locks.clone(),
-                    //     req_ctx.access_locks.clone(),
-                    //     req.get_is_cache_enabled(),
-                    // );
-                    let store = CloudStore::new(snap, start_ts, req_ctx.bypass_locks.clone());
+                    let store = CloudStore::new(
+                        snap,
+                        start_ts,
+                        req_ctx.bypass_locks.clone(),
+                        !req_ctx.context.get_not_fill_cache(),
+                    );
                     let paging_size = match req.get_paging_size() {
                         0 => None,
                         i => Some(i),

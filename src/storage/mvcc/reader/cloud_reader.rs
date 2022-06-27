@@ -8,13 +8,15 @@ use crate::storage::mvcc::{Result, TxnCommitRecord};
 
 pub struct CloudReader {
     snapshot: kvengine::SnapAccess,
+    fill_cache: bool,
     pub statistics: tikv_kv::Statistics,
 }
 
 impl CloudReader {
-    pub fn new(snapshot: kvengine::SnapAccess) -> Self {
+    pub fn new(snapshot: kvengine::SnapAccess, fill_cache: bool) -> Self {
         Self {
             snapshot,
+            fill_cache,
             statistics: tikv_kv::Statistics::default(),
         }
     }
@@ -51,7 +53,9 @@ impl CloudReader {
                 return Ok(record);
             }
         }
-        let mut data_iter = self.snapshot.new_iterator(WRITE_CF, false, true, None);
+        let mut data_iter =
+            self.snapshot
+                .new_iterator(WRITE_CF, false, true, None, self.fill_cache);
         data_iter.seek(&raw_key);
         while data_iter.valid() {
             let key = data_iter.key();
@@ -192,7 +196,9 @@ impl CloudReader {
         F: Fn(&Lock) -> bool,
     {
         let mut locks = vec![];
-        let mut lock_iter = self.snapshot.new_iterator(LOCK_CF, false, false, None);
+        let mut lock_iter =
+            self.snapshot
+                .new_iterator(LOCK_CF, false, false, None, self.fill_cache);
         let bound = if let Some(k) = end {
             Bytes::from(k.to_raw().unwrap())
         } else {
@@ -241,7 +247,9 @@ impl CloudReader {
 
     /// Return the first committed key for which `start_ts` equals to `ts`
     pub fn seek_ts(&mut self, ts: TimeStamp) -> Result<Option<Key>> {
-        let mut it = self.snapshot.new_iterator(WRITE_CF, false, true, None);
+        let mut it = self
+            .snapshot
+            .new_iterator(WRITE_CF, false, true, None, self.fill_cache);
         it.rewind();
         while it.valid() {
             let item = it.item();

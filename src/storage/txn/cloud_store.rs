@@ -21,6 +21,7 @@ pub struct CloudStore<S: Snapshot> {
     snapshot: kvengine::SnapAccess,
     start_ts: u64,
     bypass_locks: TsSet,
+    fill_cache: bool,
     stats: Statistics,
 }
 
@@ -97,12 +98,13 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
 }
 
 impl<S: Snapshot> CloudStore<S> {
-    pub fn new(snapshot: S, start_ts: u64, bypass_locks: TsSet) -> Self {
+    pub fn new(snapshot: S, start_ts: u64, bypass_locks: TsSet, fill_cache: bool) -> Self {
         Self {
             marker: PhantomData::default(),
             snapshot: snapshot.get_kvengine_snap().unwrap().clone(),
             start_ts,
             bypass_locks,
+            fill_cache,
             stats: Statistics::default(),
         }
     }
@@ -203,16 +205,18 @@ impl<S: Snapshot> CloudStore<S> {
         let upper_bound = upper_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
         self.verify_range(&lower_bound, &upper_bound)?;
         let mut stats = Statistics::default();
-        let lock_iter = self.snapshot.new_iterator(LOCK_CF, desc, false, None);
+        let lock_iter = self
+            .snapshot
+            .new_iterator(LOCK_CF, desc, false, None, self.fill_cache);
         self.check_locks(
             lock_iter,
             lower_bound.clone(),
             upper_bound.clone(),
             &mut stats,
         )?;
-        let iter = self
-            .snapshot
-            .new_iterator(WRITE_CF, desc, false, Some(self.start_ts));
+        let iter =
+            self.snapshot
+                .new_iterator(WRITE_CF, desc, false, Some(self.start_ts), self.fill_cache);
         Ok(CloudStoreScanner {
             iter,
             desc,

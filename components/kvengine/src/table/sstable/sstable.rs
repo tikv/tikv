@@ -51,8 +51,8 @@ impl SSTable {
         })
     }
 
-    pub fn new_iterator(&self, reversed: bool) -> Box<TableIterator> {
-        let it = TableIterator::new(self.clone(), reversed);
+    pub fn new_iterator(&self, reversed: bool, fill_cache: bool) -> Box<TableIterator> {
+        let it = TableIterator::new(self.clone(), reversed, fill_cache);
         Box::new(it)
     }
 
@@ -63,7 +63,7 @@ impl SSTable {
                 return table::Value::new();
             }
         }
-        let mut it = self.new_iterator(false);
+        let mut it = self.new_iterator(false, true);
         it.seek(key);
         if !it.valid() || key != it.key() {
             return table::Value::new();
@@ -89,7 +89,7 @@ impl SSTable {
             }
             _ => {}
         }
-        let mut it = self.new_iterator(false);
+        let mut it = self.new_iterator(false, true);
         it.seek(start);
         if !it.valid() {
             return it.error().is_some();
@@ -198,7 +198,7 @@ impl SSTableCore {
         })
     }
 
-    pub fn load_block(&self, pos: usize, buf: &mut Vec<u8>) -> Result<Bytes> {
+    pub fn load_block(&self, pos: usize, buf: &mut Vec<u8>, fill_cache: bool) -> Result<Bytes> {
         let addr = self.idx.get_block_addr(pos);
         let length = if pos + 1 < self.idx.num_blocks() {
             let next_addr = self.idx.get_block_addr(pos + 1);
@@ -206,7 +206,7 @@ impl SSTableCore {
         } else {
             self.start_off as usize + self.footer.data_len() - addr.curr_off as usize
         };
-        self.load_block_by_addr_len(addr, length, buf)
+        self.load_block_by_addr_len(addr, length, buf, fill_cache)
     }
 
     fn load_block_by_addr_len(
@@ -214,18 +214,27 @@ impl SSTableCore {
         addr: BlockAddress,
         length: usize,
         buf: &mut Vec<u8>,
+        fill_cache: bool,
     ) -> Result<Bytes> {
-        if self.cache.is_none() {
-            return self.read_block_from_file(addr, length, buf);
-        }
-        let cache = self.cache.as_ref().unwrap();
-        let cache_key = BlockCacheKey::new(addr.origin_fid, addr.origin_off);
-        cache
-            .try_get_with(cache_key, || {
+        match &self.cache {
+            Some(cache) => {
+                let cache_key = BlockCacheKey::new(addr.origin_fid, addr.origin_off);
+                if fill_cache {
+                    return cache
+                        .try_get_with(cache_key, || {
+                            crate::metrics::ENGINE_CACHE_MISS.inc_by(1);
+                            self.read_block_from_file(addr, length, buf)
+                        })
+                        .map_err(|err| err.as_ref().clone());
+                }
+                if let Some(block) = cache.get(&cache_key) {
+                    return Ok(block);
+                }
                 crate::metrics::ENGINE_CACHE_MISS.inc_by(1);
                 self.read_block_from_file(addr, length, buf)
-            })
-            .map_err(|err| err.as_ref().clone())
+            }
+            None => self.read_block_from_file(addr, length, buf),
+        }
     }
 
     fn read_block_from_file(
@@ -240,12 +249,7 @@ impl SSTableCore {
             validate_checksum(raw_block.chunk(), self.footer.checksum_type)?;
             return Ok(raw_block.slice(4..));
         }
-        buf.truncate(0);
-        // buf.reserve(length);
         buf.resize(length, 0);
-        unsafe {
-            buf.set_len(length);
-        }
         self.file.read_at(buf, addr.curr_off as u64)?;
         validate_checksum(buf, self.footer.checksum_type)?;
         let content = &buf[4..];
@@ -278,7 +282,7 @@ impl SSTableCore {
         }
     }
 
-    pub fn load_old_block(&self, pos: usize, buf: &mut Vec<u8>) -> Result<Bytes> {
+    pub fn load_old_block(&self, pos: usize, buf: &mut Vec<u8>, fill_cache: bool) -> Result<Bytes> {
         let addr = self.old_idx.get_block_addr(pos);
         let length = if pos + 1 < self.old_idx.num_blocks() {
             let next_addr = self.old_idx.get_block_addr(pos + 1);
@@ -286,7 +290,7 @@ impl SSTableCore {
         } else {
             self.footer.index_offset as usize - addr.curr_off as usize
         };
-        self.load_block_by_addr_len(addr, length, buf)
+        self.load_block_by_addr_len(addr, length, buf, fill_cache)
     }
 
     fn load_filter(&self) -> Result<BinaryFuse8> {
@@ -598,7 +602,7 @@ mod tests {
         for n in 99..=101 {
             let file = build_test_table_with_prefix("key", n);
             let t = SSTable::new(file, new_test_cache()).unwrap();
-            let mut it = t.new_iterator(false);
+            let mut it = t.new_iterator(false, true);
             let mut count = 0;
             it.rewind();
             while it.valid() {
@@ -637,7 +641,7 @@ mod tests {
         for n in nums {
             let tf = build_test_table_with_prefix("key", *n);
             let t = SSTable::new(tf, new_test_cache()).unwrap();
-            let mut it = t.new_iterator(false);
+            let mut it = t.new_iterator(false, true);
             it.rewind();
             assert!(it.valid());
             let v = it.value();
@@ -668,7 +672,7 @@ mod tests {
         for n in nums {
             let tf = build_test_table_with_prefix("key", n);
             let t = SSTable::new(tf, new_test_cache()).unwrap();
-            let mut it = t.new_iterator(true);
+            let mut it = t.new_iterator(true, true);
             it.rewind();
             assert!(it.valid());
             let v = it.value();
@@ -697,7 +701,7 @@ mod tests {
         ];
         let tf = build_test_table_with_prefix("k", 10000);
         let t = SSTable::new(tf, new_test_cache()).unwrap();
-        let mut it = t.new_iterator(false);
+        let mut it = t.new_iterator(false, true);
         for td in test_datas {
             it.seek(td.input.as_bytes());
             if !td.valid {
@@ -722,7 +726,7 @@ mod tests {
         ];
         let tf = build_test_table_with_prefix("k", 10000);
         let t = SSTable::new(tf, new_test_cache()).unwrap();
-        let mut it = t.new_iterator(true);
+        let mut it = t.new_iterator(true, true);
         for td in test_datas {
             it.seek(td.input.as_bytes());
             if !td.valid {
@@ -740,7 +744,7 @@ mod tests {
         for n in nums {
             let file = build_test_table_with_prefix("key", n);
             let t = SSTable::new(file, new_test_cache()).unwrap();
-            let mut it = t.new_iterator(false);
+            let mut it = t.new_iterator(false, true);
             let mut count = 0;
             it.rewind();
             assert!(it.valid());
@@ -762,7 +766,7 @@ mod tests {
         for n in nums {
             let file = build_test_table_with_prefix("key", n);
             let t = SSTable::new(file, new_test_cache()).unwrap();
-            let mut it = t.new_iterator(true);
+            let mut it = t.new_iterator(true, true);
             it.seek("zzzzzz".as_bytes()); // Seek to end, an invalid element.
             assert!(it.valid());
             it.rewind();
@@ -782,7 +786,7 @@ mod tests {
     fn test_table() {
         let tf = build_test_table_with_prefix("key", 10000);
         let t = SSTable::new(tf, new_test_cache()).unwrap();
-        let mut it = t.new_iterator(false);
+        let mut it = t.new_iterator(false, true);
         let mut kid = 1010_usize;
         let seek = test_key("key", kid);
         it.seek(seek.as_bytes());
@@ -807,7 +811,7 @@ mod tests {
         let t = SSTable::new(tf, new_test_cache()).unwrap();
 
         let seek = test_key("key", 1010);
-        let mut it = t.new_iterator(false);
+        let mut it = t.new_iterator(false, true);
         it.seek(seek.as_bytes());
         assert!(it.valid());
         assert_eq!(it.key(), seek.as_bytes());
@@ -843,7 +847,7 @@ mod tests {
         let num = 4000;
         let (tf, all_cnt) = build_multi_vesion_table(generate_key_values("key", num));
         let t = SSTable::new(tf, new_test_cache()).unwrap();
-        let mut it = t.new_iterator(false);
+        let mut it = t.new_iterator(false, true);
         let mut it_cnt = 0;
         let mut last_key = BytesMut::new();
         it.rewind();
@@ -870,7 +874,7 @@ mod tests {
                 assert!(val.version <= ver);
             }
         }
-        let mut rev_it = t.new_iterator(true);
+        let mut rev_it = t.new_iterator(true, true);
         last_key.truncate(0);
         rev_it.rewind();
         while rev_it.valid() {
@@ -898,7 +902,7 @@ mod tests {
         let tf = build_test_table_with_prefix("key", 10000);
         let t = SSTable::new(tf, new_test_cache()).unwrap();
         {
-            let mut it = t.new_iterator(false);
+            let mut it = t.new_iterator(false, true);
             let mut cnt = 0;
             it.rewind();
             while it.valid() {
@@ -911,7 +915,7 @@ mod tests {
             assert_eq!(cnt, 10000);
         }
         {
-            let mut it = t.new_iterator(true);
+            let mut it = t.new_iterator(true, true);
             let mut cnt = 0;
             it.rewind();
             while it.valid() {

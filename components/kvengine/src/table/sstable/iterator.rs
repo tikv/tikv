@@ -177,6 +177,7 @@ pub struct TableIterator {
     old_b_pos: i32,
     old_bi: BlockIterator,
     reversed: bool,
+    fill_cache: bool,
     err: Option<table::Error>,
     key_buf: BytesMut,
     iter_state: IterState,
@@ -184,7 +185,7 @@ pub struct TableIterator {
 }
 
 impl TableIterator {
-    pub fn new(t: SSTable, reversed: bool) -> Self {
+    pub fn new(t: SSTable, reversed: bool, fill_cache: bool) -> Self {
         Self {
             t,
             b_pos: 0,
@@ -192,6 +193,7 @@ impl TableIterator {
             old_b_pos: 0,
             old_bi: BlockIterator::default(),
             reversed,
+            fill_cache,
             err: None,
             key_buf: BytesMut::new(),
             iter_state: IterState::NewVersion,
@@ -213,7 +215,7 @@ impl TableIterator {
         self.b_pos = b_pos;
         let block = self
             .t
-            .load_block(self.b_pos as usize, &mut self.block_buf)
+            .load_block(self.b_pos as usize, &mut self.block_buf, self.fill_cache)
             .unwrap();
         self.bi.set_block(block);
         true
@@ -221,10 +223,11 @@ impl TableIterator {
 
     fn set_old_block(&mut self, b_pos: i32) -> bool {
         self.old_b_pos = b_pos;
-        let block = match self
-            .t
-            .load_old_block(self.old_b_pos as usize, &mut self.block_buf)
-        {
+        let block = match self.t.load_old_block(
+            self.old_b_pos as usize,
+            &mut self.block_buf,
+            self.fill_cache,
+        ) {
             Ok(b) => b,
             Err(e) => {
                 self.err = Some(e);

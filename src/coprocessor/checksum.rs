@@ -33,16 +33,12 @@ impl<S: Snapshot> ChecksumContext<S> {
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
-        // let store = SnapshotStore::new(
-        //     snap,
-        //     start_ts.into(),
-        //     req_ctx.context.get_isolation_level(),
-        //     !req_ctx.context.get_not_fill_cache(),
-        //     req_ctx.bypass_locks.clone(),
-        //     req_ctx.access_locks.clone(),
-        //     false,
-        // );
-        let store = CloudStore::new(snap, start_ts, req_ctx.bypass_locks.clone());
+        let store = CloudStore::new(
+            snap,
+            start_ts,
+            req_ctx.bypass_locks.clone(),
+            !req_ctx.context.get_not_fill_cache(),
+        );
         let scanner = RangesScanner::new(RangesScannerOptions {
             storage: TiKvStorage::new(store, false),
             ranges: ranges
