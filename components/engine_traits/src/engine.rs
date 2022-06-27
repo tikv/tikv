@@ -135,6 +135,12 @@ impl TabletErrorCollector {
     }
 }
 
+impl Default for TabletErrorCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Drop for TabletErrorCollector {
     fn drop(&mut self) {
         self.flush_error()
