@@ -251,6 +251,12 @@ impl CustomBuilder {
         self.set_type(TYPE_ENGINE_META);
     }
 
+    pub fn set_switch_mem_table(&mut self, current_size: u64) {
+        assert_eq!(self.buf.len(), HEADER_SIZE);
+        self.buf.put_u64_le(current_size);
+        self.set_type(TYPE_SWITCH_MEM_TABLE)
+    }
+
     pub fn set_type(&mut self, tp: CustomRaftlogType) {
         self.buf[0] = tp as u8;
     }

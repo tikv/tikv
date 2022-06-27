@@ -363,7 +363,6 @@ fn new_initial_cs() -> pb::ChangeSet {
 fn new_test_options() -> Options {
     let mut opts = Options::default();
     opts.table_builder_options.block_size = 4 << 15;
-    opts.dynamic_mem_table_size = false;
     opts.base_size = 4 << 15;
     opts.num_compactors = 1;
     opts

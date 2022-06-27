@@ -203,6 +203,7 @@ pub struct SkipListCore {
     rnd_x: AtomicU32,
     data_max_ts: AtomicU64,
     hint: Mutex<Hint>,
+    user_data_size: AtomicU64,
 }
 
 #[allow(dead_code)]
@@ -217,6 +218,7 @@ impl SkipListCore {
             rnd_x: AtomicU32::new(RAND_SEED),
             data_max_ts: AtomicU64::new(0),
             hint: Mutex::new(Hint::new()),
+            user_data_size: AtomicU64::new(0),
         }
     }
 
@@ -281,17 +283,19 @@ impl SkipListCore {
                 self.put_with_hint(&batch.buf, entry, &mut hint);
             }
         }
+        self.user_data_size
+            .fetch_add(batch.buf.len() as u64, Ordering::AcqRel);
         if batch_max_ts > data_max_ts {
             self.data_max_ts.store(batch_max_ts, Ordering::Release);
         }
     }
 
-    pub fn put(&self, buf: &[u8], entry: &WriteBatchEntry) {
+    fn put(&self, buf: &[u8], entry: &WriteBatchEntry) {
         let h = &mut Hint::new();
         self.put_with_hint(buf, entry, h)
     }
 
-    pub fn put_with_hint(&self, buf: &[u8], entry: &WriteBatchEntry, h: &mut Hint) {
+    fn put_with_hint(&self, buf: &[u8], entry: &WriteBatchEntry, h: &mut Hint) {
         // Since we allow overwrite, we may not need to create a new node. We might not even need to
         // increase the height. Let's defer these actions.
         let mut list_height = self.get_height();
@@ -368,7 +372,7 @@ impl SkipListCore {
         }
     }
 
-    pub fn set_value(&self, node: &mut Node, buf: &[u8], entry: &WriteBatchEntry) {
+    fn set_value(&self, node: &mut Node, buf: &[u8], entry: &WriteBatchEntry) {
         {
             // check old value version.
             let old_val_addr = node.get_val_addr();
@@ -657,7 +661,11 @@ impl SkipListCore {
         self.get_next(self.head, 0).is_null()
     }
 
-    pub fn delete_with_hint(&self, key: &[u8], h: &mut Hint) -> bool {
+    pub fn size(&self) -> u64 {
+        self.user_data_size.load(Acquire)
+    }
+
+    fn delete_with_hint(&self, key: &[u8], h: &mut Hint) -> bool {
         let list_height = self.get_height();
         let recompute_height = self.calculate_recompute_height(key, h, list_height);
         let mut node_addr = ArenaAddr(NULL_ARENA_ADDR);

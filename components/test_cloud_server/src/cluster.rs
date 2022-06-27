@@ -218,6 +218,11 @@ impl ServerCluster {
         let resp = client.split_region(&split_req).unwrap();
         assert!(!resp.has_region_error());
     }
+
+    pub fn get_region_id(&self, key: &[u8]) -> u64 {
+        let ctx = self.new_rpc_context(key);
+        ctx.region_id
+    }
 }
 
 pub fn new_test_config(base_dir: &Path, node_id: u16) -> TiKvConfig {

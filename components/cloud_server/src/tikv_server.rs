@@ -836,7 +836,7 @@ impl TiKVServer {
         };
         kv_opts.local_dir = kv_engine_path;
         kv_opts.num_compactors = conf.rocksdb.max_background_jobs as usize;
-        kv_opts.max_mem_table_size_factor = 16;
+        kv_opts.max_mem_table_size = conf.rocksdb.writecf.write_buffer_size.0;
         kv_opts.max_block_cache_size = capacity as i64;
         kv_opts.remote_compactor_addr = dfs_conf.remote_compactor_addr.clone();
         let cf_opt = &conf.rocksdb.writecf;

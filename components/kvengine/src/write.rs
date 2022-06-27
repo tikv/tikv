@@ -133,7 +133,7 @@ impl Engine {
         mem_table.set_properties(props);
     }
 
-    pub fn write(&self, wb: &mut WriteBatch) -> usize {
+    pub fn write(&self, wb: &mut WriteBatch) -> u64 {
         let shard = self.get_shard(wb.shard_id).unwrap();
         let snap = shard.new_snap_access();
         let version = shard.base_version + wb.sequence;
@@ -150,12 +150,13 @@ impl Engine {
             }
         }
         store_u64(&shard.write_sequence, wb.sequence);
-        if wb.switch_mem_table {
+        let size = mem_tbl.size();
+        if wb.switch_mem_table || size > self.opts.max_mem_table_size {
             self.switch_mem_table(&shard, version);
             self.trigger_flush(&shard);
             0
         } else {
-            mem_tbl.size()
+            size
         }
     }
 

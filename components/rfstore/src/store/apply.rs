@@ -500,14 +500,19 @@ impl Applier {
                 _ => unreachable!("unexpected custom log type: {:?}", tp),
             }),
             TYPE_SWITCH_MEM_TABLE => {
-                wb.set_switch_mem_table();
-                self.mut_mem_table_state(engine).set_switch_time(timer);
+                let old_mem_size = cl.data.chunk().get_u64_le();
+                if self.mut_mem_table_state(engine).mem_table_size >= old_mem_size {
+                    wb.set_switch_mem_table();
+                }
             }
             _ => panic!("unknown custom log type"),
         }
         let mem_table_size = ctx.engine.write(wb) as u64;
         wb.reset();
         let mem_states = self.mut_mem_table_state(engine);
+        if mem_states.mem_table_size > 0 && mem_table_size == 0 {
+            mem_states.set_switch_time(timer);
+        }
         mem_states.mem_table_size = mem_table_size;
         mem_states.last_write_time = Some(timer);
         self.maybe_propose_switch_mem_table(ctx, timer);
@@ -1368,15 +1373,16 @@ impl Applier {
         let region_id = self.region_id();
         self.mem_table_state.get_or_insert_with(|| {
             let shard = engine.get_shard(region_id).unwrap();
-            let mem_table_size = shard.get_writable_mem_table_size() as u64;
-            MemTableState::new(mem_table_size)
+            MemTableState::new(shard.get_writable_mem_table_size())
         })
     }
 
     fn maybe_propose_switch_mem_table(&mut self, ctx: &mut ApplyContext, now: Instant) {
-        if self.is_leader() && self.mut_mem_table_state(&ctx.engine).need_switch(now) {
+        let is_leader = self.is_leader();
+        let mem_state = self.mut_mem_table_state(&ctx.engine);
+        if is_leader && mem_state.need_switch(now) {
             let mut custom_builder = CustomBuilder::new();
-            custom_builder.set_type(TYPE_SWITCH_MEM_TABLE);
+            custom_builder.set_switch_mem_table(mem_state.mem_table_size);
             let mut req = self.new_raft_cmd_request();
             req.set_custom_request(custom_builder.build());
             ctx.router
@@ -1439,7 +1445,6 @@ struct MemTableState {
 }
 
 const BYTES_MB: u64 = 1024 * 1024;
-const MEM_TABLE_SIZE_UPPER_LIMIT: u64 = 128 * BYTES_MB;
 const MEM_TABLE_SIZE_LOWER_LIMIT: u64 = 4 * BYTES_MB;
 
 // 128MB mem-table flush at 10 seconds.
@@ -1477,9 +1482,7 @@ impl MemTableState {
             let idle_duration = self.get_idle_duration(now);
             return idle_duration > self.max_idle_duration();
         }
-        if self.mem_table_size > MEM_TABLE_SIZE_UPPER_LIMIT {
-            return true;
-        }
+        // We don't need to propose on hard limit, it is handled by the engine.
         let duration_secs_to_switch = STANDARD_MEMORY_SIZE_DURATION / self.mem_table_size;
         self.get_duration_since_last_switch(now).as_secs() > duration_secs_to_switch
     }
@@ -1737,7 +1740,6 @@ fn test_mem_table_state() {
     let cases = vec![
         // check mem size bound
         Case::new(0).result(false),
-        Case::new(129).result(true),
         // check propose
         Case::new(129).propose_at(0).check_at(3).result(false),
         Case::new(129).propose_at(0).check_at(11).result(true),

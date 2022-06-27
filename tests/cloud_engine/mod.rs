@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicU16;
 
 mod backup;
 mod delete_range;
+mod engine_basic;
 mod gc;
 
 static NODE_ALLOCATOR: AtomicU16 = AtomicU16::new(0);

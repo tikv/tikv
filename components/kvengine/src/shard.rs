@@ -321,7 +321,7 @@ impl Shard {
         SnapAccess::new(self)
     }
 
-    pub fn get_writable_mem_table_size(&self) -> usize {
+    pub fn get_writable_mem_table_size(&self) -> u64 {
         let guard = self.data.read().unwrap();
         guard.mem_tbls[0].size()
     }

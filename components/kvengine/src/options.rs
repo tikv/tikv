@@ -33,12 +33,7 @@ pub struct Options {
 
     pub preparation_concurrency: usize,
 
-    // Max mem size is dynamically adjusted for each time the mem-table get flushed.
-    // The formula is (factor * write_bytes_per_second)
-    // And limited in range [2MB, 128MB].
-    pub max_mem_table_size_factor: usize,
-
-    pub dynamic_mem_table_size: bool,
+    pub max_mem_table_size: u64,
 }
 
 impl Default for Options {
@@ -53,8 +48,7 @@ impl Default for Options {
             remote_compactor_addr: Default::default(),
             recovery_concurrency: Default::default(),
             preparation_concurrency: Default::default(),
-            max_mem_table_size_factor: 256,
-            dynamic_mem_table_size: true,
+            max_mem_table_size: 128 << 20,
         }
     }
 }

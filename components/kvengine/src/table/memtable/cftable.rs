@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    iter::Iterator as StdIterator,
     ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -97,11 +98,8 @@ impl CFTableCore {
         true
     }
 
-    pub fn size(&self) -> usize {
-        if self.is_empty() {
-            return 0;
-        }
-        self.arena.size()
+    pub fn size(&self) -> u64 {
+        self.tbls.iter().map(|t| t.size()).sum()
     }
 
     pub fn set_version(&self, ver: u64) {
