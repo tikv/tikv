@@ -2,8 +2,13 @@
 
 use std::{
     fmt::Debug,
+    io::Write,
     path::{Path, PathBuf},
+    str,
+    vec::Vec,
 };
+
+use tikv_util::error;
 
 use crate::*;
 
@@ -72,6 +77,68 @@ pub trait TabletAccessor<EK> {
     /// return true if it's single engine;
     /// return false if it's a multi-tablet factory;
     fn is_single_engine(&self) -> bool;
+}
+
+/// max error count to log
+const MAX_ERROR_COUNT: u32 = 5;
+
+pub struct TabletErrorCollector {
+    errors: Vec<u8>,
+    max_error_count: u32,
+    error_count: u32,
+    result: std::result::Result<(), Box<dyn std::error::Error>>,
+}
+
+impl TabletErrorCollector {
+    pub fn new() -> Self {
+        Self {
+            errors: vec![],
+            max_error_count: MAX_ERROR_COUNT,
+            error_count: 0,
+            result: Ok(()),
+        }
+    }
+
+    pub fn add_result(&mut self, region_id: u64, suffix: u64, result: Result<()>) {
+        if result.is_ok() {
+            return;
+        }
+        self.result = Err(Box::from(result.err().unwrap()));
+        self.error_count += 1;
+        if self.error_count > self.max_error_count {
+            return;
+        }
+        writeln!(
+            &mut self.errors,
+            "Tablet {}_{} encountered error: {:?}.",
+            region_id, suffix, self.result
+        )
+        .unwrap();
+    }
+
+    fn flush_error(&self) {
+        if self.error_count > 0 {
+            error!(
+                "Total count {}. Sample errors: {}",
+                self.error_count,
+                str::from_utf8(&self.errors).unwrap()
+            );
+        }
+    }
+
+    pub fn take_result(&mut self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        std::mem::replace(&mut self.result, Ok(()))
+    }
+
+    pub fn get_error_count(&self) -> u32 {
+        self.error_count
+    }
+}
+
+impl Drop for TabletErrorCollector {
+    fn drop(&mut self) {
+        self.flush_error()
+    }
 }
 
 /// A factory trait to create new engine.
@@ -222,5 +289,30 @@ where
 impl<EK: Clone + Send + 'static> Default for DummyFactory<EK> {
     fn default() -> Self {
         Self::new(None, "/tmp".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tablet_error_collector_ok() {
+        let mut err = TabletErrorCollector::new();
+        err.add_result(1, 1, Ok(()));
+        assert!(err.take_result().is_ok());
+        assert_eq!(err.get_error_count(), 0);
+    }
+
+    #[test]
+    fn test_tablet_error_collector_err() {
+        let mut err = TabletErrorCollector::new();
+        err.add_result(1, 1, Ok(()));
+        err.add_result(1, 1, Err("this is an error1".to_string().into()));
+        err.add_result(1, 1, Err("this is an error2".to_string().into()));
+        err.add_result(1, 1, Ok(()));
+        let r = err.take_result();
+        assert!(r.is_err());
+        assert_eq!(err.get_error_count(), 2);
     }
 }
