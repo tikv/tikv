@@ -48,6 +48,7 @@ use std::iter;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 use kvproto::kvrpcpb::*;
 use txn_types::{Key, OldValues, TimeStamp, Value, Write};
@@ -57,6 +58,7 @@ use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader};
 use crate::storage::txn::commands::acquire_pessimistic_lock::PessimisticLockKeyContext;
 use crate::storage::txn::latch;
+use crate::storage::txn::scheduler::PartialPessimisticLockRequestSharedState;
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
     MvccInfo, PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult,
@@ -408,6 +410,7 @@ pub struct WriteResultLockInfo {
             Option<PessimisticLockKeyCallback>,
         )>,
     >,
+    pub req_states: Option<Arc<PartialPessimisticLockRequestSharedState>>,
 }
 
 impl Debug for WriteResultLockInfo {
@@ -439,6 +442,7 @@ impl WriteResultLockInfo {
             term,
             parameters,
             secondaries: None,
+            req_states: None,
         }
     }
 }

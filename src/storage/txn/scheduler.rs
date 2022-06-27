@@ -610,6 +610,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         params: lock_info.parameters.clone(),
                         lock_key_ctx,
                         awakened_with_primary_index: Some(index),
+                        req_states: lock_info.req_states.clone().unwrap(),
                     };
 
                     // We cannot handle duplicated keys in a single command.
@@ -1141,28 +1142,35 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         l[0].parameters.wait_timeout,
                         diag_ctx,
                     );
-                    let lock_info_len = l.len();
-                    let mut key_callback_count = 0;
-                    for lock_info in l {
-                        assert!(lock_info.key_cb.is_none());
-                        // TODO: Check if there are paths that the cb is never invoked.
-                        lock_info.key_cb = Some(Box::new(
-                            lock_req_ctx.get_callback_for_blocked_key(lock_info.index_in_request),
-                        ));
-                        key_callback_count += 1;
-                        if let Some(secondaries) = &mut lock_info.secondaries {
-                            assert_eq!(lock_info_len, 1);
-                            for secondary in secondaries {
-                                assert!(secondary.3.is_none());
-                                secondary.3 = Some(Box::new(
-                                    lock_req_ctx
-                                        .get_callback_for_blocked_key(secondary.2.index_in_request),
-                                ));
-                                key_callback_count += 1;
+                    // It's possible that the request is cancelled immediately due to no timeout.
+                    if lock_req_ctx.shared_states.finished.load(Ordering::Acquire) {
+                        lock_info_list = None;
+                    } else {
+                        let lock_info_len = l.len();
+                        let mut key_callback_count = 0;
+                        for lock_info in l {
+                            assert!(lock_info.key_cb.is_none());
+                            // TODO: Check if there are paths that the cb is never invoked.
+                            lock_info.key_cb = Some(Box::new(
+                                lock_req_ctx
+                                    .get_callback_for_blocked_key(lock_info.index_in_request),
+                            ));
+                            lock_info.req_states = Some(lock_req_ctx.get_shared_states());
+                            key_callback_count += 1;
+                            if let Some(secondaries) = &mut lock_info.secondaries {
+                                assert_eq!(lock_info_len, 1);
+                                for secondary in secondaries {
+                                    assert!(secondary.3.is_none());
+                                    secondary.3 =
+                                        Some(Box::new(lock_req_ctx.get_callback_for_blocked_key(
+                                            secondary.2.index_in_request,
+                                        )));
+                                    key_callback_count += 1;
+                                }
                             }
                         }
+                        assert_eq!(key_callback_count, cmd_meta.keys_count - first_batch_size);
                     }
-                    assert_eq!(key_callback_count, cmd_meta.keys_count - first_batch_size);
                 }
                 lock_info_list
             } else {
@@ -1663,29 +1671,32 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 }
 
-struct PartialPessimisticLockRequestContextInner<L: LockManager> {
+pub struct PartialPessimisticLockRequestContextInner {
     pr: ProcessResult,
     cb: StorageCallback,
     result_rx: std::sync::mpsc::Receiver<(
         usize,
         std::result::Result<PessimisticLockKeyResult, Arc<StorageError>>,
     )>,
-    lock_manager: L,
     lock_wait_token: LockWaitToken,
+}
+
+pub struct PartialPessimisticLockRequestSharedState {
+    ctx_inner: Mutex<Option<PartialPessimisticLockRequestContextInner>>,
+    remaining_keys: AtomicUsize,
+    pub finished: AtomicBool,
 }
 
 #[derive(Clone)]
 struct PartialPessimisticLockRequestContext<L: LockManager> {
     // (inner_ctx, remaining_count)
-    shared_states: Arc<(
-        Mutex<Option<PartialPessimisticLockRequestContextInner<L>>>,
-        AtomicUsize,
-    )>,
+    shared_states: Arc<PartialPessimisticLockRequestSharedState>,
     tx: std::sync::mpsc::Sender<(
         usize,
         std::result::Result<PessimisticLockKeyResult, Arc<StorageError>>,
     )>,
 
+    lock_manager: L,
     // Fields for logging:
     start_ts: TimeStamp,
     for_update_ts: TimeStamp,
@@ -1706,15 +1717,23 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
             pr: first_batch_pr,
             cb,
             result_rx: rx,
-            lock_manager,
             lock_wait_token,
         };
         Self {
-            shared_states: Arc::new((Mutex::new(Some(inner)), AtomicUsize::new(size))),
+            shared_states: Arc::new(PartialPessimisticLockRequestSharedState {
+                ctx_inner: Mutex::new(Some(inner)),
+                remaining_keys: AtomicUsize::new(size),
+                finished: AtomicBool::new(false),
+            }),
             tx,
+            lock_manager,
             start_ts,
             for_update_ts,
         }
+    }
+
+    fn get_shared_states(&self) -> Arc<PartialPessimisticLockRequestSharedState> {
+        self.shared_states.clone()
     }
 
     fn get_callback_for_first_write_batch(&self, first_batch_size: usize) -> StorageCallback {
@@ -1722,7 +1741,7 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
         StorageCallback::Boolean(Box::new(move |res| {
             let prev = ctx
                 .shared_states
-                .1
+                .remaining_keys
                 .fetch_sub(first_batch_size, Ordering::SeqCst);
             if prev == first_batch_size {
                 ctx.finish_request(res.err(), true);
@@ -1745,7 +1764,10 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
                 );
                 return;
             }
-            let prev = ctx.shared_states.1.fetch_sub(1, Ordering::SeqCst);
+            let prev = ctx
+                .shared_states
+                .remaining_keys
+                .fetch_sub(1, Ordering::SeqCst);
             if prev == 1 {
                 // All keys are finished.
                 ctx.finish_request(None, false);
@@ -1761,7 +1783,7 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
     }
 
     fn finish_request(&self, external_error: Option<StorageError>, fail_all_on_error: bool) {
-        let mut ctx_inner = if let Some(inner) = self.shared_states.0.lock().take() {
+        let mut ctx_inner = if let Some(inner) = self.shared_states.ctx_inner.lock().take() {
             inner
         } else {
             info!("shared state for partial pessimistic lock already taken, perhaps due to error";
@@ -1771,8 +1793,9 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
             return;
         };
 
-        ctx_inner
-            .lock_manager
+        self.shared_states.finished.store(true, Ordering::Release);
+
+        self.lock_manager
             .remove_lock_wait(ctx_inner.lock_wait_token);
         let results = match ctx_inner.pr {
             ProcessResult::PessimisticLockRes {

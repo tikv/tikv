@@ -13,6 +13,7 @@ use crate::storage::txn::commands::{
     Command, CommandExt, PessimisticLockKeyCallback, PessimisticLockParameters, ReaderWithStats,
     ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
 };
+use crate::storage::txn::scheduler::PartialPessimisticLockRequestSharedState;
 use crate::storage::txn::{acquire_pessimistic_lock, Error, Result};
 use crate::storage::types::PessimisticLockKeyResult;
 use crate::storage::{PessimisticLockResults, ProcessResult, Result as StorageResult, Snapshot};
@@ -37,6 +38,7 @@ pub struct ResumedPessimisticLockItem {
     pub params: PessimisticLockParameters,
     pub lock_key_ctx: PessimisticLockKeyContext,
     pub awakened_with_primary_index: Option<usize>,
+    pub req_states: Arc<PartialPessimisticLockRequestSharedState>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -388,6 +390,7 @@ impl AcquirePessimisticLock {
                 params,
                 lock_key_ctx,
                 awakened_with_primary_index,
+                req_states,
             } = item;
 
             // If the corresponding primary is in the same batch but unsuccessful, the current key
@@ -479,6 +482,7 @@ impl AcquirePessimisticLock {
                         lock_key_ctx.hash_for_latch,
                         None,
                     );
+                    lock_info.req_states = Some(req_states);
                     if is_primary {
                         failed_primaries_indices.insert(index);
                         lock_info.secondaries = Some(vec![]);
@@ -623,6 +627,7 @@ impl AcquirePessimisticLock {
                 params: item.parameters,
                 lock_key_ctx,
                 awakened_with_primary_index: None,
+                req_states: item.req_states.unwrap(),
             }
         }));
         Self::new_resumed(items, additional_secondaries, next_batch_secondaries)

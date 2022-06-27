@@ -11,6 +11,7 @@ use crate::storage::txn::commands::{ReleasedLocks, WriteResultLockInfo};
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use txn_types::Key;
 
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
@@ -115,13 +116,21 @@ impl Latch {
     ) -> Option<WriteResultLockInfo> {
         let (result, delete_entry) = if let Some(v) = self.lock_waiting.get_mut(key) {
             let mut result = None;
-            // for i in 0..v.len() {
-            if !v.is_empty() {
-                // let lock_info = &v[i];
-                // TODO: Early cancel entries with mismatching term; cleanup already cancelled items.
-                // TODO: Pop by order instead of swapping remove.
-                result = Some(v.pop_front().unwrap());
-                // break;
+            while let Some(lock_info) = v.pop_front() {
+                // TODO: Early cancel entries with mismatching term.
+                let lock_info: WriteResultLockInfo = lock_info;
+                if lock_info
+                    .req_states
+                    .as_ref()
+                    .unwrap()
+                    .finished
+                    .load(Ordering::Acquire)
+                {
+                    // Drop already-finished entry, which might have been canceled by error.
+                    continue;
+                }
+                result = Some(lock_info);
+                break;
             }
             (result, v.is_empty())
         } else {
