@@ -168,31 +168,35 @@ impl<T: Storage> RangesScanner<T> {
     fn update_scanned_range_from_new_point(&mut self, point: &PointRange) {
         assert!(self.is_scanned_range_aware);
 
-        self.update_working_range_end_key();
-        self.current_range.lower_inclusive.clear();
-        self.current_range.upper_exclusive.clear();
-        self.current_range
-            .lower_inclusive
-            .extend_from_slice(&point.0);
-        self.current_range
-            .upper_exclusive
-            .extend_from_slice(&point.0);
-        self.current_range.upper_exclusive.push(0);
+        // Only update current_range for the first and the last range.
+        if self.current_range.lower_inclusive.is_empty() || self.ranges_iter.is_drained() {
+            self.current_range.lower_inclusive.clear();
+            self.current_range.upper_exclusive.clear();
+            self.current_range
+                .lower_inclusive
+                .extend_from_slice(&point.0);
+            self.current_range
+                .upper_exclusive
+                .extend_from_slice(&point.0);
+            self.current_range.upper_exclusive.push(0);
+        }
         self.update_working_range_begin_key();
     }
 
     fn update_scanned_range_from_new_range(&mut self, range: &IntervalRange) {
         assert!(self.is_scanned_range_aware);
 
-        self.update_working_range_end_key();
-        self.current_range.lower_inclusive.clear();
-        self.current_range.upper_exclusive.clear();
-        self.current_range
-            .lower_inclusive
-            .extend_from_slice(&range.lower_inclusive);
-        self.current_range
-            .upper_exclusive
-            .extend_from_slice(&range.upper_exclusive);
+        // Only update current_range for the first and the last range.
+        if self.current_range.lower_inclusive.is_empty() || self.ranges_iter.is_drained() {
+            self.current_range.lower_inclusive.clear();
+            self.current_range.upper_exclusive.clear();
+            self.current_range
+                .lower_inclusive
+                .extend_from_slice(&range.lower_inclusive);
+            self.current_range
+                .upper_exclusive
+                .extend_from_slice(&range.upper_exclusive);
+        }
         self.update_working_range_begin_key();
     }
 
@@ -742,15 +746,15 @@ mod tests {
         assert_eq!(&scanner.working_range_begin_key, b"foo");
         assert_eq!(&scanner.working_range_end_key, b"foo_2\0");
 
-        // Upper_exclusive is updated. Updated by the last end range.
+        // Upper_exclusive is not updated.
         assert_eq!(&scanner.next_opt(false).unwrap().unwrap().0, b"bar");
         assert_eq!(&scanner.working_range_begin_key, b"foo");
-        assert_eq!(&scanner.working_range_end_key, b"foo_50");
+        assert_eq!(&scanner.working_range_end_key, b"foo_2\0");
 
-        // Upper_exclusive is updated. Updated by the last end range.
+        // Upper_exclusive is not updated.
         assert_eq!(&scanner.next_opt(false).unwrap().unwrap().0, b"bar_2");
         assert_eq!(&scanner.working_range_begin_key, b"foo");
-        assert_eq!(&scanner.working_range_end_key, b"bar_");
+        assert_eq!(&scanner.working_range_end_key, b"foo_2\0");
 
         // Drain.
         assert_eq!(scanner.next_opt(false).unwrap(), None);
@@ -816,25 +820,25 @@ mod tests {
             is_scanned_range_aware: true,
         });
 
-        // Lower_inclusive is updated. Upper_exclusive is updated by the last end range.
+        // Lower_inclusive is updated. Upper_exclusive is not update.
         assert_eq!(&scanner.next_opt(false).unwrap().unwrap().0, b"bar_2");
         assert_eq!(&scanner.working_range_begin_key, b"box");
-        assert_eq!(&scanner.working_range_end_key, b"bar_3");
+        assert_eq!(&scanner.working_range_end_key, b"");
 
         // Upper_exclusive is updated. Updated by scanned row.
         assert_eq!(&scanner.next_opt(true).unwrap().unwrap().0, b"bar");
         assert_eq!(&scanner.working_range_begin_key, b"box");
         assert_eq!(&scanner.working_range_end_key, b"bar");
 
-        // Upper_exclusive is updated. Updated by the last end range.
+        // Upper_exclusive is not update.
         assert_eq!(&scanner.next_opt(false).unwrap().unwrap().0, b"foo_2");
         assert_eq!(&scanner.working_range_begin_key, b"box");
-        assert_eq!(&scanner.working_range_end_key, b"foo_5");
+        assert_eq!(&scanner.working_range_end_key, b"bar");
 
         // Upper_exclusive is not update.
         assert_eq!(&scanner.next_opt(false).unwrap().unwrap().0, b"foo");
         assert_eq!(&scanner.working_range_begin_key, b"box");
-        assert_eq!(&scanner.working_range_end_key, b"foo_5");
+        assert_eq!(&scanner.working_range_end_key, b"bar");
 
         // Drain.
         assert_eq!(scanner.next_opt(false).unwrap(), None);
