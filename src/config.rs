@@ -12,6 +12,7 @@ use std::{
     fs, i32,
     io::{Error as IoError, ErrorKind, Write},
     path::Path,
+    str,
     sync::{Arc, RwLock},
     usize,
 };
@@ -35,8 +36,8 @@ use engine_rocks::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE,
+    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, TabletAccessor,
+    TabletErrorCollector, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::{IOPriority, IORateLimiter};
 use keys::region_raft_prefix_len;
@@ -1494,31 +1495,39 @@ pub enum DBType {
     Raft,
 }
 
-pub struct DBConfigManger {
-    db: RocksEngine,
+pub struct DBConfigManger<T: TabletAccessor<RocksEngine>> {
+    tablet_accessor: Arc<T>,
     db_type: DBType,
     shared_block_cache: bool,
 }
 
-impl DBConfigManger {
-    pub fn new(db: RocksEngine, db_type: DBType, shared_block_cache: bool) -> Self {
+impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
+    pub fn new(tablet_accessor: Arc<T>, db_type: DBType, shared_block_cache: bool) -> Self {
         DBConfigManger {
-            db,
+            tablet_accessor,
             db_type,
             shared_block_cache,
         }
     }
-}
 
-impl DBConfigManger {
     fn set_db_config(&self, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
-        self.db.set_db_options(opts)?;
-        Ok(())
+        let mut error_collector = TabletErrorCollector::new();
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
+                error_collector.add_result(region_id, suffix, db.set_db_options(opts));
+            });
+        error_collector.take_result()
     }
 
     fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
+        let mut error_collector = TabletErrorCollector::new();
         self.validate_cf(cf)?;
-        self.db.set_options_cf(cf, opts)?;
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
+                error_collector.add_result(region_id, suffix, db.set_options_cf(cf, opts));
+            });
+        error_collector.take_result()?;
+
         // Write config to metric
         for (cfg_name, cfg_value) in opts {
             let cfg_value = match cfg_value {
@@ -1542,33 +1551,68 @@ impl DBConfigManger {
                  block-cache.capacity in storage module instead"
                 .into());
         }
-        let opt = self.db.get_options_cf(cf)?;
-        opt.set_block_cache_capacity(size.0)?;
+        // for multi-rocks, shared block cache has to be enabled and thus should shortcut in the above if statement.
+        assert!(self.tablet_accessor.is_single_engine());
+        let mut error_collector = TabletErrorCollector::new();
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
+                let r = db.get_options_cf(cf);
+                if let Ok(opt) = r {
+                    let r = opt.set_block_cache_capacity(size.0);
+                    if let Err(r) = r {
+                        error_collector.add_result(region_id, suffix, Err(r.into()));
+                    }
+                } else if let Err(r) = r {
+                    error_collector.add_result(region_id, suffix, Err(r));
+                }
+            });
         // Write config to metric
         CONFIG_ROCKSDB_GAUGE
             .with_label_values(&[cf, "block_cache_size"])
             .set(size.0 as f64);
-        Ok(())
+        error_collector.take_result()
     }
 
     fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {
-        let mut opt = self.db.as_inner().get_db_options();
-        opt.set_rate_bytes_per_sec(rate_bytes_per_sec)?;
-        Ok(())
+        let mut error_collector = TabletErrorCollector::new();
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
+                let mut opt = db.as_inner().get_db_options();
+                let r = opt.set_rate_bytes_per_sec(rate_bytes_per_sec);
+                if let Err(r) = r {
+                    error_collector.add_result(region_id, suffix, Err(r.into()));
+                }
+            });
+        error_collector.take_result()
     }
 
     fn set_rate_limiter_auto_tuned(
         &self,
         rate_limiter_auto_tuned: bool,
     ) -> Result<(), Box<dyn Error>> {
-        let mut opt = self.db.as_inner().get_db_options();
-        opt.set_auto_tuned(rate_limiter_auto_tuned)?;
-        // double check the new state
-        let new_auto_tuned = opt.get_auto_tuned();
-        if new_auto_tuned.is_none() || new_auto_tuned.unwrap() != rate_limiter_auto_tuned {
-            return Err("fail to set rate_limiter_auto_tuned".into());
-        }
-        Ok(())
+        let mut error_collector = TabletErrorCollector::new();
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
+                let mut opt = db.as_inner().get_db_options();
+                let r = opt.set_auto_tuned(rate_limiter_auto_tuned);
+                if let Err(r) = r {
+                    error_collector.add_result(region_id, suffix, Err(r.into()));
+                } else {
+                    // double check the new state
+                    let new_auto_tuned = opt.get_auto_tuned();
+                    if new_auto_tuned.is_none()
+                        || new_auto_tuned.unwrap() != rate_limiter_auto_tuned
+                    {
+                        error_collector.add_result(
+                            region_id,
+                            suffix,
+                            Err("fail to set rate_limiter_auto_tuned".to_string().into()),
+                        );
+                    }
+                }
+            });
+
+        error_collector.take_result()
     }
 
     fn set_max_background_jobs(&self, max_background_jobs: i32) -> Result<(), Box<dyn Error>> {
@@ -1599,7 +1643,7 @@ impl DBConfigManger {
     }
 }
 
-impl ConfigManager for DBConfigManger {
+impl<T: TabletAccessor<RocksEngine> + Send + Sync> ConfigManager for DBConfigManger<T> {
     fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
@@ -3817,7 +3861,9 @@ mod tests {
 
     use api_version::{ApiV1, KvFormat};
     use case_macros::*;
-    use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
+    use engine_traits::{
+        ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as DBOptionsTrait, ALL_CFS,
+    };
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
     use itertools::Itertools;
@@ -4235,7 +4281,11 @@ mod tests {
         let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
         cfg_controller.register(
             Module::Rocksdb,
-            Box::new(DBConfigManger::new(engine.clone(), DBType::Kv, shared)),
+            Box::new(DBConfigManger::new(
+                Arc::new(engine.clone()),
+                DBType::Kv,
+                shared,
+            )),
         );
         let (scheduler, receiver) = dummy_scheduler();
         cfg_controller.register(
