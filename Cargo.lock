@@ -3019,6 +3019,7 @@ dependencies = [
  "engine_rocks",
  "engine_test",
  "engine_traits",
+ "fail",
  "keys",
  "kvproto",
  "protobuf",

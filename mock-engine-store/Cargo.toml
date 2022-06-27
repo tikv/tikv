@@ -16,6 +16,7 @@ protobuf-codec = [
 ]
 
 [dependencies]
+fail = "0.5"
 server = { path = "../components/server" }
 raftstore = { path = "../components/raftstore", default-features = false }
 protobuf = "2.8.0"
