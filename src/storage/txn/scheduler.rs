@@ -53,7 +53,7 @@ use crate::storage::kv::{
     SnapContext, Statistics,
 };
 use crate::storage::lock_manager::{
-    self, DiagnosticContext, LockManager, LockWaitToken, WaitTimeout,
+    self, DiagnosticContext, LockDigest, LockManager, LockWaitToken, WaitTimeout,
 };
 use crate::storage::metrics::{self, *};
 use crate::storage::txn::commands::acquire_pessimistic_lock::ResumedPessimisticLockItem;
@@ -678,7 +678,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     kvrpcpb::LockInfo::default(),
                     NonZeroU64::new(item.params.pb_ctx.get_term()), // Assuming the `term` field in ctx should have been set here.
                     item.params,
-                    item.lock_key_ctx.lock_digest,
+                    item.lock_key_ctx.lock_hash,
                     item.lock_key_ctx.hash_for_latch,
                     Some(cb),
                 ));
@@ -900,7 +900,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .iter()
             .map(|lock| lock_manager::KeyLockWaitInfo {
                 key: lock.key.clone(),
-                lock_digest: lock.lock_digest,
+                lock_digest: LockDigest {
+                    ts: lock.last_found_lock.get_lock_version().into(),
+                    hash: lock.lock_hash,
+                },
                 lock_info: lock.last_found_lock.clone(),
             })
             .collect();

@@ -28,7 +28,7 @@ use tikv_kv::SnapshotExt;
 
 pub struct PessimisticLockKeyContext {
     pub index_in_request: usize,
-    pub lock_digest: LockDigest,
+    pub lock_hash: u64,
     pub hash_for_latch: u64,
 }
 
@@ -119,17 +119,14 @@ command! {
 }
 
 impl PessimisticLockKeyContext {
-    fn from_key(index: usize, key: &Key, ts: TimeStamp) -> Self {
-        let lock_digest = LockDigest {
-            hash: key.gen_hash(),
-            ts,
-        };
+    fn from_key(index: usize, key: &Key) -> Self {
+        let hash_for_lock = key.gen_hash();
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
         let hash_for_latch = hasher.finish();
         Self {
             index_in_request: index,
-            lock_digest,
+            lock_hash: hash_for_lock,
             hash_for_latch,
         }
     }
@@ -233,7 +230,7 @@ impl AcquirePessimisticLock {
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
         for (index, (key, should_not_exist)) in keys.iter().enumerate() {
-            let lock_key_ctx = PessimisticLockKeyContext::from_key(index, key, params.start_ts);
+            let lock_key_ctx = PessimisticLockKeyContext::from_key(index, key);
             match acquire_pessimistic_lock(
                 &mut txn,
                 &mut reader,
@@ -266,7 +263,7 @@ impl AcquirePessimisticLock {
                         lock_info,
                         term,
                         params.clone(),
-                        lock_key_ctx.lock_digest,
+                        lock_key_ctx.lock_hash,
                         lock_key_ctx.hash_for_latch,
                         None,
                     );
@@ -280,8 +277,7 @@ impl AcquirePessimisticLock {
                                 if i == index {
                                     None
                                 } else {
-                                    let lock_key_ctx =
-                                        PessimisticLockKeyContext::from_key(i, &k, params.start_ts);
+                                    let lock_key_ctx = PessimisticLockKeyContext::from_key(i, &k);
                                     Some((k, s, lock_key_ctx, None))
                                 }
                             })
@@ -478,7 +474,7 @@ impl AcquirePessimisticLock {
                         lock_info,
                         snapshot.ext().get_term(),
                         params,
-                        lock_key_ctx.lock_digest,
+                        lock_key_ctx.lock_hash,
                         lock_key_ctx.hash_for_latch,
                         None,
                     );
@@ -618,7 +614,7 @@ impl AcquirePessimisticLock {
             assert!(item.key_cb.is_none());
             let lock_key_ctx = PessimisticLockKeyContext {
                 index_in_request: item.index_in_request,
-                lock_digest: item.lock_digest,
+                lock_hash: item.lock_hash,
                 hash_for_latch: item.hash_for_latch,
             };
             ResumedPessimisticLockItem {
