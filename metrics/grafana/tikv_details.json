@@ -21377,28 +21377,28 @@
               "refId": "E"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_failure{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type,key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_failure{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode,type)",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{key_mode}}_failure-{{type}}",
               "refId": "F"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_met{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type,key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_met{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{key_mode}}_mvcc-deletion-met",
               "refId": "G"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_handled{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type,key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_handled{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{key_mode}}_mvcc-deletion-handled",
               "refId": "H"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_wasted{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type,key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_wasted{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{key_mode}}_mvcc-deletion-wasted",

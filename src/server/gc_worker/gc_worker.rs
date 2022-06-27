@@ -72,6 +72,9 @@ pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
 const GC_MAX_PENDING_TASKS: usize = 4096;
 
+pub const TXN_KEYMODE: &str = "txn";
+pub const RAW_KEYMODE: &str = "raw";
+
 /// Provides safe point.
 pub trait GcSafePointProvider: Send + 'static {
     fn get_safe_point(&self) -> Result<TimeStamp>;
@@ -528,7 +531,7 @@ where
                     wasted_keys += 1;
                 }
 
-                gc_info.report_metrics("raw");
+                gc_info.report_metrics(RAW_KEYMODE);
 
                 next_gc_key = keys.next();
                 gc_info = GcInfo::default();
@@ -743,20 +746,15 @@ where
     }
 
     fn update_statistics_metrics(&mut self, key_mode: GcKeyMode) {
-        let stats_map = self.stats_map.get_mut(&key_mode);
-        match stats_map {
-            None => {}
-            Some(stats) => {
-                for (cf, cf_details) in stats.details_enum().iter() {
-                    for (tag, count) in cf_details.iter() {
-                        GC_KEYS_COUNTER_STATIC
-                            .get(key_mode)
-                            .get(*cf)
-                            .get(*tag)
-                            .inc_by(*count as u64);
-                    }
+        if let Some(stats) = self.stats_map.get_mut(&key_mode) {
+            for (cf, cf_details) in stats.details_enum().iter() {
+                for (tag, count) in cf_details.iter() {
+                    GC_KEYS_COUNTER_STATIC
+                        .get(key_mode)
+                        .get(*cf)
+                        .get(*tag)
+                        .inc_by(*count as u64);
                 }
-                stats.clean();
             }
         }
     }
@@ -832,10 +830,10 @@ where
                 match self.gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
-                            .with_label_values(&["txn"])
+                            .with_label_values(&[TXN_KEYMODE])
                             .inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED
-                            .with_label_values(&["txn"])
+                            .with_label_values(&[TXN_KEYMODE])
                             .inc_by(wasted as _);
                         update_metrics(false);
                     }
@@ -858,10 +856,10 @@ where
                 match self.raw_gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
-                            .with_label_values(&["raw"])
+                            .with_label_values(&[RAW_KEYMODE])
                             .inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED
-                            .with_label_values(&["raw"])
+                            .with_label_values(&[RAW_KEYMODE])
                             .inc_by(wasted as _);
                         update_metrics(false);
                     }
@@ -917,7 +915,7 @@ where
                 }
                 info!("write GcTask::OrphanVersions success"; "id" => id);
                 GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-                    .with_label_values(&["cleaned", "txn"])
+                    .with_label_values(&[TXN_KEYMODE, "cleaned"])
                     .inc_by(wb.count() as u64);
                 update_metrics(false);
             }

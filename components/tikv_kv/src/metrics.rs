@@ -5,8 +5,8 @@ use prometheus_static_metric::*;
 make_auto_flush_static_metric! {
 
     pub label_enum GcKeyMode {
-        // The enum 'txn' contain tidb and txnkv scenarios statistics.
-        // If necessary, 'txn' can be divided into 'tidb' and 'txnkv' in the future.
+        // The enum 'txn' contains both TiDB and TxnKV scenarios statistics,
+        // as they have the same storage format, and use the same GC procedures.
         txn,
         raw,
     }

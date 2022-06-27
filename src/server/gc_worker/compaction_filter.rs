@@ -34,7 +34,7 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
-    server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager},
+    server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager, TXN_KEYMODE},
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
 
@@ -77,7 +77,7 @@ lazy_static! {
     pub static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_failure",
         "Compaction filter meets failure",
-        &["type","key_mode"]
+        &["key_mode", "type"]
     )
     .unwrap();
     // A counter for skip performing GC in compactions.
@@ -106,7 +106,7 @@ lazy_static! {
     pub static ref GC_COMPACTION_FILTER_ORPHAN_VERSIONS: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_orphan_versions",
         "Compaction filter orphan versions for default CF",
-        &["tag","key_mode"]
+        &["key_mode", "tag"]
     ).unwrap();
 
     /// Counter of mvcc deletions met in compaction filter.
@@ -241,13 +241,14 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             return std::ptr::null_mut();
         }
         drop(gc_context_option);
-
         GC_COMPACTION_FILTER_PERFORM
-            .with_label_values(&["txn"])
+            .with_label_values(&[TXN_KEYMODE])
             .inc();
         if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
-            GC_COMPACTION_FILTER_SKIP.with_label_values(&["txn"]).inc();
+            GC_COMPACTION_FILTER_SKIP
+                .with_label_values(&[TXN_KEYMODE])
+                .inc();
             return std::ptr::null_mut();
         }
 
@@ -359,12 +360,12 @@ impl WriteCompactionFilter {
                 match e {
                     ScheduleError::Full(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&["full", "txn"])
+                            .with_label_values(&[TXN_KEYMODE, "full"])
                             .inc();
                     }
                     ScheduleError::Stopped(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&["stopped", "txn"])
+                            .with_label_values(&[TXN_KEYMODE, "stopped"])
                             .inc();
                     }
                 }
@@ -435,7 +436,7 @@ impl WriteCompactionFilter {
                     if self.is_bottommost_level {
                         self.mvcc_deletion_overlaps = Some(0);
                         GC_COMPACTION_FILTER_MVCC_DELETION_MET
-                            .with_label_values(&["txn"])
+                            .with_label_values(&[TXN_KEYMODE])
                             .inc();
                     }
                 }
@@ -514,14 +515,14 @@ impl WriteCompactionFilter {
     fn switch_key_metrics(&mut self) {
         if self.versions != 0 {
             self.versions_hist
-                .with_label_values(&["txn"])
+                .with_label_values(&[TXN_KEYMODE])
                 .observe(self.versions as f64);
             self.total_versions += self.versions;
             self.versions = 0;
         }
         if self.filtered != 0 {
             self.filtered_hist
-                .with_label_values(&["txn"])
+                .with_label_values(&[TXN_KEYMODE])
                 .observe(self.filtered as f64);
             self.total_filtered += self.filtered;
             self.filtered = 0;
@@ -530,13 +531,13 @@ impl WriteCompactionFilter {
 
     fn flush_metrics(&self) {
         GC_COMPACTION_FILTERED
-            .with_label_values(&["txn"])
+            .with_label_values(&[TXN_KEYMODE])
             .inc_by(self.total_filtered as u64);
         GC_COMPACTION_MVCC_ROLLBACK
-            .with_label_values(&["txn"])
+            .with_label_values(&[TXN_KEYMODE])
             .inc_by(self.mvcc_rollback_and_locks as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-            .with_label_values(&["generated", "txn"])
+            .with_label_values(&[TXN_KEYMODE, "generated"])
             .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
@@ -628,7 +629,7 @@ impl CompactionFilter for WriteCompactionFilter {
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
                 GC_COMPACTION_FAILURE
-                    .with_label_values(&["filter", "txn"])
+                    .with_label_values(&[TXN_KEYMODE, "filter"])
                     .inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
