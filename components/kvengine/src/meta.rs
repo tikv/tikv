@@ -269,43 +269,18 @@ impl ShardMeta {
     }
 
     fn apply_ingest_files(&mut self, ingest_files: &pb::IngestFiles) {
-        let mut min_level = 4;
-        for file in self.files.values() {
-            if min_level < file.level {
-                min_level = file.level;
-            }
-        }
-        let has_ln_file = !ingest_files.get_table_creates().is_empty();
-        if min_level <= 1 && has_ln_file {
-            // We need spare level to ingest Ln files.
-            error!(
-                "{}:{} no empty level to ingest Ln files!",
-                self.id, self.ver
-            );
-            return;
-        }
         self.apply_properties(ingest_files.get_properties());
-        if has_ln_file {
-            let ingest_level = min_level - 1;
-            for tbl in ingest_files.get_table_creates() {
-                self.add_file(
-                    tbl.id,
-                    0,
-                    ingest_level as u32,
-                    tbl.get_smallest(),
-                    tbl.get_biggest(),
-                );
-            }
-        } else {
-            for l0_tbl in ingest_files.get_l0_creates() {
-                self.add_file(
-                    l0_tbl.id,
-                    -1,
-                    0,
-                    l0_tbl.get_smallest(),
-                    l0_tbl.get_biggest(),
-                );
-            }
+        for tbl in ingest_files.get_table_creates() {
+            self.add_file(tbl.id, 0, tbl.level, tbl.get_smallest(), tbl.get_biggest());
+        }
+        for l0_tbl in ingest_files.get_l0_creates() {
+            self.add_file(
+                l0_tbl.id,
+                -1,
+                0,
+                l0_tbl.get_smallest(),
+                l0_tbl.get_biggest(),
+            );
         }
     }
 
