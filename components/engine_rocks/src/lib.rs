@@ -30,7 +30,7 @@ mod compact;
 pub use crate::compact::*;
 mod db_options;
 pub use crate::db_options::*;
-mod db_vector;
+pub mod db_vector;
 pub use crate::db_vector::*;
 mod engine;
 pub use crate::engine::*;
@@ -64,7 +64,7 @@ mod perf_context_metrics;
 mod engine_iterator;
 pub use crate::engine_iterator::*;
 
-mod options;
+pub mod options;
 pub mod raw_util;
 pub mod util;
 
