@@ -13,7 +13,7 @@ use collections::HashSet;
 use engine_rocks::{
     raw::{CompactOptions, DBBottommostLevelCompaction, DB},
     util::get_cf_handle,
-    Compat, RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksWriteBatch,
+    Compat, RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksWriteBatchVec,
 };
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, MvccProperties, Peekable,
@@ -577,11 +577,11 @@ impl<ER: RaftEngine> Debugger<ER> {
             let msg = format!("Store {} in the failed list", store_id);
             return Err(Error::Other(msg.into()));
         }
-        let mut wb = RocksWriteBatch::new(self.engines.kv.as_inner().clone());
+        let mut wb = self.engines.kv.write_batch();
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
         {
-            let remove_stores = |key: &[u8], value: &[u8], kv_wb: &mut RocksWriteBatch| {
+            let remove_stores = |key: &[u8], value: &[u8], kv_wb: &mut RocksWriteBatchVec| {
                 let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
                 if suffix_type != keys::REGION_STATE_SUFFIX {
                     return Ok(());
@@ -1010,7 +1010,7 @@ fn recover_mvcc_for_range(
     let wb_limit: usize = 10240;
 
     loop {
-        let mut wb = RocksWriteBatch::new(db.clone());
+        let mut wb = db.c().write_batch();
         mvcc_checker.check_mvcc(&mut wb, Some(wb_limit))?;
 
         let batch_size = wb.count();
@@ -1102,7 +1102,7 @@ impl MvccChecker {
         }
     }
 
-    pub fn check_mvcc(&mut self, wb: &mut RocksWriteBatch, limit: Option<usize>) -> Result<()> {
+    pub fn check_mvcc(&mut self, wb: &mut RocksWriteBatchVec, limit: Option<usize>) -> Result<()> {
         loop {
             // Find min key in the 3 CFs.
             let mut key = MvccChecker::min_key(None, &self.default_iter, |k| {
@@ -1124,7 +1124,7 @@ impl MvccChecker {
         }
     }
 
-    fn check_mvcc_key(&mut self, wb: &mut RocksWriteBatch, key: &[u8]) -> Result<()> {
+    fn check_mvcc_key(&mut self, wb: &mut RocksWriteBatchVec, key: &[u8]) -> Result<()> {
         self.scan_count += 1;
         if self.scan_count % 1_000_000 == 0 {
             info!(
@@ -1292,7 +1292,7 @@ impl MvccChecker {
 
     fn delete(
         &mut self,
-        wb: &mut RocksWriteBatch,
+        wb: &mut RocksWriteBatchVec,
         cf: &str,
         key: &[u8],
         ts: Option<TimeStamp>,
@@ -1333,7 +1333,7 @@ fn set_region_tombstone(
     db: &Arc<DB>,
     store_id: u64,
     region: Region,
-    wb: &mut RocksWriteBatch,
+    wb: &mut RocksWriteBatchVec,
 ) -> Result<()> {
     let id = region.get_id();
     let key = keys::region_state_key(id);
@@ -1924,7 +1924,7 @@ mod tests {
         let cf2 = CF_RAFT;
 
         {
-            let mock_region_state = |wb: &mut RocksWriteBatch, region_id: u64, peers: &[u64]| {
+            let mock_region_state = |wb: &mut RocksWriteBatchVec, region_id: u64, peers: &[u64]| {
                 let region_state_key = keys::region_state_key(region_id);
                 let mut region_state = RegionLocalState::default();
                 region_state.set_state(PeerState::Normal);
@@ -1945,20 +1945,23 @@ mod tests {
                 wb.put_msg_cf(cf2, &region_state_key, &region_state)
                     .unwrap();
             };
-            let mock_raft_state =
-                |wb: &mut RocksWriteBatch, region_id: u64, last_index: u64, commit_index: u64| {
-                    let raft_state_key = keys::raft_state_key(region_id);
-                    let mut raft_state = RaftLocalState::default();
-                    raft_state.set_last_index(last_index);
-                    raft_state.mut_hard_state().set_commit(commit_index);
-                    wb.put_msg_cf(cf1, &raft_state_key, &raft_state).unwrap();
-                };
-            let mock_apply_state = |wb: &mut RocksWriteBatch, region_id: u64, apply_index: u64| {
-                let raft_apply_key = keys::apply_state_key(region_id);
-                let mut apply_state = RaftApplyState::default();
-                apply_state.set_applied_index(apply_index);
-                wb.put_msg_cf(cf2, &raft_apply_key, &apply_state).unwrap();
+            let mock_raft_state = |wb: &mut RocksWriteBatchVec,
+                                   region_id: u64,
+                                   last_index: u64,
+                                   commit_index: u64| {
+                let raft_state_key = keys::raft_state_key(region_id);
+                let mut raft_state = RaftLocalState::default();
+                raft_state.set_last_index(last_index);
+                raft_state.mut_hard_state().set_commit(commit_index);
+                wb.put_msg_cf(cf1, &raft_state_key, &raft_state).unwrap();
             };
+            let mock_apply_state =
+                |wb: &mut RocksWriteBatchVec, region_id: u64, apply_index: u64| {
+                    let raft_apply_key = keys::apply_state_key(region_id);
+                    let mut apply_state = RaftApplyState::default();
+                    apply_state.set_applied_index(apply_index);
+                    wb.put_msg_cf(cf2, &raft_apply_key, &apply_state).unwrap();
+                };
 
             for &region_id in &[10, 11, 12] {
                 mock_region_state(&mut wb2, region_id, &[store_id]);

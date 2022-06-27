@@ -82,7 +82,7 @@ pub mod kv {
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
-        RocksSnapshot as KvTestSnapshot, RocksWriteBatch as KvTestWriteBatch,
+        RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
     use engine_traits::Result;
 

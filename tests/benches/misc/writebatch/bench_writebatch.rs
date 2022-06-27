@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_rocks::{raw::DB, Compat, RocksWriteBatch};
+use engine_rocks::{raw::DB, Compat, RocksWriteBatchVec};
 use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
 use tempfile::Builder;
 use test::Bencher;
@@ -87,7 +87,7 @@ fn bench_writebatch_1024(b: &mut Bencher) {
     bench_writebatch_impl(b, 1024);
 }
 
-fn fill_writebatch(wb: &mut RocksWriteBatch, target_size: usize) {
+fn fill_writebatch(wb: &mut RocksWriteBatchVec, target_size: usize) {
     let (k, v) = (b"this is the key", b"this is the value");
     loop {
         wb.put(k, v).unwrap();
