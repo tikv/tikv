@@ -454,4 +454,8 @@ x-build-dist-debug:
 	bash scripts/run-cargo.sh
 
 test-cloud-engine:
-	cargo test -p kvengine -p rfstore -p rfengine -p tests --tests
+	cargo test -p kvengine -p rfstore -p rfengine --tests
+	cargo test -p tests --test cloud_engine
+
+kvenginepb:
+	GEN_KVENGINEPB=1 cargo build -p kvenginepb
