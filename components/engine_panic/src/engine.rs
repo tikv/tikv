@@ -25,7 +25,7 @@ impl KvEngine for PanicEngine {
 }
 
 impl TabletAccessor<PanicEngine> for PanicEngine {
-    fn for_each_opened_tablet(&self, f: &mut (dyn FnMut(u64, u64, &PanicEngine) + '_)) {
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &PanicEngine)) {
         panic!()
     }
 

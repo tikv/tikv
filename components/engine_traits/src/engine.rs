@@ -72,7 +72,7 @@ pub trait KvEngine:
 /// For multi rocksdb instances, it accesses all the tablets with the accessor
 pub trait TabletAccessor<EK> {
     /// Loop visit all opened tablets by the specified function.
-    fn for_each_opened_tablet(&self, _f: &mut (dyn FnMut(u64, u64, &EK) + '_));
+    fn for_each_opened_tablet(&self, _f: &mut (dyn FnMut(u64, u64, &EK)));
 
     /// return true if it's single engine;
     /// return false if it's a multi-tablet factory;
@@ -275,7 +275,7 @@ impl<EK> TabletAccessor<EK> for DummyFactory<EK>
 where
     EK: Clone + Send + 'static,
 {
-    fn for_each_opened_tablet(&self, f: &mut (dyn FnMut(u64, u64, &EK) + '_)) {
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &EK)) {
         if let Some(engine) = &self.engine {
             f(0, 0, engine);
         }

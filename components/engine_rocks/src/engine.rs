@@ -112,7 +112,7 @@ impl KvEngine for RocksEngine {
 }
 
 impl TabletAccessor<RocksEngine> for RocksEngine {
-    fn for_each_opened_tablet(&self, f: &mut (dyn FnMut(u64, u64, &RocksEngine) + '_)) {
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
         f(0, 0, self);
     }
 

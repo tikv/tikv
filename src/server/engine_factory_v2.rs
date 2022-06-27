@@ -154,7 +154,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
 
 impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactoryV2<ER> {
     #[inline]
-    fn for_each_opened_tablet(&self, f: &mut (dyn FnMut(u64, u64, &RocksEngine) + '_)) {
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
         let reg = self.registry.lock().unwrap();
         for ((id, suffix), tablet) in &*reg {
             f(*id, *suffix, tablet)
