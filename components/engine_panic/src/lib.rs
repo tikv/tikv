@@ -39,6 +39,8 @@ pub mod mvcc_properties;
 pub use crate::mvcc_properties::*;
 pub mod ttl_properties;
 pub use crate::ttl_properties::*;
+pub mod seqno_properties;
+pub use crate::seqno_properties::*;
 pub mod perf_context;
 pub use crate::perf_context::*;
 pub mod flow_control_factors;

@@ -23,7 +23,6 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{
     config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel},
     get_env,
-    properties::MvccPropertiesCollectorFactory,
     raw::{
         BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
         DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
@@ -31,9 +30,10 @@ use engine_rocks::{
     },
     raw_util::CFOptions,
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
-    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
-    RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    MvccPropertiesCollectorFactory, RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine,
+    RocksEventListener, RocksSstPartitionerFactory, RocksdbLogger, SeqnoPropertiesCollectorFactory,
+    TtlPropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, TabletAccessor,
@@ -650,6 +650,10 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.seqno-properties-collector",
+            SeqnoPropertiesCollectorFactory::default(),
+        );
         match api_version {
             ApiVersion::V1 => {
                 // nothing to do
@@ -767,6 +771,10 @@ impl WriteCfConfig {
             "tikv.mvcc-properties-collector",
             MvccPropertiesCollectorFactory::default(),
         );
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.seqno-properties-collector",
+            SeqnoPropertiesCollectorFactory::default(),
+        );
         let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
@@ -853,6 +861,10 @@ impl LockCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.seqno-properties-collector",
+            SeqnoPropertiesCollectorFactory::default(),
+        );
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts

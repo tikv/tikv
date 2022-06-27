@@ -302,6 +302,8 @@ mod flow_control_factors;
 pub use crate::flow_control_factors::*;
 mod table_properties;
 pub use crate::table_properties::*;
+mod seqno_properties;
+pub use crate::seqno_properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.

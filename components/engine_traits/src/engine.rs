@@ -33,6 +33,7 @@ pub trait KvEngine:
     + MvccPropertiesExt
     + TtlPropertiesExt
     + TablePropertiesExt
+    + SeqnoPropertiesExt
     + PerfContextExt
     + MiscExt
     + Send
