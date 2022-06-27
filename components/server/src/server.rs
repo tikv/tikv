@@ -819,49 +819,49 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             );
         }
 
-        // Register causal observer for RawKV API V2
-        if let ApiVersion::V2 = F::TAG {
-            let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
-                self.pd_client.clone(),
-                self.config.causal_ts.renew_interval.0,
-                self.config.causal_ts.renew_batch_min_size,
-            ));
-            if let Err(e) = tso {
-                panic!("Causal timestamp provider initialize failed: {:?}", e);
-            }
-            let causal_ts_provider = Arc::new(tso.unwrap());
-            info!("Causal timestamp provider startup.");
+        // // Register causal observer for RawKV API V2
+        // if let ApiVersion::V2 = F::TAG {
+        //     let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
+        //         self.pd_client.clone(),
+        //         self.config.causal_ts.renew_interval.0,
+        //         self.config.causal_ts.renew_batch_min_size,
+        //     ));
+        //     if let Err(e) = tso {
+        //         panic!("Causal timestamp provider initialize failed: {:?}", e);
+        //     }
+        //     let causal_ts_provider = Arc::new(tso.unwrap());
+        //     info!("Causal timestamp provider startup.");
+        //
+        //     let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        //     causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // }
 
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        }
+        // // Register cdc.
+        // let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        // cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // // Register cdc config manager.
+        // cfg_controller.register(
+        //     tikv::config::Module::CDC,
+        //     Box::new(CdcConfigManager(cdc_worker.scheduler())),
+        // );
 
-        // Register cdc.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
-        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        // Register cdc config manager.
-        cfg_controller.register(
-            tikv::config::Module::CDC,
-            Box::new(CdcConfigManager(cdc_worker.scheduler())),
-        );
-
-        // Create resolved ts worker
-        let rts_worker = if self.config.resolved_ts.enable {
-            let worker = Box::new(LazyWorker::new("resolved-ts"));
-            // Register the resolved ts observer
-            let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
-            resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-            // Register config manager for resolved ts worker
-            cfg_controller.register(
-                tikv::config::Module::ResolvedTs,
-                Box::new(resolved_ts::ResolvedTsConfigManager::new(
-                    worker.scheduler(),
-                )),
-            );
-            Some(worker)
-        } else {
-            None
-        };
+        // // Create resolved ts worker
+        // let rts_worker = if self.config.resolved_ts.enable {
+        //     let worker = Box::new(LazyWorker::new("resolved-ts"));
+        //     // Register the resolved ts observer
+        //     let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
+        //     resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        //     // Register config manager for resolved ts worker
+        //     cfg_controller.register(
+        //         tikv::config::Module::ResolvedTs,
+        //         Box::new(resolved_ts::ResolvedTsConfigManager::new(
+        //             worker.scheduler(),
+        //         )),
+        //     );
+        //     Some(worker)
+        // } else {
+        //     None
+        // };
 
         let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
         let check_leader_scheduler = self
@@ -932,35 +932,35 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             )),
         );
 
-        // Start backup stream
-        if self.config.backup_stream.enable {
-            // Create backup stream.
-            let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
-            let backup_stream_scheduler = backup_stream_worker.scheduler();
-
-            // Register backup-stream observer.
-            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
-            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-            // Register config manager.
-            cfg_controller.register(
-                tikv::config::Module::BackupStream,
-                Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
-            );
-
-            let backup_stream_endpoint = backup_stream::Endpoint::new::<String>(
-                node.id(),
-                &self.config.pd.endpoints,
-                self.config.backup_stream.clone(),
-                backup_stream_scheduler,
-                backup_stream_ob,
-                self.region_info_accessor.clone(),
-                self.router.clone(),
-                self.pd_client.clone(),
-                self.concurrency_manager.clone(),
-            );
-            backup_stream_worker.start(backup_stream_endpoint);
-            self.to_stop.push(backup_stream_worker);
-        }
+        // // Start backup stream
+        // if self.config.backup_stream.enable {
+        //     // Create backup stream.
+        //     let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
+        //     let backup_stream_scheduler = backup_stream_worker.scheduler();
+        //
+        //     // Register backup-stream observer.
+        //     let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
+        //     backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        //     // Register config manager.
+        //     cfg_controller.register(
+        //         tikv::config::Module::BackupStream,
+        //         Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
+        //     );
+        //
+        //     let backup_stream_endpoint = backup_stream::Endpoint::new::<String>(
+        //         node.id(),
+        //         &self.config.pd.endpoints,
+        //         self.config.backup_stream.clone(),
+        //         backup_stream_scheduler,
+        //         backup_stream_ob,
+        //         self.region_info_accessor.clone(),
+        //         self.router.clone(),
+        //         self.pd_client.clone(),
+        //         self.concurrency_manager.clone(),
+        //     );
+        //     backup_stream_worker.start(backup_stream_endpoint);
+        //     self.to_stop.push(backup_stream_worker);
+        // }
 
         let import_path = self.store_path.join("import");
         let mut importer = SstImporter::new(
