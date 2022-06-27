@@ -1512,22 +1512,20 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
 
     fn set_db_config(&self, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
         let mut error_collector = TabletErrorCollector::new();
-        self.tablet_accessor.for_each_opened_tablet(Box::new(
-            |region_id, suffix, db: &RocksEngine| {
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
                 error_collector.add_result(region_id, suffix, db.set_db_options(opts));
-            },
-        ));
+            });
         error_collector.take_result()
     }
 
     fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
         let mut error_collector = TabletErrorCollector::new();
         self.validate_cf(cf)?;
-        self.tablet_accessor.for_each_opened_tablet(Box::new(
-            |region_id, suffix, db: &RocksEngine| {
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
                 error_collector.add_result(region_id, suffix, db.set_options_cf(cf, opts));
-            },
-        ));
+            });
         error_collector.take_result()?;
 
         // Write config to metric
@@ -1556,8 +1554,8 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
         // for multi-rocks, shared block cache has to be enabled and thus should shortcut in the above if statement.
         assert!(self.tablet_accessor.is_single_engine());
         let mut error_collector = TabletErrorCollector::new();
-        self.tablet_accessor.for_each_opened_tablet(Box::new(
-            |region_id, suffix, db: &RocksEngine| {
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
                 let r = db.get_options_cf(cf);
                 if let Ok(opt) = r {
                     let r = opt.set_block_cache_capacity(size.0);
@@ -1567,8 +1565,7 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
                 } else if let Err(r) = r {
                     error_collector.add_result(region_id, suffix, Err(r));
                 }
-            },
-        ));
+            });
         // Write config to metric
         CONFIG_ROCKSDB_GAUGE
             .with_label_values(&[cf, "block_cache_size"])
@@ -1578,15 +1575,14 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
 
     fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {
         let mut error_collector = TabletErrorCollector::new();
-        self.tablet_accessor.for_each_opened_tablet(Box::new(
-            |region_id, suffix, db: &RocksEngine| {
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
                 let mut opt = db.as_inner().get_db_options();
                 let r = opt.set_rate_bytes_per_sec(rate_bytes_per_sec);
                 if let Err(r) = r {
                     error_collector.add_result(region_id, suffix, Err(r.into()));
                 }
-            },
-        ));
+            });
         error_collector.take_result()
     }
 
@@ -1595,8 +1591,8 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
         rate_limiter_auto_tuned: bool,
     ) -> Result<(), Box<dyn Error>> {
         let mut error_collector = TabletErrorCollector::new();
-        self.tablet_accessor.for_each_opened_tablet(Box::new(
-            |region_id, suffix, db: &RocksEngine| {
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
                 let mut opt = db.as_inner().get_db_options();
                 let r = opt.set_auto_tuned(rate_limiter_auto_tuned);
                 if let Err(r) = r {
@@ -1614,8 +1610,7 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
                         );
                     }
                 }
-            },
-        ));
+            });
 
         error_collector.take_result()
     }

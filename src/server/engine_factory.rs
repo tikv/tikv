@@ -271,7 +271,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
 }
 
 impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactory<ER> {
-    fn for_each_opened_tablet(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
+    fn for_each_opened_tablet(&self, f: &mut (dyn FnMut(u64, u64, &RocksEngine) + '_)) {
         if let Ok(db) = self.inner.root_db.lock() {
             let db = db.as_ref().unwrap();
             f(0, 0, db);
