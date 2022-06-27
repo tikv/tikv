@@ -35,7 +35,10 @@ use yatp::{
 
 use super::metrics::*;
 use crate::{
-    coprocessor::CoprocessorHost,
+    coprocessor::{
+        ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost,
+        ObserverContext,
+    },
     store::{
         self, check_abort,
         peer_storage::{
@@ -813,7 +816,9 @@ where
             }
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
-                if let Err(_) = self.ctx.pre_apply_snapshot(&task) { () }
+                if let Err(_) = self.ctx.pre_apply_snapshot(&task) {
+                    ()
+                }
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
                 self.handle_pending_applies();
@@ -882,6 +887,7 @@ mod tests {
     use keys::data_key;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use pd_client::RpcClient;
+    use prometheus::core::AtomicU64;
     use tempfile::Builder;
     use tikv_util::worker::{LazyWorker, Worker};
 
@@ -1040,6 +1046,10 @@ mod tests {
             .prefix("test_pending_applies")
             .tempdir()
             .unwrap();
+        let obs = MockApplySnapshotObserver::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(obs.clone()));
 
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
@@ -1094,7 +1104,7 @@ mod tests {
             0,
             true,
             2,
-            CoprocessorHost::<KvTestEngine>::default(),
+            host,
             router,
             Option::<Arc<RpcClient>>::None,
         );
@@ -1222,6 +1232,12 @@ mod tests {
         );
 
         wait_apply_finish(&[1]);
+        assert_eq!(obs.pre_apply_count.load(Ordering::SeqCst), 1);
+        assert_eq!(obs.post_apply_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            obs.pre_apply_hash.load(Ordering::SeqCst),
+            obs.post_apply_hash.load(Ordering::SeqCst)
+        );
 
         // the pending apply task should be finished and snapshots are ingested.
         // note that when ingest sst, it may flush memtable if overlap,
@@ -1327,5 +1343,51 @@ mod tests {
         );
         thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
         assert!(!check_region_exist(6));
+    }
+
+    #[derive(Clone, Default)]
+    struct MockApplySnapshotObserver {
+        pub pre_apply_count: Arc<AtomicUsize>,
+        pub post_apply_count: Arc<AtomicUsize>,
+        pub pre_apply_hash: Arc<AtomicUsize>,
+        pub post_apply_hash: Arc<AtomicUsize>,
+    }
+
+    impl Coprocessor for MockApplySnapshotObserver {}
+
+    impl ApplySnapshotObserver for MockApplySnapshotObserver {
+        fn pre_apply_snapshot(
+            &self,
+            _: &mut ObserverContext<'_>,
+            peer_id: u64,
+            key: &crate::store::SnapKey,
+            snapshot: Option<&crate::store::Snapshot>,
+        ) {
+            let code = snapshot.unwrap().total_size().unwrap()
+                + key.term
+                + key.region_id
+                + key.idx
+                + peer_id;
+            self.pre_apply_count.fetch_add(1, Ordering::SeqCst);
+            self.pre_apply_hash
+                .fetch_add(code as usize, Ordering::SeqCst);
+        }
+
+        fn post_apply_snapshot(
+            &self,
+            _: &mut ObserverContext<'_>,
+            peer_id: u64,
+            key: &crate::store::SnapKey,
+            snapshot: Option<&crate::store::Snapshot>,
+        ) {
+            let code = snapshot.unwrap().total_size().unwrap()
+                + key.term
+                + key.region_id
+                + key.idx
+                + peer_id;
+            self.post_apply_count.fetch_add(1, Ordering::SeqCst);
+            self.post_apply_hash
+                .fetch_add(code as usize, Ordering::SeqCst);
+        }
     }
 }
