@@ -440,12 +440,21 @@ mod tests {
     fn test_unary_minus_real() {
         let test_cases = vec![
             (None, None),
-            (Some(Real::from(0.123_f64)), Some(Real::from(-0.123_f64))),
-            (Some(Real::from(-0.123_f64)), Some(Real::from(0.123_f64))),
-            (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
             (
-                Some(Real::from(f64::INFINITY)),
-                Some(Real::from(f64::NEG_INFINITY)),
+                Some(Real::new(0.123_f64).unwrap()),
+                Some(Real::new(-0.123_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(-0.123_f64).unwrap()),
+                Some(Real::new(0.123_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(0.0_f64).unwrap()),
+                Some(Real::new(0.0_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(f64::INFINITY).unwrap()),
+                Some(Real::new(f64::NEG_INFINITY).unwrap()),
             ),
         ];
         for (arg, expect_output) in test_cases {

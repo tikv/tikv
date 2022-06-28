@@ -110,7 +110,7 @@ impl ConfigManager {
 impl online_config::ConfigManager for ConfigManager {
     fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
         let mut new_config = self.current_config.clone();
-        new_config.update(change);
+        new_config.update(change)?;
         new_config.validate()?;
         if self.current_config.receiver_address != new_config.receiver_address {
             self.address_notifier

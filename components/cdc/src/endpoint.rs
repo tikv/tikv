@@ -41,6 +41,7 @@ use security::SecurityManager;
 use tikv::{config::CdcConfig, storage::Statistics};
 use tikv_util::{
     debug, error, impl_display_as_debug, info,
+    sys::thread::ThreadBuildWrapper,
     time::Limiter,
     timer::SteadyTimer,
     warn,
@@ -373,12 +374,16 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
             .worker_threads(config.incremental_scan_threads)
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         let tso_worker = Builder::new_multi_thread()
             .thread_name("tso")
             .worker_threads(config.tso_worker_threads)
             .enable_time()
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
 
@@ -442,7 +447,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     fn on_change_cfg(&mut self, change: ConfigChange) {
         // Validate first.
         let mut validate_cfg = self.config.clone();
-        validate_cfg.update(change);
+        if let Err(e) = validate_cfg.update(change) {
+            warn!("cdc config update failed"; "error" => ?e);
+            return;
+        }
         if let Err(e) = validate_cfg.validate() {
             warn!("cdc config update failed"; "error" => ?e);
             return;
@@ -454,7 +462,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             "change" => ?change
         );
         // Update the config here. The following adjustments will all use the new values.
-        self.config.update(change.clone());
+        self.config.update(change.clone()).unwrap();
 
         // Maybe the cache will be lost due to smaller capacity,
         // but it is acceptable.

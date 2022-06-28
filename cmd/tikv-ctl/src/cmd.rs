@@ -539,6 +539,12 @@ pub enum Cmd {
         /// PD endpoints
         pd: String,
     },
+    /// Reset data in a TiKV to a certain version
+    ResetToVersion {
+        #[structopt(short = "v")]
+        /// The version to reset TiKV to
+        version: u64,
+    },
     #[structopt(external_subcommand)]
     External(Vec<String>),
 }

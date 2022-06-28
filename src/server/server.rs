@@ -44,6 +44,7 @@ use crate::{
     read_pool::ReadPool,
     server::{gc_worker::GcWorker, Proxy},
     storage::{lock_manager::LockManager, Engine, Storage},
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
@@ -109,6 +110,8 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
                 RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
                     .worker_threads(cfg.value().stats_concurrency)
+                    .after_start_wrapper(|| {})
+                    .before_stop_wrapper(|| {})
                     .build()
                     .unwrap(),
             )
@@ -526,6 +529,8 @@ mod tests {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()
                 .unwrap(),
         );

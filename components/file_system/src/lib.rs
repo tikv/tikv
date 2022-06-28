@@ -18,10 +18,13 @@ mod metrics;
 mod metrics_manager;
 mod rate_limiter;
 
-pub use std::fs::{
-    canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
-    remove_dir_all, remove_file, rename, set_permissions, symlink_metadata, DirBuilder, DirEntry,
-    FileType, Metadata, Permissions, ReadDir,
+pub use std::{
+    convert::TryFrom,
+    fs::{
+        canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link,
+        remove_dir, remove_dir_all, remove_file, rename, set_permissions, symlink_metadata,
+        DirBuilder, DirEntry, FileType, Metadata, Permissions, ReadDir,
+    },
 };
 use std::{
     io::{self, ErrorKind, Read, Write},
@@ -205,19 +208,17 @@ impl<'de> Deserialize<'de> for IOPriority {
 
 impl From<IOPriority> for ConfigValue {
     fn from(mode: IOPriority) -> ConfigValue {
-        ConfigValue::IOPriority(mode.as_str().to_owned())
+        ConfigValue::String(mode.as_str().to_owned())
     }
 }
 
-impl From<ConfigValue> for IOPriority {
-    fn from(c: ConfigValue) -> IOPriority {
-        if let ConfigValue::IOPriority(s) = c {
-            match IOPriority::from_str(s.as_str()) {
-                Ok(p) => p,
-                _ => panic!("expect: low, medium, high, got: {:?}", s),
-            }
+impl TryFrom<ConfigValue> for IOPriority {
+    type Error = String;
+    fn try_from(c: ConfigValue) -> Result<IOPriority, Self::Error> {
+        if let ConfigValue::String(s) = c {
+            Self::from_str(s.as_str())
         } else {
-            panic!("expect: ConfigValue::IOPriority, got: {:?}", c);
+            panic!("expect: ConfigValue::String, got: {:?}", c);
         }
     }
 }

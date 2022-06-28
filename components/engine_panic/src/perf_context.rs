@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind, PerfLevel};
+use tracker::TrackerToken;
 
 use crate::engine::PanicEngine;
 
@@ -19,7 +20,7 @@ impl PerfContext for PanicPerfContext {
         panic!()
     }
 
-    fn report_metrics(&mut self) {
+    fn report_metrics(&mut self, _: &[TrackerToken]) {
         panic!()
     }
 }

@@ -43,7 +43,7 @@ use crate::{
 };
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
-const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
+const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
@@ -436,9 +436,7 @@ where
                 Err(e) => error!(?e; "bootstrap cluster"; "cluster_id" => self.cluster_id,),
             }
             retry += 1;
-            thread::sleep(Duration::from_secs(
-                CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
-            ));
+            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
         }
         Err(box_err!("bootstrapped cluster failed"))
     }
@@ -451,9 +449,7 @@ where
                     warn!("check cluster bootstrapped failed"; "err" => ?e);
                 }
             }
-            thread::sleep(Duration::from_secs(
-                CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
-            ));
+            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
         }
         Err(box_err!("check cluster bootstrapped failed"))
     }

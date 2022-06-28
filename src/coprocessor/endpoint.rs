@@ -2,6 +2,9 @@
 
 use std::{borrow::Cow, future::Future, marker::PhantomData, sync::Arc, time::Duration};
 
+use ::tracker::{
+    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
+};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -164,6 +167,7 @@ impl<E: Engine> Endpoint<E> {
 
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
+
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
@@ -201,6 +205,10 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                with_tls_tracker(|tracker| {
+                    tracker.req_info.request_type = RequestType::CoprocessorDag;
+                    tracker.req_info.start_ts = start_ts;
+                });
 
                 self.check_memory_locks(&req_ctx)?;
 
@@ -260,8 +268,13 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                with_tls_tracker(|tracker| {
+                    tracker.req_info.request_type = RequestType::CoprocessorAnalyze;
+                    tracker.req_info.start_ts = start_ts;
+                });
 
                 self.check_memory_locks(&req_ctx)?;
+
                 let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
@@ -300,6 +313,10 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                with_tls_tracker(|tracker| {
+                    tracker.req_info.request_type = RequestType::CoprocessorChecksum;
+                    tracker.req_info.start_ts = start_ts;
+                });
 
                 self.check_memory_locks(&req_ctx)?;
 
@@ -316,6 +333,7 @@ impl<E: Engine> Endpoint<E> {
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
+
         Ok((builder, req_ctx))
     }
 
@@ -360,7 +378,7 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` to process the request and produce a result.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
-        mut tracker: Box<Tracker>,
+        mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
         // When this function is being executed, it may be queued for a long time, so that
@@ -468,17 +486,25 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            req.get_context(),
+            RequestType::Unknown,
+            req.start_ts,
+        )));
+        set_tls_tracker_token(tracker);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         async move {
-            match result_of_future {
+            let res = match result_of_future {
                 Err(e) => make_error_response(e).into(),
                 Ok(handle_fut) => handle_fut
                     .await
                     .unwrap_or_else(|e| make_error_response(e).into()),
-            }
+            };
+            GLOBAL_TRACKERS.remove(tracker);
+            res
         }
     }
 
@@ -489,7 +515,7 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` multiple times to process the request and produce multiple results.
     fn handle_stream_request_impl(
         semaphore: Option<Arc<Semaphore>>,
-        mut tracker: Box<Tracker>,
+        mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
