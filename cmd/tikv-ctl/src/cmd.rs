@@ -548,9 +548,7 @@ pub enum Cmd {
         version: u64,
     },
     /// Control for Raft Engine
-    RaftEngineCtl {
-        args: Vec<String>,
-    },
+    RaftEngineCtl { args: Vec<String> },
     #[structopt(external_subcommand)]
     External(Vec<String>),
 }

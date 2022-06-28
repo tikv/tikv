@@ -193,7 +193,7 @@ fn main() {
                     path.map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
                 DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
             }
-        }
+        },
         Cmd::CleanupEncryptionMeta {} => {
             let key_manager =
                 match data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
