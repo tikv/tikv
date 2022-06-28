@@ -534,6 +534,14 @@ impl RaftEngine for RaftLogEngine {
     fn get_engine_size(&self) -> Result<u64> {
         Ok(self.0.get_used_size() as u64)
     }
+
+    fn for_each_raft_group<E, F>(&self, _f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<engine_traits::Error>,
+    {
+        unimplemented!()
+    }
 }
 
 fn transfer_error(e: RaftEngineError) -> engine_traits::Error {
