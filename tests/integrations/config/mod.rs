@@ -101,7 +101,7 @@ fn test_serde_custom_tikv_config() {
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
         stats_concurrency: 10,
-        heavy_load_threshold: 1000,
+        heavy_load_threshold: 25,
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
         background_thread_count: 999,
@@ -222,7 +222,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
-        raft_msg_flush_interval: ReadableDuration::micros(2333),
+        raft_msg_flush_interval: ReadableDuration::micros(250),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -689,6 +689,7 @@ fn test_serde_custom_tikv_config() {
         num_threads: 456,
         batch_size: 7,
         sst_max_size: ReadableSize::mb(789),
+        s3_multi_part_size: ReadableSize::mb(15),
         hadoop: HadoopConfig {
             home: "/root/hadoop".to_string(),
             linux_user: "hadoop".to_string(),

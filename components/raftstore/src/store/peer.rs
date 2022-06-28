@@ -42,7 +42,7 @@ use smallvec::SmallVec;
 use time::Timespec;
 use uuid::Uuid;
 
-use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::coprocessor::{CoprocessorHost, RegionChangeEvent, RoleChange};
 use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::async_io::write::WriteMsg;
 use crate::store::async_io::write_router::WriteRouter;
@@ -596,6 +596,9 @@ where
     persisted_number: u64,
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
+
+    /// lead_transferee if the peer is in a leadership transferring.
+    pub lead_transferee: u64,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -706,6 +709,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
+            lead_transferee: raft::INVALID_ID,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -929,6 +933,7 @@ where
         engines: &Engines<EK, ER>,
         perf_context: &mut EK::PerfContext,
         keep_data: bool,
+        pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
     ) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
@@ -939,47 +944,94 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
         );
+        let (pending_create_peers, clean) = if self.local_first_replicate {
+            let mut pending = pending_create_peers.lock().unwrap();
+            if self.get_store().is_initialized() {
+                assert_eq!(pending.get(&region.get_id()), None);
+                (None, true)
+            } else if let Some(status) = pending.get(&region.get_id()) {
+                if *status == (self.peer.get_id(), false) {
+                    pending.remove(&region.get_id());
+                    // Hold the lock to avoid apply worker applies split.
+                    (Some(pending), true)
+                } else if *status == (self.peer.get_id(), true) {
+                    // It's already marked to split by apply worker, skip delete.
+                    (None, false)
+                } else {
+                    // Peer id can't be different as router should exist all the time, their is no
+                    // chance for store to insert a different peer id. And apply worker should skip
+                    // split when meeting a different id.
+                    let status = *status;
+                    // Avoid panic with lock.
+                    drop(pending);
+                    panic!("{} unexpected pending states {:?}", self.tag, status);
+                }
+            } else {
+                // The status is inserted when it's created. It will be removed in following cases:
+                // 1. By appy worker as it fails to split due to region state key. This is
+                //    impossible to reach this code path because the delete write batch is not
+                //    persisted yet.
+                // 2. By store fsm as it fails to create peer, which is also invalid obviously.
+                // 3. By peer fsm after persisting snapshot, then it should be initialized.
+                // 4. By peer fsm after split.
+                // 5. By peer fsm when destroy, which should go the above branch instead.
+                (None, false)
+            }
+        } else {
+            (None, true)
+        };
+        if clean {
+            // Set Tombstone state explicitly
+            let mut kv_wb = engines.kv.write_batch();
+            let mut raft_wb = engines.raft.log_batch(1024);
+            // Raft log gc should be flushed before being destroyed, so last_compacted_idx has to be
+            // the minimal index that may still have logs.
+            let last_compacted_idx = self.last_compacted_idx;
+            self.mut_store()
+                .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
 
-        // Set Tombstone state explicitly
-        let mut kv_wb = engines.kv.write_batch();
-        let mut raft_wb = engines.raft.log_batch(1024);
-        // Raft log gc should be flushed before being destroyed, so last_compacted_idx has to be
-        // the minimal index that may still have logs.
-        let last_compacted_idx = self.last_compacted_idx;
-        self.mut_store()
-            .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
+            // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
+            // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
+            // peer list are empty, so a removed peer will be created again.  Saving current peer
+            // into the peer list of region will fix this problem.
+            if !self.get_store().is_initialized() {
+                region.mut_peers().push(self.peer.clone());
+            }
 
-        // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
-        // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
-        // peer list are empty, so a removed peer will be created again.  Saving current peer
-        // into the peer list of region will fix this problem.
-        if !self.get_store().is_initialized() {
-            region.mut_peers().push(self.peer.clone());
-        }
-        write_peer_state(
-            &mut kv_wb,
-            &region,
-            PeerState::Tombstone,
-            self.pending_merge_state.clone(),
-        )?;
-        // write kv rocksdb first in case of restart happen between two write
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        kv_wb.write_opt(&write_opts)?;
+            write_peer_state(
+                &mut kv_wb,
+                &region,
+                PeerState::Tombstone,
+                // Only persist the `merge_state` if the merge is known to be succeeded
+                // which is determined by the `keep_data` flag
+                if keep_data {
+                    self.pending_merge_state.clone()
+                } else {
+                    None
+                },
+            )?;
 
-        perf_context.start_observe();
-        engines.raft.consume(&mut raft_wb, true)?;
-        perf_context.report_metrics();
+            // write kv rocksdb first in case of restart happen between two write
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            kv_wb.write_opt(&write_opts)?;
 
-        if self.get_store().is_initialized() && !keep_data {
-            // If we meet panic when deleting data and raft log, the dirty data
-            // will be cleared by a newer snapshot applying or restart.
-            if let Err(e) = self.get_store().clear_data() {
-                error!(?e;
-                    "failed to schedule clear data task";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
+            drop(pending_create_peers);
+
+            perf_context.start_observe();
+            engines.raft.consume(&mut raft_wb, true)?;
+            perf_context.report_metrics();
+
+            if self.get_store().is_initialized() && !keep_data {
+                // If we meet panic when deleting data and raft log, the dirty data
+                // will be cleared by a newer snapshot applying or restart.
+                if let Err(e) = self.get_store().clear_data() {
+                    error!(?e;
+                        "failed to schedule clear data task";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
+                }
             }
         }
 
@@ -994,7 +1046,11 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "takes" => ?t.saturating_elapsed(),
+            "clean" => clean,
+            "keep_data" => keep_data,
         );
+
+        fail_point!("raft_store_after_destroy_peer");
 
         Ok(())
     }
@@ -1302,7 +1358,8 @@ where
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
             fail_point!("on_step_read_index_msg");
-            ctx.coprocessor_host.on_step_read_index(&mut m);
+            ctx.coprocessor_host
+                .on_step_read_index(&mut m, self.get_role());
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
@@ -1657,16 +1714,22 @@ where
                 _ => {}
             }
             self.on_leader_changed(ctx, ss.leader_id, self.term());
-            // TODO: it may possible that only the `leader_id` change and the role
-            // didn't change
-            ctx.coprocessor_host
-                .on_role_change(self.region(), ss.raft_state);
+            ctx.coprocessor_host.on_role_change(
+                self.region(),
+                RoleChange {
+                    state: ss.raft_state,
+                    leader_id: ss.leader_id,
+                    prev_lead_transferee: self.lead_transferee,
+                    vote: self.raft_group.raft.vote,
+                },
+            );
             self.cmd_epoch_checker.maybe_update_term(self.term());
         } else if let Some(hs) = ready.hs() {
             if hs.get_term() != self.get_store().hard_state().get_term() {
                 self.on_leader_changed(ctx, self.leader_id(), hs.get_term());
             }
         }
+        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 
     /// Correctness depends on the order between calling this function and notifying other peers
@@ -2933,6 +2996,7 @@ where
             Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
+        fail_point!("after_propose");
 
         match res {
             Err(e) => {
@@ -4439,6 +4503,11 @@ where
                 "err" => ?e,
             );
         }
+    }
+
+    /// Update states of the peer which can be changed in the previous raft tick.
+    pub fn post_raft_group_tick(&mut self) {
+        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 }
 

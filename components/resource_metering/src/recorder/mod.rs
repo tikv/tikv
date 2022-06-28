@@ -2,7 +2,7 @@
 
 use crate::collector::{Collector, CollectorReg, COLLECTOR_REG_CHAN};
 use crate::localstorage::{register_storage_chan_tx, LocalStorage, LocalStorageRef};
-use crate::{utils, RawRecords, SharedTagPtr};
+use crate::{RawRecords, SharedTagPtr};
 
 use std::io;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -12,8 +12,9 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use crossbeam::channel::{unbounded, Receiver};
+use tikv_util::sys::thread::Pid;
 use tikv_util::time::Instant;
 
 mod cpu;
@@ -40,11 +41,7 @@ pub trait SubRecorder {
     ///
     /// [RawRecords]: crate::model::RawRecords
     /// [LocalStorage]: crate::localstorage::LocalStorage
-    fn tick(
-        &mut self,
-        _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
-    ) {
+    fn tick(&mut self, _records: &mut RawRecords, _thread_stores: &mut HashMap<Pid, LocalStorage>) {
     }
 
     /// This function is called every time before reporting to Collector.
@@ -57,7 +54,7 @@ pub trait SubRecorder {
     fn collect(
         &mut self,
         _records: &mut RawRecords,
-        _thread_stores: &mut HashMap<usize, LocalStorage>,
+        _thread_stores: &mut HashMap<Pid, LocalStorage>,
     ) {
     }
 
@@ -75,7 +72,7 @@ pub trait SubRecorder {
     /// This function exists because the sampling work of `SubRecorder` may need
     /// to be performed on all functions, and `SubRecorder` may wish to maintain
     /// a thread-related data structure by itself.
-    fn thread_created(&mut self, _id: usize, _tag: SharedTagPtr) {}
+    fn thread_created(&mut self, _id: Pid, _tag: SharedTagPtr) {}
 }
 
 /// Give `Recorder` a list of [SubRecorder]s and `Recorder` will make them work
@@ -93,7 +90,7 @@ pub struct Recorder {
     recorders: Vec<Box<dyn SubRecorder + Send>>,
     collectors: HashMap<u64, Box<dyn Collector>>,
     thread_rx: Receiver<LocalStorageRef>,
-    thread_stores: HashMap<usize, LocalStorage>,
+    thread_stores: HashMap<Pid, LocalStorage>,
     last_collect: Instant,
     last_cleanup: Instant,
 }
@@ -136,9 +133,10 @@ impl Recorder {
     fn cleanup(&mut self) {
         if self.last_cleanup.saturating_elapsed().as_secs() > CLEANUP_INTERVAL_SECS {
             // Clean up the data of the destroyed threads.
-            if let Some(ids) = utils::thread_ids() {
+            let pid = tikv_util::sys::thread::process_id();
+            if let Ok(ids) = tikv_util::sys::thread::thread_ids::<HashSet<Pid>>(pid) {
                 self.thread_stores.retain(|k, v| {
-                    let retain = ids.contains(k);
+                    let retain = ids.contains(&(*k as _));
                     assert!(retain || v.shared_ptr.take().is_none());
                     retain
                 });
@@ -373,7 +371,7 @@ mod tests {
         fn tick(
             &mut self,
             _records: &mut RawRecords,
-            _thread_stores: &mut HashMap<usize, LocalStorage>,
+            _thread_stores: &mut HashMap<Pid, LocalStorage>,
         ) {
             OP_COUNT.fetch_add(1, SeqCst);
         }
@@ -382,7 +380,7 @@ mod tests {
             OP_COUNT.fetch_add(1, SeqCst);
         }
 
-        fn thread_created(&mut self, _id: usize, _tag: SharedTagPtr) {
+        fn thread_created(&mut self, _id: Pid, _tag: SharedTagPtr) {
             OP_COUNT.fetch_add(1, SeqCst);
         }
     }

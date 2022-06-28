@@ -114,6 +114,7 @@ fn start_raftstore(
             AutoSplitController::default(),
             Arc::default(),
             ConcurrencyManager::new(1.into()),
+            None,
         )
         .unwrap();
     (cfg_controller, raft_router, system.apply_router(), system)

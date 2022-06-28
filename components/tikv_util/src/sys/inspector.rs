@@ -46,6 +46,7 @@ mod linux {
     use procfs::process::Process;
 
     use super::{DiskStat, IoStat, ThreadInspector};
+    use crate::sys::thread;
 
     pub struct Impl(Process);
 
@@ -100,8 +101,8 @@ mod linux {
     }
 
     pub fn self_thread_inspector() -> Result<Impl, String> {
-        let pid = std::process::id();
-        let tid = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+        let pid = thread::process_id();
+        let tid = thread::thread_id();
         let root = format!("/proc/{}/task/{}", pid, tid);
         let process = Process::new_with_root(root.into())
             .map_err(|e| format!("procfs::Process::new: {}", e))?;
