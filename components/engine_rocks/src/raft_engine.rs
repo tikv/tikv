@@ -12,7 +12,7 @@ use kvproto::{
         RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
     },
 };
-use protobuf::Message;
+use protobuf::{parse_from_bytes, Message};
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
 
@@ -22,6 +22,20 @@ impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         let key = keys::raft_state_key(raft_group_id);
         self.get_msg_cf(CF_DEFAULT, &key)
+    }
+
+    fn get_seqno_relation(
+        &self,
+        raft_group_id: u64,
+        seqno: u64,
+    ) -> Result<Option<RegionSequenceNumberRelation>> {
+        let key = keys::sequence_number_relation_key(raft_group_id, seqno);
+        let res = if let Some((_, value)) = self.seek_cf(CF_DEFAULT, &key)? {
+            Some(parse_from_bytes::<RegionSequenceNumberRelation>(&value)?)
+        } else {
+            None
+        };
+        Ok(res)
     }
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
@@ -367,7 +381,10 @@ impl RaftLogBatch for RocksWriteBatch {
         raft_group_id: u64,
         relation: &RegionSequenceNumberRelation,
     ) -> Result<()> {
-        self.put_msg(&keys::sequence_number_relation_key(raft_group_id), relation)
+        self.put_msg(
+            &keys::sequence_number_relation_key(raft_group_id, relation.sequence_number),
+            relation,
+        )
     }
 
     fn persist_size(&self) -> usize {

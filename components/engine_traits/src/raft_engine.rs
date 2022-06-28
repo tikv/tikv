@@ -22,6 +22,12 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
 
+    fn get_seqno_relation(
+        &self,
+        raft_group_id: u64,
+        seqno: u64,
+    ) -> Result<Option<RegionSequenceNumberRelation>>;
+
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
 
     /// Return count of fetched entries.

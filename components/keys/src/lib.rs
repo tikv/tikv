@@ -96,8 +96,8 @@ pub fn raft_state_key(region_id: u64) -> [u8; 11] {
     make_region_prefix(region_id, RAFT_STATE_SUFFIX)
 }
 
-pub fn sequence_number_relation_key(region_id: u64) -> [u8; 11] {
-    make_region_prefix(region_id, SEQUENCE_NUMBER_RELATION_SUFFIX)
+pub fn sequence_number_relation_key(region_id: u64, seqno: u64) -> [u8; 19] {
+    make_region_key(region_id, SEQUENCE_NUMBER_RELATION_SUFFIX, seqno)
 }
 
 pub fn snapshot_raft_state_key(region_id: u64) -> [u8; 11] {

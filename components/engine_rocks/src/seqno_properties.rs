@@ -43,7 +43,7 @@ impl SeqnoPropertiesExt for RocksEngine {
             return Ok(None);
         }
 
-        let mut res = SeqnoProperties::new();
+        let mut res = SeqnoProperties::default();
         for (_, v) in collection.iter() {
             let prop = match RocksSeqnoProperties::decode(v.user_collected_properties()) {
                 Ok(v) => v,
@@ -78,7 +78,7 @@ pub struct SeqnoPropertiesCollectorFactory;
 impl TablePropertiesCollectorFactory<SeqnoPropertiesCollector> for SeqnoPropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> SeqnoPropertiesCollector {
         SeqnoPropertiesCollector {
-            prop: SeqnoProperties::new(),
+            prop: SeqnoProperties::default(),
         }
     }
 }
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn test_seqno_properties() {
         let mut collector = SeqnoPropertiesCollector {
-            prop: SeqnoProperties::new(),
+            prop: SeqnoProperties::default(),
         };
         collector.add(b"k", b"v", DBEntryType::Put, 3, 0);
         collector.add(b"k", b"v", DBEntryType::Put, 2, 0);

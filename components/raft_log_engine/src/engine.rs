@@ -287,6 +287,13 @@ const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
 const SEQNO_RELATION_KEY: &[u8] = &[0x05];
 
+fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);
+    key.extend_from_slice(SEQNO_RELATION_KEY);
+    key.extend_from_slice(&seqno.to_be_bytes());
+    key
+}
+
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
         self.0
@@ -310,7 +317,11 @@ impl RaftLogBatchTrait for RaftLogBatch {
         relation: &RegionSequenceNumberRelation,
     ) -> Result<()> {
         self.0
-            .put_message(raft_group_id, SEQNO_RELATION_KEY.to_vec(), relation)
+            .put_message(
+                raft_group_id,
+                raft_seqno_relation_key(relation.sequence_number),
+                relation,
+            )
             .map_err(transfer_error)
     }
 
@@ -366,6 +377,27 @@ impl RaftEngineReadOnly for RaftLogEngine {
         self.0
             .get_message(raft_group_id, RAFT_LOG_STATE_KEY)
             .map_err(transfer_error)
+    }
+
+    fn get_seqno_relation(
+        &self,
+        raft_group_id: u64,
+        seqno: u64,
+    ) -> Result<Option<RegionSequenceNumberRelation>> {
+        let mut res = None;
+        self.0
+            .scan_message(
+                raft_group_id,
+                Some(SEQNO_RELATION_KEY),
+                Some(&raft_seqno_relation_key(seqno + 1)),
+                true,
+                |_, value| {
+                    res = Some(value);
+                    Ok(false)
+                },
+            )
+            .map_err(transfer_error)?;
+        Ok(res)
     }
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {

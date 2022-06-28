@@ -8,8 +8,8 @@ pub struct SeqnoProperties {
     pub smallest_seqno: u64,
 }
 
-impl SeqnoProperties {
-    pub fn new() -> Self {
+impl Default for SeqnoProperties {
+    fn default() -> Self {
         Self {
             largest_seqno: u64::MIN,
             smallest_seqno: u64::MAX,

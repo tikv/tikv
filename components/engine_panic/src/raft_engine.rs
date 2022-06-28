@@ -54,6 +54,14 @@ impl RaftEngineReadOnly for PanicEngine {
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
         panic!()
     }
+
+    fn get_seqno_relation(
+        &self,
+        raft_group_id: u64,
+        seqno: u64,
+    ) -> Result<Option<RegionSequenceNumberRelation>> {
+        panic!()
+    }
 }
 
 impl RaftEngineDebug for PanicEngine {
