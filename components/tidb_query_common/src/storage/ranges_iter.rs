@@ -64,6 +64,12 @@ impl RangesIterator {
     pub fn notify_drained(&mut self) {
         self.in_range = false;
     }
+
+    /// Check drained.
+    #[inline]
+    pub fn is_drained(&mut self) -> bool {
+        self.iter.len() == 0
+    }
 }
 
 #[cfg(test)]

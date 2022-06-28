@@ -4157,9 +4157,34 @@ dependencies = [
  "tikv_util",
  "time",
  "tokio",
+ "tracker",
  "txn_types",
  "uuid",
  "yatp",
+]
+
+[[package]]
+name = "raftstore-v2"
+version = "0.1.0"
+dependencies = [
+ "collections",
+ "crossbeam",
+ "engine_test",
+ "engine_traits",
+ "error_code",
+ "fail",
+ "kvproto",
+ "pd_client",
+ "raft",
+ "raft-proto",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "smallvec",
+ "tempfile",
+ "test_pd",
+ "test_util",
+ "tikv_util",
 ]
 
 [[package]]
@@ -5937,7 +5962,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.1.0-alpha"
+version = "6.2.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -5971,6 +5996,7 @@ dependencies = [
  "futures-executor",
  "futures-timer",
  "futures-util",
+ "getset",
  "grpcio",
  "grpcio-health",
  "hex 0.4.2",

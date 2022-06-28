@@ -7,7 +7,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{RaftEngine, Result, TabletFactory};
+use engine_traits::{RaftEngine, Result, TabletAccessor, TabletFactory};
 
 use crate::server::engine_factory::KvEngineFactory;
 
@@ -30,9 +30,10 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
             ));
         }
         let tablet_path = self.tablet_path(id, suffix);
-        let kv_engine = self.inner.create_tablet(&tablet_path)?;
+        let kv_engine = self.inner.create_tablet(&tablet_path, id, suffix)?;
         debug!("inserting tablet"; "key" => ?(id, suffix));
         reg.insert((id, suffix), kv_engine.clone());
+        self.inner.on_tablet_created(id, suffix);
         Ok(kv_engine)
     }
 
@@ -123,15 +124,9 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
         let path = self.tablet_path(id, suffix);
         self.registry.lock().unwrap().remove(&(id, suffix));
-        self.inner.destroy_tablet(&path)
-    }
-
-    #[inline]
-    fn loop_tablet_cache(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
-        let reg = self.registry.lock().unwrap();
-        for ((id, suffix), tablet) in &*reg {
-            f(*id, *suffix, tablet)
-        }
+        self.inner.destroy_tablet(&path)?;
+        self.inner.on_tablet_destroy(id, suffix);
+        Ok(())
     }
 
     #[inline]
@@ -154,6 +149,21 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
 
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
         Box::new(std::clone::Clone::clone(self))
+    }
+}
+
+impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactoryV2<ER> {
+    #[inline]
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
+        let reg = self.registry.lock().unwrap();
+        for ((id, suffix), tablet) in &*reg {
+            f(*id, *suffix, tablet)
+        }
+    }
+
+    // it have multi tablets.
+    fn is_single_engine(&self) -> bool {
+        false
     }
 }
 
@@ -210,6 +220,15 @@ mod tests {
         let tablet_path = factory.tablet_path(1, 10);
         let tablet2 = factory.open_tablet_raw(&tablet_path, false).unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
+        let mut count = 0;
+        factory.for_each_opened_tablet(&mut |id, suffix, _tablet| {
+            assert!(id == 0);
+            assert!(suffix == 0);
+            count += 1;
+        });
+        assert_eq!(count, 1);
+        assert!(factory.is_single_engine());
+        assert!(shared_db.is_single_engine());
     }
 
     #[test]
@@ -247,6 +266,7 @@ mod tests {
         factory.destroy_tablet(1, 20).unwrap();
         let result = factory.open_tablet(1, 20);
         assert!(result.is_err());
+        assert!(!factory.is_single_engine());
     }
 
     #[test]
@@ -261,11 +281,11 @@ mod tests {
         factory.create_tablet(1, 10).unwrap();
         factory.create_tablet(2, 10).unwrap();
         let mut count = 0;
-        factory.loop_tablet_cache(Box::new(|id, suffix, _tablet| {
+        factory.for_each_opened_tablet(&mut |id, suffix, _tablet| {
             assert!(id == 1 || id == 2);
             assert!(suffix == 10);
             count += 1;
-        }));
+        });
         assert_eq!(count, 2);
     }
 }
