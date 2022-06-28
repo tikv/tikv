@@ -2,7 +2,7 @@
 
 //! Storage online config manager.
 
-use std::sync::Arc;
+use std::{convert::TryInto, sync::Arc};
 
 use engine_traits::{CFNamesExt, CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IOPriority, IOType};
@@ -110,7 +110,7 @@ impl<EK: Engine, L: LockManager> ConfigManager for StorageConfigManger<EK, L> {
             for t in IOType::iter() {
                 if let Some(priority) = io_rate_limit.remove(&(t.as_str().to_owned() + "_priority"))
                 {
-                    let priority: IOPriority = priority.into();
+                    let priority: IOPriority = priority.try_into()?;
                     limiter.set_io_priority(t, priority);
                 }
             }
