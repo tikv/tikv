@@ -225,9 +225,8 @@ impl FileSystem for ManagedFileSystem {
         }
     }
 
-    fn delete<P: AsRef<Path>>(&self, _path: P) -> IoResult<()> {
-        // TODO(tabokie)
-        Ok(())
+    fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        self.base_level_file_system.delete(path)
     }
 }
 

@@ -22,7 +22,7 @@ impl engine_traits::PerfContext for RaftEnginePerfContext {
                     + perf_context.log_rotate_duration)
                     .as_nanos() as u64;
                 t.metrics.store_write_memtable_nanos =
-                    perf_context.log_rotate_duration.as_nanos() as u64;
+                    perf_context.apply_duration.as_nanos() as u64;
             });
         }
     }
