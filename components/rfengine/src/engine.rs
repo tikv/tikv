@@ -518,6 +518,9 @@ mod tests {
             engine.write(wb).unwrap();
         }
         assert_eq!(engine.regions.len(), 10);
+        let recycled = engine.dir.join(RECYCLE_DIR).read_dir().unwrap().count();
+        assert!(0 < recycled && recycled <= 3);
+
         let mut old_entries_map = HashMap::new();
         for region_ref in engine.regions.iter() {
             let region_data = region_ref.read().unwrap();
@@ -526,6 +529,7 @@ mod tests {
         }
         assert_eq!(old_entries_map.len(), 10);
         engine.stop_worker();
+
         for _ in 0..2 {
             let engine = RfEngine::open(tmp_dir.path(), wal_size).unwrap();
             engine.iterate_all_states(false, |region_id, key, _| {

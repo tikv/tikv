@@ -169,23 +169,30 @@ impl Worker {
         Ok(())
     }
 
+    fn recycle_dir(&self) -> PathBuf {
+        self.dir.join(RECYCLE_DIR)
+    }
+
+    fn recycle_file_name(&self, epoch_id: u32) -> PathBuf {
+        self.recycle_dir().join(format!("{:08x}.wal", epoch_id))
+    }
+
     fn recycle_wal_file(&self, epoch_id: u32) -> Result<()> {
         let wal_filename = wal_file_name(self.dir.as_path(), epoch_id);
-        let recycled_count = self.dir.read_dir()?.count();
+        let recycled_count = self.recycle_dir().read_dir()?.count();
         if recycled_count >= 3 {
             fs::remove_file(wal_filename)?;
             let _ = file_system::sync_dir(self.dir.as_path());
             return Ok(());
         }
 
-        let wal_filename = wal_file_name(self.dir.as_path(), epoch_id);
-        let recycle_filename = recycle_file_name(self.dir.as_path(), epoch_id);
+        let recycle_filename = self.recycle_file_name(epoch_id);
         fs::rename(wal_filename.as_path(), recycle_filename).map_err(|e| {
             let _ = fs::remove_file(wal_filename);
             e
         })?;
         let _ = file_system::sync_dir(self.dir.as_path());
-        let _ = file_system::sync_dir(self.dir.join(RECYCLE_DIR).as_path());
+        let _ = file_system::sync_dir(self.recycle_dir());
         Ok(())
     }
 
@@ -383,10 +390,6 @@ impl StatesHeader {
 
 pub(crate) fn wal_file_name(dir: &Path, epoch_id: u32) -> PathBuf {
     dir.join(format!("{:08x}.wal", epoch_id))
-}
-
-pub(crate) fn recycle_file_name(dir: &Path, epoch_id: u32) -> PathBuf {
-    dir.join("recycle").join(format!("{:08x}.wal", epoch_id))
 }
 
 pub(crate) enum Task {
