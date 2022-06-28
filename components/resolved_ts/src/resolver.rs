@@ -11,9 +11,29 @@ use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use txn_types::TimeStamp;
 
-use crate::metrics::{RTS_RAW_FORCE_ADVANCE_TS_COUNT, RTS_RESOLVED_FAIL_ADVANCE_VEC};
+use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
-const RAW_LOCK_TS_TTL: u64 = 60_1000; // 60s
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedTs {
+    pub raw_ts: TimeStamp,
+    pub txn_ts: TimeStamp,
+}
+
+impl ResolvedTs {
+    pub fn default() -> ResolvedTs {
+        ResolvedTs {
+            raw_ts: TimeStamp::zero(),
+            txn_ts: TimeStamp::zero(),
+        }
+    }
+    pub fn get_min(&self) -> TimeStamp {
+        cmp::min(self.raw_ts, self.txn_ts)
+    }
+
+    pub fn is_min_ts_from_raw(&self) -> bool {
+        self.raw_ts < self.txn_ts
+    }
+}
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
@@ -27,7 +47,7 @@ pub struct Resolver {
     // BinaryHeap is max heap, so we reverse order to get a min heap.
     raw_lock_ts_heap: BinaryHeap<Reverse<TimeStamp>>,
     // The timestamps that guarantees no more commit will happen before.
-    resolved_ts: TimeStamp,
+    resolved_ts: ResolvedTs,
     // The highest index `Resolver` had been tracked
     tracked_index: u64,
     // The region read progress used to utilize `resolved_ts` to serve stale read request
@@ -70,7 +90,7 @@ impl Resolver {
     ) -> Resolver {
         Resolver {
             region_id,
-            resolved_ts: TimeStamp::zero(),
+            resolved_ts: ResolvedTs::default(),
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
             raw_lock_ts_heap: BinaryHeap::new(),
@@ -82,7 +102,7 @@ impl Resolver {
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {
-        self.resolved_ts
+        self.resolved_ts.get_min()
     }
 
     pub fn size(&self) -> usize {
@@ -176,7 +196,7 @@ impl Resolver {
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
-    pub fn resolve(&mut self, min_ts: TimeStamp) -> TimeStamp {
+    pub fn resolve(&mut self, min_ts: TimeStamp) -> ResolvedTs {
         // The `Resolver` is stopped, not need to advance, just return the current `resolved_ts`
         if self.stopped {
             return self.resolved_ts;
@@ -187,22 +207,8 @@ impl Resolver {
         let min_start_ts = min_lock.unwrap_or(min_ts);
 
         // No more commit happens before the ts.
-        let mut new_resolved_ts = cmp::min(min_start_ts, min_ts);
-        let min_raw_ts = self
-            .raw_lock_ts_heap
-            .peek()
-            .map_or(min_ts, |ts| ts.to_owned().0);
-        // RawKv has no place to untrack_lock if PutCmd failed in propose/apply after track_lock,
-        // Here is a workaround, if raw ts has no advance in past RAW_LOCK_TS_TTL, which means,
-        // no PutCmd succeed after previous failure, we need advance it by TTL.
-        // The final solution should be move append_ts & track_lock to storage and untrack it in callback, need more discussion.
-        if min_ts.physical().saturating_sub(min_raw_ts.physical()) > RAW_LOCK_TS_TTL {
-            self.raw_untrack_lock(TimeStamp::compose(min_ts.physical() - RAW_LOCK_TS_TTL, 0));
-            RTS_RAW_FORCE_ADVANCE_TS_COUNT.inc();
-        }
-        new_resolved_ts = cmp::min(new_resolved_ts, min_raw_ts);
-
-        if self.resolved_ts >= new_resolved_ts {
+        let new_txn_resolved_ts = cmp::min(min_start_ts, min_ts);
+        if self.resolved_ts.txn_ts >= new_txn_resolved_ts {
             let label = if has_lock { "has_lock" } else { "stale_ts" };
             RTS_RESOLVED_FAIL_ADVANCE_VEC
                 .with_label_values(&[label])
@@ -210,18 +216,25 @@ impl Resolver {
         }
 
         // Resolved ts never decrease.
-        self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
+        self.resolved_ts.txn_ts = cmp::max(self.resolved_ts.txn_ts, new_txn_resolved_ts);
 
         // Publish an `(apply index, safe ts)` item into the region read progress
         if let Some(rrp) = &self.read_progress {
-            rrp.update_safe_ts(self.tracked_index, self.resolved_ts.into_inner());
+            rrp.update_safe_ts(self.tracked_index, self.resolved_ts.txn_ts.into_inner());
         }
+
+        let min_raw_ts = self
+            .raw_lock_ts_heap
+            .peek()
+            .map_or(min_ts, |ts| ts.to_owned().0);
+        // Resolved ts never decrease.
+        self.resolved_ts.raw_ts = cmp::max(self.resolved_ts.raw_ts, min_raw_ts);
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than
             // the min start ts, so it guarantees to be smaller than
             // any late arriving commit ts.
-            new_resolved_ts // cmp::min(min_start_ts, min_ts)
+            new_txn_resolved_ts // cmp::min(min_start_ts, min_ts)
         } else {
             min_ts
         };
@@ -348,7 +361,12 @@ mod tests {
                     Event::RawLock(ts) => resolver.raw_track_lock(ts.into()),
                     Event::RawUnlock(ts) => resolver.raw_untrack_lock(ts.into()),
                     Event::Resolve(min_ts, expect) => {
-                        assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
+                        assert_eq!(
+                            resolver.resolve(min_ts.into()).get_min(),
+                            expect.into(),
+                            "case {}",
+                            i
+                        )
                     }
                 }
             }

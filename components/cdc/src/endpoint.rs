@@ -40,7 +40,7 @@ use resolved_ts::Resolver;
 use security::SecurityManager;
 use tikv::{config::CdcConfig, storage::Statistics};
 use tikv_util::{
-    debug, error, impl_display_as_debug, info,
+    debug, error, impl_display_as_debug, info, box_err,
     sys::thread::ThreadBuildWrapper,
     time::Limiter,
     timer::SteadyTimer,
@@ -70,6 +70,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
 // Suppress repeat resolved ts lag warning.
 const WARN_RESOLVED_TS_COUNT_THRESHOLD: usize = 10;
+const RAW_RESOLVED_TS_OUTLIER_THRESHOLD: Duration = Duration::from_secs(60);
 
 pub enum Deregister {
     Downstream {
@@ -317,6 +318,47 @@ impl ResolvedRegionHeap {
     fn reset_and_shrink_to(&mut self, min_capacity: usize) {
         self.clear();
         self.heap.shrink_to(min_capacity);
+    }
+
+    // extreme outier match the following two conditions:
+    // 1. https://en.wikipedia.org/wiki/Box_plot
+    // 2. the gap with min_ts is larger than RAW_RESOLVED_TS_OUTLIER_THRESHOLD.
+    fn get_extreme_outlier(&self, min_ts: TimeStamp) -> Vec<u64> {
+        if self.heap.is_empty() {
+            return vec![];
+        } else if self.heap.len() < 4 {
+            // if count is smaller than 4, just return one outlier if exists.
+            let resolved = self.heap.peek().unwrap().0.resolved_ts;
+            if Duration::from_millis(min_ts.physical().saturating_sub(resolved.physical()))
+                > RAW_RESOLVED_TS_OUTLIER_THRESHOLD
+            {
+                return vec![self.heap.peek().unwrap().0.region_id];
+            }
+        } else {
+            let ts_vec: Vec<TimeStamp> = self.heap.iter().map(|iter| iter.0.resolved_ts).collect();
+            let size = ts_vec.len();
+            let q1_ts = ts_vec[(size + 1) / 4];
+            let q3_ts = ts_vec[3 * (size + 1) / 4];
+            let delta = q3_ts.physical().saturating_sub(q1_ts.physical());
+            let outliers: Vec<u64> = self
+                .heap
+                .iter()
+                .filter(|iter| {
+                    q1_ts
+                        .physical()
+                        .saturating_sub(iter.0.resolved_ts.physical())
+                        > 3 * delta
+                        && Duration::from_millis(
+                            min_ts
+                                .physical()
+                                .saturating_sub(iter.0.resolved_ts.physical()),
+                        ) > RAW_RESOLVED_TS_OUTLIER_THRESHOLD
+                })
+                .map(|iter| iter.0.region_id)
+                .collect();
+            return outliers;
+        }
+        return vec![];
     }
 }
 
@@ -673,6 +715,18 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             return;
         }
 
+        // causal_ts_provider cache tso for future use.
+        // flush it to avoid new data's timestamp is smaller than request.checkpoint_ts
+        if let Err(e) = self.observer.flush_causal_timestamp() {
+            error!("cdc flush causal timestamp failed"; "err" => ?e);
+            let mut err_event = EventError::default();
+            let mut err = ErrorDuplicateRequest::default();
+            err.set_region_id(region_id);
+            err_event.set_duplicate_request(err);
+            let _ = downstream.sink_error_event(region_id, err_event);
+            return;
+        }
+
         let mut is_new_delegate = false;
         let delegate = match self.capture_regions.entry(region_id) {
             HashMapEntry::Occupied(e) => e.into_mut(),
@@ -824,10 +878,30 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         }
     }
 
+    fn handle_raw_lap_regions(&self, raw_resolved_regions: &ResolvedRegionHeap, min_ts: TimeStamp) {
+        let outliers = raw_resolved_regions.get_extreme_outlier(min_ts);
+        for region_id in outliers {
+            if let Some(delegate) = self.capture_regions.get(&region_id) {
+                let observe_id = delegate.handle.id;
+                let deregister = Deregister::Delegate {
+                    region_id,
+                    observe_id,
+                    err: Error::Other(box_err!("raw region dead lock")),
+                };
+                if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
+                    error!("cdc schedule cdc task failed"; "error" => ?e);
+                }
+            }
+        }
+    }
+
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
         // Reset resolved_regions to empty.
         let resolved_regions = &mut self.resolved_region_heap;
         resolved_regions.clear();
+        let mut raw_resolved_regions = ResolvedRegionHeap {
+            heap: BinaryHeap::new(),
+        };
 
         let total_region_count = regions.len();
         self.min_resolved_ts = TimeStamp::max();
@@ -845,13 +919,16 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     advance_failed_stale += 1;
                 }
                 if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
-                    if resolved_ts < self.min_resolved_ts {
-                        self.min_resolved_ts = resolved_ts;
+                    if resolved_ts.get_min() < self.min_resolved_ts {
+                        self.min_resolved_ts = resolved_ts.get_min();
                         self.min_ts_region_id = region_id;
                     }
-                    resolved_regions.push(region_id, resolved_ts);
+                    resolved_regions.push(region_id, resolved_ts.get_min());
+                    if resolved_ts.is_min_ts_from_raw() {
+                        raw_resolved_regions.push(region_id, resolved_ts.raw_ts)
+                    }
 
-                    if resolved_ts == old_resolved_ts {
+                    if resolved_ts.get_min() == old_resolved_ts {
                         advance_failed_same += 1;
                     } else {
                         advance_ok += 1;
@@ -892,6 +969,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let (normal_min_resolved_ts, normal_regions) = resolved_regions.to_hash_set();
         self.broadcast_resolved_ts(outlier_min_resolved_ts, outlier_regions);
         self.broadcast_resolved_ts(normal_min_resolved_ts, normal_regions);
+        self.handle_raw_lap_regions(&raw_resolved_regions, min_ts);
     }
 
     fn broadcast_resolved_ts(&self, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
@@ -1921,7 +1999,7 @@ mod tests {
         suite.run(Task::RawTrackTs { region_id, ts });
         let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
         let resolver = delegate.resolver.as_mut().unwrap();
-        let raw_resolved_ts = resolver.resolve(20.into());
+        let raw_resolved_ts = resolver.resolve(20.into()).get_min();
         assert_eq!(raw_resolved_ts, ts);
     }
 
@@ -2490,5 +2568,31 @@ mod tests {
         heap1.push(1, 1.into());
         heap1.clear();
         assert!(heap1.heap.is_empty());
+
+        let mut heap2 = ResolvedRegionHeap {
+            heap: BinaryHeap::new(),
+        };
+        assert_eq!(heap2.get_extreme_outlier(1.into()).is_empty(), true);
+        heap2.push(5, TimeStamp::compose(5, 0));
+        heap2.push(3, TimeStamp::compose(3, 0));
+        heap2.push(4, TimeStamp::compose(4, 0));
+        assert_eq!(
+            heap2.get_extreme_outlier(TimeStamp::compose(60_010, 0)),
+            vec![3]
+        );
+        for i in 2000..3000 {
+            heap2.push(i, TimeStamp::compose(i, 0));
+        }
+        // 3,4,5 are outlier, but gap from input is smaller than 60s, so ret is empty.
+        assert_eq!(
+            heap2
+                .get_extreme_outlier(TimeStamp::compose(2000, 0))
+                .is_empty(),
+            true
+        );
+        // 3 4 5 are extreme outliers
+        let mut outlier = heap2.get_extreme_outlier(TimeStamp::compose(60_010, 0));
+        outlier.sort_unstable();
+        assert_eq!(outlier, vec![3, 4, 5]);
     }
 }

@@ -28,7 +28,7 @@ use raftstore::{
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
-use resolved_ts::Resolver;
+use resolved_ts::{ResolvedTs, Resolver};
 use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
@@ -411,7 +411,7 @@ impl Delegate {
     }
 
     /// Try advance and broadcast resolved ts.
-    pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
+    pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<ResolvedTs> {
         if self.resolver.is_none() {
             debug!("cdc region resolver not ready";
                 "region_id" => self.region_id, "min_ts" => min_ts);
@@ -421,9 +421,9 @@ impl Delegate {
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = resolver.resolve(min_ts);
         debug!("cdc resolved ts updated";
-            "region_id" => self.region_id, "resolved_ts" => resolved_ts);
+            "region_id" => self.region_id, "resolved_ts" => ?resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
-            .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
+            .observe((min_ts.physical() - resolved_ts.get_min().physical()) as f64 / 1000f64);
         Some(resolved_ts)
     }
 
