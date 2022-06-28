@@ -73,7 +73,7 @@ use crate::{
             ExecResult,
         },
         hibernate_state::{GroupState, HibernateState},
-        local_metrics::RaftMetrics,
+        local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
@@ -523,11 +523,11 @@ where
                 }))
             };
 
-            let times: SmallVec<[TiInstant; 4]> = cbs
+            let tokens: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { request_times, .. } = cb {
-                        Some(request_times[0])
+                    if let Callback::Write { trackers, .. } = cb {
+                        Some(trackers[0])
                     } else {
                         None
                     }
@@ -546,8 +546,8 @@ where
                 committed_cb,
             );
 
-            if let Callback::Write { request_times, .. } = &mut cb {
-                *request_times = times;
+            if let Callback::Write { trackers, .. } = &mut cb {
+                *trackers = tokens;
             }
 
             return Some((req, cb));
@@ -3126,6 +3126,14 @@ where
             return Some(DelayReason::UnPersistedReady);
         }
 
+        let is_initialized = self.fsm.peer.is_initialized();
+        if !is_initialized {
+            // If the peer is uninitialized, then it can't receive any logs from leader. So
+            // no need to gc. If there was a peer with same region id on the store, and it had
+            // logs written, then it must be initialized, hence its log should be gc either
+            // before it's destroyed or during node restarts.
+            self.fsm.logs_gc_flushed = true;
+        }
         if !self.fsm.logs_gc_flushed {
             let start_index = self.fsm.peer.last_compacted_idx;
             let mut end_index = start_index;
@@ -4766,14 +4774,11 @@ where
         }
 
         if self.ctx.raft_metrics.waterfall_metrics {
-            if let Some(request_times) = cb.get_request_times() {
-                let now = TiInstant::now();
-                for t in request_times {
-                    self.ctx
-                        .raft_metrics
-                        .wf_batch_wait
-                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
-                }
+            let now = Instant::now();
+            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
+                tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
+                    &mut t.metrics.wf_batch_wait_nanos
+                });
             }
         }
 
