@@ -675,6 +675,14 @@ where
         }
     }
 
+    /// Called when received new ApplyTask
+    fn handle_new_pending_applies(&mut self) {
+        fail_point!("handle_new_pending_applies", |_| {});
+        if self.ctx.engine.can_apply_snapshot() {
+            self.handle_pending_applies();
+        }
+    }
+
     /// Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self) {
         fail_point!("apply_pending_snapshot", |_| {});
@@ -757,7 +765,7 @@ where
                 fail_point!("on_region_worker_apply", true, |_| {});
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
-                self.handle_pending_applies();
+                self.handle_new_pending_applies();
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
                     SNAP_COUNTER.apply.delay.inc()
@@ -1267,5 +1275,15 @@ mod tests {
         );
         thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
         assert!(!check_region_exist(6));
+
+        #[cfg(feature = "failpoints")]
+        {
+            engine.kv.compact_files_in_range(None, None, None).unwrap();
+            fail::cfg("handle_new_pending_applies", "return").unwrap();
+            gen_and_apply_snap(7);
+            thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+            wait_apply_finish(&[7]);
+            fail::remove("handle_new_pending_applies");
+        }
     }
 }

@@ -59,6 +59,11 @@ pub trait KvEngine:
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
     fn bad_downcast<T: 'static>(&self) -> &T;
+
+    /// Can apply snapshot now
+    fn can_apply_snapshot(&self) -> bool {
+        true
+    }
 }
 
 /// A factory trait to create new engine.
