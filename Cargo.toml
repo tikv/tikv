@@ -201,13 +201,17 @@ rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
 fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
 
+# TODO: remote this replacement after rust-openssl supports sm4 encryption (https://github.com/sfackler/rust-openssl/pull/1656).
+openssl = { git = "https://github.com/jiayang-zheng/rust-openssl", branch = "support_sm4"}
+openssl-sys = { git = "https://github.com/jiayang-zheng/rust-openssl", branch = "support_sm4"}
+
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-# [patch.'https://github.com/pingcap/kvproto']
-# kvproto = {git = "https://github.com/your_github_id/kvproto", branch="your_branch"}
+[patch.'https://github.com/pingcap/kvproto']
+kvproto = {git = "https://github.com/jiayang-zheng/kvproto", branch="add_sm4_encryption"}
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
