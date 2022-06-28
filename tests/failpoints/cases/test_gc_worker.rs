@@ -321,7 +321,7 @@ fn test_error_in_compaction_filter() {
     gc_runner.gc(&raw_engine);
 
     match gc_runner.gc_receiver.recv().unwrap() {
-        GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.as_raw().count(), 2),
+        GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.count(), 2),
         GcTask::GcKeys { .. } => {}
         _ => unreachable!(),
     }
