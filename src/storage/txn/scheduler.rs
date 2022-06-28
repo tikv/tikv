@@ -456,7 +456,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         cid: u64,
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         released_locks: Option<ReleasedLocks>,
+        tag: metrics::CommandKind,
     ) {
+        let start_time = Instant::now();
         let next_cid_for_holding_latches = if released_locks.is_some() {
             Some(self.inner.gen_id())
         } else {
@@ -482,6 +484,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 latch_keep_list,
             );
         }
+        STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM_STATIC
+            .get(tag)
+            .observe(start_time.saturating_elapsed_secs())
     }
 
     fn schedule_command(
@@ -571,6 +576,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         mut awakened_locks_info: Vec<WriteResultLockInfo>,
         latches: Vec<u64>,
     ) {
+        let start_time = Instant::now();
+
         let mut key_callbacks: Vec<_> = awakened_locks_info
             .iter_mut()
             .map(|i| i.key_cb.take().unwrap())
@@ -654,12 +661,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             SchedulerTaskCallback::LockKeyCallbacks(key_callbacks),
             Some(latches),
         );
+
+        STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
+            .schedule
+            .observe(start_time.saturating_elapsed_secs());
     }
 
     pub fn schedule_awakened_pessimistic_locks_suspended_secondaries(
         &self,
         mut secondaries: Vec<(ResumedPessimisticLockItem, PessimisticLockKeyCallback)>,
     ) {
+        let start_time = Instant::now();
         // TODO: Consider priority.
         secondaries
             .sort_unstable_by_key(|x| (x.0.lock_key_ctx.hash_for_latch, x.0.params.start_ts));
@@ -705,6 +717,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             SchedulerTaskCallback::LockKeyCallbacks(current_command_callbacks),
             Some(prepared_latches),
         );
+        STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
+            .schedule_secondaries
+            .observe(start_time.saturating_elapsed_secs());
     }
 
     // pub for test
@@ -792,7 +807,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             cb.execute(pr);
         }
 
-        self.release_latches(&tctx.lock, cid, None, None);
+        self.release_latches(&tctx.lock, cid, None, None, tctx.tag);
     }
 
     /// Event handler for the success of read.
@@ -811,7 +826,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             tctx.cb.unwrap().execute(pr);
         }
 
-        self.release_latches(&tctx.lock, cid, None, None);
+        self.release_latches(&tctx.lock, cid, None, None, tag);
     }
 
     /// Event handler for the success of write.
@@ -876,7 +891,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             assert!((pipelined && wait_for_locks.is_none()) || async_apply_prewrite);
         }
-        self.release_latches(&tctx.lock, cid, wait_for_locks, released_locks);
+        self.release_latches(&tctx.lock, cid, wait_for_locks, released_locks, tag);
 
         if let Some(secondaries) = pessimistic_lock_next_batch_secondaries {
             self.schedule_awakened_pessimistic_locks_suspended_secondaries(secondaries);
@@ -1103,8 +1118,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
         let mut pr = Some(pr);
-        let lock_info = if tag == CommandKind::acquire_pessimistic_lock {
+        let lock_info = if tag == CommandKind::acquire_pessimistic_lock
+            || tag == CommandKind::acquire_pessimistic_lock_resumed
+        {
             if let Some(cmd_meta) = pessimistic_lock_single_request_meta {
+                let conversion_start = Instant::now();
+
                 assert!(pessimistic_lock_next_batch_secondaries.is_none());
 
                 let mut lock_info_list =
@@ -1175,16 +1194,27 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         assert_eq!(key_callback_count, cmd_meta.keys_count - first_batch_size);
                     }
                 }
+
+                STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
+                    .convert_from_normal
+                    .observe(conversion_start.saturating_elapsed_secs());
                 lock_info_list
             } else {
                 // It's already in key-wise mode.
+                let start_time = Instant::now();
                 scheduler.update_wait_for_lock();
                 scheduler.tidy_up_pessimistic_lock_result(
                     cid,
                     pr.as_mut().unwrap(),
                     pessimistic_lock_next_batch_secondaries.as_mut(),
                 );
-                Self::take_lock_info_from_pessimistic_lock_pr(pr.as_mut().unwrap())
+                let lock_info_list =
+                    Self::take_lock_info_from_pessimistic_lock_pr(pr.as_mut().unwrap());
+
+                STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
+                    .tidy_up_result
+                    .observe(start_time.saturating_elapsed_secs());
+                lock_info_list
             }
         } else {
             None
@@ -1206,7 +1236,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return;
         }
 
-        if tag == CommandKind::acquire_pessimistic_lock
+        if (tag == CommandKind::acquire_pessimistic_lock
+            || tag == CommandKind::acquire_pessimistic_lock_resumed)
             && pessimistic_lock_mode == PessimisticLockMode::InMemory
             && self.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
@@ -1786,6 +1817,7 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
     }
 
     fn finish_request(&self, external_error: Option<StorageError>, fail_all_on_error: bool) {
+        let start_time = Instant::now();
         let mut ctx_inner = if let Some(inner) = self.shared_states.ctx_inner.lock().take() {
             inner
         } else {
@@ -1832,6 +1864,9 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
                 }
             }
         }
+        STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
+            .finish_request
+            .observe(start_time.saturating_elapsed_secs());
 
         ctx_inner.cb.execute(ctx_inner.pr);
     }
@@ -2037,7 +2072,7 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
-        scheduler.release_latches(&lock, cid, None, None);
+        scheduler.release_latches(&lock, cid, None, None, CommandKind::prewrite);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
@@ -2219,7 +2254,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         // When releasing the lock, the queuing tasks should be all waken up without stack overflow.
-        scheduler.release_latches(&lock, cid, None, None);
+        scheduler.release_latches(&lock, cid, None, None, CommandKind::prewrite);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();

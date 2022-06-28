@@ -5,7 +5,7 @@ use kvproto::kvrpcpb::{Context, ExtraOp};
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::{LockDigest, LockManager, WaitTimeout};
+use crate::storage::lock_manager::{LockManager, WaitTimeout};
 use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
 };
@@ -134,7 +134,33 @@ impl PessimisticLockKeyContext {
 
 impl CommandExt for AcquirePessimisticLock {
     ctx!();
-    tag!(acquire_pessimistic_lock);
+
+    fn tag(&self) -> crate::storage::metrics::CommandKind {
+        match self.inner {
+            PessimisticLockCmdInner::SingleRequest { .. } => {
+                crate::storage::metrics::CommandKind::acquire_pessimistic_lock
+            }
+            PessimisticLockCmdInner::BatchResumedRequests { .. } => {
+                crate::storage::metrics::CommandKind::acquire_pessimistic_lock_resumed
+            }
+        }
+    }
+
+    fn incr_cmd_metric(&self) {
+        match self.inner {
+            PessimisticLockCmdInner::SingleRequest { .. } => {
+                crate::storage::metrics::KV_COMMAND_COUNTER_VEC_STATIC
+                    .acquire_pessimistic_lock
+                    .inc();
+            }
+            PessimisticLockCmdInner::BatchResumedRequests { .. } => {
+                crate::storage::metrics::KV_COMMAND_COUNTER_VEC_STATIC
+                    .acquire_pessimistic_lock_resumed
+                    .inc();
+            }
+        }
+    }
+
     // ts!(start_ts);
     property!(can_be_pipelined);
 

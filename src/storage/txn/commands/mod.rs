@@ -54,7 +54,7 @@ use kvproto::kvrpcpb::*;
 use txn_types::{Key, OldValues, TimeStamp, Value, Write};
 
 use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
+use crate::storage::lock_manager::{LockManager, WaitTimeout};
 use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader};
 use crate::storage::txn::commands::acquire_pessimistic_lock::PessimisticLockKeyContext;
 use crate::storage::txn::latch;
