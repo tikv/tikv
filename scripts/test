@@ -18,8 +18,8 @@ fi
 DYLD_LIBRARY_PATH=${DYLD_LIBRARY_PATH:-""}
 LOCAL_DIR=${LOCAL_DIR:-""}
 TIKV_ENABLE_FEATURES=${TIKV_ENABLE_FEATURES:-""}
-# EXTRA_CARGO_ARGS is unecessary now: this can just be given as arguments to ./scripts/test-all or ./scripts/test
 CUSTOM_TEST_COMMAND=${CUSTOM_TEST_COMMAND:-"test"}
+# EXTRA_CARGO_ARGS is unecessary now: this can just be given as arguments to ./scripts/test-all or ./scripts/test
 EXTRA_CARGO_ARGS=${EXTRA_CARGO_ARGS:-""}
 
 # When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it

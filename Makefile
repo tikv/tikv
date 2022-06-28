@@ -311,7 +311,13 @@ run:
 # Run tests under a variety of conditions. This should pass before
 # submitting pull requests.
 test:
-	./scripts/test-all
+	./scripts/test-all -- --nocapture
+
+# Run tests with nextest.
+test_with_nextest: export CUSTOM_TEST_COMMAND=nextest run
+test_with_nextest: export RUSTDOCFLAGS="-Z unstable-options --persist-doctests"
+test_with_nextest:
+	./scripts/test-all --no-capture
 
 ## Static analysis
 ## ---------------

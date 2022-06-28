@@ -77,15 +77,10 @@ make test
 env EXTRA_CARGO_ARGS=$TESTNAME make test
 ```
 
-Alternatively, you can use [nextest](https://github.com/nextest-rs/nextest) to run tests by setting these environment variables beforehand:
+Alternatively, you can use [nextest](https://github.com/nextest-rs/nextest) to run tests:
 
 ```bash
-# Change the default test runner.
-export CUSTOM_TEST_COMMAND="nextest run"
-# Nextest requires doc tests compiled as binaries.
-export RUSTDOCFLAGS="-Z unstable-options --persist-doctests"
-# Some arguments are different in nextest.
-./scripts/test $TESTNAME --no-capture
+env EXTRA_CARGO_ARGS=$TESTNAME make test_with_nextest
 ```
 
 TiKV follows the Rust community coding style. We use Rustfmt and [Clippy](https://github.com/Manishearth/rust-clippy) to automatically format and lint our code. Using these tools is checked in our CI. These are as part of `make dev`, you can also run them alone:
