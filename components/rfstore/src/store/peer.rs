@@ -1318,6 +1318,7 @@ impl Peer {
         ctx.global.engines.kv.meta_committed(&cs);
         let region_id = self.region_id;
         let tag = self.tag();
+        let opt_parent_id = self.mut_store().parent_id();
         let shard_meta = self.mut_store().mut_engine_meta();
         let mut rejected = false;
         if shard_meta.ver != cs.get_shard_ver() {
@@ -1346,6 +1347,14 @@ impl Peer {
         );
         ctx.raft_wb
             .set_state(region_id, KV_ENGINE_META_KEY, &shard_meta.marshal());
+        if cs.has_initial_flush() || cs.has_snapshot() {
+            if let Some(parent_id) = opt_parent_id {
+                ctx.global
+                    .engines
+                    .raft
+                    .remove_dependent(parent_id, self.region_id);
+            }
+        }
         ctx.apply_msgs.msgs.push(ApplyMsg::PrepareChangeSet(cs))
     }
 

@@ -57,6 +57,10 @@ impl ShardMeta {
                 tbl.get_biggest(),
             );
         }
+        if cs.has_parent() {
+            let parent_meta = Box::new(Self::new(cs.get_parent()));
+            meta.parent = Some(parent_meta);
+        }
         meta
     }
 

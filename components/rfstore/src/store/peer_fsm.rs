@@ -10,7 +10,7 @@ use std::{
 
 use bytes::Buf;
 use fail::fail_point;
-use kvengine::{DeletePrefixes, ShardMeta, DEL_PREFIXES_KEY};
+use kvengine::{DeletePrefixes, DEL_PREFIXES_KEY};
 use kvproto::{
     import_sstpb::SwitchMode,
     metapb::{self, Region, RegionEpoch},
@@ -1013,30 +1013,10 @@ impl<'a> PeerMsgHandler<'a> {
             self.ctx.raft_wb.truncate_raft_log(tag.id(), write_sequence);
         }
         if change.has_snapshot() {
-            let store = self.peer.mut_store();
-            let parent_id = store.parent_id();
-            store.initial_flushed = true;
-            store.snap_state = SnapState::Relax;
-            store.shard_meta = Some(ShardMeta::new(&change));
-            if let Some(parent_id) = parent_id {
-                self.ctx
-                    .global
-                    .engines
-                    .raft
-                    .remove_dependent(parent_id, tag.id());
-            }
+            self.peer.mut_store().snap_state = SnapState::Relax;
         }
-        if change.has_initial_flush() {
-            let store = self.peer.mut_store();
-            store.initial_flushed = true;
-            let parent_id = store.parent_id();
-            if let Some(parent_id) = parent_id {
-                self.ctx
-                    .global
-                    .engines
-                    .raft
-                    .remove_dependent(parent_id, tag.id());
-            }
+        if change.has_snapshot() || change.has_initial_flush() {
+            self.peer.mut_store().initial_flushed = true;
         }
     }
 
