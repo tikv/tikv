@@ -319,7 +319,7 @@ test_with_nextest: export CUSTOM_TEST_COMMAND=nextest run
 endif
 test_with_nextest: export RUSTDOCFLAGS="-Z unstable-options --persist-doctests"
 test_with_nextest:
-	./scripts/test-all --no-capture
+	./scripts/test-all
 
 ## Static analysis
 ## ---------------
