@@ -7,7 +7,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{RaftEngine, Result, TabletFactory};
+use engine_traits::{RaftEngine, Result, TabletAccessor, TabletFactory};
 
 use crate::server::engine_factory::KvEngineFactory;
 
@@ -130,14 +130,6 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     }
 
     #[inline]
-    fn loop_tablet_cache(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
-        let reg = self.registry.lock().unwrap();
-        for ((id, suffix), tablet) in &*reg {
-            f(*id, *suffix, tablet)
-        }
-    }
-
-    #[inline]
     fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<RocksEngine> {
         {
             let reg = self.registry.lock().unwrap();
@@ -157,6 +149,21 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
 
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
         Box::new(std::clone::Clone::clone(self))
+    }
+}
+
+impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactoryV2<ER> {
+    #[inline]
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
+        let reg = self.registry.lock().unwrap();
+        for ((id, suffix), tablet) in &*reg {
+            f(*id, *suffix, tablet)
+        }
+    }
+
+    // it have multi tablets.
+    fn is_single_engine(&self) -> bool {
+        false
     }
 }
 
@@ -213,6 +220,15 @@ mod tests {
         let tablet_path = factory.tablet_path(1, 10);
         let tablet2 = factory.open_tablet_raw(&tablet_path, false).unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
+        let mut count = 0;
+        factory.for_each_opened_tablet(&mut |id, suffix, _tablet| {
+            assert!(id == 0);
+            assert!(suffix == 0);
+            count += 1;
+        });
+        assert_eq!(count, 1);
+        assert!(factory.is_single_engine());
+        assert!(shared_db.is_single_engine());
     }
 
     #[test]
@@ -250,6 +266,7 @@ mod tests {
         factory.destroy_tablet(1, 20).unwrap();
         let result = factory.open_tablet(1, 20);
         assert!(result.is_err());
+        assert!(!factory.is_single_engine());
     }
 
     #[test]
@@ -264,11 +281,11 @@ mod tests {
         factory.create_tablet(1, 10).unwrap();
         factory.create_tablet(2, 10).unwrap();
         let mut count = 0;
-        factory.loop_tablet_cache(Box::new(|id, suffix, _tablet| {
+        factory.for_each_opened_tablet(&mut |id, suffix, _tablet| {
             assert!(id == 1 || id == 2);
             assert!(suffix == 10);
             count += 1;
-        }));
+        });
         assert_eq!(count, 2);
     }
 }
