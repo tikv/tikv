@@ -20,6 +20,6 @@ if [[ "$(uname)" == "Linux" ]]; then
 fi
 
 if [[ "$(uname)" = "Linux" ]]; then
-    CARGO_TEST_COMMAND="" EXTRA_CARGO_ARGS="" ./scripts/test --message-format=json-render-diagnostics -q --no-run |
+    CUSTOM_TEST_COMMAND="" EXTRA_CARGO_ARGS="" ./scripts/test --message-format=json-render-diagnostics -q --no-run |
         python scripts/check-bins.py --features "${TIKV_ENABLE_FEATURES}" --check-tests
 fi

@@ -81,7 +81,7 @@ Alternatively, you can use [nextest](https://github.com/nextest-rs/nextest) to r
 
 ```bash
 # Change the default test runner.
-export CARGO_TEST_COMMAND="nextest run"
+export CUSTOM_TEST_COMMAND="nextest run"
 # Nextest requires doc tests compiled as binaries.
 export RUSTDOCFLAGS="-Z unstable-options --persist-doctests"
 # Some arguments are different in nextest.
