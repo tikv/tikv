@@ -1781,6 +1781,12 @@ mod tests {
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
             }
         }
+        assert_eq!(
+            GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
+                .with_label_values(&[TXN_KEYMODE])
+                .get(),
+            80
+        );
     }
 
     #[test]

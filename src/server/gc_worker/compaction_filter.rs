@@ -74,6 +74,7 @@ lazy_static! {
     )
     .unwrap();
     // A counter for errors met by `WriteCompactionFilter`.
+    //TODO: Add test case to check the correctness of GC_COMPACTION_FAILURE
     pub static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_failure",
         "Compaction filter meets failure",
@@ -96,6 +97,7 @@ lazy_static! {
 
 
     // `WriteType::Rollback` and `WriteType::Lock` are handled in different ways.
+    //TODO: Add test case to check the correctness of GC_COMPACTION_MVCC_ROLLBACK
     pub static ref GC_COMPACTION_MVCC_ROLLBACK: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_mvcc_rollback",
         "Compaction of mvcc rollbacks",
@@ -103,6 +105,7 @@ lazy_static! {
     )
     .unwrap();
 
+    //TODO: Add test case to check the correctness of GC_COMPACTION_FILTER_ORPHAN_VERSIONS
     pub static ref GC_COMPACTION_FILTER_ORPHAN_VERSIONS: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_orphan_versions",
         "Compaction filter orphan versions for default CF",
@@ -126,6 +129,7 @@ lazy_static! {
 
     /// Mvcc deletions sent to gc worker can have already been cleared, in which case resources are
     /// wasted to seek them.
+    //TODO: Add test case to check the correctness of GC_COMPACTION_FILTER_MVCC_DELETION_WASTED
     pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_WASTED: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_mvcc_deletion_wasted",
         "MVCC deletion from compaction filter wasted",
@@ -929,6 +933,39 @@ pub mod tests {
         assert!(is_compaction_filter_allowed(&cfg_value, &gate));
     }
 
+    #[test]
+    fn test_check_need_gc() {
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        cfg.writecf.dynamic_level_bytes = false;
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path());
+        let engine = builder.build_with_cfg(&cfg).unwrap();
+        let raw_engine = engine.get_rocksdb();
+
+        let mut gc_runner = TestGCRunner::new(0);
+        let value = vec![b'v'; 512];
+
+        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
+        must_commit(&engine, b"zkey", 100, 110);
+
+        gc_runner
+            .safe_point(TimeStamp::new(1).into_inner())
+            .gc(&raw_engine);
+        assert_eq!(
+            GC_COMPACTION_FILTER_PERFORM
+                .with_label_values(&[TXN_KEYMODE])
+                .get(),
+            1
+        );
+        assert_eq!(
+            GC_COMPACTION_FILTER_SKIP
+                .with_label_values(&[TXN_KEYMODE])
+                .get(),
+            1
+        );
+    }
+
     // Test compaction filter won't break basic GC rules.
     #[test]
     fn test_compaction_filter_basic() {
@@ -941,10 +978,24 @@ pub mod tests {
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
         must_commit(&engine, b"zkey", 100, 110);
         gc_runner.safe_point(50).gc(&raw_engine);
+        assert_eq!(
+            MVCC_VERSIONS_HISTOGRAM
+                .with_label_values(&[TXN_KEYMODE])
+                .get_sample_sum(),
+            0 as f64
+        );
+        assert_eq!(
+            GC_COMPACTION_FILTERED
+                .with_label_values(&[TXN_KEYMODE])
+                .get(),
+            0
+        );
+
         must_get(&engine, b"zkey", 110, &value);
 
         // GC can't delete keys before the safe ponit if they are latest versions.
         gc_runner.safe_point(200).gc(&raw_engine);
+
         must_get(&engine, b"zkey", 110, &value);
 
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 120);
@@ -952,10 +1003,23 @@ pub mod tests {
 
         // GC can't delete the latest version before the safe ponit.
         gc_runner.safe_point(115).gc(&raw_engine);
+
         must_get(&engine, b"zkey", 110, &value);
 
         // GC a version will also delete the key on default CF.
         gc_runner.safe_point(200).gc(&raw_engine);
+        assert_eq!(
+            MVCC_VERSIONS_HISTOGRAM
+                .with_label_values(&[TXN_KEYMODE])
+                .get_sample_sum(),
+            4_f64
+        );
+        assert_eq!(
+            GC_COMPACTION_FILTERED
+                .with_label_values(&[TXN_KEYMODE])
+                .get(),
+            1
+        );
         must_get_none(&engine, b"zkey", 110);
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
@@ -1001,6 +1065,12 @@ pub mod tests {
         // A GC task should be emit after older versions are cleaned.
         gc_and_check(true, b"zkey");
 
+        assert_eq!(
+            GC_COMPACTION_FILTER_MVCC_DELETION_MET
+                .with_label_values(&[TXN_KEYMODE])
+                .get(),
+            2
+        );
         // Clean the engine, prepare for later tests.
         raw_engine
             .delete_ranges_cf(

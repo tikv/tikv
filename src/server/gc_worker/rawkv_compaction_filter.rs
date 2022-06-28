@@ -25,7 +25,8 @@ use crate::{
     server::gc_worker::{
         compaction_filter::{
             CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
-            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
+            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
+            GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
         },
         GcTask, RAW_KEYMODE,
     },
@@ -203,6 +204,9 @@ impl RawCompactionFilter {
             let raw_value = ApiV2::decode_raw_value(value)?;
             // If it's the latest version, and it's deleted or expired, it needs to be sent to GCWorker to be processed asynchronously.
             if !raw_value.is_valid(self.current_ts) {
+                GC_COMPACTION_FILTER_MVCC_DELETION_MET
+                    .with_label_values(&[RAW_KEYMODE])
+                    .inc();
                 self.raw_handle_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
                     self.raw_gc_mvcc_deletions();
@@ -375,6 +379,19 @@ pub mod tests {
 
         gc_runner.safe_point(80).gc_raw(&raw_engine);
 
+        assert_eq!(
+            MVCC_VERSIONS_HISTOGRAM
+                .with_label_values(&[RAW_KEYMODE])
+                .get_sample_sum(),
+            1_f64
+        );
+        assert_eq!(
+            GC_COMPACTION_FILTERED
+                .with_label_values(&[RAW_KEYMODE])
+                .get(),
+            1
+        );
+
         // If ts(70) < safepoint(80), and this userkey's latest verion is not deleted or expired, this version will be removed in do_filter.
         let entry70 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(b"r\0a", 70).as_slice())
@@ -382,6 +399,19 @@ pub mod tests {
         assert!(entry70.is_none());
 
         gc_runner.safe_point(90).gc_raw(&raw_engine);
+
+        assert_eq!(
+            MVCC_VERSIONS_HISTOGRAM
+                .with_label_values(&[RAW_KEYMODE])
+                .get_sample_sum(),
+            1_f64
+        );
+        assert_eq!(
+            GC_COMPACTION_FILTERED
+                .with_label_values(&[RAW_KEYMODE])
+                .get(),
+            1
+        );
 
         let entry100 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(user_key, 100).as_slice())
@@ -468,6 +498,13 @@ pub mod tests {
         let check_key_del = make_key(user_key_del, 1);
         let (prefix_del, _commit_ts) = ApiV2::split_ts(check_key_del.as_slice()).unwrap();
         gc_and_check(true, prefix_del);
+
+        assert_eq!(
+            GC_COMPACTION_FILTER_MVCC_DELETION_MET
+                .with_label_values(&[RAW_KEYMODE])
+                .get(),
+            1
+        );
 
         // Clean the engine, prepare for later tests.
         let range_start_key =
