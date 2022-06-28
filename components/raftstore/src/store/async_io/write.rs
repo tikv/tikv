@@ -38,7 +38,7 @@ use crate::{
     store::{
         config::Config,
         fsm::RaftRouter,
-        local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics},
+        local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics, TimeTracker},
         metrics::*,
         transport::Transport,
         util::LatencyInspector,
@@ -97,7 +97,7 @@ where
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
     pub messages: Vec<RaftMessage>,
-    pub request_times: Vec<Instant>,
+    pub trackers: Vec<TimeTracker>,
 }
 
 impl<EK, ER> WriteTask<EK, ER>
@@ -117,7 +117,7 @@ where
             cut_logs: None,
             raft_state: None,
             messages: vec![],
-            request_times: vec![],
+            trackers: vec![],
         }
     }
 
@@ -298,12 +298,12 @@ where
         }
         self.state_size = 0;
         if metrics.waterfall_metrics {
-            let now = Instant::now();
+            let now = std::time::Instant::now();
             for task in &self.tasks {
-                for t in &task.request_times {
-                    metrics
-                        .wf_before_write
-                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                for tracker in &task.trackers {
+                    tracker.observe(now, &metrics.wf_before_write, |t| {
+                        &mut t.metrics.wf_before_write_nanos
+                    });
                 }
             }
         }
@@ -311,12 +311,12 @@ where
 
     fn after_write_to_kv_db(&mut self, metrics: &StoreWriteMetrics) {
         if metrics.waterfall_metrics {
-            let now = Instant::now();
+            let now = std::time::Instant::now();
             for task in &self.tasks {
-                for t in &task.request_times {
-                    metrics
-                        .wf_kvdb_end
-                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                for tracker in &task.trackers {
+                    tracker.observe(now, &metrics.wf_kvdb_end, |t| {
+                        &mut t.metrics.wf_kvdb_end_nanos
+                    });
                 }
             }
         }
@@ -324,12 +324,12 @@ where
 
     fn after_write_to_raft_db(&mut self, metrics: &StoreWriteMetrics) {
         if metrics.waterfall_metrics {
-            let now = Instant::now();
+            let now = std::time::Instant::now();
             for task in &self.tasks {
-                for t in &task.request_times {
-                    metrics
-                        .wf_write_end
-                        .observe(duration_to_sec(now.saturating_duration_since(*t)))
+                for tracker in &task.trackers {
+                    tracker.observe(now, &metrics.wf_write_end, |t| {
+                        &mut t.metrics.wf_write_end_nanos
+                    });
                 }
             }
         }
@@ -535,7 +535,14 @@ where
                         self.store_id, self.tag, e
                     );
                 });
-            self.perf_context.report_metrics(&[]); // TODO: pass in request trackers
+            let trackers: Vec<_> = self
+                .batch
+                .tasks
+                .iter()
+                .flat_map(|task| task.trackers.iter().flat_map(|t| t.as_tracker_token()))
+                .collect();
+            // TODO: Add a different perf context for raft engine.
+            self.perf_context.report_metrics(&trackers);
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
         }

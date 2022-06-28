@@ -77,6 +77,7 @@ make_auto_flush_static_metric! {
     pub label_enum ThrottleType {
         dag,
         analyze_full_sampling,
+        quota_limiter_auto_tuned,
     }
 
     pub struct NonTxnCommandThrottleTimeCounterVec: LocalIntCounter {
@@ -102,6 +103,8 @@ lazy_static! {
         NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC,
         NonTxnCommandThrottleTimeCounterVec
     );
+    pub static ref INSTANCE_BACKEND_CPU_QUOTA: IntGauge =
+        register_int_gauge!("tikv_backend_cpu_quota", "cpu quota for backend request").unwrap();
 }
 
 pub fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {

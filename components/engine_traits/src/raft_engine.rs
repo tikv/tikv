@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+};
 use raft::eraftpb::Entry;
 
 use crate::*;
@@ -8,7 +11,14 @@ use crate::*;
 pub const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
 pub trait RaftEngineReadOnly: Sync + Send + 'static {
+    fn is_empty(&self) -> Result<bool>;
+
+    fn get_store_ident(&self) -> Result<Option<StoreIdent>>;
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>>;
+
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
 
@@ -89,6 +99,8 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     /// Note: `RaftLocalState` won't be updated in this call.
     fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize>;
 
+    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()>;
+
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
 
     /// Like `cut_logs` but the range could be very large. Return the deleted count.
@@ -135,7 +147,14 @@ pub trait RaftLogBatch: Send {
     /// Remove Raft logs in [`from`, `to`) which will be overwritten later.
     fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64);
 
+    fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()>;
+
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()>;
+    fn remove_prepare_bootstrap_region(&mut self) -> Result<()>;
+
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
+    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
+    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
 
     /// The data size of this RaftLogBatch.
     fn persist_size(&self) -> usize;
