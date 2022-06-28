@@ -65,7 +65,7 @@ pub struct RaftLogGCTask {
     pub to: u64,
 }
 
-pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
+pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch;
