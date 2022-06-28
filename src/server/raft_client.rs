@@ -1232,7 +1232,10 @@ mod tests {
         assert!(msg_buf.full());
 
         // update config
-        version_track.update(|cfg| cfg.max_grpc_send_msg_len *= 2);
+        let _ = version_track.update(|cfg| -> Result<(), ()> {
+            cfg.max_grpc_send_msg_len *= 2;
+            Ok(())
+        });
         msg_buf.clear();
 
         let new_max_msg_len =

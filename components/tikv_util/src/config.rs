@@ -1108,13 +1108,15 @@ impl<T> VersionTrack<T> {
         }
     }
 
-    /// Update the value
-    pub fn update<F>(&self, f: F)
+    pub fn update<F, O, E>(&self, f: F) -> Result<O, E>
     where
-        F: FnOnce(&mut T),
+        F: FnOnce(&mut T) -> Result<O, E>,
     {
-        f(&mut self.value.write().unwrap());
-        self.version.fetch_add(1, Ordering::Release);
+        let res = f(&mut self.value.write().unwrap());
+        if res.is_ok() {
+            self.version.fetch_add(1, Ordering::Release);
+        }
+        res
     }
 
     pub fn value(&self) -> RwLockReadGuard<'_, T> {
@@ -1966,9 +1968,10 @@ mod tests {
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
 
-        vc.update(|v| {
+        let _ = vc.update(|v| -> Result<(), ()> {
             v.v1 = 1000;
             v.v2 = true;
+            Ok(())
         });
         for tr in trackers.iter_mut() {
             let incoming = tr.any_new();
