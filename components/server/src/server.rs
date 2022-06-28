@@ -827,6 +827,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 self.config.coprocessor.region_split_size,
                 self.config.coprocessor.enable_region_bucket,
                 self.config.coprocessor.region_bucket_size,
+                self.config.memory_usage_limit.unwrap().0,
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));

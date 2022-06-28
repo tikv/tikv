@@ -2954,10 +2954,12 @@ impl TiKvConfig {
         self.server.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
+        let memory_limit = self.memory_usage_limit.unwrap().0;
         self.raft_store.validate(
             self.coprocessor.region_split_size,
             self.coprocessor.enable_region_bucket,
             self.coprocessor.region_bucket_size,
+            memory_limit,
         )?;
         self.security.validate()?;
         self.import.validate()?;
