@@ -33,7 +33,7 @@ pub struct StoreContext<T> {
     pub trans: T,
     /// The latest configuration.
     pub cfg: Config,
-    /// The tick batch for delay ticking. It will be flushed at the end of every found.
+    /// The tick batch for delay ticking. It will be flushed at the end of every round.
     pub tick_batch: Vec<PeerTickBatch>,
     /// The precise timer for scheduling tick.
     pub timer: SteadyTimer,

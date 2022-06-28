@@ -4,7 +4,6 @@ use std::assert_matches::assert_matches;
 
 use engine_traits::RaftEngineReadOnly;
 use kvproto::metapb::Store;
-use raftstore::{router::RaftStoreBlackHole, store::Config};
 use raftstore_v2::Bootstrap;
 use slog::o;
 use tempfile::TempDir;
