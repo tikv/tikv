@@ -1531,7 +1531,11 @@ impl ConfiguredRaftEngine for RocksEngine {
     fn register_config(&self, cfg_controller: &mut ConfigController, share_cache: bool) {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(self.clone(), DBType::Raft, share_cache)),
+            Box::new(DBConfigManger::new(
+                Arc::new(self.clone()),
+                DBType::Raft,
+                share_cache,
+            )),
         );
     }
 }
@@ -1614,7 +1618,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
-                engines.kv.clone(),
+                Arc::new(factory),
                 DBType::Kv,
                 self.config.storage.block_cache.shared,
             )),
