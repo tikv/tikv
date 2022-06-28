@@ -108,7 +108,8 @@ impl RocksEngine {
         if io_rate_limiter.is_some() {
             db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
         }
-
+        // ART does not support concurrent write.
+        db_opts.allow_concurrent_memtable_write(false);
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path,
             Some(db_opts),
