@@ -1,10 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Deref;
+
 use engine_test::kv::KvTestEngine;
-use engine_traits::{Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt};
+use engine_traits::{
+    MiscExt, Mutable, Peekable, SeqnoPropertiesExt, SyncMutable, WriteBatch, WriteBatchExt,
+    WriteOptions,
+};
 use panic_hook::recover_safe;
 
-use super::{assert_engine_error, default_engine};
+use super::{assert_engine_error, default_engine, tempdir};
 
 #[test]
 fn write_batch_none_no_commit() {
@@ -809,7 +814,6 @@ fn save_points_and_counts() {
 
     assert_eq!(wb.is_empty(), false);
     assert_eq!(wb.count(), 1);
-
     wb.write().unwrap();
 
     assert_eq!(wb.is_empty(), false);
@@ -824,4 +828,76 @@ fn save_points_and_counts() {
 
     assert_eq!(wb.is_empty(), true);
     assert_eq!(wb.count(), 0);
+}
+
+#[test]
+fn recover_without_wal() {
+    use engine_test::{
+        ctor::{DBOptions, KvEngineConstructorExt},
+        kv::KvTestEngine,
+    };
+    use engine_traits::{CF_DEFAULT, CF_LOCK};
+    let dir = tempdir();
+    let path = dir.path().to_str().unwrap();
+
+    fn put_value(path: &str) {
+        let mut db_opt = DBOptions::default();
+        db_opt.avoid_flush_during_shutdown(true);
+        let engine =
+            KvTestEngine::new_kv_engine(path, Some(db_opt), &[CF_DEFAULT, CF_LOCK], None).unwrap();
+        let mut opt = WriteOptions::default();
+        opt.set_disable_wal(true);
+
+        let mut wb = engine.write_batch();
+        wb.put_cf(CF_LOCK, b"a", b"v1").unwrap();
+        wb.put_cf(CF_DEFAULT, b"b", b"v2").unwrap();
+        let seq = wb.write_opt(&opt).unwrap();
+        println!("write {}", seq);
+        println!("before flush {}", engine.get_latest_sequence_number());
+        engine.flush(true).unwrap();
+        println!("after flush {}", engine.get_latest_sequence_number());
+
+        let mut wb = engine.write_batch();
+        wb.put_cf(CF_LOCK, b"c", b"v3").unwrap();
+        wb.put_cf(CF_DEFAULT, b"d", b"v4").unwrap();
+        let seq = wb.write_opt(&opt).unwrap();
+        println!("write {}", seq);
+        println!("before flush {}", engine.get_latest_sequence_number());
+        engine.flush_cf(CF_LOCK, true).unwrap();
+        println!("after flush {}", engine.get_latest_sequence_number());
+    }
+
+    put_value(path);
+
+    let engine = KvTestEngine::new_kv_engine(path, None, &[CF_DEFAULT, CF_LOCK], None).unwrap();
+    assert_eq!(
+        b"v1",
+        engine.get_value_cf(CF_LOCK, b"a").unwrap().unwrap().deref()
+    );
+    assert_eq!(
+        b"v2",
+        engine
+            .get_value_cf(CF_DEFAULT, b"b")
+            .unwrap()
+            .unwrap()
+            .deref()
+    );
+    assert_eq!(
+        b"v3",
+        engine.get_value_cf(CF_LOCK, b"c").unwrap().unwrap().deref()
+    );
+    assert!(engine.get_value_cf(CF_DEFAULT, b"d").unwrap().is_none());
+    println!("{}", engine.get_latest_sequence_number());
+    println!(
+        "default props: {:?}",
+        engine
+            .get_range_seqno_properties_cf(CF_DEFAULT, b"", b"z")
+            .unwrap()
+    );
+    println!(
+        "lock props: {:?}",
+        engine
+            .get_range_seqno_properties_cf(CF_LOCK, b"", b"z")
+            .unwrap()
+    );
 }

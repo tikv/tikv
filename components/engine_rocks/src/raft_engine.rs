@@ -301,6 +301,26 @@ impl RaftEngine for RocksEngine {
         self.put_msg(&keys::raft_state_key(raft_group_id), state)
     }
 
+    fn put_region_state(&self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+        self.put_msg(&keys::region_state_key(raft_group_id), state)
+    }
+
+    fn scan_region_state<F>(&self, mut f: F) -> Result<()>
+    where
+        F: FnMut(u64, RegionLocalState) -> Result<bool>,
+    {
+        let start_key = keys::REGION_META_MIN_KEY;
+        let end_key = keys::REGION_META_MAX_KEY;
+        self.scan_cf(CF_DEFAULT, start_key, end_key, false, |key, value| {
+            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
+            let local_state = parse_from_bytes(value)?;
+            f(region_id, local_state)
+        })
+    }
+
     fn batch_gc(&self, groups: Vec<RaftLogGCTask>) -> Result<usize> {
         let mut total = 0;
         let mut raft_wb = self.write_batch_with_cap(4 * 1024);

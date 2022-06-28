@@ -540,6 +540,31 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
+    fn put_region_state(&self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+        let mut batch = Self::LogBatch::default();
+        batch
+            .0
+            .put_message(raft_group_id, REGION_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)?;
+        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        Ok(())
+    }
+
+    fn scan_region_state<F>(&self, mut f: F) -> Result<()>
+    where
+        F: FnMut(u64, RegionLocalState) -> Result<bool>,
+    {
+        for rid in self.raft_groups() {
+            let state = self.get_region_state(rid)?;
+            if let Some(state) = state {
+                if !f(rid, state)? {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
         self.batch_gc(vec![RaftLogGCTask {
             raft_group_id,

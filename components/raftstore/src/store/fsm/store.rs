@@ -1107,6 +1107,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let kv_engine = self.engines.kv.clone();
+        let raft_engine = self.engines.raft.clone();
         let store_id = self.store.get_id();
         let mut total_count = 0;
         let mut tombstone_count = 0;
@@ -1120,65 +1121,50 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
         let mut replication_state = self.global_replication_state.lock().unwrap();
-        kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
-            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
-            if suffix != keys::REGION_STATE_SUFFIX {
-                return Ok(true);
-            }
-
+        let mut recover_peers = |region_id, local_state: RegionLocalState| {
             total_count += 1;
-
-            let mut local_state = RegionLocalState::default();
-            local_state.merge_from_bytes(value)?;
-
-            let region = local_state.get_region();
-            if local_state.get_state() == PeerState::Tombstone {
-                tombstone_count += 1;
-                debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
-                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
-                return Ok(true);
+            match local_state.get_state() {
+                PeerState::Tombstone => {
+                    tombstone_count += 1;
+                }
+                PeerState::Applying => {
+                    applying_count += 1;
+                    applying_regions.push(local_state.get_region().clone());
+                }
+                PeerState::Merging => {
+                    merging_count += 1;
+                }
+                _ => {}
             }
-            if local_state.get_state() == PeerState::Applying {
-                // in case of restart happen when we just write region state to Applying,
-                // but not write raft_local_state to raft rocksdb in time.
-                box_try!(peer_storage::recover_from_applying_state(
-                    &self.engines,
-                    &mut raft_wb,
-                    region_id
-                ));
-                applying_count += 1;
-                applying_regions.push(region.clone());
-                return Ok(true);
+            if let Some((tx, peer)) = box_try!(self.recover_peer_from_local_state(
+                region_id,
+                local_state,
+                &mut meta,
+                &mut kv_wb,
+                &mut raft_wb,
+                &mut *replication_state,
+            )) {
+                region_peers.push((tx, peer));
             }
 
-            let (tx, mut peer) = box_try!(PeerFsm::create(
-                store_id,
-                &self.cfg.value(),
-                self.region_scheduler.clone(),
-                self.raftlog_fetch_scheduler.clone(),
-                self.engines.clone(),
-                region,
-            ));
-            peer.peer.init_replication_mode(&mut *replication_state);
-            if local_state.get_state() == PeerState::Merging {
-                info!("region is merging"; "region" => ?region, "store_id" => store_id);
-                merging_count += 1;
-                peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
-            }
-            meta.region_ranges.insert(enc_end_key(region), region_id);
-            meta.regions.insert(region_id, region.clone());
-            meta.region_read_progress
-                .insert(region_id, peer.peer.read_progress.clone());
-            // No need to check duplicated here, because we use region id as the key
-            // in DB.
-            region_peers.push((tx, peer));
-            self.coprocessor_host.on_region_changed(
-                region,
-                RegionChangeEvent::Create,
-                StateRole::Follower,
-            );
             Ok(true)
-        })?;
+        };
+        if self.should_recover_from_raftdb() {
+            raft_engine.scan_region_state(|region_id, local_state| {
+                recover_peers(region_id, local_state)
+            })?;
+        } else {
+            kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
+                let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+                if suffix != keys::REGION_STATE_SUFFIX {
+                    return Ok(true);
+                }
+
+                let mut local_state = RegionLocalState::default();
+                local_state.merge_from_bytes(value)?;
+                recover_peers(region_id, local_state)
+            })?;
+        }
 
         if !kv_wb.is_empty() {
             kv_wb.write().unwrap();
@@ -1222,6 +1208,60 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         self.clear_stale_data(&meta)?;
 
         Ok(region_peers)
+    }
+
+    fn should_recover_from_raftdb(&self) -> bool {
+        false
+    }
+
+    fn recover_peer_from_local_state(
+        &self,
+        region_id: u64,
+        local_state: RegionLocalState,
+        meta: &mut StoreMeta,
+        kv_wb: &mut EK::WriteBatch,
+        raft_wb: &mut ER::LogBatch,
+        replication_state: &mut GlobalReplicationState,
+    ) -> Result<Option<SenderFsmPair<EK, ER>>> {
+        let store_id = self.store.get_id();
+        let region = local_state.get_region();
+        if local_state.get_state() == PeerState::Tombstone {
+            debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
+            self.clear_stale_meta(kv_wb, raft_wb, &local_state);
+            return Ok(None);
+        }
+        if local_state.get_state() == PeerState::Applying {
+            // in case of restart happen when we just write region state to Applying,
+            // but not write raft_local_state to raft rocksdb in time.
+            peer_storage::recover_from_applying_state(&self.engines, raft_wb, region_id)?;
+            return Ok(None);
+        }
+
+        let (tx, mut peer) = PeerFsm::create(
+            store_id,
+            &self.cfg.value(),
+            self.region_scheduler.clone(),
+            self.raftlog_fetch_scheduler.clone(),
+            self.engines.clone(),
+            region,
+        )?;
+        peer.peer.init_replication_mode(replication_state);
+        if local_state.get_state() == PeerState::Merging {
+            info!("region is merging"; "region" => ?region, "store_id" => store_id);
+            peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
+        }
+        meta.region_ranges.insert(enc_end_key(region), region_id);
+        meta.regions.insert(region_id, region.clone());
+        meta.region_read_progress
+            .insert(region_id, peer.peer.read_progress.clone());
+        // No need to check duplicated here, because we use region id as the key
+        // in DB.
+        self.coprocessor_host.on_region_changed(
+            region,
+            RegionChangeEvent::Create,
+            StateRole::Follower,
+        );
+        Ok(Some((tx, peer)))
     }
 
     fn clear_stale_meta(

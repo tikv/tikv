@@ -151,6 +151,17 @@ impl RaftEngine for PanicEngine {
     fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
         panic!()
     }
+
+    fn put_region_state(&self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+        panic!()
+    }
+
+    fn scan_region_state<F>(&self, f: F) -> Result<()>
+    where
+        F: FnMut(u64, RegionLocalState) -> Result<bool>,
+    {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {

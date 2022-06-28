@@ -169,6 +169,7 @@ pub mod ctor {
     pub struct DBOptions {
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IORateLimiter>>,
+        avoid_flush_during_shutdown: bool,
     }
 
     impl DBOptions {
@@ -178,6 +179,10 @@ pub mod ctor {
 
         pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IORateLimiter>>) {
             self.rate_limiter = rate_limiter;
+        }
+
+        pub fn avoid_flush_during_shutdown(&mut self, avoid: bool) {
+            self.avoid_flush_during_shutdown = avoid;
         }
     }
 
@@ -329,7 +334,7 @@ pub mod ctor {
                 new_engine as rocks_new_engine, new_engine_opt as rocks_new_engine_opt,
                 RocksCFOptions,
             },
-            RocksColumnFamilyOptions, RocksDBOptions,
+            RocksColumnFamilyOptions, RocksDBOptions, SeqnoPropertiesCollectorFactory,
         };
         use engine_traits::{ColumnFamilyOptions as ColumnFamilyOptionsTrait, Result};
 
@@ -367,6 +372,12 @@ pub mod ctor {
                         let mut rocks_cf_opts = RocksColumnFamilyOptions::new();
                         set_standard_cf_opts(rocks_cf_opts.as_raw_mut(), &cf_opts.options);
                         set_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
+                        rocks_cf_opts
+                            .as_raw_mut()
+                            .add_table_properties_collector_factory(
+                                "tikv.seqno-properties-collector",
+                                SeqnoPropertiesCollectorFactory::default(),
+                            );
                         RocksCFOptions::new(cf_opts.cf, rocks_cf_opts)
                     })
                     .collect();
@@ -444,6 +455,7 @@ pub mod ctor {
 
         fn get_rocks_db_opts(db_opts: DBOptions) -> Result<RocksDBOptions> {
             let mut rocks_db_opts = RawRocksDBOptions::new();
+            rocks_db_opts.avoid_flush_during_shutdown(db_opts.avoid_flush_during_shutdown);
             let env = get_env(db_opts.key_manager.clone(), db_opts.rate_limiter)?;
             rocks_db_opts.set_env(env);
             let rocks_db_opts = RocksDBOptions::from_raw(rocks_db_opts);
