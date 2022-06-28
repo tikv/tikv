@@ -196,10 +196,10 @@ impl FileSystem for ManagedFileSystem {
         self.base_file_system.exists_metadata(path)
     }
 
-    fn delete_metadata<P: AsRef<Path>>(&self, path: P) -> IoResult<bool> {
+    fn delete_metadata<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
         if let Some(ref manager) = self.key_manager {
             // Note: no error if the file doesn't exist.
-            manager.delete_file(path.as_ref().to_str().unwrap())?
+            manager.delete_file(path.as_ref().to_str().unwrap())?;
         }
         self.base_file_system.delete_metadata(path)
     }

@@ -468,13 +468,13 @@ impl DataKeyManager {
     pub fn retain_encrypted_files(&self, f: impl Fn(&str) -> bool) {
         let mut dict = self.dicts.file_dict.lock().unwrap();
         let mut file_dict_file = self.dicts.file_dict_file.lock().unwrap();
-        let old_size = dict.files.len();
         dict.files.retain(|fname, info| {
             if info.method != EncryptionMethod::Plaintext {
                 let retain = f(fname);
                 if !retain {
                     file_dict_file.remove(fname).unwrap();
                 }
+                retain
             } else {
                 false
             }

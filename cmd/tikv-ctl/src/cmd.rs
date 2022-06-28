@@ -541,6 +541,7 @@ pub enum Cmd {
         /// PD endpoints
         pd: String,
     },
+    /// Raft Engine Control.
     RaftEngineCtl {
         args: Vec<String>,
     },
