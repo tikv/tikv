@@ -80,6 +80,8 @@ fn test_serde_custom_tikv_config() {
         labels: HashMap::from_iter([("a".to_owned(), "b".to_owned())]),
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
+        grpc_gzip_compression_level: 2,
+        grpc_min_message_size_to_compress: 4096,
         advertise_status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
         max_grpc_send_msg_len: 6 * (1 << 20),
@@ -256,7 +258,7 @@ fn test_serde_custom_tikv_config() {
         level_merge: true,
         range_merge: true,
         max_sorted_runs: 100,
-        gc_merge_rewrite: true,
+        gc_merge_rewrite: false,
     };
     let titan_db_config = TitanDBConfig {
         enabled: true,

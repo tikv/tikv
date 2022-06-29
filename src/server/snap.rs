@@ -43,6 +43,7 @@ use tikv_util::{
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use super::{metrics::*, Config, Error, Result};
+use crate::tikv_util::sys::thread::ThreadBuildWrapper;
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
@@ -165,7 +166,9 @@ pub fn send_snap(
         .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
         .keepalive_time(cfg.grpc_keepalive_time.0)
         .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
-        .default_compression_algorithm(cfg.grpc_compression_algorithm());
+        .default_compression_algorithm(cfg.grpc_compression_algorithm())
+        .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
+        .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress);
 
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
@@ -354,8 +357,8 @@ where
             pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("snap-sender"))
                 .worker_threads(DEFAULT_POOL_SIZE)
-                .on_thread_start(tikv_alloc::add_thread_memory_accessor)
-                .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
+                .after_start_wrapper(tikv_alloc::add_thread_memory_accessor)
+                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
             raft_router: r,

@@ -75,7 +75,7 @@ use crate::{
     store::{
         cmd_resp,
         fsm::RaftPollerBuilder,
-        local_metrics::RaftMetrics,
+        local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
         msg::{Callback, PeerMsg, ReadResponse, SignificantMsg},
@@ -520,12 +520,21 @@ where
             self.pending_ssts = vec![];
         }
         if !self.kv_wb_mut().is_empty() {
+            self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            self.perf_context.report_metrics();
+            let trackers: Vec<_> = self
+                .applied_batch
+                .cb_batch
+                .iter()
+                .flat_map(|(cb, _)| cb.get_trackers())
+                .flat_map(|trackers| trackers.iter().map(|t| t.as_tracker_token()))
+                .flatten()
+                .collect();
+            self.perf_context.report_metrics(&trackers);
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -556,13 +565,10 @@ where
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
-        let now = Instant::now();
+        let now = std::time::Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            if let Some(times) = cb.get_request_times() {
-                for t in times {
-                    self.apply_time
-                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
-                }
+            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
+                tracker.observe(now, &self.apply_time, |t| &mut t.metrics.apply_time_nanos);
             }
             cb.invoke_with_response(resp);
         }
@@ -1076,7 +1082,10 @@ where
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
-        // TOOD(cdc): should we observe empty cmd, aka leader change?
+
+        // we should observe empty cmd, aka leader change,
+        // read index during confchange, or other situations.
+        apply_ctx.host.on_empty_cmd(&self.region, index, term);
 
         self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
@@ -2908,17 +2917,17 @@ impl<S: Snapshot> Apply<S> {
     }
 
     pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
-        let mut now = None;
+        let now = std::time::Instant::now();
         for cb in &mut self.cbs {
-            if let Callback::Write { request_times, .. } = &mut cb.cb {
-                if now.is_none() {
-                    now = Some(Instant::now());
-                }
-                for t in request_times {
-                    metrics
-                        .store_time
-                        .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
-                    *t = now.unwrap();
+            if let Callback::Write { trackers, .. } = &mut cb.cb {
+                for tracker in trackers {
+                    tracker.observe(now, &metrics.store_time, |t| {
+                        t.metrics.write_instant = Some(now);
+                        &mut t.metrics.store_time_nanos
+                    });
+                    if let TimeTracker::Instant(t) = tracker {
+                        *t = now;
+                    }
                 }
             }
         }
@@ -3819,7 +3828,6 @@ where
             }
             update_cfg(&incoming.apply_batch_system);
         }
-        self.apply_ctx.perf_context.start_observe();
     }
 
     fn handle_control(&mut self, control: &mut ControlFsm) -> Option<usize> {
@@ -5392,6 +5400,100 @@ mod tests {
             let dk = keys::data_key(&keys[i]);
             assert_eq!(engine.get_value(&dk).unwrap().unwrap(), &expected_vals[i]);
         }
+    }
+
+    #[test]
+    fn test_bucket_version_change_in_try_batch() {
+        let (_path, engine) = create_tmp_engine("test-bucket");
+        let (_, importer) = create_tmp_importer("test-bucket");
+        let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = {
+            let mut cfg = Config::default();
+            cfg.apply_batch_system.pool_size = 1;
+            cfg.apply_batch_system.low_priority_pool_size = 0;
+            Arc::new(VersionTrack::new(cfg))
+        };
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engine,
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-bucket".to_owned(), builder);
+
+        let mut reg = Registration {
+            id: 1,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(1, 1));
+        reg.region.set_start_key(b"k1".to_vec());
+        reg.region.set_end_key(b"k2".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let entry1 = {
+            let mut entry = EntryBuilder::new(1, 1);
+            entry = entry.put(b"key1", b"value1");
+            entry.epoch(1, 3).build()
+        };
+
+        let entry2 = {
+            let mut entry = EntryBuilder::new(2, 1);
+            entry = entry.put(b"key2", b"value2");
+            entry.epoch(1, 3).build()
+        };
+
+        let (capture_tx, _capture_rx) = mpsc::channel();
+        let mut apply1 = apply(1, 1, 1, vec![entry1], vec![cb(1, 1, capture_tx.clone())]);
+        let bucket_meta = BucketMeta {
+            region_id: 1,
+            region_epoch: RegionEpoch::default(),
+            version: 1,
+            keys: vec![b"".to_vec(), b"".to_vec()],
+            sizes: vec![0, 0],
+        };
+        apply1.bucket_meta = Some(Arc::new(bucket_meta));
+
+        let mut apply2 = apply(1, 1, 1, vec![entry2], vec![cb(2, 1, capture_tx)]);
+        let mut bucket_meta2 = BucketMeta {
+            region_id: 1,
+            region_epoch: RegionEpoch::default(),
+            version: 2,
+            keys: vec![b"".to_vec(), b"".to_vec()],
+            sizes: vec![0, 0],
+        };
+        bucket_meta2.version = 2;
+        apply2.bucket_meta = Some(Arc::new(bucket_meta2));
+
+        router.schedule_task(1, Msg::apply(apply1));
+        router.schedule_task(1, Msg::apply(apply2));
+
+        let res = fetch_apply_res(&rx);
+        let bucket_version = res.bucket_stat.unwrap().as_ref().meta.version;
+
+        assert_eq!(bucket_version, 2);
+
+        validate(&router, 1, |delegate| {
+            let bucket_version = delegate.buckets.as_ref().unwrap().meta.version;
+            assert_eq!(bucket_version, 2);
+        });
     }
 
     #[test]

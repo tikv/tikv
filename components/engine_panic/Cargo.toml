@@ -12,4 +12,5 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 tikv_alloc = { path = "../tikv_alloc" }
 # FIXME: Remove this dep from the engine_traits interface
 tikv_util = { path = "../tikv_util", default-features = false }
+tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }

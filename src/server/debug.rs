@@ -35,7 +35,10 @@ use raftstore::{
     },
 };
 use thiserror::Error;
-use tikv_util::{config::ReadableSize, keybuilder::KeyBuilder, worker::Worker};
+use tikv_util::{
+    config::ReadableSize, keybuilder::KeyBuilder, sys::thread::StdThreadBuildWrapper,
+    worker::Worker,
+};
 use txn_types::Key;
 
 pub use crate::storage::mvcc::MvccInfoIterator;
@@ -441,7 +444,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             let props = tikv_util::thread_group::current_properties();
             let thread = ThreadBuilder::new()
                 .name(format!("mvcc-recover-thread-{}", thread_index))
-                .spawn(move || {
+                .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
                     tikv_alloc::add_thread_memory_accessor();
                     info!(

@@ -24,7 +24,7 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Rollback:
         cmd_ty => (),
-        display => "kv::command::rollback keys({}) @ {} | {:?}", (keys.len, start_ts, ctx),
+        display => "kv::command::rollback keys({:?}) @ {} | {:?}", (keys, start_ts, ctx),
         content => {
             keys: Vec<Key>,
             /// The transaction timestamp.
@@ -35,6 +35,7 @@ command! {
 impl CommandExt for Rollback {
     ctx!();
     tag!(rollback);
+    request_type!(KvRollback);
     ts!(start_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);

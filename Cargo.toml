@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.1.0-alpha"
+version = "6.2.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -94,7 +94,8 @@ futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-timer = "3.0"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+getset = "0.1"
+grpcio = { version = "0.10.3", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"
 http = "0"
@@ -164,6 +165,7 @@ tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 toml = "0.5"
+tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
@@ -248,6 +250,7 @@ members = [
   "components/panic_hook",
   "components/pd_client",
   "components/raftstore",
+  "components/raftstore-v2",
   "components/resolved_ts",
   "components/resource_metering",
   "components/server",
@@ -270,6 +273,7 @@ members = [
   "components/tikv_alloc",
   "components/tikv_util",
   "components/tipb_helper",
+  "components/tracker",
   "components/txn_types",
   "fuzz",
   "fuzz/fuzzer-afl",

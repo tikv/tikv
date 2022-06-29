@@ -13,17 +13,13 @@ if [[ -z $MAKEFILE_RUN ]] ; then
 fi
 
 ./scripts/test "$@" -- --nocapture
-# The special Linux case below is testing the mem-profiling
-# features in tikv_alloc, which are marked #[ignore] since
-# they require special compile-time and run-time setup
-# Fortunately rebuilding with the mem-profiling feature will only
-# rebuild starting at jemalloc-sys.
+# Re-run tests that requires specific environment variables.
 if [[ "$(uname)" == "Linux" ]]; then
-    export MALLOC_CONF=prof:true,prof_active:false
-    ./scripts/test -p tikv -p tikv_alloc --lib "$@" -- --nocapture --ignored
+    export MALLOC_CONF=prof:true
+    ./scripts/test ifdef_malloc_conf "$@" -- --nocapture
 fi
 
 if [[ "$(uname)" = "Linux" ]]; then
     EXTRA_CARGO_ARGS="" ./scripts/test --message-format=json-render-diagnostics -q --no-run -- --nocapture |
-            python scripts/check-bins.py --features "${TIKV_ENABLE_FEATURES}" --check-tests
+      python scripts/check-bins.py --features "${TIKV_ENABLE_FEATURES}" --check-tests
 fi

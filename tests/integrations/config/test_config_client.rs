@@ -64,8 +64,7 @@ fn test_dispatch_change() {
 
     impl ConfigManager for CfgManager {
         fn dispatch(&mut self, c: ConfigChange) -> Result<(), Box<dyn Error>> {
-            self.0.lock().unwrap().update(c);
-            Ok(())
+            self.0.lock().unwrap().update(c)
         }
     }
 
@@ -198,8 +197,7 @@ fn test_update_from_toml_file() {
 
     impl ConfigManager for CfgManager {
         fn dispatch(&mut self, c: ConfigChange) -> Result<(), Box<dyn Error>> {
-            self.0.lock().unwrap().update(c);
-            Ok(())
+            self.0.lock().unwrap().update(c)
         }
     }
 

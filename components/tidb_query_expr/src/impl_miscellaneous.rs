@@ -318,14 +318,21 @@ mod tests {
     fn test_real_any_value() {
         let test_cases = vec![
             (vec![], None),
-            (vec![Real::from(1.2_f64)], Some(Real::from(1.2_f64))),
             (
-                vec![Real::from(1.2_f64), Real::from(2.3_f64)],
-                Some(Real::from(1.2_f64)),
+                vec![Real::new(1.2_f64).unwrap()],
+                Some(Real::new(1.2_f64).unwrap()),
             ),
             (
-                vec![Real::from(1.2_f64), Real::from(2.3_f64), Real::from(3_f64)],
-                Some(Real::from(1.2_f64)),
+                vec![Real::new(1.2_f64).unwrap(), Real::new(2.3_f64).unwrap()],
+                Some(Real::new(1.2_f64).unwrap()),
+            ),
+            (
+                vec![
+                    Real::new(1.2_f64).unwrap(),
+                    Real::new(2.3_f64).unwrap(),
+                    Real::new(3_f64).unwrap(),
+                ],
+                Some(Real::new(1.2_f64).unwrap()),
             ),
         ];
 

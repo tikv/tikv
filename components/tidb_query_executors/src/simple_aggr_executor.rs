@@ -309,7 +309,7 @@ mod tests {
                 Self {
                     rows_with_null: 0,
                     rows_without_null: 0,
-                    sum: Real::from(0.0),
+                    sum: Real::new(0.0).unwrap(),
                 }
             }
         }

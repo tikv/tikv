@@ -43,6 +43,7 @@ use tikv_util::{
     time::{duration_to_ms, duration_to_sec, Instant},
     worker::Scheduler,
 };
+use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
 use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
@@ -1328,6 +1329,12 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
+    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+        req.get_context(),
+        RequestType::KvGet,
+        req.get_version(),
+    )));
+    set_tls_tracker_token(tracker);
     let start = Instant::now();
     let v = storage.get(
         req.take_context(),
@@ -1347,7 +1354,9 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
                     stats.stats.write_scan_detail(scan_detail_v2);
-                    stats.perf_stats.write_scan_detail(scan_detail_v2);
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        tracker.write_scan_detail(scan_detail_v2);
+                    });
                     let time_detail = exec_detail_v2.mut_time_detail();
                     time_detail.set_kv_read_wall_time_ms(duration_ms as i64);
                     time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms as i64);
@@ -1361,6 +1370,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
+        GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
 }
@@ -1369,6 +1379,12 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
+    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+        req.get_context(),
+        RequestType::KvScan,
+        req.get_version(),
+    )));
+    set_tls_tracker_token(tracker);
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
     let v = storage.scan(
@@ -1402,6 +1418,7 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
                 }
             }
         }
+        GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
 }
@@ -1410,6 +1427,12 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
+    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+        req.get_context(),
+        RequestType::KvBatchGet,
+        req.get_version(),
+    )));
+    set_tls_tracker_token(tracker);
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
@@ -1427,7 +1450,9 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
                     stats.stats.write_scan_detail(scan_detail_v2);
-                    stats.perf_stats.write_scan_detail(scan_detail_v2);
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        tracker.write_scan_detail(scan_detail_v2);
+                    });
                     let time_detail = exec_detail_v2.mut_time_detail();
                     time_detail.set_kv_read_wall_time_ms(duration_ms as i64);
                     time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms as i64);
@@ -1445,6 +1470,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                 }
             }
         }
+        GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
 }
@@ -1453,6 +1479,12 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: ScanLockRequest,
 ) -> impl Future<Output = ServerResult<ScanLockResponse>> {
+    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+        req.get_context(),
+        RequestType::KvScanLock,
+        req.get_max_version(),
+    )));
+    set_tls_tracker_token(tracker);
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
@@ -1475,6 +1507,7 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
+        GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
 }
@@ -1900,10 +1933,19 @@ macro_rules! txn_command_future {
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
             $prelude
+            let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+                $req.get_context(),
+                RequestType::Unknown,
+                0,
+            )));
+            set_tls_tracker_token(tracker);
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);
 
             async move {
+                defer!{{
+                    GLOBAL_TRACKERS.remove(tracker);
+                }};
                 let $v = match res {
                     Err(e) => Err(e),
                     Ok(_) => f.await?,
@@ -2156,6 +2198,7 @@ mod tests {
     use std::thread;
 
     use futures::{channel::oneshot, executor::block_on};
+    use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
 
@@ -2166,7 +2209,7 @@ mod tests {
 
         thread::Builder::new()
             .name("source".to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 block_on(signal_rx).unwrap();
                 tx.send(100).unwrap();
             })
@@ -2189,7 +2232,7 @@ mod tests {
         let (signal_tx, signal_rx) = oneshot::channel();
         thread::Builder::new()
             .name("source".to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tx.send(100).unwrap();
                 signal_tx.send(()).unwrap();
             })
