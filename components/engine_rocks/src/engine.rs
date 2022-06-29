@@ -23,8 +23,8 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct RocksEngine {
-    pub db: Arc<DB>,
-    pub shared_block_cache: bool,
+    db: Arc<DB>,
+    shared_block_cache: bool,
 }
 
 impl RocksEngine {
@@ -61,6 +61,10 @@ impl RocksEngine {
 
     pub fn set_shared_block_cache(&mut self, enable: bool) {
         self.shared_block_cache = enable;
+    }
+
+    pub fn get_shared_block_cache(&self)-> bool {
+        self.shared_block_cache
     }
 }
 

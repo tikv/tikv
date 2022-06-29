@@ -14,8 +14,8 @@ use rocksdb::{
 use tikv_util::warn;
 
 pub struct CFOptions<'a> {
-    pub cf: &'a str,
-    pub options: ColumnFamilyOptions,
+    cf: &'a str,
+    options: ColumnFamilyOptions,
 }
 
 impl<'a> CFOptions<'a> {
