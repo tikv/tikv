@@ -16,6 +16,7 @@ use engine_rocks::{
     RocksEngine, RocksMvccProperties,
 };
 use engine_traits::{raw_ttl::ttl_current_ts, MiscExt, MvccProperties};
+use pd_client::{Feature, FeatureGate};
 use prometheus::local::LocalHistogram;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
@@ -32,6 +33,11 @@ use crate::{
     },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
+
+// The default version that can enable compaction filter for GC. This is necessary because after
+// compaction filter is enabled, it's impossible to fallback to ealier version which modifications
+// of GC are distributed to other replicas by Raft.
+const COMPACTION_FILTER_RAWKV_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
 pub struct RawCompactionFilterFactory;
 
@@ -58,7 +64,6 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         if safe_point == 0 {
             // Safe point has not been initialized yet.
             debug!("skip gc in compaction filter because of no safe point");
-            println!("asdfasdfasd01");
             return std::ptr::null_mut();
         }
 
@@ -79,14 +84,13 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
 
         if db.is_stalled_or_stopped() {
             debug!("skip gc in compaction filter because the DB is stalled");
-            println!("asdfasdfasd");
+            return std::ptr::null_mut();
+        }
+        if !do_check_allowed(enable, skip_vcheck, &gc_context.feature_gate) {
+            debug!("skip gc in rawkv compaction filter because it's not allowed");
             return std::ptr::null_mut();
         }
 
-        // if !do_check_allowed(enable, skip_vcheck, &gc_context.feature_gate) {
-        //     debug!("skip gc in compaction filter because it's not allowed");
-        //     return std::ptr::null_mut();
-        // }
         drop(gc_context_option);
 
         GC_COMPACTION_FILTER_PERFORM.inc();
@@ -173,6 +177,10 @@ impl CompactionFilter for RawCompactionFilter {
             }
         }
     }
+}
+
+fn do_check_allowed(enable: bool, skip_vcheck: bool, feature_gate: &FeatureGate) -> bool {
+    enable && (skip_vcheck || feature_gate.can_enable(COMPACTION_FILTER_RAWKV_GC_FEATURE))
 }
 
 fn check_need_gc(
@@ -455,6 +463,15 @@ pub mod tests {
         gc_runner
             .safe_point(TimeStamp::new(1).into_inner())
             .gc_raw(&raw_engine);
+        assert_eq!(GC_COMPACTION_FILTER_PERFORM.get(), 1);
+        assert_eq!(GC_COMPACTION_FILTER_SKIP.get(), 1);
+
+        // Set enable_compaction_filter = false
+        // do_check_allowed will return false
+        gc_runner
+            .safe_point(TimeStamp::physical_now())
+            .gc_raw_enable_filter(&raw_engine, false);
+
         assert_eq!(GC_COMPACTION_FILTER_PERFORM.get(), 1);
         assert_eq!(GC_COMPACTION_FILTER_SKIP.get(), 1);
     }
