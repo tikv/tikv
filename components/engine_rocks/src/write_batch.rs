@@ -213,7 +213,7 @@ impl Mutable for RocksWriteBatchVec {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::WriteBatch;
+    use engine_traits::{Peekable, WriteBatch};
     use rocksdb::DBOptions as RawDBOptions;
     use tempfile::Builder;
 
@@ -223,7 +223,53 @@ mod tests {
     };
 
     #[test]
-    fn test_should_write_to_engine() {
+    fn test_should_write_to_engine_with_pipeline_write_mode() {
+        let path = Builder::new()
+            .prefix("test-should-write-to-engine")
+            .tempdir()
+            .unwrap();
+        let opt = RawDBOptions::default();
+        opt.enable_unordered_write(false);
+        opt.enable_pipelined_write(true);
+        opt.enable_multi_batch_write(false);
+        let engine = new_engine_opt(
+            path.path().join("db").to_str().unwrap(),
+            RocksDBOptions::from_raw(opt),
+            vec![],
+        )
+        .unwrap();
+        assert!(
+            !engine
+                .as_inner()
+                .get_db_options()
+                .is_enable_multi_batch_write()
+        );
+        let mut wb = engine.write_batch();
+        for _i in 0..RocksEngine::WRITE_BATCH_MAX_KEYS {
+            wb.put(b"aaa", b"bbb").unwrap();
+        }
+        assert!(!wb.should_write_to_engine());
+        wb.put(b"aaa", b"bbb").unwrap();
+        assert!(wb.should_write_to_engine());
+        wb.write().unwrap();
+
+        let v = engine.get_value(b"aaa").unwrap();
+
+        assert!(v.is_some());
+        assert_eq!(v.unwrap(), b"bbb");
+        let mut wb = RocksWriteBatchVec::with_unit_capacity(&engine, 1024);
+        for _i in 0..RocksEngine::WRITE_BATCH_MAX_KEYS {
+            wb.put(b"aaa", b"bbb").unwrap();
+        }
+        assert!(!wb.should_write_to_engine());
+        wb.put(b"aaa", b"bbb").unwrap();
+        assert!(wb.should_write_to_engine());
+        wb.clear();
+        assert!(!wb.should_write_to_engine());
+    }
+
+    #[test]
+    fn test_should_write_to_engine_with_multi_batch_write_mode() {
         let path = Builder::new()
             .prefix("test-should-write-to-engine")
             .tempdir()
