@@ -31,7 +31,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         engine: ER,
         logger: &Logger,
     ) -> Result<Option<Self>> {
-        let s = match Storage::new(engine, region_id, store_id, logger)? {
+        let s = match Storage::new(region_id, store_id, engine, logger)? {
             Some(s) => s,
             None => return Ok(None),
         };
@@ -59,7 +59,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tablet_index = s.region_state().get_tablet_index();
         let tablet = if tablet_index != 0 {
             if !tablet_factory.exists(region_id, tablet_index) {
-                return Err(box_err!("tablet {} not found", tablet_index));
+                return Err(box_err!(
+                    "missing tablet {} for region {}",
+                    tablet_index,
+                    region_id
+                ));
             }
             // TODO: Perhaps we should stop create the tablet automatically.
             Some(tablet_factory.open_tablet(region_id, tablet_index)?)

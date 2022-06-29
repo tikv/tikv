@@ -59,9 +59,9 @@ impl<ER: RaftEngine> Storage<ER> {
     /// All metadata should be initialized before calling this method. If the region is destroyed
     /// `None` will be returned.
     pub fn new(
-        engine: ER,
         region_id: u64,
         store_id: u64,
+        engine: ER,
         logger: &Logger,
     ) -> Result<Option<Storage<ER>>> {
         let region_state = match engine.get_region_state(region_id) {

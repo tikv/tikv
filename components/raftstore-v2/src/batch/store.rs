@@ -88,10 +88,10 @@ impl<EK: KvEngine, T> StorePoller<EK, T> {
     }
 
     fn flush_events(&mut self) {
-        self.flush_ticks();
+        self.schedule_ticks();
     }
 
-    fn flush_ticks(&mut self) {
+    fn schedule_ticks(&mut self) {
         assert_eq!(
             PeerTick::get_all_ticks().len(),
             self.poll_ctx.tick_batch.len()
