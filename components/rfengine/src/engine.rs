@@ -518,6 +518,24 @@ mod tests {
             engine.write(wb).unwrap();
         }
         assert_eq!(engine.regions.len(), 10);
+        for _ in 0..10 {
+            let wal_cnt = engine
+                .dir
+                .read_dir()
+                .unwrap()
+                .filter(|p| {
+                    p.as_ref()
+                        .unwrap()
+                        .path()
+                        .extension()
+                        .map_or(false, |e| e == "wal")
+                })
+                .count();
+            if wal_cnt <= 2 {
+                break;
+            }
+            thread::sleep(std::time::Duration::from_secs(1));
+        }
         let recycled = engine.dir.join(RECYCLE_DIR).read_dir().unwrap().count();
         assert!(0 < recycled && recycled <= 3);
 
