@@ -7,7 +7,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::Peekable;
+use engine_traits::{Peekable, WriteBatch};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};

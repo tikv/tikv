@@ -210,7 +210,7 @@ impl RaftEngine for RocksEngine {
     type LogBatch = RocksWriteBatchVec;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
-        RocksWriteBatchVec::with_capacity(self, capacity)
+        RocksWriteBatchVec::with_unit_capacity(self, capacity)
     }
 
     fn sync(&self) -> Result<()> {
