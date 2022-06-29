@@ -113,6 +113,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
 struct RawCompactionFilter {
     safe_point: u64,
     engine: RocksEngine,
+    is_bottommost_level: bool,
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     current_ts: u64,
     mvcc_key_prefix: Vec<u8>,
@@ -231,7 +232,7 @@ impl RawCompactionFilter {
         safe_point: u64,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         ts: u64,
-        _context: &CompactionFilterContext,
+        context: &CompactionFilterContext,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
     ) -> Self {
         // Safe point must have been initialized.
@@ -240,6 +241,7 @@ impl RawCompactionFilter {
         RawCompactionFilter {
             safe_point,
             engine,
+            is_bottommost_level: context.is_bottommost_level(),
             gc_scheduler,
             current_ts: ts,
             mvcc_key_prefix: vec![],
@@ -289,7 +291,7 @@ impl RawCompactionFilter {
             self.versions += 1;
             let raw_value = ApiV2::decode_raw_value(value)?;
             // If it's the latest version, and it's deleted or expired, it needs to be sent to GCWorker to be processed asynchronously.
-            if !raw_value.is_valid(self.current_ts) {
+            if !raw_value.is_valid(self.current_ts) && self.is_bottommost_level {
                 self.raw_handle_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
                     self.raw_gc_mvcc_deletions();
