@@ -8,7 +8,8 @@ use std::{
     u64,
 };
 
-use engine_traits::{MvccProperties, Range};
+use api_version::{ApiV2, KeyMode, KvFormat};
+use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -494,12 +495,132 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 }
 
 /// Can only be used for write CF.
+pub struct RawMvccPropertiesCollector {
+    props: MvccProperties,
+    last_row: Vec<u8>,
+    num_errors: u64,
+    row_versions: u64,
+    cur_index_handle: IndexHandle,
+    row_index_handles: IndexHandles,
+}
+
+impl RawMvccPropertiesCollector {
+    fn new() -> RawMvccPropertiesCollector {
+        RawMvccPropertiesCollector {
+            props: MvccProperties::new(),
+            last_row: Vec::new(),
+            num_errors: 0,
+            row_versions: 0,
+            cur_index_handle: IndexHandle::default(),
+            row_index_handles: IndexHandles::new(),
+        }
+    }
+}
+
+impl TablePropertiesCollector for RawMvccPropertiesCollector {
+    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        // TsFilter filters sst based on max_ts and min_ts during iterating.
+        // To prevent seeing outdated (GC) records, we should consider
+        // RocksDB delete entry type.
+        if entry_type != DBEntryType::Put && entry_type != DBEntryType::Delete {
+            return;
+        }
+
+        let current_ts = ttl_current_ts();
+
+        let key_mode = ApiV2::parse_key_mode(keys::origin_key(key));
+        if key_mode != KeyMode::Raw {
+            return;
+        }
+
+        if !keys::validate_data_key(key) {
+            self.num_errors += 1;
+            return;
+        }
+
+        let (k, ts) = match ApiV2::split_ts(key) {
+            Ok((k, ts)) => (k, ts),
+            Err(_) => {
+                self.num_errors += 1;
+                return;
+            }
+        };
+
+        self.props.min_ts = cmp::min(self.props.min_ts, ts);
+        self.props.max_ts = cmp::max(self.props.max_ts, ts);
+        if entry_type == DBEntryType::Delete {
+            // Empty value for delete entry type, skip following properties.
+            return;
+        }
+
+        self.props.num_versions += 1;
+
+        if k != self.last_row.as_slice() {
+            self.props.num_rows += 1;
+            self.row_versions = 1;
+            self.last_row.clear();
+            self.last_row.extend(k);
+        } else {
+            self.row_versions += 1;
+        }
+        if self.row_versions > self.props.max_row_versions {
+            self.props.max_row_versions = self.row_versions;
+        }
+
+        let decode_raw_value = ApiV2::decode_raw_value(value);
+        if let Ok(raw_value) = decode_raw_value {
+            if raw_value.is_valid(current_ts) {
+                self.props.num_puts += 1;
+            } else {
+                self.props.num_deletes += 1;
+            }
+        }
+
+        // Add new row.
+        if self.row_versions == 1 {
+            self.cur_index_handle.size += 1;
+            self.cur_index_handle.offset += 1;
+            if self.cur_index_handle.offset == 1
+                || self.cur_index_handle.size >= PROP_ROWS_INDEX_DISTANCE
+            {
+                self.row_index_handles
+                    .insert(self.last_row.clone(), self.cur_index_handle.clone());
+                self.cur_index_handle.size = 0;
+            }
+        }
+    }
+
+    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
+        // Insert last handle.
+        if self.cur_index_handle.size > 0 {
+            self.row_index_handles
+                .insert(self.last_row.clone(), self.cur_index_handle.clone());
+        }
+        let mut res = RocksMvccProperties::encode(&self.props);
+        res.encode_u64(PROP_NUM_ERRORS, self.num_errors);
+        res.encode_handles(PROP_ROWS_INDEX, &self.row_index_handles);
+        res.0
+    }
+}
+
+/// Can only be used for write CF.
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory<MvccPropertiesCollector> for MvccPropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
         MvccPropertiesCollector::new()
+    }
+}
+
+#[derive(Default)]
+pub struct RawMvccPropertiesCollectorFactory {}
+
+impl TablePropertiesCollectorFactory<RawMvccPropertiesCollector>
+    for RawMvccPropertiesCollectorFactory
+{
+    fn create_table_properties_collector(&mut self, _: u32) -> RawMvccPropertiesCollector {
+        RawMvccPropertiesCollector::new()
     }
 }
 

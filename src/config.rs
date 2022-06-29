@@ -31,8 +31,8 @@ use engine_rocks::{
     },
     raw_util::CFOptions,
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
-    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
-    RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
+    RaftDBLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory, RocksEngine,
+    RocksEventListener, RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
@@ -651,7 +651,7 @@ impl DefaultCfConfig {
         };
         cf_opts.add_table_properties_collector_factory(
             "tikv.mvcc-properties-collector",
-            MvccPropertiesCollectorFactory::default(),
+            RawMvccPropertiesCollectorFactory::default(),
         );
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         match api_version {
