@@ -649,6 +649,10 @@ impl DefaultCfConfig {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         match api_version {
             ApiVersion::V1 => {

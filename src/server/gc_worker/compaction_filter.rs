@@ -52,8 +52,8 @@ pub struct GcContext {
     pub(crate) db: RocksEngine,
     pub(crate) store_id: u64,
     pub(crate) safe_point: Arc<AtomicU64>,
-    cfg_tracker: GcWorkerConfigManager,
-    feature_gate: FeatureGate,
+    pub(crate) cfg_tracker: GcWorkerConfigManager,
+    pub(crate) feature_gate: FeatureGate,
     pub(crate) gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     pub(crate) region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
@@ -80,12 +80,12 @@ lazy_static! {
     )
     .unwrap();
     // A counter for skip performing GC in compactions.
-    static ref GC_COMPACTION_FILTER_SKIP: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_FILTER_SKIP: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_skip",
         "Skip to create compaction filter for GC because of table properties"
     )
     .unwrap();
-    static ref GC_COMPACTION_FILTER_PERFORM: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_FILTER_PERFORM: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_perform",
         "perfrom GC in compaction filter"
     )

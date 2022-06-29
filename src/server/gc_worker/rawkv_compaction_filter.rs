@@ -13,19 +13,20 @@ use engine_rocks::{
         CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
         DBCompactionFilter,
     },
-    RocksEngine,
+    RocksEngine, RocksMvccProperties,
 };
-use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
+use engine_traits::{raw_ttl::ttl_current_ts, MiscExt, MvccProperties};
 use prometheus::local::LocalHistogram;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
-use txn_types::Key;
+use txn_types::{Key, TimeStamp};
 
 use crate::{
     server::gc_worker::{
         compaction_filter::{
             CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
-            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
+            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+            GC_COMPACTION_FILTER_PERFORM, GC_COMPACTION_FILTER_SKIP, GC_CONTEXT,
         },
         GcTask,
     },
@@ -57,8 +58,45 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         if safe_point == 0 {
             // Safe point has not been initialized yet.
             debug!("skip gc in compaction filter because of no safe point");
+            println!("asdfasdfasd01");
             return std::ptr::null_mut();
         }
+
+        let (enable, skip_vcheck, ratio_threshold) = {
+            let value = &*gc_context.cfg_tracker.value();
+            (
+                value.enable_compaction_filter,
+                value.compaction_filter_skip_version_check,
+                value.ratio_threshold,
+            )
+        };
+
+        debug!(
+            "creating compaction filter"; "feature_enable" => enable,
+            "skip_version_check" => skip_vcheck,
+            "ratio_threshold" => ratio_threshold,
+        );
+
+        if db.is_stalled_or_stopped() {
+            debug!("skip gc in compaction filter because the DB is stalled");
+            println!("asdfasdfasd");
+            return std::ptr::null_mut();
+        }
+
+        // if !do_check_allowed(enable, skip_vcheck, &gc_context.feature_gate) {
+        //     debug!("skip gc in compaction filter because it's not allowed");
+        //     return std::ptr::null_mut();
+        // }
+        drop(gc_context_option);
+
+        GC_COMPACTION_FILTER_PERFORM.inc();
+
+        if !check_need_gc(safe_point.into(), ratio_threshold, context) {
+            debug!("skip gc in compaction filter because it's not necessary");
+            GC_COMPACTION_FILTER_SKIP.inc();
+            return std::ptr::null_mut();
+        }
+
         let filter = RawCompactionFilter::new(
             db,
             safe_point,
@@ -134,6 +172,57 @@ impl CompactionFilter for RawCompactionFilter {
             }
         }
     }
+}
+
+fn check_need_gc(
+    safe_point: TimeStamp,
+    ratio_threshold: f64,
+    context: &CompactionFilterContext,
+) -> bool {
+    let check_props = |props: &MvccProperties| -> (bool, bool /*skip_more_checks*/) {
+        if props.min_ts > safe_point {
+            return (false, false);
+        }
+        if ratio_threshold < 1.0 || context.is_bottommost_level() {
+            // According to our tests, `split_ts` on keys and `parse_write` on values
+            // won't utilize much CPU. So always perform GC at the bottommost level
+            // to avoid garbage accumulation.
+            return (true, true);
+        }
+        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
+            // When comparing `num_versions` with `num_rows`, it's unnecessary to
+            // treat internal levels specially.
+            return (true, false);
+        }
+
+        // When comparing `num_versions` with `num_puts`, trait internal levels specially
+        // because MVCC-deletion marks can't be handled at those levels.
+        let num_rollback_and_locks = (props.num_versions - props.num_deletes) as f64;
+        if num_rollback_and_locks > props.num_puts as f64 * ratio_threshold {
+            return (true, false);
+        }
+        (props.max_row_versions > 1024, false)
+    };
+
+    let (mut sum_props, mut needs_gc) = (MvccProperties::new(), 0);
+    for i in 0..context.file_numbers().len() {
+        let table_props = context.table_properties(i);
+        let user_props = table_props.user_collected_properties();
+        if let Ok(props) = RocksMvccProperties::decode(user_props) {
+            sum_props.add(&props);
+            let (sst_needs_gc, skip_more_checks) = check_props(&props);
+            if sst_needs_gc {
+                needs_gc += 1;
+            }
+            if skip_more_checks {
+                // It's the bottommost level or ratio_threshold is less than 1.
+                needs_gc = context.file_numbers().len();
+                break;
+            }
+        }
+    }
+
+    (needs_gc >= ((context.file_numbers().len() + 1) / 2)) || check_props(&sum_props).0
 }
 
 impl RawCompactionFilter {
@@ -315,6 +404,57 @@ pub mod tests {
         let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
         let res = keys::data_key(encode_key.as_encoded());
         res
+    }
+
+    #[test]
+    fn test_check_need_gc() {
+        let mut cfg = DbConfig::default();
+        cfg.defaultcf.disable_auto_compactions = true;
+        cfg.defaultcf.dynamic_level_bytes = false;
+
+        let engine = TestEngineBuilder::new()
+            .api_version(ApiVersion::V2)
+            .build_with_cfg(&cfg)
+            .unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let mut gc_runner = TestGCRunner::new(0);
+
+        let user_key = b"r\0aaaaaaaaaaa";
+
+        let test_raws = vec![
+            (user_key, 100, false),
+            (user_key, 90, false),
+            (user_key, 70, false),
+        ];
+
+        let modifies = test_raws
+            .into_iter()
+            .map(|(key, ts, is_delete)| {
+                (
+                    make_key(key, ts),
+                    ApiV2::encode_raw_value(RawValue {
+                        user_value: &[0; 10][..],
+                        expire_ts: Some(TimeStamp::max().into_inner()),
+                        is_delete,
+                    }),
+                )
+            })
+            .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded_slice(k.as_slice()), v))
+            .collect();
+
+        let ctx = Context {
+            api_version: ApiVersion::V2,
+            ..Default::default()
+        };
+        let batch = WriteData::from_modifies(modifies);
+
+        engine.write(&ctx, batch).unwrap();
+
+        gc_runner
+            .safe_point(TimeStamp::new(1).into_inner())
+            .gc_raw(&raw_engine);
+        assert_eq!(GC_COMPACTION_FILTER_PERFORM.get(), 1);
+        assert_eq!(GC_COMPACTION_FILTER_SKIP.get(), 1);
     }
 
     #[test]
