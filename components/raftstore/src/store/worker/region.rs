@@ -675,16 +675,8 @@ where
         }
     }
 
-    /// Called when received new ApplyTask
-    fn handle_new_pending_applies(&mut self) {
-        fail_point!("handle_new_pending_applies", |_| {});
-        if self.ctx.engine.can_apply_snapshot() {
-            self.handle_pending_applies();
-        }
-    }
-
     /// Tries to apply pending tasks if there is some.
-    fn handle_pending_applies(&mut self) {
+    fn handle_pending_applies(&mut self, is_timeout: bool) {
         fail_point!("apply_pending_snapshot", |_| {});
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be ingested.
@@ -692,8 +684,15 @@ where
             if self.ctx.ingest_maybe_stall() {
                 break;
             }
-            if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
-                self.ctx.handle_apply(region_id, status);
+            if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
+                fail_point!("handle_new_pending_applies", |_| {});
+                if self.ctx.engine.can_apply_snapshot(is_timeout, *region_id) {
+                    // KvEngine can't apply snapshot for other reasons.
+                    break;
+                }
+                if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
+                    self.ctx.handle_apply(region_id, status);
+                }
             }
         }
     }
@@ -765,7 +764,7 @@ where
                 fail_point!("on_region_worker_apply", true, |_| {});
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
-                self.handle_new_pending_applies();
+                self.handle_pending_applies(false);
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
                     SNAP_COUNTER.apply.delay.inc()
@@ -798,7 +797,7 @@ where
     T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
-        self.handle_pending_applies();
+        self.handle_pending_applies(true);
         self.clean_stale_tick += 1;
         if self.clean_stale_tick >= STALE_PEER_CHECK_TICK {
             self.ctx.clean_stale_ranges();
