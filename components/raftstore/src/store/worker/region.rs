@@ -640,7 +640,7 @@ where
     }
 
     fn pre_apply_snapshot(&self, task: &Task<EK::Snapshot>) -> Result<()> {
-        let (region_id, status, peer_id) = match task {
+        let (region_id, abort, peer_id) = match task {
             Task::Apply {
                 region_id,
                 status,
@@ -652,10 +652,8 @@ where
         let region_state = self.get_region_state(*region_id)?;
         let apply_state = self.get_apply_state(*region_id)?;
 
-        let abort = status.clone();
         let timer = Instant::now();
         check_abort(&abort)?;
-        let region = region_state.get_region().clone();
 
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
@@ -665,8 +663,12 @@ where
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
         check_abort(&abort)?;
-        self.coprocessor_host
-            .pre_apply_snapshot(&region, *peer_id, &snap_key, Some(&s));
+        self.coprocessor_host.pre_apply_snapshot(
+            region_state.get_region(),
+            *peer_id,
+            &snap_key,
+            Some(&s),
+        );
         info!(
             "pre apply snapshot";
             "region_id" => region_id,
