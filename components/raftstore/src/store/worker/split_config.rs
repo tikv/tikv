@@ -117,7 +117,7 @@ impl ConfigManager for SplitConfigManager {
         {
             let change = change.clone();
             self.0
-                .update(move |cfg: &mut SplitConfig| cfg.update(change));
+                .update(move |cfg: &mut SplitConfig| cfg.update(change))?;
         }
         info!(
             "load base split config changed";

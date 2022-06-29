@@ -12,7 +12,7 @@ use std::{
     iter::{FromIterator, Iterator},
     mem,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
     u64,
 };
 
@@ -3301,7 +3301,7 @@ where
         let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
-            &mut self.ctx.perf_context,
+            &mut self.ctx.raft_perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
         ) {
@@ -5572,6 +5572,19 @@ where
 
         if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
             return;
+        }
+
+        if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
+            // Clean up the force leader state after a timeout, since the PD recovery process may
+            // have been aborted for some reasons.
+            if time.saturating_elapsed()
+                > cmp::max(
+                    self.ctx.cfg.peer_stale_state_check_interval.0,
+                    Duration::from_secs(60),
+                )
+            {
+                self.on_exit_force_leader();
+            }
         }
 
         if self.ctx.cfg.hibernate_regions {

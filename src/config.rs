@@ -39,7 +39,7 @@ use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, TabletAccessor,
     TabletErrorCollector, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
-use file_system::{IOPriority, IORateLimiter};
+use file_system::IORateLimiter;
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
@@ -3673,8 +3673,6 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
         ConfigValue::I32(_) => ConfigValue::from(v.parse::<i32>()?),
         ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
         ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
-        ConfigValue::BlobRunMode(_) => ConfigValue::from(v.parse::<BlobRunMode>()?),
-        ConfigValue::IOPriority(_) => ConfigValue::from(v.parse::<IOPriority>()?),
         ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
         _ => unreachable!(),
     };
@@ -3700,9 +3698,7 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                     match c {
                         ConfigValue::Duration(_)
                         | ConfigValue::Size(_)
-                        | ConfigValue::String(_)
-                        | ConfigValue::BlobRunMode(_)
-                        | ConfigValue::IOPriority(_) => Ok(true),
+                        | ConfigValue::String(_) => Ok(true),
                         ConfigValue::None => Err(Box::new(IoError::new(
                             ErrorKind::Other,
                             format!("unexpect none field: {:?}", c),
@@ -3840,7 +3836,7 @@ impl ConfigController {
         diff = {
             let incoming = self.get_current();
             let mut updated = incoming.clone();
-            updated.update(diff);
+            updated.update(diff)?;
             // Config might be adjusted in `validate`.
             updated.validate()?;
             incoming.diff(&updated)
@@ -3854,7 +3850,8 @@ impl ConfigController {
                     // dispatched to corresponding config manager, to avoid dispatch change twice
                     if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
-                            inner.current.update(to_update);
+                            // we already verified the correctness at the beginning of this function.
+                            inner.current.update(to_update).unwrap();
                             return Err(e);
                         }
                     }
@@ -3866,7 +3863,8 @@ impl ConfigController {
             }
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
-        inner.current.update(to_update);
+        // we already verified the correctness at the beginning of this function.
+        inner.current.update(to_update).unwrap();
         // Write change to the config file
         if let Some(change) = change {
             let content = {
@@ -4443,7 +4441,7 @@ mod tests {
         cfg_controller
             .update_config("resolved-ts.advance-ts-interval", "100ms")
             .unwrap();
-        resolved_ts_cfg.update(rx.recv().unwrap());
+        resolved_ts_cfg.update(rx.recv().unwrap()).unwrap();
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
             ReadableDuration::millis(100)
@@ -4464,7 +4462,7 @@ mod tests {
         cfg_controller
             .update_config("resolved-ts.advance-ts-interval", "3s")
             .unwrap();
-        resolved_ts_cfg.update(rx.recv().unwrap());
+        resolved_ts_cfg.update(rx.recv().unwrap()).unwrap();
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
             ReadableDuration::secs(3)
@@ -4618,7 +4616,7 @@ mod tests {
         let diff = config_value_to_string(diff.into_iter().collect());
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].0.as_str(), "blob_run_mode");
-        assert_eq!(diff[0].1.as_str(), "kFallback");
+        assert_eq!(diff[0].1.as_str(), "fallback");
     }
 
     #[test]

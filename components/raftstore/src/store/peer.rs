@@ -1221,7 +1221,7 @@ where
     pub fn destroy(
         &mut self,
         engines: &Engines<EK, ER>,
-        perf_context: &mut EK::PerfContext,
+        perf_context: &mut ER::PerfContext,
         keep_data: bool,
         pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
     ) -> Result<()> {
