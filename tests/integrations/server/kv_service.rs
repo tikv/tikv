@@ -2025,3 +2025,131 @@ fn test_storage_with_quota_limiter_disable() {
 
     assert!(begin.elapsed() < Duration::from_millis(500));
 }
+
+#[test]
+fn test_commands_write_detail() {
+    let (_cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        cluster.cfg.pessimistic_txn.pipelined = false;
+        cluster.cfg.pessimistic_txn.in_memory = false;
+    });
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+
+    let check_scan_detail = |sc: &ScanDetailV2| {
+        assert!(sc.get_get_snapshot_nanos() > 0);
+    };
+    let check_write_detail = |wd: &WriteDetail| {
+        assert!(wd.get_store_batch_wait_nanos() > 0);
+        assert!(wd.get_persist_log_nanos() > 0);
+        assert!(wd.get_raft_db_write_leader_wait_nanos() > 0);
+        assert!(wd.get_raft_db_sync_log_nanos() > 0);
+        assert!(wd.get_raft_db_write_memtable_nanos() > 0);
+        assert!(wd.get_commit_log_nanos() > 0);
+        assert!(wd.get_apply_batch_wait_nanos() > 0);
+        assert!(wd.get_apply_log_nanos() > 0);
+        assert!(wd.get_apply_mutex_lock_nanos() > 0);
+        assert!(wd.get_apply_write_wal_nanos() > 0);
+        assert!(wd.get_apply_write_memtable_nanos() > 0);
+    };
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.set_key(k.clone());
+
+    let mut pessimistic_lock_req = PessimisticLockRequest::default();
+    pessimistic_lock_req.set_context(ctx.clone());
+    pessimistic_lock_req.set_mutations(vec![mutation.clone()].into());
+    pessimistic_lock_req.set_start_version(20);
+    pessimistic_lock_req.set_for_update_ts(20);
+    pessimistic_lock_req.set_primary_lock(k.clone());
+    pessimistic_lock_req.set_lock_ttl(3000);
+    let pessimistic_lock_resp = client.kv_pessimistic_lock(&pessimistic_lock_req).unwrap();
+    check_scan_detail(
+        pessimistic_lock_resp
+            .get_exec_details_v2()
+            .get_scan_detail_v2(),
+    );
+    check_write_detail(
+        pessimistic_lock_resp
+            .get_exec_details_v2()
+            .get_write_detail(),
+    );
+
+    let mut prewrite_req = PrewriteRequest::default();
+    mutation.set_op(Op::Put);
+    mutation.set_value(v);
+    prewrite_req.set_mutations(vec![mutation].into());
+    prewrite_req.set_is_pessimistic_lock(vec![true]);
+    prewrite_req.set_context(ctx.clone());
+    prewrite_req.set_primary_lock(k.clone());
+    prewrite_req.set_start_version(20);
+    prewrite_req.set_for_update_ts(20);
+    prewrite_req.set_lock_ttl(3000);
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    check_scan_detail(prewrite_resp.get_exec_details_v2().get_scan_detail_v2());
+    check_write_detail(prewrite_resp.get_exec_details_v2().get_write_detail());
+
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(ctx);
+    commit_req.set_keys(vec![k].into());
+    commit_req.set_start_version(20);
+    commit_req.set_commit_version(30);
+    let commit_resp = client.kv_commit(&commit_req).unwrap();
+    check_scan_detail(commit_resp.get_exec_details_v2().get_scan_detail_v2());
+    check_write_detail(commit_resp.get_exec_details_v2().get_write_detail());
+}
+
+#[test]
+fn test_rpc_wall_time() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let k = b"key".to_vec();
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k;
+    get_req.version = 10;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(
+        get_resp
+            .get_exec_details_v2()
+            .get_time_detail()
+            .get_total_rpc_wall_time_ns()
+            > 0
+    );
+
+    let (mut sender, receiver) = client.batch_commands().unwrap();
+    let mut batch_req = BatchCommandsRequest::default();
+    for i in 0..3 {
+        let mut req = batch_commands_request::Request::default();
+        req.cmd = Some(batch_commands_request::request::Cmd::Get(get_req.clone()));
+        batch_req.mut_requests().push(req);
+        batch_req.mut_request_ids().push(i);
+    }
+    block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
+    block_on(sender.close()).unwrap();
+
+    let (tx, rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut responses = Vec::new();
+        for r in block_on(
+            receiver
+                .map(move |b| b.unwrap().take_responses())
+                .collect::<Vec<_>>(),
+        ) {
+            responses.extend(r.into_vec());
+        }
+        tx.send(responses).unwrap();
+    });
+    let responses = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(responses.len(), 3);
+    for resp in responses {
+        assert!(
+            resp.get_get()
+                .get_exec_details_v2()
+                .get_time_detail()
+                .get_total_rpc_wall_time_ns()
+                > 0
+        );
+    }
+}

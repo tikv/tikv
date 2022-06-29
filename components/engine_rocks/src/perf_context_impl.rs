@@ -4,7 +4,6 @@ use std::{fmt::Debug, marker::PhantomData, mem, ops::Sub, time::Duration};
 
 use derive_more::{Add, AddAssign, Sub, SubAssign};
 use engine_traits::{PerfContextKind, PerfLevel};
-use kvproto::kvrpcpb::ScanDetailV2;
 use lazy_static::lazy_static;
 use slog_derive::KV;
 use tikv_util::time::Instant;
@@ -136,14 +135,6 @@ pub struct ReadPerfContext {
 }
 
 impl ReadPerfContext {
-    pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
-        detail_v2.set_rocksdb_delete_skipped_count(self.internal_delete_skipped_count);
-        detail_v2.set_rocksdb_key_skipped_count(self.internal_key_skipped_count);
-        detail_v2.set_rocksdb_block_cache_hit_count(self.block_cache_hit_count);
-        detail_v2.set_rocksdb_block_read_count(self.block_read_count);
-        detail_v2.set_rocksdb_block_read_byte(self.block_read_byte);
-    }
-
     fn report_to_tracker(&self, tracker: &mut Tracker) {
         tracker.metrics.block_cache_hit_count += self.block_cache_hit_count;
         tracker.metrics.block_read_byte += self.block_read_byte;
