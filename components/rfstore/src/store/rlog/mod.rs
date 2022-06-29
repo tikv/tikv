@@ -174,6 +174,11 @@ impl CustomRaftLog<'a> {
             }
         }
     }
+
+    pub(crate) fn get_switch_mem_table(&self) -> u64 {
+        let mut bin = &self.data[HEADER_SIZE..];
+        bin.get_u64_le()
+    }
 }
 
 pub struct CustomBuilder {
@@ -292,13 +297,11 @@ pub fn is_engine_meta_log(data: &[u8]) -> bool {
 }
 
 #[test]
-fn test_run() {
-    use slog::Drain;
-    let decorator = slog_term::PlainDecorator::new(std::io::stdout());
-    let drain = slog_term::CompactFormat::new(decorator).build();
-    let drain = std::sync::Mutex::new(drain).fuse();
-    let logger = slog::Logger::root(drain, slog::o!());
-    slog_global::set_global(logger);
-
-    slog_global::warn!("abc {}", 2; "next" => 2);
+fn test_custom_log() {
+    let mut builder = CustomBuilder::new();
+    builder.set_switch_mem_table(2022);
+    let req = builder.build();
+    let cl = CustomRaftLog::new_from_data(req.get_data());
+    assert_eq!(cl.get_type(), TYPE_SWITCH_MEM_TABLE);
+    assert_eq!(cl.get_switch_mem_table(), 2022);
 }

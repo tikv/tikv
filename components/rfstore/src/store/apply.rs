@@ -500,8 +500,8 @@ impl Applier {
                 _ => unreachable!("unexpected custom log type: {:?}", tp),
             }),
             TYPE_SWITCH_MEM_TABLE => {
-                let old_mem_size = cl.data.chunk().get_u64_le();
-                if self.mut_mem_table_state(engine).mem_table_size >= old_mem_size {
+                let switch_mem_table_size = cl.get_switch_mem_table();
+                if self.mut_mem_table_state(engine).mem_table_size >= switch_mem_table_size {
                     wb.set_switch_mem_table();
                 }
             }
