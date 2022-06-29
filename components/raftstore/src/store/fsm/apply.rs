@@ -293,6 +293,7 @@ pub enum ExecResult<S> {
 }
 
 /// The possible returned value when applying logs.
+#[derive(Debug)]
 pub enum ApplyResult<S> {
     None,
     Yield,
@@ -4858,6 +4859,14 @@ mod tests {
             self
         }
 
+        fn prepare_merge(mut self, target: metapb::Region) -> EntryBuilder {
+            let mut request = AdminRequest::default();
+            request.set_cmd_type(AdminCmdType::PrepareMerge);
+            request.mut_prepare_merge().set_target(target);
+            self.req.set_admin_request(request);
+            self
+        }
+
         fn build(mut self) -> Entry {
             self.entry
                 .set_data(self.req.write_to_bytes().unwrap().into());
@@ -4881,6 +4890,29 @@ mod tests {
 
         fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl AdminObserver for ApplyObserver {
+        fn post_exec_admin(
+            &self,
+            _: &mut ObserverContext<'_>,
+            cmd: &Cmd,
+            _: &RaftApplyState,
+            region_state: &RegionState,
+        ) -> bool {
+            let request = cmd.request.get_admin_request();
+            match request.get_cmd_type() {
+                AdminCmdType::CompactLog => true,
+                AdminCmdType::CommitMerge
+                | AdminCmdType::PrepareMerge
+                | AdminCmdType::RollbackMerge => {
+                    assert!(region_state.modified_region.is_some());
+                    true
+                }
+                AdminCmdType::BatchSplit => true,
+                _ => false,
+            }
         }
     }
 
@@ -5516,6 +5548,102 @@ mod tests {
             let bucket_version = delegate.buckets.as_ref().unwrap().meta.version;
             assert_eq!(bucket_version, 2);
         });
+    }
+
+    #[test]
+    fn test_exec_observer() {
+        let (_path, engine) = create_tmp_engine("test-delegate");
+        let (_import_dir, importer) = create_tmp_importer("test-delegate");
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        let obs = ApplyObserver::default();
+        host.registry
+            .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = Config::default();
+        let (router, mut system) = create_apply_batch_system(&cfg);
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg: Arc::new(VersionTrack::new(cfg)),
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engine: engine.clone(),
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-handle-raft".to_owned(), builder);
+
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(1, peer_id));
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let mut index_id = 1;
+        let put_entry = EntryBuilder::new(index_id, 1)
+            .put(b"k1", b"v1")
+            .put(b"k2", b"v2")
+            .put(b"k3", b"v3")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
+        fetch_apply_res(&rx);
+
+        index_id += 1;
+        let mut splits = BatchSplitRequest::default();
+        splits.set_right_derive(true);
+        splits.mut_requests().push(new_split_req(b"k2", 8, vec![7]));
+        let split = EntryBuilder::new(index_id, 1)
+            .split(splits)
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![split], vec![])));
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
+        assert_eq!(apply_res.applied_index_term, 1);
+        let (r1, r8) = if let ExecResult::SplitRegion {
+            regions,
+            derived,
+            new_split_regions,
+        } = apply_res.exec_res.front().unwrap()
+        {
+            let r8 = regions.get(0).unwrap();
+            let r1 = regions.get(1).unwrap();
+            assert_eq!(r8.get_id(), 8);
+            assert_eq!(r1.get_id(), 1);
+            (r1, r8)
+        } else {
+            panic!("error split exec_res");
+        };
+
+        index_id += 1;
+        let merge = EntryBuilder::new(index_id, 1)
+            .prepare_merge(r8.clone())
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![merge], vec![])));
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
+        assert_eq!(apply_res.applied_index_term, 1);
+        // Will trigger commit.
+        let mut state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(apply_res.apply_state, state);
+        system.shutdown();
     }
 
     #[test]
