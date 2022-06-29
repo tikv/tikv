@@ -606,6 +606,10 @@ impl AutoSplitController {
         AutoSplitController::new(SplitConfigManager::default(), 0, 0, None)
     }
 
+    fn should_check_region_cpu(&self) -> bool {
+        self.cfg.region_cpu_threshold_ratio > 0.0
+    }
+
     fn is_grpc_poll_busy(&self, grpc_thread_usage: f64) -> bool {
         if self.max_grpc_thread_count == 0 {
             return false;
@@ -626,7 +630,7 @@ impl AutoSplitController {
     }
 
     fn is_region_busy(&self, unified_read_pool_thread_usage: f64, region_cpu_usage: f64) -> bool {
-        if unified_read_pool_thread_usage <= 0.0 {
+        if unified_read_pool_thread_usage <= 0.0 || !self.should_check_region_cpu() {
             return false;
         }
         region_cpu_usage / unified_read_pool_thread_usage >= self.cfg.region_cpu_threshold_ratio
@@ -650,10 +654,14 @@ impl AutoSplitController {
 
     // collect the CPU stats from cpu_stats_vec and dispatch them to a Region HashMap.
     fn collect_cpu_stats(
+        &self,
         cpu_stats_vec: Vec<Arc<RawRecords>>,
     ) -> HashMap<u64, (f64, Option<KeyRange>)> {
         // RegionID -> (CPU usage, Hottest Key Range), calculate the CPU usage and its hottest key range.
         let mut region_cpu_map = HashMap::default();
+        if !self.should_check_region_cpu() {
+            return region_cpu_map;
+        }
         // Calculate the Region CPU usage.
         let mut collect_interval_ms = 0;
         let mut region_key_range_cpu_time_map = HashMap::new();
@@ -722,7 +730,7 @@ impl AutoSplitController {
         let mut top_cpu_usage = vec![];
         let mut top_qps = BinaryHeap::with_capacity(TOP_N);
         let region_infos_map = Self::collect_read_stats(read_stats_vec);
-        let region_cpu_map = Self::collect_cpu_stats(cpu_stats_vec);
+        let region_cpu_map = self.collect_cpu_stats(cpu_stats_vec);
         // Prepare some diagnostic info.
         let (grpc_thread_usage, unified_read_pool_thread_usage) = (
             Self::collect_thread_usage_and_count(thread_stats, "grpc-server"),
