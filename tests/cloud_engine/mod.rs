@@ -7,13 +7,17 @@
 
 use std::sync::atomic::AtomicU16;
 
+use tikv_util::info;
+
 mod backup;
 mod delete_range;
 mod engine_basic;
 mod gc;
 
-static NODE_ALLOCATOR: AtomicU16 = AtomicU16::new(0);
+static NODE_ALLOCATOR: AtomicU16 = AtomicU16::new(1);
 
 pub(crate) fn alloc_node_id() -> u16 {
-    NODE_ALLOCATOR.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    let node_id = NODE_ALLOCATOR.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    info!("allocated node_id {}", node_id);
+    node_id
 }

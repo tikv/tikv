@@ -17,9 +17,6 @@ pub struct Options {
     // The L2 size is 10x of the base size, L3 size is 100x of the base size.
     pub base_size: u64,
 
-    // Maximum number of tables to keep in memory, before stalling.
-    pub num_mem_tables: usize,
-
     pub max_block_cache_size: i64,
 
     // Number of compaction workers to run concurrently.
@@ -40,8 +37,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             local_dir: PathBuf::from("/tmp"),
-            base_size: 64 << 20,
-            num_mem_tables: 16,
+            base_size: 16 << 20,
             max_block_cache_size: 0,
             num_compactors: 3,
             table_builder_options: Default::default(),

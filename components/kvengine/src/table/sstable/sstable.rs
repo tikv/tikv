@@ -355,14 +355,15 @@ impl SSTableCore {
 
     pub fn get_suggest_split_key(&self) -> Option<Bytes> {
         let num_blocks = self.idx.num_blocks();
-        if num_blocks > 0 {
-            let diff_key = self.idx.block_diff_key(num_blocks / 2);
-            let mut split_key = BytesMut::new();
-            split_key.extend_from_slice(self.idx.common_prefix.chunk());
-            split_key.extend_from_slice(diff_key);
-            return Some(split_key.freeze());
+        if num_blocks <= 1 {
+            return None;
         }
-        None
+        let block_idx = num_blocks * 2 / 3;
+        let diff_key = self.idx.block_diff_key(block_idx);
+        let mut split_key = BytesMut::new();
+        split_key.extend_from_slice(self.idx.common_prefix.chunk());
+        split_key.extend_from_slice(diff_key);
+        return Some(split_key.freeze());
     }
 }
 

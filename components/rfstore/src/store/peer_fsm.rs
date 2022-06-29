@@ -739,6 +739,7 @@ impl<'a> PeerMsgHandler<'a> {
         self.ticker.schedule(PEER_TICK_SPLIT_CHECK);
         if let Some(shard) = self.ctx.global.engines.kv.get_shard(self.region_id()) {
             self.peer.peer_stat.approximate_size = shard.get_estimated_size();
+            self.peer.peer_stat.approximate_keys = shard.get_estimated_entries();
             if !self.fsm.peer.is_leader() {
                 return;
             }
@@ -751,36 +752,33 @@ impl<'a> PeerMsgHandler<'a> {
             if self.ctx.global.importer.get_mode() == SwitchMode::Import {
                 return;
             }
-            let region_max_size = self.ctx.cfg.region_max_size.0;
-            let region_split_size = self.ctx.cfg.region_split_size.0;
+            let region_max_size = self.ctx.cfg.region_split_size.0 * 3 / 2;
+            let region_max_entries = region_max_size / 100;
             let estimated_size = shard.get_estimated_size();
+            let estimated_entries = shard.get_estimated_entries();
             raftstore::coprocessor::metrics::REGION_SIZE_HISTOGRAM.observe(estimated_size as f64);
-            if estimated_size < region_max_size {
+            raftstore::coprocessor::metrics::REGION_KEYS_HISTOGRAM
+                .observe(estimated_entries as f64);
+            if estimated_size < region_max_size && estimated_entries < region_max_entries {
                 return;
             }
-            info!(
-                "region {} estimated size {} is greater than region max size {}, split size is {}",
-                self.peer.tag(),
-                estimated_size,
-                region_max_size,
-                region_split_size,
-            );
-            let raw_keys = shard.get_suggest_split_keys(region_split_size);
-            let encoded_split_keys = raw_keys
-                .iter()
-                .map(|k| {
-                    let key = Key::from_raw(k);
-                    key.as_encoded().to_vec()
-                })
-                .collect();
-            let task = PdTask::AskBatchSplit {
-                region: self.region().clone(),
-                split_keys: encoded_split_keys,
-                peer: self.peer.peer.clone(),
-                right_derive: true,
-                callback: Callback::None,
-            };
-            self.ctx.global.pd_scheduler.schedule(task).unwrap();
+            if let Some(k) = shard.get_suggest_split_key() {
+                info!(
+                    "region {} split, estimated size {}, estimated entries {}, max_size {}",
+                    self.peer.tag(),
+                    estimated_size,
+                    estimated_entries,
+                    region_max_size,
+                );
+                let task = PdTask::AskBatchSplit {
+                    region: self.region().clone(),
+                    split_keys: vec![Key::from_raw(&k).as_encoded().to_vec()],
+                    peer: self.peer.peer.clone(),
+                    right_derive: true,
+                    callback: Callback::None,
+                };
+                self.ctx.global.pd_scheduler.schedule(task).unwrap();
+            }
         }
     }
 

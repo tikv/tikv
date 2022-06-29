@@ -82,8 +82,6 @@ pub struct Config {
 
     pub channel_capacity: usize,
 
-    pub region_max_size: ReadableSize,
-
     pub region_split_size: ReadableSize,
 
     pub apply_pool_size: usize,
@@ -115,8 +113,7 @@ impl Default for Config {
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
             split_region_check_tick_interval: ReadableDuration::secs(3),
             switch_mem_table_check_tick_interval: ReadableDuration::minutes(1),
-            region_max_size: ReadableSize::gb(1),
-            region_split_size: ReadableSize::mb(640),
+            region_split_size: ReadableSize::mb(256),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             local_file_gc_timeout: ReadableDuration::minutes(30),
@@ -153,6 +150,10 @@ impl Config {
         let mut cfg = Config::default();
         cfg.raft_base_tick_interval = old.raft_base_tick_interval;
         cfg.raft_heartbeat_ticks = old.raft_heartbeat_ticks;
+        if cfg.split_region_check_tick_interval > old.split_region_check_tick_interval {
+            // The default old interval is too large, we only set if it's smaller for test.
+            cfg.split_region_check_tick_interval = old.split_region_check_tick_interval;
+        }
         cfg.raft_election_timeout_ticks = old.raft_election_timeout_ticks;
         cfg.raft_min_election_timeout_ticks = old.raft_min_election_timeout_ticks;
         cfg.raft_max_election_timeout_ticks = old.raft_max_election_timeout_ticks;
@@ -171,9 +172,6 @@ impl Config {
         cfg.leader_transfer_max_log_lag = old.leader_transfer_max_log_lag;
 
         cfg.region_split_size = old_cop.region_split_size;
-        if let Some(size) = old_cop.region_max_size {
-            cfg.region_max_size = size;
-        }
         cfg.apply_pool_size = old.apply_batch_system.pool_size;
         cfg.async_io = old.store_io_pool_size > 0;
         cfg.local_file_gc_tick_interval = old.local_file_gc_tick_interval;

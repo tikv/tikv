@@ -58,6 +58,7 @@ pub struct L0TableCore {
     footer: L0Footer,
     file: Arc<dyn File>,
     cfs: [Option<sstable::SSTable>; NUM_CFS],
+    entries: u64,
     smallest: Bytes,
     biggest: Bytes,
 }
@@ -78,6 +79,7 @@ impl L0TableCore {
             cf_offs[i] = LittleEndian::read_u32(&cf_offs_buf[i * 4..]);
         }
         let mut cfs: [Option<SSTable>; NUM_CFS] = [None, None, None];
+        let mut entries = 0;
         for i in 0..NUM_CFS {
             let start_off = cf_offs[i] as u64;
             let mut end_off = cf_offs_off;
@@ -88,6 +90,7 @@ impl L0TableCore {
                 continue;
             }
             let tbl = sstable::SSTable::new_l0_cf(file.clone(), start_off, end_off, cache.clone())?;
+            entries += tbl.entries as u64;
             cfs[i] = Some(tbl)
         }
         let (smallest, biggest) = Self::compute_smallest_biggest(&cfs);
@@ -95,6 +98,7 @@ impl L0TableCore {
             footer,
             file,
             cfs,
+            entries,
             smallest,
             biggest,
         })
@@ -134,6 +138,10 @@ impl L0TableCore {
 
     pub fn size(&self) -> u64 {
         self.file.size()
+    }
+
+    pub fn entries(&self) -> u64 {
+        self.entries
     }
 
     pub fn smallest(&self) -> &[u8] {

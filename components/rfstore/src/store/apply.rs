@@ -1559,7 +1559,15 @@ pub(crate) fn split_gen_new_region_metas(
             return Err(box_err!("missing split key"));
         }
         if split_key <= keys.last().unwrap() {
-            return Err(box_err!("invalid split requests {:?}", splits));
+            let ver = old_region.get_region_epoch().get_version();
+            return Err(box_err!(
+                "invalid split requests {:?}, old region {}:{} start_key {:?}, end_key {:?}",
+                splits,
+                old_region.id,
+                ver,
+                old_region.start_key.clone(),
+                old_region.end_key.clone()
+            ));
         }
         if request.new_peer_ids.len() != old_region.peers.len() {
             return Err(box_err!(

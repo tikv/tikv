@@ -7,10 +7,12 @@ use kvengine::{new_tmp_filename, table::sstable::new_filename};
 use test_cloud_server::ServerCluster;
 use tikv_util::config::ReadableDuration;
 
+use crate::alloc_node_id;
+
 #[test]
 fn test_local_file_gc() {
     test_util::init_log_for_test();
-    let node_id = 3;
+    let node_id = alloc_node_id();
     let mut cluster = ServerCluster::new(vec![node_id], |_, cfg| {
         cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(100);
         cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(50);
@@ -25,18 +27,29 @@ fn test_local_file_gc() {
     fs::write(&new_tmp_file_path, "def").unwrap();
     cluster.put_kv(0..1000, gen_key, gen_val);
     cluster.split(&gen_key(500));
-    std::thread::sleep(Duration::from_secs(2));
     let shard_ids = kv.get_all_shard_id_vers();
     assert_eq!(shard_ids.len(), 2);
     let mut all_files = HashSet::default();
-    for shard_id in shard_ids {
-        let snap = kv.get_snap_access(shard_id.id).unwrap();
-        all_files.extend(snap.get_all_files());
+    for _ in 0..10 {
+        for shard_id in &shard_ids {
+            let snap = kv.get_snap_access(shard_id.id).unwrap();
+            all_files.extend(snap.get_all_files());
+        }
+        if !all_files.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
     }
     assert!(!all_files.is_empty());
     for &file_id in &all_files {
         let file_path = new_filename(file_id, kv.opts.local_dir.as_path());
         assert!(file_path.exists());
+    }
+    for _ in 0..10 {
+        if !new_file_path.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
     }
     assert!(!new_file_path.exists());
     assert!(!new_tmp_file_path.exists());

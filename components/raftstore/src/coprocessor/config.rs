@@ -69,7 +69,7 @@ pub enum ConsistencyCheckMethod {
 }
 
 /// Default region split size.
-pub const SPLIT_SIZE_MB: u64 = 96;
+pub const SPLIT_SIZE_MB: u64 = 256;
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 

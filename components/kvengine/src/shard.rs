@@ -43,6 +43,7 @@ pub struct Shard {
     pub(crate) base_version: u64,
 
     pub(crate) estimated_size: AtomicU64,
+    pub(crate) estimated_entries: AtomicU64,
 
     // meta_seq is the raft log index of the applied change set.
     // Because change set are applied in the worker thread, the value is usually smaller
@@ -84,6 +85,7 @@ impl Shard {
             initial_flushed: Default::default(),
             base_version: Default::default(),
             estimated_size: Default::default(),
+            estimated_entries: Default::default(),
             meta_seq: Default::default(),
             write_sequence: Default::default(),
             compaction_priority: RwLock::new(None),
@@ -127,18 +129,21 @@ impl Shard {
     }
 
     pub(crate) fn refresh_states(&self) {
-        self.refresh_estimated_size();
+        self.refresh_estimated_size_and_entries();
         self.refresh_compaction_priority();
     }
 
-    fn refresh_estimated_size(&self) {
+    fn refresh_estimated_size_and_entries(&self) {
         let data = self.get_data();
         let mut size = data.get_l0_total_size();
+        let mut entries = data.get_l0_total_entries();
         data.for_each_level(|_, l| {
             size += data.get_level_total_size(l);
+            entries += data.get_level_total_entries(l);
             false
         });
         store_u64(&self.estimated_size, size);
+        store_u64(&self.estimated_entries, entries);
     }
 
     pub(crate) fn set_del_prefix(&self, val: &[u8]) {
@@ -154,40 +159,21 @@ impl Shard {
         self.set_data(new_data);
     }
 
-    pub fn get_suggest_split_keys(&self, target_size: u64) -> Vec<Bytes> {
-        let estimated_size = load_u64(&self.estimated_size);
-        if estimated_size < target_size {
-            return vec![];
-        }
-        let mut keys = Vec::new();
+    pub fn get_suggest_split_key(&self) -> Option<Bytes> {
         let data = self.get_data();
-        let max_cf = data.get_cf(0);
-        let mut max_level = &max_cf.levels[0];
-        let mut max_level_total_size = 0;
-        for i in 1..max_cf.levels.len() {
-            let level = &max_cf.levels[i];
-            let level_total_size = data.get_level_total_size(level);
-            if level_total_size > max_level_total_size {
-                max_level = level;
-                max_level_total_size = level_total_size;
-            }
+        let max_level = data
+            .get_cf(0)
+            .levels
+            .iter()
+            .max_by_key(|level| level.tables.len())?;
+        if max_level.tables.len() == 0 {
+            return None;
         }
-        let level_target_size =
-            ((target_size as f64) * (max_level_total_size as f64) / (estimated_size as f64)) as u64;
-        let mut current_size = 0;
-        for i in 0..max_level.tables.len() {
-            let tbl = &max_level.tables[i];
-            if self.cover_full_table(tbl.smallest(), tbl.biggest()) {
-                current_size += tbl.size();
-            } else {
-                current_size += tbl.size() / 2;
-            }
-            if i != 0 && current_size > level_target_size {
-                keys.push(Bytes::copy_from_slice(tbl.smallest()));
-                current_size = 0
-            }
+        if max_level.tables.len() == 1 {
+            return max_level.tables[0].get_suggest_split_key();
         }
-        keys
+        let tbl_idx = max_level.tables.len() * 2 / 3;
+        Some(Bytes::copy_from_slice(max_level.tables[tbl_idx].smallest()))
     }
 
     pub fn overlap_table(&self, smallest: &[u8], biggest: &[u8]) -> bool {
@@ -257,6 +243,10 @@ impl Shard {
 
     pub fn get_estimated_size(&self) -> u64 {
         self.estimated_size.load(Ordering::Relaxed)
+    }
+
+    pub fn get_estimated_entries(&self) -> u64 {
+        self.estimated_entries.load(Ordering::Relaxed)
     }
 
     pub fn get_initial_flushed(&self) -> bool {
@@ -422,28 +412,64 @@ impl ShardDataCore {
     }
 
     pub(crate) fn get_l0_total_size(&self) -> u64 {
-        let mut total_size = 0;
-        for l0 in &self.l0_tbls {
-            if self.cover_full_table(l0.smallest(), l0.biggest()) {
-                total_size += l0.size();
-            } else {
-                total_size += l0.size() / 2;
-            }
-        }
-        total_size
+        self.l0_tbls
+            .iter()
+            .map(|l0| {
+                if self.cover_full_table(l0.smallest(), l0.biggest()) {
+                    l0.size()
+                } else {
+                    l0.size() / 2
+                }
+            })
+            .sum()
+    }
+
+    pub(crate) fn get_l0_total_entries(&self) -> u64 {
+        self.l0_tbls
+            .iter()
+            .map(|l0| {
+                if self.cover_full_table(l0.smallest(), l0.biggest()) {
+                    l0.entries()
+                } else {
+                    l0.entries() / 2
+                }
+            })
+            .sum()
     }
 
     pub(crate) fn get_level_total_size(&self, level: &LevelHandler) -> u64 {
-        let mut total_size = 0;
-        for (i, tbl) in level.tables.as_slice().iter().enumerate() {
-            let is_bound = i == 0 || i == level.tables.len() - 1;
-            if is_bound && self.cover_full_table(tbl.smallest(), tbl.biggest()) {
-                total_size += tbl.size();
-            } else {
-                total_size += tbl.size() / 2;
-            }
-        }
-        total_size
+        level
+            .tables
+            .iter()
+            .enumerate()
+            .map(|(i, tbl)| {
+                if self.is_over_bound_table(level, i, tbl) {
+                    tbl.size() / 2
+                } else {
+                    tbl.size()
+                }
+            })
+            .sum()
+    }
+
+    pub(crate) fn get_level_total_entries(&self, level: &LevelHandler) -> u64 {
+        level
+            .tables
+            .iter()
+            .enumerate()
+            .map(|(i, tbl)| {
+                if self.is_over_bound_table(level, i, tbl) {
+                    tbl.entries as u64 / 2
+                } else {
+                    tbl.entries as u64
+                }
+            })
+            .sum()
+    }
+
+    fn is_over_bound_table(&self, level: &LevelHandler, i: usize, tbl: &SSTable) -> bool {
+        let is_bound = i == 0 || i == level.tables.len() - 1;
+        is_bound && !self.cover_full_table(tbl.smallest(), tbl.biggest())
     }
 
     pub fn cover_full_table(&self, smallest: &[u8], biggest: &[u8]) -> bool {
