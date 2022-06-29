@@ -1350,7 +1350,7 @@ where
         }
 
         if should_write {
-            info!("persist data and apply state"; "region_id" => self.region_id(), "peer_id" => self.id(), "state" => ?self.apply_state);
+            debug!("persist data and apply state"; "region_id" => self.region_id(), "peer_id" => self.id(), "state" => ?self.apply_state);
             ctx.commit(self);
         }
         (resp, exec_result)
