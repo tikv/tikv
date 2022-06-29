@@ -15,6 +15,7 @@ use prometheus::{
 };
 
 use crate::{
+    metrics::*,
     sys::thread::{self, Pid, THREAD_NAME_HASHMAP},
     time::Instant,
 };
@@ -205,11 +206,41 @@ impl Collector for ThreadsCollector {
                 }
             }
         }
-        let mut mfs = metrics.cpu_totals.collect();
-        mfs.extend(metrics.threads_state.collect());
-        mfs.extend(metrics.io_totals.collect());
-        mfs.extend(metrics.voluntary_ctxt_switches.collect());
-        mfs.extend(metrics.nonvoluntary_ctxt_switches.collect());
+
+        let compact_policy = get_metrics_compact_policy();
+        let simplify_metrics = |mut mfs: Vec<proto::MetricFamily>| {
+            if compact_policy == MetricsCompactPolicy::No {
+                return mfs;
+            }
+            mfs.retain_mut(|mf| {
+                let mut metrics = mf.take_metric().into_vec();
+                // there are more than 100 threads and most of them are inactive,
+                // so only retain the sample which value >= 0.01 * max_sample_value
+                let threshold = if compact_policy == MetricsCompactPolicy::Lossless {
+                    0.
+                } else {
+                    metrics
+                        .iter()
+                        .map(|m| m.get_gauge().get_value())
+                        .reduce(f64::max)
+                        .unwrap()
+                        / 100.0
+                };
+                metrics.retain(|m| m.get_gauge().get_value() > threshold);
+                let should_retain = !metrics.is_empty();
+                mf.set_metric(metrics.into());
+                should_retain
+            });
+            mfs
+        };
+
+        let mut mfs = simplify_metrics(metrics.cpu_totals.collect());
+        mfs.extend(simplify_metrics(metrics.io_totals.collect()));
+        mfs.extend(simplify_metrics(metrics.threads_state.collect()));
+        mfs.extend(simplify_metrics(metrics.voluntary_ctxt_switches.collect()));
+        mfs.extend(simplify_metrics(
+            metrics.nonvoluntary_ctxt_switches.collect(),
+        ));
         mfs
     }
 }

@@ -22,7 +22,7 @@ mod imp {
                 }
                 SIGUSR1 => {
                     // Use SIGUSR1 to log metrics.
-                    info!("{}", metrics::dump(false));
+                    info!("{}", metrics::dump());
                     if let Some(ref engines) = engines {
                         info!("{:?}", MiscExt::dump_stats(&engines.kv));
                         info!("{:?}", RaftEngine::dump_stats(&engines.raft));

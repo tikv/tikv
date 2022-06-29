@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, i32, isize, sync::Arc, time::Duration};
+use std::{cmp, convert::TryFrom, i32, isize, sync::Arc, time::Duration};
 
 use collections::HashMap;
 use engine_traits::{perf_level_serde, PerfLevel};
@@ -10,6 +10,7 @@ pub use raftstore::store::Config as RaftStoreConfig;
 use regex::Regex;
 use tikv_util::{
     config::{self, ReadableDuration, ReadableSize, VersionTrack},
+    metrics::MetricsCompactPolicy,
     sys::SysQuota,
     worker::Scheduler,
 };
@@ -170,8 +171,11 @@ pub struct Config {
     pub reject_messages_on_memory_ratio: f64,
 
     // whether to compact metrics or not.
+    // // deprecated. use metrics_compact_policy instead.
     #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub simplify_metrics: bool,
+    pub metrics_compact_policy: MetricsCompactPolicy,
 
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
@@ -252,6 +256,7 @@ impl Default for Config {
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
             simplify_metrics: false,
+            metrics_compact_policy: MetricsCompactPolicy::No,
         }
     }
 }
@@ -381,6 +386,12 @@ impl Config {
             self.heavy_load_threshold = 75;
         }
 
+        // migrate legacy metrics config.
+        // simplify_metrics == ture has the same effect with MetricsCompactPolicy::Lossless
+        if self.simplify_metrics && self.metrics_compact_policy == MetricsCompactPolicy::No {
+            self.metrics_compact_policy = MetricsCompactPolicy::Lossless;
+        }
+
         Ok(())
     }
 
@@ -429,6 +440,10 @@ impl ConfigManager for ServerConfigManager {
                 self.grpc_mem_quota
                     .clone()
                     .resize_memory(mem_quota.0 as usize);
+            }
+            if let Some(value) = c.get("metrics_compact_policy") {
+                let policy = MetricsCompactPolicy::try_from(value)?;
+                tikv_util::metrics::set_metrics_compact_policy(policy);
             }
             if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);

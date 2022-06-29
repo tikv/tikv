@@ -3872,6 +3872,7 @@ mod tests {
     use tikv_kv::RocksEngine as RocksDBEngine;
     use tikv_util::{
         config::VersionTrack,
+        metrics::{get_metrics_compact_policy, MetricsCompactPolicy},
         quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
         sys::SysQuota,
         worker::{dummy_scheduler, ReceiverWrapper},
@@ -4786,6 +4787,23 @@ mod tests {
         cfg.server.raft_msg_max_batch_size = 32;
         assert_eq!(cfg_controller.get_current(), cfg);
         check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("server.metrics-compact-policy", "lossless")
+            .unwrap();
+        cfg.server.metrics_compact_policy = MetricsCompactPolicy::Lossless;
+        assert_eq!(cfg_controller.get_current(), cfg);
+        assert_eq!(
+            get_metrics_compact_policy(),
+            cfg.server.metrics_compact_policy
+        );
+
+        assert!(
+            cfg_controller
+                .update_config("server.metrics-compact-policy", "invalid-value")
+                .is_err()
+        );
+        assert_eq!(cfg_controller.get_current(), cfg);
     }
 
     #[test]

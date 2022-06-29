@@ -108,7 +108,7 @@ use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
-    metrics::INSTANCE_BACKEND_CPU_QUOTA,
+    metrics::{set_metrics_compact_policy, INSTANCE_BACKEND_CPU_QUOTA},
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{cpu_time::ProcessStat, disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
@@ -1004,6 +1004,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
 
         initial_metric(&self.config.metric);
+        // init metrics glboal variables
+        set_metrics_compact_policy(self.config.server.metrics_compact_policy);
         if self.config.storage.enable_ttl {
             ttl_checker.start_with_timer(TtlChecker::new(
                 self.engines.as_ref().unwrap().engine.kv_engine(),
