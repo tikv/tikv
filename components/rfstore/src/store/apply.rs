@@ -575,10 +575,11 @@ impl Applier {
             match exec_result {
                 ExecResult::ChangePeer(cp) => {
                     self.region = cp.region.clone();
-                    let peer_id = self.get_peer().get_id();
-                    let new_peer = cp.changes[0].get_peer().clone();
-                    if peer_id == new_peer.get_id() {
-                        self.peer = new_peer;
+                    for peer in cp.region.get_peers() {
+                        if peer.id == self.peer.id {
+                            self.peer = peer.clone();
+                            break;
+                        }
                     }
                 }
                 ExecResult::SplitRegion { regions } => {
