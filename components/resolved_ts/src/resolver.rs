@@ -44,7 +44,7 @@ pub struct Resolver {
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // raw ts, depend on "non-decreasing" of entries' timestamp in the same region.
-    // BinaryHeap is max heap, so we reverse order to get a min heap.
+    // BinaryHeap is max heap, so reverse order to get a min heap. Only used in rawkv.
     raw_lock_ts_heap: BinaryHeap<Reverse<TimeStamp>>,
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: ResolvedTs,
