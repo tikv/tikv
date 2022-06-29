@@ -428,7 +428,6 @@ impl Config {
         region_split_size: ReadableSize,
         enable_region_bucket: bool,
         region_bucket_size: ReadableSize,
-        memory_limit: u64,
     ) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             return Err(box_err!("heartbeat tick must greater than 0"));
@@ -621,50 +620,6 @@ impl Config {
                 self.max_peer_down_duration,
                 self.peer_stale_state_check_interval * 2,
             );
-        }
-
-        let memory_notice = "evict_cache_on_memory_ratio may be better to be limited into [0, 0.3].\
-                For total memory <= 32G, 0.15 suggested.\
-                For total memory > 32G and <= 128G, 0.20 suggested.\
-                For more huge memory, 0.25 suggested.\
-                More huge value is not always suggested. And, set to 0 will disable it.";
-
-        if self.evict_cache_on_memory_ratio < 0.0 {
-            return Err(box_err!(memory_notice));
-        } else if self.evict_cache_on_memory_ratio > 0.3 {
-            // limit max value 0.30.
-            warn!(
-                "Will reset the evict_cache_on_memory_ratio config from bigger value {} to 0.30 \
-            {}",
-                self.evict_cache_on_memory_ratio, memory_notice
-            );
-            self.evict_cache_on_memory_ratio = 0.30;
-        } else if self.evict_cache_on_memory_ratio != 0.0 {
-            if memory_limit <= ReadableSize::gb(32).0 {
-                if (self.evict_cache_on_memory_ratio - 0.15).abs() > std::f64::MIN_POSITIVE {
-                    info!(
-                        "0.15 suggested for raftstore.evict-cache-on-memory-ratio \
-                    while TiKV memory limit {} less than 32GB.",
-                        memory_limit
-                    );
-                }
-            } else if memory_limit <= ReadableSize::gb(128).0 {
-                if (self.evict_cache_on_memory_ratio - 0.20).abs() > std::f64::MIN_POSITIVE {
-                    info!(
-                        "0.20 suggested for raftstore.evict-cache-on-memory-ratio \
-                    while TiKV memory limit {} less than 128GB.",
-                        memory_limit
-                    );
-                }
-            } else {
-                if (self.evict_cache_on_memory_ratio - 0.25).abs() > std::f64::MIN_POSITIVE {
-                    info!(
-                        "0.25 suggested for raftstore.evict-cache-on-memory-ratio \
-                    while TiKV memory limit {} greater than 128GB.",
-                        memory_limit
-                    );
-                }
-            }
         }
 
         if self.snap_generator_pool_size == 0 {

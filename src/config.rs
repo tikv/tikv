@@ -2998,12 +2998,10 @@ impl TiKvConfig {
         self.server.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
-        let memory_limit = self.memory_usage_limit.unwrap().0;
         self.raft_store.validate(
             self.coprocessor.region_split_size,
             self.coprocessor.enable_region_bucket,
             self.coprocessor.region_bucket_size,
-            memory_limit,
         )?;
         self.security.validate()?;
         self.import.validate()?;
@@ -3140,6 +3138,54 @@ impl TiKvConfig {
                 "memory_usage_limit:{:?} > recommanded:{:?}, maybe page cache isn't enough",
                 limit, default,
             );
+        }
+
+        let memory_limit = limit.0;
+        let memory_notice = "evict_cache_on_memory_ratio may be better to be limited into [0, 0.3].\
+                For total memory <= 32G, highest 0.15 suggested.\
+                For total memory > 32G and <= 128G, highest 0.20 suggested.\
+                For more huge memory, highest 0.25 suggested.\
+                More huge value is not always suggested. And, set to 0 will disable it.";
+        debug!(
+            "check evict_cache_on_memory_ratio={}, memory_limit={}GB",
+            self.raft_store.evict_cache_on_memory_ratio,
+            memory_limit / 1024 / 1024 / 1024
+        );
+
+        if self.raft_store.evict_cache_on_memory_ratio < 0.0 {
+            return Err(memory_notice.into());
+        } else if self.raft_store.evict_cache_on_memory_ratio > 0.3 {
+            // limit max value 0.30.
+            warn!(
+                "Will reset the evict_cache_on_memory_ratio config from bigger value {} to 0.30 \
+            {}",
+                self.raft_store.evict_cache_on_memory_ratio, memory_notice
+            );
+            self.raft_store.evict_cache_on_memory_ratio = 0.30;
+        } else if self.raft_store.evict_cache_on_memory_ratio != 0.0 {
+            if memory_limit <= ReadableSize::gb(32).0 {
+                if self.raft_store.evict_cache_on_memory_ratio > 0.15 {
+                    warn!(
+                        "0.15 suggested for raftstore.evict-cache-on-memory-ratio \
+                    while TiKV memory limit {} less than 32GB.",
+                        memory_limit
+                    );
+                }
+            } else if memory_limit <= ReadableSize::gb(128).0 {
+                if self.raft_store.evict_cache_on_memory_ratio > 0.20 {
+                    warn!(
+                        "0.20 suggested for raftstore.evict-cache-on-memory-ratio \
+                    while TiKV memory limit {} less than 128GB.",
+                        memory_limit
+                    );
+                }
+            } else if self.raft_store.evict_cache_on_memory_ratio > 0.25 {
+                warn!(
+                    "0.25 suggested for raftstore.evict-cache-on-memory-ratio \
+                    while TiKV memory limit {} greater than 128GB.",
+                    memory_limit
+                );
+            }
         }
 
         Ok(())
