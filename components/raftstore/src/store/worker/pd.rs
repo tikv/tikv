@@ -1449,6 +1449,8 @@ where
                     } else {
                         CasualMessage::HalfSplitRegion {
                             region_epoch: epoch,
+                            start_key: None,
+                            end_key: None,
                             policy: split_region.get_policy(),
                             source: "pd",
                             cb: Callback::None,
