@@ -120,8 +120,6 @@ impl Engine {
                 shard.id, shard.ver, shard.start, shard.end, version, all_files
             );
         }
-        let new_shard = self.get_shard(cs.shard_id).unwrap();
-        self.trigger_flush(&new_shard);
         Ok(())
     }
 }

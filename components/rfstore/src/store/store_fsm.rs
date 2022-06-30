@@ -997,6 +997,11 @@ impl<'a> StoreMsgHandler<'a> {
             .set_region(derived, &mut peer_fsm.peer, RegionChangeReason::Split);
 
         let is_leader = peer_fsm.peer.is_leader();
+        self.ctx
+            .global
+            .engines
+            .kv
+            .set_shard_active(region_id, is_leader);
         if is_leader {
             peer_fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.

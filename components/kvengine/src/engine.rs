@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::max,
     collections::{HashMap, HashSet},
     fmt::{Debug, Display, Formatter},
     iter::{FromIterator, Iterator},
@@ -322,6 +323,13 @@ impl EngineCore {
                 mem_tbls.push(mem_tbl.clone());
             }
         }
+        // A newly split shard's meta_sequence is an in-mem state until initial flush.
+        // It is possible that the mem-table has switched after split, we should use the larger
+        // one to pass the ShardTaskManager's duplication check.
+        let mem_data_sequence = mem_tbls
+            .first()
+            .map_or(0, |t| t.get_version() - shard.base_version);
+        let data_sequence = max(shard.get_meta_sequence(), mem_data_sequence);
         self.flush_tx
             .send(FlushMsg::Task(FlushTask::new_initial(
                 shard,
@@ -329,8 +337,7 @@ impl EngineCore {
                     parent_snap,
                     mem_tbls,
                     base_version: shard.base_version,
-                    // A newly split shard's meta_sequence is an in-mem state until initial flush.
-                    data_sequence: shard.get_meta_sequence(),
+                    data_sequence,
                 },
             )))
             .unwrap();
