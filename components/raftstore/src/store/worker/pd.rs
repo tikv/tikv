@@ -922,7 +922,11 @@ where
     ) -> Runner<EK, ER, T> {
         // Register the region CPU records collector.
         let mut region_cpu_records_collector = None;
-        if auto_split_controller.cfg.region_cpu_threshold_ratio > 0.0 {
+        if auto_split_controller
+            .cfg
+            .region_cpu_overload_threshold_ratio
+            > 0.0
+        {
             region_cpu_records_collector = Some(collector_reg_handle.register(
                 Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
                 false,

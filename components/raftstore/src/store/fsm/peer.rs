@@ -5512,14 +5512,10 @@ where
         source: &str,
         _cb: Callback<EK::Snapshot>,
     ) {
-        let start_key_to_log = start_key.clone().unwrap_or_default();
-        let end_key_to_log = end_key.clone().unwrap_or_default();
         info!(
-            "on half split key range";
+            "on half split";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
-            "start_key" => log_wrappers::Value::key(&start_key_to_log),
-            "end_key" => log_wrappers::Value::key(&end_key_to_log),
             "policy" => ?policy,
             "source" => source,
         );
@@ -5529,8 +5525,6 @@ where
                 "not leader, skip";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "start_key" => log_wrappers::Value::key(&start_key_to_log),
-                "end_key" => log_wrappers::Value::key(&end_key_to_log),
             );
             return;
         }
@@ -5541,8 +5535,6 @@ where
                 "receive a stale halfsplit message";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "start_key" => log_wrappers::Value::key(&start_key_to_log),
-                "end_key" => log_wrappers::Value::key(&end_key_to_log),
             );
             return;
         }
@@ -5572,8 +5564,6 @@ where
                 "failed to schedule split check";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "start_key" => log_wrappers::Value::key(&start_key_to_log),
-                "end_key" => log_wrappers::Value::key(&end_key_to_log),
                 "err" => %e,
             );
         }

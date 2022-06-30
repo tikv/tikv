@@ -607,33 +607,37 @@ impl AutoSplitController {
     }
 
     fn should_check_region_cpu(&self) -> bool {
-        self.cfg.region_cpu_threshold_ratio > 0.0
+        self.cfg.region_cpu_overload_threshold_ratio > 0.0
     }
 
     fn is_grpc_poll_busy(&self, grpc_thread_usage: f64) -> bool {
         if self.max_grpc_thread_count == 0 {
             return false;
         }
-        let grpc_thread_cpu_threshold =
-            self.max_grpc_thread_count as f64 * self.cfg.grpc_thread_cpu_threshold_ratio;
-        grpc_thread_usage > 0.0 && grpc_thread_usage >= grpc_thread_cpu_threshold
+        let grpc_thread_cpu_overload_threshold =
+            self.max_grpc_thread_count as f64 * self.cfg.grpc_thread_cpu_overload_threshold_ratio;
+        grpc_thread_usage > 0.0 && grpc_thread_usage >= grpc_thread_cpu_overload_threshold
     }
 
     fn is_unified_read_pool_busy(&self, unified_read_pool_thread_usage: f64) -> bool {
         if self.max_unified_read_pool_thread_count == 0 {
             return false;
         }
-        let unified_read_pool_cpu_threshold = self.max_unified_read_pool_thread_count as f64
-            * self.cfg.unified_read_pool_thread_cpu_threshold_ratio;
+        let unified_read_pool_cpu_overload_threshold = self.max_unified_read_pool_thread_count
+            as f64
+            * self
+                .cfg
+                .unified_read_pool_thread_cpu_overload_threshold_ratio;
         unified_read_pool_thread_usage > 0.0
-            && unified_read_pool_thread_usage >= unified_read_pool_cpu_threshold
+            && unified_read_pool_thread_usage >= unified_read_pool_cpu_overload_threshold
     }
 
     fn is_region_busy(&self, unified_read_pool_thread_usage: f64, region_cpu_usage: f64) -> bool {
         if unified_read_pool_thread_usage <= 0.0 || !self.should_check_region_cpu() {
             return false;
         }
-        region_cpu_usage / unified_read_pool_thread_usage >= self.cfg.region_cpu_threshold_ratio
+        region_cpu_usage / unified_read_pool_thread_usage
+            >= self.cfg.region_cpu_overload_threshold_ratio
     }
 
     // collect the read stats from read_stats_vec and dispatch them to a Region HashMap.
@@ -684,7 +688,11 @@ impl AutoSplitController {
         });
         // Calculate the Region CPU usage.
         region_cpu_map.iter_mut().for_each(|(_, (cpu_time, _))| {
-            *cpu_time /= collect_interval_ms as f64;
+            if collect_interval_ms == 0 {
+                *cpu_time = 0.0;
+            } else {
+                *cpu_time /= collect_interval_ms as f64;
+            }
         });
         // Choose the hottest key range for each Region.
         let mut hottest_key_range_cpu_time_map = HashMap::with_capacity(region_cpu_map.len());
@@ -905,13 +913,13 @@ impl AutoSplitController {
     pub fn refresh_and_check_cfg(&mut self) -> SplitConfigChange {
         let mut cfg_change = SplitConfigChange::Noop;
         if let Some(incoming) = self.cfg_tracker.any_new() {
-            if self.cfg.region_cpu_threshold_ratio <= 0.0
-                && incoming.region_cpu_threshold_ratio > 0.0
+            if self.cfg.region_cpu_overload_threshold_ratio <= 0.0
+                && incoming.region_cpu_overload_threshold_ratio > 0.0
             {
                 cfg_change = SplitConfigChange::RegisterRegionCPUCollector;
             }
-            if self.cfg.region_cpu_threshold_ratio > 0.0
-                && incoming.region_cpu_threshold_ratio <= 0.0
+            if self.cfg.region_cpu_overload_threshold_ratio > 0.0
+                && incoming.region_cpu_overload_threshold_ratio <= 0.0
             {
                 cfg_change = SplitConfigChange::DeregisterRegionCPUCollector;
             }

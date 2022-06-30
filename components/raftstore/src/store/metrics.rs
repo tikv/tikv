@@ -669,6 +669,7 @@ lazy_static! {
         exponential_buckets(8.0, 2.0, 24).unwrap()
     ).unwrap();
 
+
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
         "Total memory size of raft entries caches."
