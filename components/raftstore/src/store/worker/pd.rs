@@ -49,19 +49,22 @@ use tikv_util::{
 };
 use yatp::Remote;
 
-use crate::store::{
-    cmd_resp::new_error,
-    metrics::*,
-    peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
-    transport::SignificantRouter,
-    util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
-    worker::{
-        query_stats::QueryStats,
-        split_controller::{SplitInfo, TOP_N},
-        AutoSplitController, ReadStats, WriteStats,
+use crate::{
+    coprocessor::CoprocessorHost,
+    store::{
+        cmd_resp::new_error,
+        metrics::*,
+        peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
+        transport::SignificantRouter,
+        util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
+        worker::{
+            query_stats::QueryStats,
+            split_controller::{SplitInfo, TOP_N},
+            AutoSplitController, ReadStats, WriteStats,
+        },
+        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+        RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
     },
-    Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-    RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
 };
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
@@ -852,6 +855,7 @@ where
     // The health status of the store is updated by the slow score mechanism.
     health_service: Option<HealthService>,
     curr_health_status: ServingStatus,
+    coprocessor_host: CoprocessorHost<EK>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -876,6 +880,7 @@ where
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
+        coprocessor_host: CoprocessorHost<EK>,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(
@@ -911,6 +916,7 @@ where
             slow_score: SlowScore::new(cfg.inspect_interval.0),
             health_service,
             curr_health_status: ServingStatus::Serving,
+            coprocessor_host,
         }
     }
 
@@ -1145,33 +1151,36 @@ where
 
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
 
-        let disk_cap = disk_stats.total_space();
-        let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
-            disk_cap
-        } else {
-            store_info.capacity
-        };
+        let (capacity, used_size, available) =
+            if let Some(engine_size) = self.coprocessor_host.on_compute_engine_size() {
+                (engine_size.capacity, engine_size.used, engine_size.avail)
+            } else {
+                let disk_cap = disk_stats.total_space();
+                let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
+                    disk_cap
+                } else {
+                    store_info.capacity
+                };
+                let used_size = self.snap_mgr.get_total_snap_size().unwrap()
+                    + store_info
+                        .kv_engine
+                        .get_engine_used_size()
+                        .expect("kv engine used size")
+                    + store_info
+                        .raft_engine
+                        .get_engine_size()
+                        .expect("raft engine used size");
+                let mut available = capacity.checked_sub(used_size).unwrap_or_default();
+                // We only care about rocksdb SST file size, so we should check disk available here.
+                available = cmp::min(available, disk_stats.available_space());
+                (capacity, used_size, available)
+            };
+
         stats.set_capacity(capacity);
-
-        let used_size = self.snap_mgr.get_total_snap_size().unwrap()
-            + store_info
-                .kv_engine
-                .get_engine_used_size()
-                .expect("kv engine used size")
-            + store_info
-                .raft_engine
-                .get_engine_size()
-                .expect("raft engine used size");
         stats.set_used_size(used_size);
-
-        let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-        // We only care about rocksdb SST file size, so we should check disk available here.
-        available = cmp::min(available, disk_stats.available_space());
-
         if available == 0 {
             warn!("no available space");
         }
-
         stats.set_available(available);
         stats.set_bytes_read(
             self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,

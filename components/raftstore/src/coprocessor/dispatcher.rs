@@ -143,6 +143,7 @@ impl_box_observer_g!(
     SplitCheckObserver,
     WrappedSplitCheckObserver
 );
+impl_box_observer!(BoxPdTaskObserver, PdTaskObserver, WrappedPdTaskObserver);
 impl_box_observer!(BoxRoleObserver, RoleObserver, WrappedRoleObserver);
 impl_box_observer!(
     BoxRegionChangeObserver,
@@ -176,6 +177,7 @@ where
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
     read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
+    pd_task_observers: Vec<Entry<BoxPdTaskObserver>>,
     // TODO: add endpoint
 }
 
@@ -191,6 +193,7 @@ impl<E: KvEngine> Default for Registry<E> {
             region_change_observers: Default::default(),
             cmd_observers: Default::default(),
             read_index_observers: Default::default(),
+            pd_task_observers: Default::default(),
         }
     }
 }
@@ -235,6 +238,10 @@ impl<E: KvEngine> Registry<E> {
         cco: BoxConsistencyCheckObserver<E>,
     ) {
         push!(priority, cco, self.consistency_check_observers);
+    }
+
+    pub fn register_pd_task_observer(&mut self, priority: u32, ro: BoxPdTaskObserver) {
+        push!(priority, ro, self.pd_task_observers);
     }
 
     pub fn register_role_observer(&mut self, priority: u32, ro: BoxRoleObserver) {
@@ -491,6 +498,15 @@ impl<E: KvEngine> CoprocessorHost<E> {
         Ok(hashes)
     }
 
+    pub fn on_compute_engine_size(&self) -> Option<EngineSize> {
+        let mut store_size = None;
+        for observer in &self.registry.pd_task_observers {
+            let observer = observer.observer.inner();
+            observer.on_compute_engine_size(&mut store_size);
+        }
+        return store_size;
+    }
+
     pub fn on_role_change(&self, region: &Region, role_change: RoleChange) {
         loop_ob!(
             region,
@@ -640,6 +656,12 @@ mod tests {
         }
     }
 
+    impl PdTaskObserver for TestCoprocessor {
+        fn on_compute_engine_size(&self, _: &mut Option<EngineSize>) {
+            self.called.fetch_add(19, Ordering::SeqCst);
+        }
+    }
+
     impl RoleObserver for TestCoprocessor {
         fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: &RoleChange) {
             self.called.fetch_add(7, Ordering::SeqCst);
@@ -715,6 +737,8 @@ mod tests {
         host.registry
             .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(ob.clone()));
         host.registry
+            .register_pd_task_observer(1, BoxPdTaskObserver::new(ob.clone()));
+        host.registry
             .register_role_observer(1, BoxRoleObserver::new(ob.clone()));
         host.registry
             .register_region_change_observer(1, BoxRegionChangeObserver::new(ob.clone()));
@@ -768,6 +792,10 @@ mod tests {
         empty_req.set_requests(vec![Request::default()].into());
         host.on_empty_cmd(&region, 0, 0);
         assert_all!([&ob.called], &[88]);
+
+        let mut empty_req = RaftCmdRequest::default();
+        host.on_compute_engine_size();
+        assert_all!([&ob.called], &[107]); // 19
     }
 
     #[test]

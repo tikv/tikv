@@ -31,8 +31,8 @@ pub use self::{
     consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver},
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
-        BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver, BoxSplitCheckObserver,
-        CoprocessorHost, Registry,
+        BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver,
+        BoxSplitCheckObserver, CoprocessorHost, Registry,
     },
     error::{Error, Result},
     region_info_accessor::{
@@ -149,6 +149,18 @@ pub trait SplitCheckObserver<E>: Coprocessor {
         _: &E,
         policy: CheckPolicy,
     );
+}
+
+#[derive(Debug, Default)]
+pub struct EngineSize {
+    pub capacity: u64,
+    pub used: u64,
+    pub avail: u64,
+}
+
+pub trait PdTaskObserver: Coprocessor {
+    /// Compute capacity/used/available size of this store.
+    fn on_compute_engine_size(&self, _: &mut Option<EngineSize>) {}
 }
 
 pub struct RoleChange {
