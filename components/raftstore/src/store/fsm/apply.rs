@@ -5557,7 +5557,7 @@ mod tests {
         let mut host = CoprocessorHost::<KvTestEngine>::default();
         let obs = ApplyObserver::default();
         host.registry
-            .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
+            .register_admin_observer(1, BoxAdminObserver::new(obs));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
