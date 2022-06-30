@@ -4,7 +4,7 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc},
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -47,7 +47,7 @@ use raftstore::{
     Result,
 };
 use rand::RngCore;
-use server::server::ConfiguredRaftEngine;
+use server::{raftstore_v1::CompactedEventSenderV1, server::ConfiguredRaftEngine};
 use tempfile::TempDir;
 use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
 use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
@@ -658,7 +658,9 @@ pub fn create_test_engine(
         builder = builder.block_cache(cache);
     }
     if let Some(router) = router {
-        builder = builder.compaction_filter_router(router);
+        builder = builder.compaction_event_sender(Arc::new(CompactedEventSenderV1 {
+            router: Mutex::new(router),
+        }));
     }
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();

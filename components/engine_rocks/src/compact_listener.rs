@@ -205,17 +205,27 @@ impl CompactedEvent for RocksCompactedEvent {
 
 pub type Filter = fn(&RocksCompactionJobInfo<'_>) -> bool;
 
+/// The trait for sending RocksCompactedEvent event
+/// This is to workaround Box<dyn Fn> cannot be cloned
+pub trait CompactedEventSender {
+    fn send(&self, event: RocksCompactedEvent);
+    fn clone(&self) -> Box<dyn CompactedEventSender + Send + Sync>;
+}
+
 pub struct CompactionListener {
-    ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
+    event_sender: Box<dyn CompactedEventSender + Send + Sync>,
     filter: Option<Filter>,
 }
 
 impl CompactionListener {
     pub fn new(
-        ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
+        event_sender: Box<dyn CompactedEventSender + Send + Sync>,
         filter: Option<Filter>,
     ) -> CompactionListener {
-        CompactionListener { ch, filter }
+        CompactionListener {
+            event_sender,
+            filter,
+        }
     }
 }
 
@@ -288,7 +298,7 @@ impl EventListener for CompactionListener {
             return;
         }
 
-        (self.ch)(RocksCompactedEvent::new(
+        self.event_sender.send(RocksCompactedEvent::new(
             info,
             smallest_key.unwrap(),
             largest_key.unwrap(),

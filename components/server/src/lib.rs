@@ -7,5 +7,6 @@ extern crate tikv_util;
 pub mod setup;
 pub mod memory;
 pub mod raft_engine_switch;
+pub mod raftstore_v1;
 pub mod server;
 pub mod signal_handler;

@@ -118,8 +118,8 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    memory::*, raft_engine_switch::*, setup::*, signal_handler,
-    tikv_util::sys::thread::ThreadBuildWrapper,
+    memory::*, raft_engine_switch::*, raftstore_v1::CompactedEventSenderV1, setup::*,
+    signal_handler, tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 // minimum number of core kept for background requests
@@ -1601,7 +1601,9 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
 
         // Create kv engine.
         let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
-            .compaction_filter_router(self.router.clone())
+            .compaction_event_sender(Arc::new(CompactedEventSenderV1 {
+                router: Mutex::new(self.router.clone()),
+            }))
             .region_info_accessor(self.region_info_accessor.clone())
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);

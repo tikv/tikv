@@ -1518,6 +1518,7 @@ dependencies = [
 name = "engine_test"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "encryption",
  "engine_panic",
  "engine_rocks",
