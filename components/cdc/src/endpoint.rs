@@ -501,7 +501,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     fn on_change_cfg(&mut self, change: ConfigChange) {
         // Validate first.
         let mut validate_cfg = self.config.clone();
-        validate_cfg.update(change);
+        if let Err(e) = validate_cfg.update(change) {
+            warn!("cdc config update failed"; "error" => ?e);
+            return;
+        }
         if let Err(e) = validate_cfg.validate() {
             warn!("cdc config update failed"; "error" => ?e);
             return;
@@ -513,7 +516,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             "change" => ?change
         );
         // Update the config here. The following adjustments will all use the new values.
-        self.config.update(change.clone());
+        self.config.update(change.clone()).unwrap();
 
         // Maybe the cache will be lost due to smaller capacity,
         // but it is acceptable.

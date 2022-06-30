@@ -10,7 +10,9 @@ use engine_rocks::{
     CompactionListener, FlowListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine,
     RocksEventListener,
 };
-use engine_traits::{CompactionJobInfo, RaftEngine, Result, TabletFactory, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    CompactionJobInfo, RaftEngine, Result, TabletAccessor, TabletFactory, CF_DEFAULT, CF_WRITE,
+};
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::{
     store::{RaftRouter, StoreMsg},
@@ -83,20 +85,29 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
     pub fn build(self) -> KvEngineFactory<ER> {
         KvEngineFactory {
             inner: Arc::new(self.inner),
-            router: self.router,
+            router: Mutex::new(self.router),
         }
     }
 }
 
-#[derive(Clone)]
 pub struct KvEngineFactory<ER: RaftEngine> {
     inner: Arc<FactoryInner>,
-    router: Option<RaftRouter<RocksEngine, ER>>,
+    router: Mutex<Option<RaftRouter<RocksEngine, ER>>>,
+}
+
+impl<ER: RaftEngine> Clone for KvEngineFactory<ER> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            router: Mutex::new(self.router.lock().unwrap().clone()),
+        }
+    }
 }
 
 impl<ER: RaftEngine> KvEngineFactory<ER> {
     pub fn create_raftstore_compaction_listener(&self) -> Option<CompactionListener> {
-        let ch = match &self.router {
+        let router = self.router.lock().unwrap();
+        let ch = match &*router {
             Some(r) => Mutex::new(r.clone()),
             None => return None,
         };
@@ -257,11 +268,17 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
         Box::new(std::clone::Clone::clone(self))
     }
+}
 
-    fn loop_tablet_cache(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
+impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactory<ER> {
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
         if let Ok(db) = self.inner.root_db.lock() {
             let db = db.as_ref().unwrap();
             f(0, 0, db);
         }
+    }
+
+    fn is_single_engine(&self) -> bool {
+        true
     }
 }

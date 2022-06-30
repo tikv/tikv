@@ -12,7 +12,7 @@ use std::{
     iter::{FromIterator, Iterator},
     mem,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
     u64,
 };
 
@@ -73,7 +73,7 @@ use crate::{
             ExecResult,
         },
         hibernate_state::{GroupState, HibernateState},
-        local_metrics::RaftMetrics,
+        local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
@@ -523,11 +523,11 @@ where
                 }))
             };
 
-            let times: SmallVec<[TiInstant; 4]> = cbs
+            let tokens: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { request_times, .. } = cb {
-                        Some(request_times[0])
+                    if let Callback::Write { trackers, .. } = cb {
+                        Some(trackers[0])
                     } else {
                         None
                     }
@@ -546,8 +546,8 @@ where
                 committed_cb,
             );
 
-            if let Callback::Write { request_times, .. } = &mut cb {
-                *request_times = times;
+            if let Callback::Write { trackers, .. } = &mut cb {
+                *trackers = tokens;
             }
 
             return Some((req, cb));
@@ -3294,7 +3294,7 @@ where
         let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
-            &mut self.ctx.perf_context,
+            &mut self.ctx.raft_perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
         ) {
@@ -4774,14 +4774,11 @@ where
         }
 
         if self.ctx.raft_metrics.waterfall_metrics {
-            if let Some(request_times) = cb.get_request_times() {
-                let now = TiInstant::now();
-                for t in request_times {
-                    self.ctx
-                        .raft_metrics
-                        .wf_batch_wait
-                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
-                }
+            let now = Instant::now();
+            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
+                tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
+                    &mut t.metrics.wf_batch_wait_nanos
+                });
             }
         }
 
@@ -5574,6 +5571,19 @@ where
 
         if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
             return;
+        }
+
+        if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
+            // Clean up the force leader state after a timeout, since the PD recovery process may
+            // have been aborted for some reasons.
+            if time.saturating_elapsed()
+                > cmp::max(
+                    self.ctx.cfg.peer_stale_state_check_interval.0,
+                    Duration::from_secs(60),
+                )
+            {
+                self.on_exit_force_leader();
+            }
         }
 
         if self.ctx.cfg.hibernate_regions {
