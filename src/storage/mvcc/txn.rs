@@ -106,10 +106,12 @@ impl MvccTxn {
     }
 
     pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock) {
+        debug!("put pessimistic lock"; "key" => %key, "lock" => ?lock);
         self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
     pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
+        debug!("unlock key"; "key" => %key, "pessimistic" => pessimistic);
         let released = ReleasedLock::new(&key, pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
