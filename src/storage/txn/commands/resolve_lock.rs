@@ -1,19 +1,26 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE,
-};
-use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResolveLockReadPhase, ResponsePolicy,
-    TypedCommand, WriteCommand, WriteContext, WriteResult,
-};
-use crate::storage::txn::{cleanup, commit, Error, ErrorInner, Result};
-use crate::storage::{ProcessResult, Snapshot};
 use collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
+
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{
+        Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
+        MAX_TXN_WRITE_SIZE,
+    },
+    txn::{
+        cleanup,
+        commands::{
+            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResolveLockReadPhase,
+            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+        },
+        commit, Error, ErrorInner, Result,
+    },
+    ProcessResult, Snapshot,
+};
 
 command! {
     /// Resolve locks according to `txn_status`.
@@ -23,7 +30,7 @@ command! {
     /// This should follow after a `ResolveLockReadPhase`.
     ResolveLock:
         cmd_ty => (),
-        display => "kv::resolve_lock", (),
+        display => "kv::resolve_lock {:?} scan_key({:?}) key_locks({:?})", (txn_status, scan_key, key_locks),
         content => {
             /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
             ///
@@ -50,6 +57,7 @@ command! {
 impl CommandExt for ResolveLock {
     ctx!();
     tag!(resolve_lock);
+    request_type!(KvResolveLock);
     property!(is_sys_cmd);
 
     fn write_bytes(&self) -> usize {

@@ -1,10 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+use std::{
+    env, io,
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
+
 use async_trait::async_trait;
-use azure_core::auth::{TokenCredential, TokenResponse};
-use azure_core::prelude::*;
+use azure_core::{
+    auth::{TokenCredential, TokenResponse},
+    prelude::*,
+};
 use azure_identity::token_credentials::{ClientSecretCredential, TokenCredentialOptions};
-use azure_storage::blob::prelude::*;
-use azure_storage::core::{prelude::*, ConnectionStringBuilder};
+use azure_storage::{
+    blob::prelude::*,
+    core::{prelude::*, ConnectionStringBuilder},
+};
 use chrono::{Duration as ChronoDuration, Utc};
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
@@ -17,15 +27,13 @@ use futures_util::{
 };
 pub use kvproto::brpb::{AzureBlobStorage as InputConfig, Bucket as InputBucket, CloudDynamic};
 use oauth2::{ClientId, ClientSecret};
-use tikv_util::debug;
-use tikv_util::stream::{retry, RetryError};
-use tokio::sync::Mutex;
-use tokio::time::{timeout, Duration};
-
-use std::str::FromStr;
-use std::{
-    env, io,
-    sync::{Arc, RwLock},
+use tikv_util::{
+    debug,
+    stream::{retry, RetryError},
+};
+use tokio::{
+    sync::Mutex,
+    time::{timeout, Duration},
 };
 
 const ENV_CLIENT_ID: &str = "AZURE_CLIENT_ID";

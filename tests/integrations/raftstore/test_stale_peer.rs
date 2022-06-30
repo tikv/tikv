@@ -2,19 +2,14 @@
 
 //! A module contains test cases of stale peers gc.
 
-use std::sync::Arc;
-use std::thread;
-use std::time::*;
-
-use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-use raft::eraftpb::MessageType;
+use std::{sync::Arc, thread, time::*};
 
 use engine_rocks::Compat;
-use engine_traits::Peekable;
-use engine_traits::CF_RAFT;
+use engine_traits::{Peekable, CF_RAFT};
+use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 /// A helper function for testing the behaviour of the gc of stale peer
 /// which is out of region.

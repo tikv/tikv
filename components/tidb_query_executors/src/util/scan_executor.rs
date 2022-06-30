@@ -1,15 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor::KeyRange;
-use tipb::ColumnInfo;
-use tipb::FieldType;
+use tidb_query_common::{
+    storage::{
+        scanner::{RangesScanner, RangesScannerOptions},
+        IntervalRange, Range, Storage,
+    },
+    Result,
+};
+use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
+use tipb::{ColumnInfo, FieldType};
 
 use crate::interface::*;
-use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query_common::storage::{IntervalRange, Range, Storage};
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::expr::EvalContext;
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
@@ -100,8 +102,8 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
     ) -> Result<bool> {
         assert!(scan_rows > 0);
 
-        for _ in 0..scan_rows {
-            let some_row = self.scanner.next()?;
+        for i in 0..scan_rows {
+            let some_row = self.scanner.next_opt(i == scan_rows - 1)?;
             if let Some((key, value)) = some_row {
                 // Retrieved one row from point range or non-point range.
 
@@ -143,8 +145,8 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
 /// Checks whether the given columns info are supported.
 pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     use std::convert::TryFrom;
-    use tidb_query_datatype::EvalType;
-    use tidb_query_datatype::FieldTypeAccessor;
+
+    use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 
     for column in columns_info {
         if column.get_pk_handle() {

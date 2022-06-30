@@ -1,15 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::string::ToString;
+use std::{collections::HashMap, string::ToString};
 
-use crate::server::service::diagnostics::{ioload, SYS_INFO};
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-use tikv_util::config::KIB;
-use tikv_util::sys::{cpu_time::LiunxStyleCpuTime, SysQuota, *};
+use tikv_util::{
+    config::KIB,
+    sys::{cpu_time::LinuxStyleCpuTime, SysQuota, *},
+};
 use walkdir::WalkDir;
 
-type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
+use crate::server::service::diagnostics::{ioload, SYS_INFO};
+
+type CpuTimeSnapshot = Option<LinuxStyleCpuTime>;
 
 #[derive(Clone, Debug)]
 pub struct NicSnapshot {
@@ -85,7 +87,7 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
         return;
     }
 
-    let t2 = LiunxStyleCpuTime::current();
+    let t2 = LinuxStyleCpuTime::current();
     if t2.is_err() {
         return;
     }
@@ -263,7 +265,7 @@ fn io_load_info(prev_io: HashMap<String, ioload::IoLoad>, collector: &mut Vec<Se
 }
 
 pub fn cpu_time_snapshot() -> CpuTimeSnapshot {
-    let t1 = LiunxStyleCpuTime::current();
+    let t1 = LinuxStyleCpuTime::current();
     if t1.is_err() {
         return None;
     }
@@ -630,9 +632,8 @@ mod tests {
                 .iter()
                 .map(|x| x.get_key())
                 .collect::<Vec<&str>>();
-            assert_eq!(
-                keys,
-                vec![
+            assert!(
+                keys.starts_with(&[
                     "read_io/s",
                     "read_merges/s",
                     "read_sectors/s",
@@ -644,7 +645,9 @@ mod tests {
                     "in_flight/s",
                     "io_ticks/s",
                     "time_in_queue/s",
-                ]
+                ]),
+                "actual: {:?}",
+                keys
             );
         }
     }

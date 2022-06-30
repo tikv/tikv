@@ -3,15 +3,20 @@
 // #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, SnapshotReader};
-use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
-    WriteCommand, WriteContext, WriteResult,
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{MvccTxn, SnapshotReader},
+    txn::{
+        cleanup,
+        commands::{
+            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+            WriteCommand, WriteContext, WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Snapshot,
 };
-use crate::storage::txn::{cleanup, Result};
-use crate::storage::{ProcessResult, Snapshot};
 
 command! {
     /// Rollback mutations on a single key.
@@ -33,6 +38,7 @@ command! {
 impl CommandExt for Cleanup {
     ctx!();
     tag!(cleanup);
+    request_type!(KvCleanup);
     ts!(start_ts);
     write_bytes!(key);
     gen_lock!(key);

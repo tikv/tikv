@@ -1,42 +1,36 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::future::Future;
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::{borrow::Cow, time::Duration};
+use std::{borrow::Cow, future::Future, marker::PhantomData, sync::Arc, time::Duration};
 
-use async_stream::try_stream;
-use futures::channel::mpsc;
-use futures::prelude::*;
-use tidb_query_common::execute_stats::ExecSummary;
-use tokio::sync::Semaphore;
-
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
-use protobuf::CodedInputStream;
-use protobuf::Message;
-use tikv_kv::SnapshotExt;
-use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
-
-use crate::server::Config;
-use crate::storage::kv::PerfStatisticsInstant;
-use crate::storage::kv::{self, with_tls_engine};
-use crate::storage::mvcc::Error as MvccError;
-use crate::storage::{
-    self, need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
+use ::tracker::{
+    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
 };
-use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
-
-use crate::coprocessor::cache::CachedRequestHandler;
-use crate::coprocessor::interceptors::*;
-use crate::coprocessor::metrics::*;
-use crate::coprocessor::tracker::Tracker;
-use crate::coprocessor::*;
+use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::PerfLevel;
+use engine_traits::PerfLevel;
+use futures::{channel::mpsc, prelude::*};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
+use protobuf::{CodedInputStream, Message};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
+use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
+use tikv_kv::SnapshotExt;
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant};
+use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
+use tokio::sync::Semaphore;
 use txn_types::Lock;
+
+use crate::{
+    coprocessor::{cache::CachedRequestHandler, interceptors::*, metrics::*, tracker::Tracker, *},
+    read_pool::ReadPoolHandle,
+    server::Config,
+    storage::{
+        self,
+        kv::{self, with_tls_engine, SnapContext},
+        mvcc::Error as MvccError,
+        need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
+    },
+};
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.
@@ -82,7 +76,6 @@ impl<E: Engine> Endpoint<E> {
         cfg: &Config,
         read_pool: ReadPoolHandle,
         concurrency_manager: ConcurrencyManager,
-        perf_level: PerfLevel,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Self {
@@ -99,7 +92,7 @@ impl<E: Engine> Endpoint<E> {
             read_pool,
             semaphore,
             concurrency_manager,
-            perf_level,
+            perf_level: cfg.end_point_perf_level,
             resource_tag_factory,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
@@ -174,6 +167,7 @@ impl<E: Engine> Endpoint<E> {
 
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
+
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
@@ -211,6 +205,10 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                with_tls_tracker(|tracker| {
+                    tracker.req_info.request_type = RequestType::CoprocessorDag;
+                    tracker.req_info.start_ts = start_ts;
+                });
 
                 self.check_memory_locks(&req_ctx)?;
 
@@ -270,8 +268,13 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                with_tls_tracker(|tracker| {
+                    tracker.req_info.request_type = RequestType::CoprocessorAnalyze;
+                    tracker.req_info.start_ts = start_ts;
+                });
 
                 self.check_memory_locks(&req_ctx)?;
+
                 let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
@@ -310,6 +313,10 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                with_tls_tracker(|tracker| {
+                    tracker.req_info.request_type = RequestType::CoprocessorChecksum;
+                    tracker.req_info.start_ts = start_ts;
+                });
 
                 self.check_memory_locks(&req_ctx)?;
 
@@ -326,6 +333,7 @@ impl<E: Engine> Endpoint<E> {
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
+
         Ok((builder, req_ctx))
     }
 
@@ -370,7 +378,7 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` to process the request and produce a result.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
-        mut tracker: Box<Tracker>,
+        mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
         // When this function is being executed, it may be queued for a long time, so that
@@ -478,17 +486,25 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            req.get_context(),
+            RequestType::Unknown,
+            req.start_ts,
+        )));
+        set_tls_tracker_token(tracker);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         async move {
-            match result_of_future {
+            let res = match result_of_future {
                 Err(e) => make_error_response(e).into(),
                 Ok(handle_fut) => handle_fut
                     .await
                     .unwrap_or_else(|e| make_error_response(e).into()),
-            }
+            };
+            GLOBAL_TRACKERS.remove(tracker);
+            res
         }
     }
 
@@ -499,7 +515,7 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` multiple times to process the request and produce multiple results.
     fn handle_stream_request_impl(
         semaphore: Option<Arc<Semaphore>>,
-        mut tracker: Box<Tracker>,
+        mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
@@ -531,14 +547,12 @@ impl<E: Engine> Endpoint<E> {
             loop {
                 let result = {
                     tracker.on_begin_item();
-                    let perf_statistics_instant = PerfStatisticsInstant::new();
 
                     let result = handler.handle_streaming_request();
 
                     let mut storage_stats = Statistics::default();
                     handler.collect_scan_statistics(&mut storage_stats);
-                    let perf_statistics = perf_statistics_instant.delta();
-                    tracker.on_finish_item(Some(storage_stats), perf_statistics);
+                    tracker.on_finish_item(Some(storage_stats));
 
                     result
                 };
@@ -669,26 +683,24 @@ fn make_error_response(e: Error) -> coppb::Response {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::sync::{atomic, mpsc};
-    use std::thread;
-    use std::vec;
+    use std::{
+        sync::{atomic, mpsc},
+        thread, vec,
+    };
 
     use futures::executor::{block_on, block_on_stream};
     use kvproto::kvrpcpb::IsolationLevel;
-
-    use tipb::Executor;
-    use tipb::Expr;
-
-    use crate::config::CoprReadPoolConfig;
-    use crate::coprocessor::readpool_impl::build_read_pool_for_test;
-    use crate::read_pool::ReadPool;
-    use crate::storage::kv::RocksEngine;
-    use crate::storage::TestEngineBuilder;
-    use engine_rocks::PerfLevel;
     use protobuf::Message;
+    use tipb::{Executor, Expr};
     use txn_types::{Key, LockType};
+
+    use super::*;
+    use crate::{
+        config::CoprReadPoolConfig,
+        coprocessor::readpool_impl::build_read_pool_for_test,
+        read_pool::ReadPool,
+        storage::{kv::RocksEngine, TestEngineBuilder},
+    };
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -845,7 +857,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -887,7 +898,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -926,7 +936,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -950,7 +959,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -965,9 +973,11 @@ mod tests {
 
     #[test]
     fn test_full() {
-        use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
         use std::sync::Mutex;
+
         use tikv_util::yatp_pool::{DefaultTicker, YatpPoolBuilder};
+
+        use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -997,7 +1007,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1046,7 +1055,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1072,7 +1080,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1126,7 +1133,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1155,7 +1161,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1255,7 +1260,6 @@ mod tests {
             },
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1324,7 +1328,6 @@ mod tests {
             &config,
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1653,7 +1656,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1717,7 +1719,6 @@ mod tests {
             &config,
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );

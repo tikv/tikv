@@ -1,14 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
-use std::marker::PhantomData;
-use std::mem;
-use std::ops::Deref;
+use std::{marker::PhantomData, mem, ops::Deref};
 
 use engine_traits::{CfName, KvEngine};
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
+use kvproto::{
+    metapb::Region,
+    pdpb::CheckPolicy,
+    raft_cmdpb::{ComputeHashRequest, RaftCmdRequest},
+};
 use protobuf::Message;
 use raft::eraftpb;
 use tikv_util::box_try;
@@ -342,6 +342,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
         CoprocessorHost { registry, cfg }
     }
 
+    pub fn on_empty_cmd(&self, region: &Region, index: u64, term: u64) {
+        loop_ob!(
+            region,
+            &self.registry.query_observers,
+            on_empty_cmd,
+            index,
+            term,
+        );
+    }
+
     /// Call all propose hooks until bypass is set to true.
     pub fn pre_propose(&self, region: &Region, req: &mut RaftCmdRequest) -> Result<()> {
         if !req.has_admin_request() {
@@ -555,15 +565,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::*;
     use std::sync::Arc;
 
     use engine_panic::PanicEngine;
-    use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{
-        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
+    use kvproto::{
+        metapb::Region,
+        raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request},
     };
     use tikv_util::box_err;
+
+    use crate::coprocessor::*;
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {
@@ -620,6 +631,11 @@ mod tests {
 
         fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &Cmd) {
             self.called.fetch_add(6, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn on_empty_cmd(&self, ctx: &mut ObserverContext<'_>, _index: u64, _term: u64) {
+            self.called.fetch_add(14, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
@@ -737,12 +753,21 @@ mod tests {
         host.post_apply_sst_from_snapshot(&region, "default", "");
         assert_all!([&ob.called], &[55]);
 
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
         // `post_apply` + `on_flush_applied_cmd_batch` => 13 + 6 = 19
         assert_all!([&ob.called], &[74]);
+
+        let mut empty_req = RaftCmdRequest::default();
+        empty_req.set_requests(vec![Request::default()].into());
+        host.on_empty_cmd(&region, 0, 0);
+        assert_all!([&ob.called], &[88]);
     }
 
     #[test]

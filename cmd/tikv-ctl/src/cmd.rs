@@ -1,11 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{borrow::ToOwned, lazy::SyncLazy, str, string::ToString, u64};
+
 use clap::{crate_authors, AppSettings};
 use engine_traits::CF_DEFAULT;
-use std::borrow::ToOwned;
-use std::lazy::SyncLazy;
-use std::string::ToString;
-use std::{str, u64};
 use structopt::StructOpt;
 
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
@@ -540,6 +538,12 @@ pub enum Cmd {
         #[structopt(long, value_delimiter = ",")]
         /// PD endpoints
         pd: String,
+    },
+    /// Reset data in a TiKV to a certain version
+    ResetToVersion {
+        #[structopt(short = "v")]
+        /// The version to reset TiKV to
+        version: u64,
     },
     #[structopt(external_subcommand)]
     External(Vec<String>),

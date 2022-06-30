@@ -1,22 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::ptr::NonNull;
-use std::sync::Arc;
+use std::{cmp::Ordering, collections::BinaryHeap, ptr::NonNull, sync::Arc};
 
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
+    expr::{EvalConfig, EvalContext, EvalWarnings},
+};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use tipb::{Expr, FieldType, TopN};
 
-use crate::interface::*;
-use crate::util::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalWarnings;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_expr::RpnStackNode;
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::{interface::*, util::*};
 
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// The heap, which contains N rows at most.
@@ -104,6 +101,35 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             n,
 
             context: EvalContext::default(),
+            src,
+            is_ended: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test_with_config(
+        config: Arc<EvalConfig>,
+        src: Src,
+        order_exprs: Vec<RpnExpression>,
+        order_is_desc: Vec<bool>,
+        n: usize,
+    ) -> Self {
+        assert_eq!(order_exprs.len(), order_is_desc.len());
+
+        let order_exprs_field_type: Vec<FieldType> = order_exprs
+            .iter()
+            .map(|expr| expr.ret_field_type(src.schema()).clone())
+            .collect();
+
+        Self {
+            heap: BinaryHeap::new(),
+            eval_columns_buffer_unsafe: Box::new(Vec::new()),
+            order_exprs: order_exprs.into_boxed_slice(),
+            order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
+            order_is_desc: order_is_desc.into_boxed_slice(),
+            n,
+
+            context: EvalContext::new(config),
             src,
             is_ended: false,
         }
@@ -299,7 +325,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
         if self.n == 0 {
@@ -310,6 +336,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
                 warnings: EvalWarnings::default(),
                 is_drained: Ok(true),
             };
+        }
+
+        if let Some(paging_size) = self.context.cfg.paging_size {
+            if self.n > paging_size as usize {
+                return self.src.next_batch(scan_rows);
+            }
         }
 
         let result = self.handle_next_batch();
@@ -470,14 +502,13 @@ impl Eq for HeapItemUnsafe {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
-
-    use crate::util::mock_executor::MockExecutor;
-    use tidb_query_datatype::expr::EvalWarnings;
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder, expr::EvalWarnings, Collation, FieldTypeFlag, FieldTypeTp,
+    };
     use tidb_query_expr::RpnExpressionBuilder;
+
+    use super::*;
+    use crate::util::mock_executor::MockExecutor;
 
     #[test]
     fn test_top_0() {
@@ -772,8 +803,10 @@ mod tests {
 
     #[test]
     fn test_integration_3() {
-        use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, IntIntPlus};
-        use tidb_query_expr::impl_op::is_null_fn_meta;
+        use tidb_query_expr::{
+            impl_arithmetic::{arithmetic_fn_meta, IntIntPlus},
+            impl_op::is_null_fn_meta,
+        };
 
         // Order by multiple expressions, data len > n.
         //
@@ -1308,5 +1341,162 @@ mod tests {
                 Some(2000_u32 as i64),
             ],
         );
+    }
+
+    #[test]
+    fn test_top_paging() {
+        // Top N = 5 and PagingSize = 6, same with no-paging.
+        let test_top5_paging6 = |col_index: usize, is_desc: bool, expected: &[Option<i64>]| {
+            let mut config = EvalConfig::default();
+            config.paging_size = Some(6);
+            let config = Arc::new(config);
+            let src_exec = make_src_executor_unsigned();
+            let mut exec = BatchTopNExecutor::new_for_test_with_config(
+                config,
+                src_exec,
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(col_index)
+                        .build_for_test(),
+                ],
+                vec![is_desc],
+                5,
+            );
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+            assert_eq!(r.physical_columns.rows_len(), 5);
+            assert_eq!(r.physical_columns.columns_len(), 3);
+            assert_eq!(
+                r.physical_columns[col_index].decoded().to_int_vec(),
+                expected
+            );
+            assert!(r.is_drained.unwrap());
+        };
+
+        test_top5_paging6(
+            0,
+            false,
+            &[
+                None,
+                Some(300_u64 as i64),
+                Some(2000_u64 as i64),
+                Some(9_223_372_036_854_775_807_u64 as i64),
+                Some(9_223_372_036_854_775_808_u64 as i64),
+            ],
+        );
+
+        test_top5_paging6(
+            0,
+            true,
+            &[
+                Some(18_446_744_073_709_551_615_u64 as i64),
+                Some(18_446_744_073_709_551_613_u64 as i64),
+                Some(9_223_372_036_854_775_808_u64 as i64),
+                Some(9_223_372_036_854_775_807_u64 as i64),
+                Some(2000_u64 as i64),
+            ],
+        );
+
+        test_top5_paging6(
+            1,
+            false,
+            &[
+                None,
+                Some(-9_223_372_036_854_775_808),
+                Some(-3),
+                Some(-1),
+                Some(300),
+            ],
+        );
+
+        test_top5_paging6(
+            1,
+            true,
+            &[
+                Some(9_223_372_036_854_775_807),
+                Some(2000),
+                Some(300),
+                Some(-1),
+                Some(-3),
+            ],
+        );
+
+        test_top5_paging6(
+            2,
+            false,
+            &[
+                None,
+                Some(300_u32 as i64),
+                Some(2000_u32 as i64),
+                Some(2_147_483_647_u32 as i64),
+                Some(2_147_483_648_u32 as i64),
+            ],
+        );
+
+        test_top5_paging6(
+            2,
+            true,
+            &[
+                Some(4_294_967_295_u32 as i64),
+                Some(4_294_967_295_u32 as i64),
+                Some(2_147_483_648_u32 as i64),
+                Some(2_147_483_647_u32 as i64),
+                Some(2000_u32 as i64),
+            ],
+        );
+
+        // Top N = 5 and PagingSize = 4, return all data and do nothing.
+        let test_top5_paging4 = |build_src_executor: fn() -> MockExecutor| {
+            let mut config = EvalConfig::default();
+            config.paging_size = Some(4);
+            let config = Arc::new(config);
+            let src_exec = build_src_executor();
+            let mut exec = BatchTopNExecutor::new_for_test_with_config(
+                config,
+                src_exec,
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(0)
+                        .build_for_test(),
+                ],
+                vec![false],
+                5,
+            );
+            let mut exec2 = build_src_executor();
+
+            loop {
+                let r1 = exec.next_batch(1);
+                let r2 = exec2.next_batch(1);
+                assert_eq!(r1.logical_rows, r2.logical_rows);
+                assert_eq!(
+                    r1.physical_columns.rows_len(),
+                    r2.physical_columns.rows_len()
+                );
+                assert_eq!(
+                    r1.physical_columns.columns_len(),
+                    r2.physical_columns.columns_len()
+                );
+                let r1_is_drained = r1.is_drained.unwrap();
+                assert_eq!(r1_is_drained, r2.is_drained.unwrap());
+                if r1_is_drained {
+                    break;
+                }
+            }
+        };
+
+        test_top5_paging4(make_src_executor_unsigned);
+        test_top5_paging4(make_src_executor);
+        test_top5_paging4(make_bytes_src_executor);
     }
 }

@@ -32,9 +32,6 @@ pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
 
-pub use crate::codec::mysql::{
-    json::JsonRef, Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime,
-};
 pub use bit_vec::{BitAndIterator, BitVec};
 pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
 pub use chunked_vec_enum::ChunkedVecEnum;
@@ -43,14 +40,15 @@ pub use chunked_vec_set::ChunkedVecSet;
 pub use chunked_vec_sized::ChunkedVecSized;
 
 // Dynamic eval types.
-pub use self::scalar::{ScalarValue, ScalarValueRef};
-pub use self::vector::{VectorValue, VectorValueExt};
-
-use crate::EvalType;
-
+pub use self::{
+    scalar::{ScalarValue, ScalarValueRef},
+    vector::{VectorValue, VectorValueExt},
+};
 use super::Result;
-use crate::codec::convert::ConvertTo;
-use crate::expr::EvalContext;
+pub use crate::codec::mysql::{
+    json::JsonRef, Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime,
+};
+use crate::{codec::convert::ConvertTo, expr::EvalContext, EvalType};
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
 /// Rust's `bool` type.
@@ -651,8 +649,9 @@ impl<'a> EvaluableRef<'a> for SetRef<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::f64;
+
+    use super::*;
 
     #[test]
     fn test_bytes_as_bool() {

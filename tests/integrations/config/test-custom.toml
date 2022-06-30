@@ -72,6 +72,7 @@ end-point-stream-batch-row-limit = 4096
 end-point-enable-batch-if-possible = true
 end-point-request-max-handle-duration = "12s"
 end-point-max-concurrency = 10
+end-point-perf-level = 5
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
@@ -217,6 +218,7 @@ reactive-memory-lock-tick-interval = "566ms"
 reactive-memory-lock-timeout-tick = 8
 report-min-resolved-ts-interval = "233ms"
 report-region-buckets-tick-interval = "1234s"
+max-snapshot-file-raw-size = "10GB"
 
 [coprocessor]
 split-region-on-table = false
@@ -226,10 +228,11 @@ region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
 consistency-check-method = "raw"
-perf-level = 5
 enable-region-bucket = true 
 region-bucket-size = "1MB"
 region-size-threshold-for-approximate = "3MB"
+region-bucket-merge-size-ratio = 0.4
+prefer-approximate-bucket = false
 
 [rocksdb]
 wal-recovery-mode = "absolute-consistency"
@@ -331,7 +334,6 @@ blob-run-mode = "fallback"
 level-merge = true
 range-merge = true
 max-sorted-runs = 100
-gc-merge-rewrite = true
 
 [rocksdb.writecf]
 block-size = "12KB"
@@ -563,7 +565,6 @@ blob-run-mode = "fallback"
 level-merge = true
 range-merge = true
 max-sorted-runs = 100
-gc-merge-rewrite = true
 
 [raft-engine]
 enable = false
@@ -575,6 +576,7 @@ purge-threshold = "1GB"
 recovery-mode = "tolerate-tail-corruption"
 recovery-read-block-size = "1KB"
 recovery-threads = 2
+memory-limit = "1GB"
 
 [security]
 ca-path = "invalid path"
@@ -635,6 +637,7 @@ incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
 incremental-scan-ts-filter-ratio = 0.7
+tso-worker-threads = 2
 old-value-cache-memory-quota = "14MB"
 sink-memory-quota = "7MB"
 

@@ -18,28 +18,33 @@ mod metrics;
 mod metrics_manager;
 mod rate_limiter;
 
+pub use std::{
+    convert::TryFrom,
+    fs::{
+        canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link,
+        remove_dir, remove_dir_all, remove_file, rename, set_permissions, symlink_metadata,
+        DirBuilder, DirEntry, FileType, Metadata, Permissions, ReadDir,
+    },
+};
+use std::{
+    io::{self, ErrorKind, Read, Write},
+    path::Path,
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
+
 pub use file::{File, OpenOptions};
 pub use io_stats::{get_io_type, init as init_io_stats_collector, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
+use online_config::ConfigValue;
+use openssl::{
+    error::ErrorStack,
+    hash::{self, Hasher, MessageDigest},
+};
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,
     IORateLimiterStatistics,
 };
-
-pub use std::fs::{
-    canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
-    remove_dir_all, remove_file, rename, set_permissions, symlink_metadata, DirBuilder, DirEntry,
-    FileType, Metadata, Permissions, ReadDir,
-};
-
-use std::io::{self, ErrorKind, Read, Write};
-use std::path::Path;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-
-use online_config::ConfigValue;
-use openssl::error::ErrorStack;
-use openssl::hash::{self, Hasher, MessageDigest};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter};
 
@@ -203,19 +208,17 @@ impl<'de> Deserialize<'de> for IOPriority {
 
 impl From<IOPriority> for ConfigValue {
     fn from(mode: IOPriority) -> ConfigValue {
-        ConfigValue::IOPriority(mode.as_str().to_owned())
+        ConfigValue::String(mode.as_str().to_owned())
     }
 }
 
-impl From<ConfigValue> for IOPriority {
-    fn from(c: ConfigValue) -> IOPriority {
-        if let ConfigValue::IOPriority(s) = c {
-            match IOPriority::from_str(s.as_str()) {
-                Ok(p) => p,
-                _ => panic!("expect: low, medium, high, got: {:?}", s),
-            }
+impl TryFrom<ConfigValue> for IOPriority {
+    type Error = String;
+    fn try_from(c: ConfigValue) -> Result<IOPriority, Self::Error> {
+        if let ConfigValue::String(s) = c {
+            Self::from_str(s.as_str())
         } else {
-            panic!("expect: ConfigValue::IOPriority, got: {:?}", c);
+            panic!("expect: ConfigValue::String, got: {:?}", c);
         }
     }
 }
@@ -439,10 +442,9 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
 
 #[cfg(test)]
 mod tests {
-    use rand::distributions::Alphanumeric;
-    use rand::{thread_rng, Rng};
-    use std::io::Write;
-    use std::iter;
+    use std::{io::Write, iter};
+
+    use rand::{distributions::Alphanumeric, thread_rng, Rng};
     use tempfile::{Builder, TempDir};
 
     use super::*;

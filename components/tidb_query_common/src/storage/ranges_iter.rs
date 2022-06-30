@@ -64,14 +64,19 @@ impl RangesIterator {
     pub fn notify_drained(&mut self) {
         self.in_range = false;
     }
+
+    /// Check drained.
+    #[inline]
+    pub fn is_drained(&mut self) -> bool {
+        self.iter.len() == 0
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::range::IntervalRange;
-    use super::*;
-
     use std::sync::atomic;
+
+    use super::{super::range::IntervalRange, *};
 
     static RANGE_INDEX: atomic::AtomicU64 = atomic::AtomicU64::new(1);
 

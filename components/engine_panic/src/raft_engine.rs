@@ -1,10 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
-use crate::write_batch::PanicWriteBatch;
-use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
-use kvproto::raft_serverpb::RaftLocalState;
+use engine_traits::{Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result};
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+};
 use raft::eraftpb::Entry;
+
+use crate::{engine::PanicEngine, write_batch::PanicWriteBatch};
 
 impl RaftEngineReadOnly for PanicEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -27,6 +30,39 @@ impl RaftEngineReadOnly for PanicEngine {
     }
 
     fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
+        panic!()
+    }
+
+    fn is_empty(&self) -> Result<bool> {
+        panic!()
+    }
+
+    fn get_store_ident(&self) -> Result<Option<StoreIdent>> {
+        panic!()
+    }
+
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
+        panic!()
+    }
+
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+        panic!()
+    }
+
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+        panic!()
+    }
+}
+
+impl RaftEngineDebug for PanicEngine {
+    fn scan_entries<F>(&self, _: u64, _: F) -> Result<()>
+    where
+        F: FnMut(&Entry) -> Result<bool>,
+    {
+        panic!()
+    }
+
+    fn dump_all_data(&self, _: u64) -> <Self as RaftEngine>::LogBatch {
         panic!()
     }
 }
@@ -101,6 +137,10 @@ impl RaftEngine for PanicEngine {
     fn get_engine_size(&self) -> Result<u64> {
         panic!()
     }
+
+    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
@@ -124,7 +164,27 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn merge(&mut self, _: Self) {
+    fn merge(&mut self, _: Self) -> Result<()> {
+        panic!()
+    }
+
+    fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()> {
+        panic!()
+    }
+
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
+        panic!()
+    }
+
+    fn remove_prepare_bootstrap_region(&mut self) -> Result<()> {
+        panic!()
+    }
+
+    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+        panic!()
+    }
+
+    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         panic!()
     }
 }

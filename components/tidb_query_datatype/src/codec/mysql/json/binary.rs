@@ -2,10 +2,10 @@
 
 use std::convert::TryInto;
 
-use super::constants::*;
-use super::{JsonRef, JsonType, ERR_CONVERT_FAILED};
-use crate::codec::Result;
 use codec::number::NumberCodec;
+
+use super::{constants::*, JsonRef, JsonType, ERR_CONVERT_FAILED};
+use crate::codec::Result;
 
 impl<'a> JsonRef<'a> {
     /// Gets the ith element in JsonRef
@@ -114,8 +114,7 @@ impl<'a> JsonRef<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::Json;
-    use super::*;
+    use super::{super::Json, *};
 
     #[test]
     fn test_type() {

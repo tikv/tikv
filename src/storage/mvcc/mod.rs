@@ -8,24 +8,23 @@ pub(super) mod metrics;
 pub(crate) mod reader;
 pub(super) mod txn;
 
-pub use self::consistency_check::{Mvcc as MvccConsistencyCheckObserver, MvccInfoIterator};
-pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-pub use self::reader::*;
-pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
+use std::{error, io};
+
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::kvrpcpb::{Assertion, IsolationLevel};
+use thiserror::Error;
+use tikv_util::{metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark};
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
     SHORT_VALUE_MAX_LEN,
 };
 
-use std::error;
-use std::io;
-
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use kvproto::kvrpcpb::{Assertion, IsolationLevel};
-use thiserror::Error;
-
-use tikv_util::metrics::CRITICAL_ERROR;
-use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+pub use self::{
+    consistency_check::{Mvcc as MvccConsistencyCheckObserver, MvccInfoIterator},
+    metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
+    reader::*,
+    txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE},
+};
 
 #[derive(Debug, Error)]
 pub enum ErrorInner {
@@ -405,12 +404,14 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 }
 
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::{Engine, Modify, ScanMode, SnapContext, Snapshot, WriteData};
+    use std::borrow::Cow;
+
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::Context;
-    use std::borrow::Cow;
     use txn_types::Key;
+
+    use super::*;
+    use crate::storage::kv::{Engine, Modify, ScanMode, SnapContext, Snapshot, WriteData};
 
     pub fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {

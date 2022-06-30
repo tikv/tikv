@@ -26,20 +26,22 @@
 //! count and sum. In this case we say that the result of `AVG(Int)` has a *cardinality* of 2.
 //!
 
-use std::convert::TryFrom;
-use std::sync::Arc;
+use std::{convert::TryFrom, sync::Arc};
 
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tidb_query_aggr::*;
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
+    expr::{EvalConfig, EvalContext},
+    EvalType, FieldTypeAccessor,
+};
+use tidb_query_expr::RpnExpression;
 use tipb::{Expr, FieldType};
 
 use crate::interface::*;
-use tidb_query_aggr::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_expr::RpnExpression;
 
 pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     /// Accepts entities without any group by columns and modifies them optionally.
@@ -119,6 +121,7 @@ pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Sr
     imp: I,
     is_ended: bool,
     entities: Entities<Src>,
+    required_row: Option<u64>,
 }
 
 impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Src, I> {
@@ -183,6 +186,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             imp,
             is_ended: false,
             entities,
+            required_row: ctx.cfg.paging_size,
         })
     }
 
@@ -197,7 +201,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
 
         // When there are errors in the underlying executor, there must be no aggregate output.
         // Thus we even don't need to update the aggregate function state and can return directly.
-        let src_is_drained = src_result.is_drained?;
+        let mut src_is_drained = src_result.is_drained?;
 
         // Consume all data from the underlying executor. We directly return when there are errors
         // for the same reason as above.
@@ -207,6 +211,16 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
                 src_result.physical_columns,
                 &src_result.logical_rows,
             )?;
+        }
+
+        if let Some(required_row) = self.required_row {
+            if self.imp.groups_len() >= required_row as usize {
+                src_is_drained = true
+            }
+            // StreamAgg will return groups_len - 1 rows immediately
+            if !src_is_drained && self.imp.is_partial_results_ready() {
+                self.required_row = Some(required_row + 1 - self.imp.groups_len() as u64)
+            }
         }
 
         // aggregate result is always available when source is drained
@@ -330,17 +344,17 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
 /// Shared test facilities for different aggregation executors.
 #[cfg(test)]
 pub mod tests {
-    use tidb_query_codegen::AggrFunction;
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeTp};
-
-    use crate::interface::*;
-    use crate::util::mock_executor::MockExecutor;
     use tidb_query_aggr::*;
+    use tidb_query_codegen::AggrFunction;
     use tidb_query_common::Result;
-    use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-    use tidb_query_datatype::codec::data_type::*;
-    use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::{batch::LazyBatchColumnVec, data_type::*},
+        expr::{EvalContext, EvalWarnings},
+        Collation, FieldTypeTp,
+    };
+
+    use crate::{interface::*, util::mock_executor::MockExecutor};
 
     #[derive(Debug, AggrFunction)]
     #[aggr_function(state = AggrFnUnreachableState)]
@@ -465,5 +479,194 @@ pub mod tests {
                 },
             ],
         )
+    }
+
+    /// Builds an executor that will return these logical data:
+    ///
+    /// == Schema ==
+    /// Col0(Real)   Col1(Real)
+    /// == Call #1 ==
+    /// NULL         1.0
+    /// 7.0          2.0
+    /// NULL         NULL
+    /// NULL         4.5
+    /// == Call #2 ==
+    /// == Call #3 ==
+    /// 1.5          4.5
+    /// 6.0          6.0
+    /// == Call #4 ==
+    /// 6.0          6.0
+    /// 7.0          7.0
+    /// (drained)
+    pub fn make_src_executor_2() -> MockExecutor {
+        MockExecutor::new(
+            vec![FieldTypeTp::Double.into(), FieldTypeTp::Double.into()],
+            vec![
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(
+                            vec![None, None, None, Real::new(-5.0).ok(), Real::new(7.0).ok()]
+                                .into(),
+                        ),
+                        VectorValue::Real(
+                            vec![
+                                None,
+                                Real::new(4.5).ok(),
+                                Real::new(1.0).ok(),
+                                None,
+                                Real::new(2.0).ok(),
+                            ]
+                            .into(),
+                        ),
+                    ]),
+                    logical_rows: vec![2, 4, 0, 1],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![None].into()),
+                        VectorValue::Real(vec![Real::new(-10.0).ok()].into()),
+                    ]),
+                    logical_rows: Vec::new(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(
+                            vec![
+                                Real::new(5.5).ok(),
+                                Real::new(1.5).ok(),
+                                Real::new(6.0).ok(),
+                            ]
+                            .into(),
+                        ),
+                        VectorValue::Real(
+                            vec![None, Real::new(4.5).ok(), Real::new(6.0).ok()].into(),
+                        ),
+                    ]),
+                    logical_rows: vec![1, 2],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![Real::new(7.0).ok(), Real::new(6.0).ok()].into()),
+                        VectorValue::Real(vec![Real::new(7.0).ok(), Real::new(6.0).ok()].into()),
+                    ]),
+                    logical_rows: vec![1, 0],
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn test_agg_paging() {
+        use std::sync::Arc;
+
+        use tidb_query_datatype::expr::EvalConfig;
+        use tidb_query_expr::RpnExpressionBuilder;
+        use tipb::ExprType;
+        use tipb_helper::ExprDefBuilder;
+
+        use crate::{
+            BatchFastHashAggregationExecutor, BatchSlowHashAggregationExecutor,
+            BatchStreamAggregationExecutor,
+        };
+
+        let group_by_exp = || {
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(1)
+                .build_for_test()
+        };
+
+        let aggr_definitions = vec![
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build(),
+        ];
+
+        let exec_fast = |src_exec, paging_size| {
+            let mut config = EvalConfig::default();
+            config.paging_size = paging_size;
+            let config = Arc::new(config);
+            Box::new(BatchFastHashAggregationExecutor::new_for_test_with_config(
+                config,
+                src_exec,
+                group_by_exp(),
+                aggr_definitions.clone(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let exec_slow = |src_exec, paging_size| {
+            let mut config = EvalConfig::default();
+            config.paging_size = paging_size;
+            let config = Arc::new(config);
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test_with_config(
+                config,
+                src_exec,
+                vec![group_by_exp()],
+                aggr_definitions.clone(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let test_paging_size = vec![2, 5, 7];
+        let expect_call_num = vec![1, 3, 4];
+        let expect_row_num = vec![vec![4], vec![0, 0, 5], vec![0, 0, 0, 6]];
+        let executor_builders: Vec<Box<dyn Fn(MockExecutor, Option<u64>) -> _>> =
+            vec![Box::new(exec_fast), Box::new(exec_slow)];
+        for test_case in 0..test_paging_size.len() {
+            let paging_size = test_paging_size[test_case];
+            let call_num = expect_call_num[test_case];
+            let row_num = &expect_row_num[test_case];
+            for exec_builder in &executor_builders {
+                let src_exec = make_src_executor_2();
+                let mut exec = exec_builder(src_exec, Some(paging_size));
+                for nth_call in 0..call_num {
+                    let r = exec.next_batch(1);
+                    if nth_call == call_num - 1 {
+                        assert!(r.is_drained.unwrap());
+                    } else {
+                        assert!(!r.is_drained.unwrap());
+                    }
+                    assert_eq!(r.physical_columns.rows_len(), row_num[nth_call]);
+                }
+            }
+        }
+
+        let expect_row_num2 = vec![vec![4], vec![3, 0, 2], vec![3, 0, 1, 2]];
+        let exec_stream = |src_exec, paging_size| {
+            let mut config = EvalConfig::default();
+            config.paging_size = paging_size;
+            let config = Arc::new(config);
+            Box::new(BatchStreamAggregationExecutor::new_for_test_with_config(
+                config,
+                src_exec,
+                vec![group_by_exp()],
+                aggr_definitions.clone(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+        for test_case in 0..test_paging_size.len() {
+            let paging_size = test_paging_size[test_case];
+            let call_num = expect_call_num[test_case];
+            let row_num = &expect_row_num2[test_case];
+            let mut exec = exec_stream(make_src_executor_2(), Some(paging_size));
+            for nth_call in 0..call_num {
+                let r = exec.next_batch(1);
+                if nth_call == call_num - 1 {
+                    assert!(r.is_drained.unwrap());
+                } else {
+                    assert!(!r.is_drained.unwrap());
+                }
+                assert_eq!(r.physical_columns.rows_len(), row_num[nth_call]);
+            }
+        }
     }
 }

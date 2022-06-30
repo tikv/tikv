@@ -1,25 +1,34 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
-use std::io::{Read, Result as IoResult, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    fs,
+    io::{Read, Result as IoResult, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineReadOnly,
-    RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
+    CacheStats, EncryptionKeyManager, PerfContextExt, PerfContextKind, PerfLevel, RaftEngine,
+    RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+};
 use raft::eraftpb::Entry;
-use raft_engine::env::{DefaultFileSystem, FileSystem, Handle, WriteExt};
 use raft_engine::{
+    env::{DefaultFileSystem, FileSystem, Handle, WriteExt},
     Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
+pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
 use tikv_util::Either;
 
-pub use raft_engine::{Config as RaftEngineConfig, RecoveryMode};
+use crate::perf_context::RaftEnginePerfContext;
+
+// A special region ID representing global state.
+const STORE_REGION_ID: u64 = 0;
 
 #[derive(Clone)]
 pub struct MessageExtTyped;
@@ -215,6 +224,10 @@ impl FileSystem for ManagedFileSystem {
             })
         }
     }
+
+    fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        self.base_level_file_system.delete(path)
+    }
 }
 
 #[derive(Clone)]
@@ -254,10 +267,22 @@ impl RaftLogEngine {
     }
 }
 
+impl PerfContextExt for RaftLogEngine {
+    type PerfContext = RaftEnginePerfContext;
+
+    fn get_perf_context(&self, _level: PerfLevel, _kind: PerfContextKind) -> Self::PerfContext {
+        RaftEnginePerfContext
+    }
+}
+
 #[derive(Default)]
 pub struct RaftLogBatch(LogBatch);
 
 const RAFT_LOG_STATE_KEY: &[u8] = b"R";
+const STORE_IDENT_KEY: &[u8] = &[0x01];
+const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
+const REGION_STATE_KEY: &[u8] = &[0x03];
+const APPLY_STATE_KEY: &[u8] = &[0x04];
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -284,8 +309,42 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.0.is_empty()
     }
 
-    fn merge(&mut self, mut src: Self) {
-        self.0.merge(&mut src.0);
+    fn merge(&mut self, mut src: Self) -> Result<()> {
+        self.0.merge(&mut src.0).map_err(transfer_error)
+    }
+
+    fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()> {
+        self.0
+            .put_message(STORE_REGION_ID, STORE_IDENT_KEY.to_vec(), ident)
+            .map_err(transfer_error)
+    }
+
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
+        self.0
+            .put_message(
+                STORE_REGION_ID,
+                PREPARE_BOOTSTRAP_REGION_KEY.to_vec(),
+                region,
+            )
+            .map_err(transfer_error)
+    }
+
+    fn remove_prepare_bootstrap_region(&mut self) -> Result<()> {
+        self.0
+            .delete(STORE_REGION_ID, PREPARE_BOOTSTRAP_REGION_KEY.to_vec());
+        Ok(())
+    }
+
+    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+        self.0
+            .put_message(raft_group_id, REGION_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)
+    }
+
+    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+        self.0
+            .put_message(raft_group_id, APPLY_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)
     }
 }
 
@@ -320,6 +379,52 @@ impl RaftEngineReadOnly for RaftLogEngine {
             let last = self.0.last_index(raft_group_id).unwrap();
             buf.reserve((last - first + 1) as usize);
             self.fetch_entries_to(raft_group_id, first, last + 1, None, buf)?;
+        }
+        Ok(())
+    }
+
+    fn is_empty(&self) -> Result<bool> {
+        self.get_store_ident().map(|i| i.is_none())
+    }
+
+    fn get_store_ident(&self) -> Result<Option<StoreIdent>> {
+        self.0
+            .get_message(STORE_REGION_ID, STORE_IDENT_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
+        self.0
+            .get_message(STORE_REGION_ID, PREPARE_BOOTSTRAP_REGION_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+        self.0
+            .get_message(raft_group_id, REGION_STATE_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+        self.0
+            .get_message(raft_group_id, APPLY_STATE_KEY)
+            .map_err(transfer_error)
+    }
+}
+
+impl RaftEngineDebug for RaftLogEngine {
+    fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
+    where
+        F: FnMut(&Entry) -> Result<bool>,
+    {
+        if let Some(first_index) = self.first_index(raft_group_id) {
+            for idx in first_index..=self.last_index(raft_group_id).unwrap() {
+                if let Some(entry) = self.get_entry(raft_group_id, idx)? {
+                    if !f(&entry)? {
+                        break;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -368,6 +473,16 @@ impl RaftEngine for RaftLogEngine {
             .add_entries::<MessageExtTyped>(raft_group_id, &entries)
             .map_err(transfer_error)?;
         self.0.write(&mut batch.0, false).map_err(transfer_error)
+    }
+
+    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
+        let mut batch = Self::LogBatch::default();
+        batch
+            .0
+            .put_message(STORE_REGION_ID, STORE_IDENT_KEY.to_vec(), ident)
+            .map_err(transfer_error)?;
+        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
+        Ok(())
     }
 
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
@@ -424,8 +539,6 @@ impl RaftEngine for RaftLogEngine {
     fn flush_stats(&self) -> Option<CacheStats> {
         None
     }
-
-    fn stop(&self) {}
 
     fn dump_stats(&self) -> Result<String> {
         // Raft engine won't dump anything.

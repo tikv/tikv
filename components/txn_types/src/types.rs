@@ -1,15 +1,21 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::timestamp::TimeStamp;
+use std::fmt::{self, Debug, Display, Formatter};
+
 use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
 use kvproto::kvrpcpb::{self, Assertion};
-use std::fmt::{self, Debug, Display, Formatter};
-use tikv_util::codec;
-use tikv_util::codec::bytes;
-use tikv_util::codec::bytes::BytesEncoder;
-use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::{
+    codec,
+    codec::{
+        bytes,
+        bytes::BytesEncoder,
+        number::{self, NumberEncoder},
+    },
+};
+
+use super::timestamp::TimeStamp;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
@@ -255,34 +261,12 @@ pub enum MutationType {
 }
 
 /// A row mutation.
-#[derive(Debug, Clone)]
-pub enum RawMutation {
-    /// Put `Value` into `Key` with TTL. The TTL will overwrite the existing TTL value.
-    Put { key: Key, value: Value, ttl: u64 },
-    /// Delete `Key`.
-    Delete { key: Key },
-}
-
-impl RawMutation {
-    pub fn key(&self) -> &Key {
-        match self {
-            RawMutation::Put {
-                ref key,
-                value: _,
-                ttl: _,
-            } => key,
-            RawMutation::Delete { ref key } => key,
-        }
-    }
-}
-
-/// A row mutation.
 ///
 /// It may also carry an `Assertion` field, which means it has such an *assertion* to the data
 /// (the key already exist or not exist). The assertion should pass if the mutation (in a prewrite
 /// request) is going to be finished successfully, otherwise it indicates there should be some bug
 /// causing the attempt to write wrong data.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Mutation {
     /// Put `Value` into `Key`, overwriting any existing value.
     Put((Key, Value), Assertion),
@@ -298,6 +282,42 @@ pub enum Mutation {
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     CheckNotExists(Key, Assertion),
+}
+
+impl Debug for Mutation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl Display for Mutation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Mutation::Put((key, value), assertion) => write!(
+                f,
+                "Put key:{:?} value:{:?} assertion:{:?}",
+                key,
+                &log_wrappers::Value::value(value),
+                assertion
+            ),
+            Mutation::Delete(key, assertion) => {
+                write!(f, "Delete key:{:?} assertion:{:?}", key, assertion)
+            }
+            Mutation::Lock(key, assertion) => {
+                write!(f, "Lock key:{:?} assertion:{:?}", key, assertion)
+            }
+            Mutation::Insert((key, value), assertion) => write!(
+                f,
+                "Put key:{:?} value:{:?} assertion:{:?}",
+                key,
+                &log_wrappers::Value::value(value),
+                assertion
+            ),
+            Mutation::CheckNotExists(key, assertion) => {
+                write!(f, "CheckNotExists key:{:?} assertion:{:?}", key, assertion)
+            }
+        }
+    }
 }
 
 impl Mutation {

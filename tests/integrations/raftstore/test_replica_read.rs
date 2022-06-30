@@ -1,23 +1,26 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::mem;
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    mem,
+    sync::{
+        atomic::AtomicBool,
+        mpsc::{self, RecvTimeoutError},
+        Arc, Mutex,
+    },
+    thread,
+    time::Duration,
+};
 
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use raftstore::Result;
+use raftstore::{store::ReadIndexContext, Result};
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::time::Instant;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
+use uuid::Uuid;
 
 #[derive(Default)]
 struct CommitToFilter {
@@ -207,19 +210,14 @@ fn test_read_hibernated_region() {
     cluster.stop_node(2);
     cluster.run_node(2).unwrap();
 
-    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let (tx, rx) = mpsc::sync_channel(1);
+    let store2_sent_msgs = Arc::new(Mutex::new(Vec::new()));
     let filter = Box::new(
-        RegionPacketFilter::new(1, 3)
-            .direction(Direction::Recv)
-            .reserve_dropped(Arc::clone(&dropped_msgs))
-            .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-                if msg.has_extra_msg() {
-                    tx.send(msg.clone()).unwrap();
-                }
-            })),
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Send)
+            .reserve_dropped(Arc::clone(&store2_sent_msgs)),
     );
-    cluster.sim.wl().add_recv_filter(3, filter);
+    cluster.sim.wl().add_send_filter(2, filter);
+    cluster.pd_client.trigger_leader_info_loss();
     // This request will fail because no valid leader.
     let resp1_ch = async_read_on_peer(&mut cluster, p2.clone(), region.clone(), b"k1", true, true);
     let resp1 = resp1_ch.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -228,11 +226,20 @@ fn test_read_hibernated_region() {
         "{:?}",
         resp1.get_header()
     );
-    // Wait util receiving wake up message.
-    let wake_up_msg = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    cluster.sim.wl().clear_recv_filters(3);
-    let router = cluster.sim.wl().get_router(3).unwrap();
-    router.send_raft_message(wake_up_msg).unwrap();
+    thread::sleep(Duration::from_millis(300));
+    cluster.sim.wl().clear_send_filters(2);
+    let mut has_extra_message = false;
+    for msg in std::mem::take(&mut *store2_sent_msgs.lock().unwrap()) {
+        let to_store = msg.get_to_peer().get_store_id();
+        assert_ne!(to_store, 0, "{:?}", msg);
+        if to_store == 3 && msg.has_extra_msg() {
+            has_extra_message = true;
+        }
+        let router = cluster.sim.wl().get_router(to_store).unwrap();
+        router.send_raft_message(msg).unwrap();
+    }
+    // Had a wakeup message from 2 to 3.
+    assert!(has_extra_message);
     // Wait for the leader is woken up.
     thread::sleep(Duration::from_millis(500));
     let resp2_ch = async_read_on_peer(&mut cluster, p2, region, b"k1", true, true);
@@ -394,7 +401,7 @@ fn test_split_isolation() {
     // Use long election timeout and short lease.
     configure_for_hibernate(&mut cluster);
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -412,7 +419,7 @@ fn test_split_isolation() {
     cluster.must_split(&r1, b"k2");
     let idx = cluster.truncated_state(1, 1).get_index();
     // Trigger a log compaction, so the left region ['', 'k2'] cannot created through split cmd.
-    for i in 2..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+    for i in 2..cluster.cfg.raft_store.raft_log_gc_count_limit() * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
     cluster.wait_log_truncated(1, 1, idx + 1);
@@ -451,7 +458,8 @@ fn test_read_local_after_snapshpot_replace_peer() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
+
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -506,4 +514,65 @@ fn test_read_local_after_snapshpot_replace_peer() {
     }
     let exp_value = resp.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v3");
+}
+
+/// The case checks if a malformed request should not corrupt the leader's read queue.
+#[test]
+fn test_malformed_read_index() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), None);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
+    cluster.cfg.raft_store.hibernate_regions = true;
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+    }
+
+    // Wait till lease expires.
+    std::thread::sleep(
+        cluster
+            .cfg
+            .raft_store
+            .raft_store_max_leader_lease()
+            .to_std()
+            .unwrap(),
+    );
+    let region = cluster.get_region(b"k1");
+    // Send a malformed request to leader
+    let mut raft_msg = raft::eraftpb::Message::default();
+    raft_msg.set_msg_type(MessageType::MsgReadIndex);
+    let rctx = ReadIndexContext {
+        id: Uuid::new_v4(),
+        request: None,
+        locked: None,
+    };
+    let mut e = raft::eraftpb::Entry::default();
+    e.set_data(rctx.to_bytes().into());
+    raft_msg.mut_entries().push(e);
+    raft_msg.from = 1;
+    raft_msg.to = 1;
+    let mut message = RaftMessage::default();
+    message.set_region_id(region_id);
+    message.set_from_peer(new_peer(1, 1));
+    message.set_to_peer(new_peer(1, 1));
+    message.set_region_epoch(region.get_region_epoch().clone());
+    message.set_message(raft_msg);
+    // So the read won't be handled soon.
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    cluster.send_raft_msg(message).unwrap();
+    // Also send a correct request. If the malformed request doesn't corrupt
+    // the read queue, the correct request should be responded.
+    let resp = async_read_on_peer(&mut cluster, new_peer(1, 1), region, b"k1", true, false);
+    cluster.clear_send_filters();
+    let resp = resp.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
 }

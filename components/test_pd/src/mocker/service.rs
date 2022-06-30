@@ -1,12 +1,16 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Mutex,
+};
 
+use collections::HashMap;
 use fail::fail_point;
-use kvproto::metapb::{Peer, Region, Store, StoreState};
-use kvproto::pdpb::*;
+use kvproto::{
+    metapb::{Peer, Region, Store, StoreState},
+    pdpb::*,
+};
 
 use super::*;
 
@@ -92,7 +96,7 @@ impl PdMocker for Service {
 
         if self.is_bootstrapped.load(Ordering::SeqCst) {
             let mut err = Error::default();
-            err.set_type(ErrorType::Unknown);
+            err.set_type(ErrorType::AlreadyBootstrapped);
             err.set_message("cluster is already bootstrapped".to_owned());
             header.set_error(err);
             resp.set_header(header);

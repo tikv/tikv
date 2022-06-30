@@ -487,8 +487,9 @@ impl BlobStorage for GCSStorage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use matches::assert_matches;
+
+    use super::*;
     const HARDCODED_ENDPOINTS: &[&str] = &[
         "https://www.googleapis.com/upload/storage/v1",
         "https://www.googleapis.com/storage/v1",

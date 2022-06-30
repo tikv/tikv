@@ -8,11 +8,12 @@ use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
-use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::ErrorInner::WriteConflict;
-use crate::storage::mvcc::{NewerTsCheckState, Result};
-use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
-use crate::storage::{Cursor, Snapshot, Statistics};
+use crate::storage::{
+    kv::SEEK_BOUND,
+    mvcc::{ErrorInner::WriteConflict, NewerTsCheckState, Result},
+    txn::{Result as TxnResult, TxnEntry, TxnEntryScanner},
+    Cursor, Snapshot, Statistics,
+};
 
 /// Defines the behavior of the scanner.
 pub trait ScanPolicy<S: Snapshot> {
@@ -861,12 +862,14 @@ where
 
 pub mod test_util {
     use super::*;
-    use crate::storage::mvcc::Write;
-    use crate::storage::txn::tests::{
-        must_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
-        must_prewrite_put,
+    use crate::storage::{
+        mvcc::Write,
+        txn::tests::{
+            must_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
+            must_prewrite_put,
+        },
+        Engine,
     };
-    use crate::storage::Engine;
 
     pub struct EntryBuilder {
         pub key: Vec<u8>,
@@ -1095,15 +1098,16 @@ pub mod test_util {
 
 #[cfg(test)]
 mod latest_kv_tests {
-    use super::super::ScannerBuilder;
-    use super::test_util::prepare_test_data_for_check_gc_fence;
-    use super::*;
-    use crate::storage::kv::{Engine, Modify, TestEngineBuilder};
-    use crate::storage::mvcc::tests::write;
-    use crate::storage::txn::tests::*;
-    use crate::storage::Scanner;
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::Context;
+
+    use super::{super::ScannerBuilder, test_util::prepare_test_data_for_check_gc_fence, *};
+    use crate::storage::{
+        kv::{Engine, Modify, TestEngineBuilder},
+        mvcc::tests::write,
+        txn::tests::*,
+        Scanner,
+    };
 
     /// Check whether everything works as usual when `ForwardKvScanner::get()` goes out of bound.
     #[test]
@@ -1576,16 +1580,18 @@ mod latest_kv_tests {
 
 #[cfg(test)]
 mod latest_entry_tests {
-    use super::super::ScannerBuilder;
-    use super::*;
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
-    use crate::storage::{Engine, Modify, TestEngineBuilder};
-
-    use super::test_util::*;
-    use crate::storage::mvcc::tests::write;
-    use crate::storage::txn::EntryBatch;
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::Context;
+
+    use super::{super::ScannerBuilder, test_util::*, *};
+    use crate::storage::{
+        mvcc::tests::write,
+        txn::{
+            tests::{must_commit, must_prewrite_delete, must_prewrite_put},
+            EntryBatch,
+        },
+        Engine, Modify, TestEngineBuilder,
+    };
 
     /// Check whether everything works as usual when `EntryScanner::get()` goes out of bound.
     #[test]
@@ -2012,17 +2018,12 @@ mod latest_entry_tests {
 
 #[cfg(test)]
 mod delta_entry_tests {
-    use super::super::ScannerBuilder;
-    use super::*;
-    use crate::storage::txn::tests::*;
-    use crate::storage::{Engine, Modify, TestEngineBuilder};
-
-    use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
-
-    use super::test_util::*;
-    use crate::storage::mvcc::tests::write;
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::Context;
+    use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
+
+    use super::{super::ScannerBuilder, test_util::*, *};
+    use crate::storage::{mvcc::tests::write, txn::tests::*, Engine, Modify, TestEngineBuilder};
     /// Check whether everything works as usual when `Delta::get()` goes out of bound.
     #[test]
     fn test_get_out_of_bound() {

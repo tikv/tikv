@@ -1,13 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
-
+use api_version::{ApiV1, KvFormat};
+use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
-use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine};
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE};
-use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{
-    self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
+    self,
+    kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE},
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+    Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
 };
 use tikv_util::HandyRwLock;
 use txn_types::{self, Key, KvPair, Mutation, TimeStamp, Value};
@@ -15,12 +16,14 @@ use txn_types::{self, Key, KvPair, Mutation, TimeStamp, Value};
 use super::*;
 
 #[derive(Clone)]
-pub struct AssertionStorage<E: Engine> {
-    pub store: SyncTestStorage<E>,
+pub struct AssertionStorage<E: Engine, F: KvFormat> {
+    pub store: SyncTestStorage<E, F>,
     pub ctx: Context,
 }
 
-impl Default for AssertionStorage<RocksEngine> {
+pub type AssertionStorageApiV1<E> = AssertionStorage<E, ApiV1>;
+
+impl Default for AssertionStorage<RocksEngine, ApiV1> {
     fn default() -> Self {
         AssertionStorage {
             ctx: Context::default(),
@@ -29,21 +32,21 @@ impl Default for AssertionStorage<RocksEngine> {
     }
 }
 
-impl AssertionStorage<RocksEngine> {
-    pub fn new(api_version: ApiVersion) -> Self {
+impl<F: KvFormat> AssertionStorage<RocksEngine, F> {
+    pub fn new() -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::new(api_version).build().unwrap(),
+            store: SyncTestStorageBuilder::new().build().unwrap(),
         }
     }
 }
 
-impl AssertionStorage<SimulateEngine> {
+impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
     pub fn new_raft_storage_with_store_count(
         count: usize,
         key: &str,
     ) -> (Cluster<ServerCluster>, Self) {
-        let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
+        let (cluster, store, ctx) = new_raft_storage_with_store_count::<F>(count, key);
         let storage = Self { store, ctx };
         (cluster, storage)
     }
@@ -226,7 +229,7 @@ impl AssertionStorage<SimulateEngine> {
     }
 }
 
-impl<E: Engine> AssertionStorage<E> {
+impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
     pub fn get_none(&self, key: &[u8], ts: impl Into<TimeStamp>) {
         let key = Key::from_raw(key);
         assert_eq!(

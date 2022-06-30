@@ -30,28 +30,31 @@ pub mod readpool_impl;
 mod statistics;
 mod tracker;
 
-pub use self::endpoint::Endpoint;
-pub use self::error::{Error, Result};
-pub use checksum::checksum_crc64_xor;
+use std::sync::Arc;
 
-use crate::storage::mvcc::TimeStamp;
-use crate::storage::Statistics;
 use async_trait::async_trait;
-use engine_rocks::PerfLevel;
+pub use checksum::checksum_crc64_xor;
+use engine_traits::PerfLevel;
 use kvproto::{coprocessor as coppb, kvrpcpb};
 use lazy_static::lazy_static;
 use metrics::ReqTag;
 use rand::prelude::*;
-use std::sync::Arc;
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::{mem_trace, Id, MemoryTrace, MemoryTraceGuard};
-use tikv_util::deadline::Deadline;
-use tikv_util::time::Duration;
+use tikv_util::{deadline::Deadline, time::Duration};
 use txn_types::TsSet;
+
+pub use self::{
+    endpoint::Endpoint,
+    error::{Error, Result},
+};
+use crate::storage::{mvcc::TimeStamp, Statistics};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;
+
+pub const REQ_FLAG_TIDB_SYSSESSION: u64 = 2048;
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 

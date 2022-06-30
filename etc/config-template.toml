@@ -52,8 +52,17 @@
 # foreground-write-bandwidth = "0B"
 ## Read bandwidth limitation for this TiKV instance, default value is 0 which means unlimited.
 # foreground-read-bandwidth = "0B"
-## Limitation of max delay duration for each request, default value is 0 which means unlimited.
+## CPU quota for these background requests can use, default value is 0, it means unlimited.
+## The unit is millicpu but for now this config is approximate and soft limit.
+# background-cpu-time = 0
+## Write bandwidth limitation for backgroud request for this TiKV instance, default value is 0 which means unlimited.
+# background-write-bandwidth = "0B"
+## Read bandwidth limitation for background request for this TiKV instance, default value is 0 which means unlimited.
+# background-read-bandwidth = "0B"
+## Limitation of max delay duration, default value is 0 which means unlimited.
 # max-delay-duration = "500ms"
+## Whether to enable quota auto tune
+# enable-auto-tune = false
 
 [log]
 ## Log levels: debug, info, warn, error, fatal.
@@ -81,7 +90,7 @@
 
 ## The maximum working thread count of the thread pool.
 ## The default value is max(4, LOGICAL_CPU_NUM * 0.8).
-# max-thread-count = 8
+# max-thread-count = 4
 
 ## Size of the stack for each thread in the thread pool.
 # stack-size = "10MB"
@@ -243,6 +252,18 @@
 ##
 ## Set it to 0 will cause no space is reserved at all. It's generally used for tests.
 # reserve-space = "5GB"
+
+## The maximum recovery time after rocksdb detects restorable background errors. When the data belonging
+## to the data range is damaged, it will be reported to PD through heartbeat, and PD will add `remove-peer`
+## operator to remove this damaged peer. When the damaged peer still exists in the current store, the
+## corruption SST files remain, and the KV storage engine can still put new content normally, but it
+## will return error when reading corrupt data range.
+##
+## If after this time, the peer where the corrupted data range located has not been removed from the
+## current store, TiKV will panic.
+##
+## Set to 0 to disable this feature if you want to panic immediately when encountering such an error.
+# background-error-recovery-window = "1h"
 
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
@@ -681,7 +702,7 @@
 ## Maximum number of level-0 files.
 ## When the number of SST files of level-0 reaches the limit of `level0-stop-writes-trigger`,
 ## RocksDB stalls the new write operation.
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 
 ## Amount of data to build up in memory (backed by an unsorted log on disk) before converting to a
 ## sorted on-disk file. It is the RocksDB MemTable size.
@@ -732,6 +753,12 @@
 ## "oldest-smallest-seq-first"
 ## "min-overlapping-ratio"
 # compaction-pri = "min-overlapping-ratio"
+
+## Refer to storage.flow-control.soft-pending-compaction-bytes-limit.
+# soft-pending-compaction-bytes-limit = "192GB"
+
+## Refer to storage.flow-control.hard-pending-compaction-bytes-limit.
+# hard-pending-compaction-bytes-limit = "1000GB"
 
 ## Indicating if we'd put index/filter blocks to the block cache.
 ## If not specified, each "table reader" object will pre-load index/filter block during table
@@ -804,10 +831,15 @@
 ## default: 0.5
 # discardable-ratio = 0.5
 
-## The mode used to process blob files. In read-only mode Titan
-## stops writing value into blob log. In fallback mode Titan
-## converts blob index into real value on flush and compaction.
-## This option is especially useful for downgrading Titan.
+## The mode used to process blob files. In read-only mode Titan stops writing
+## value into blob log. In fallback mode Titan converts blob index into real
+## value on flush and compaction.
+##
+## This option can be used to disable Titan. More specifically, to disable
+## Titan, set this option to fallback and perform a full compaction using
+## tikv-ctl. Then, monitor the blob file size metrics. After the blob file size
+## decreases to 0, you can set rocksdb.titan.enabled to false and restart TiKV.
+##
 ##   default:   kNormal
 ##   read-only: kReadOnly
 ##   fallback:  kFallback
@@ -826,10 +858,6 @@
 ## default: false
 # level-merge = false
 
-## Use merge operator to rewrite GC blob index.
-## default: false
-# gc-merge-rewrite = false
-
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -847,10 +875,12 @@
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "min-overlapping-ratio"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -868,10 +898,12 @@
 # target-file-size-base = "8MB"
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "by-compensated-size"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -925,10 +957,12 @@
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "by-compensated-size"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
@@ -988,6 +1022,10 @@
 ##
 ## Default: 4. Minimum: 1.
 # recovery-threads = 4
+
+## Memory usage limit for Raft Engine.
+## When it's not set, 15% of available system memory will be used.
+# memory-limit = "1GB"
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
@@ -1088,6 +1126,15 @@
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
 # enable-auto-tune = true 
+
+[log-backup] 
+## Number of threads to perform backup stream tasks.
+## The default value is set to min(CPU_NUM * 0.5, 8).
+# num-threads = 8
+
+## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
+## The default value is false.
+# enable = false 
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.

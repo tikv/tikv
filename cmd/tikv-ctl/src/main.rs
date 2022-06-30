@@ -9,6 +9,19 @@ mod cmd;
 mod executor;
 mod util;
 
+use std::{
+    borrow::ToOwned,
+    fs::{self, File, OpenOptions},
+    io::{self, BufRead, BufReader, Read},
+    path::Path,
+    str,
+    string::ToString,
+    sync::Arc,
+    thread,
+    time::Duration,
+    u64,
+};
+
 use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
     DataKeyManager, DecrypterReader, Iv,
@@ -19,33 +32,23 @@ use file_system::calc_crc32;
 use futures::executor::block_on;
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
-use kvproto::debugpb::{Db as DBType, *};
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::SplitRegionRequest;
-use kvproto::raft_serverpb::SnapshotMeta;
-use kvproto::tikvpb::TikvClient;
+use kvproto::{
+    debugpb::{Db as DBType, *},
+    encryptionpb::EncryptionMethod,
+    kvrpcpb::SplitRegionRequest,
+    raft_serverpb::SnapshotMeta,
+    tikvpb::TikvClient,
+};
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
-use std::borrow::ToOwned;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read};
-use std::path::Path;
-use std::string::ToString;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{str, thread, u64};
-use structopt::clap::ErrorKind;
-use structopt::StructOpt;
-use tikv::config::TiKvConfig;
-use tikv::server::debug::BottommostLevelCompaction;
-use tikv_util::{escape, run_and_wait_child_process, unescape};
+use structopt::{clap::ErrorKind, StructOpt};
+use tikv::{config::TiKvConfig, server::debug::BottommostLevelCompaction};
+use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
 use txn_types::Key;
 
-use crate::cmd::*;
-use crate::executor::*;
-use crate::util::*;
+use crate::{cmd::*, executor::*, util::*};
 
 fn main() {
     let opt = Opt::from_args();
@@ -476,6 +479,7 @@ fn main() {
                 Cmd::Cluster {} => {
                     debug_executor.dump_cluster_info();
                 }
+                Cmd::ResetToVersion { version } => debug_executor.reset_to_version(version),
                 _ => {
                     unreachable!()
                 }
@@ -601,7 +605,7 @@ fn compact_whole_cluster(
         let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string()).collect();
         let h = thread::Builder::new()
             .name(format!("compact-{}", addr))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_alloc::add_thread_memory_accessor();
                 let debug_executor = new_debug_executor(&cfg, None, false, Some(&addr), mgr);
                 for cf in cfs {

@@ -1,12 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::db_vector::PanicDBVector;
-use crate::snapshot::PanicSnapshot;
-use crate::write_batch::PanicWriteBatch;
 use engine_traits::{
     IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result, SeekKey, SyncMutable,
-    WriteOptions,
+    TabletAccessor, WriteOptions,
 };
+
+use crate::{db_vector::PanicDBVector, snapshot::PanicSnapshot, write_batch::PanicWriteBatch};
 
 #[derive(Clone, Debug)]
 pub struct PanicEngine;
@@ -21,6 +20,16 @@ impl KvEngine for PanicEngine {
         panic!()
     }
     fn bad_downcast<T: 'static>(&self) -> &T {
+        panic!()
+    }
+}
+
+impl TabletAccessor<PanicEngine> for PanicEngine {
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &PanicEngine)) {
+        panic!()
+    }
+
+    fn is_single_engine(&self) -> bool {
         panic!()
     }
 }

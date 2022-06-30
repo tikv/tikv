@@ -14,6 +14,7 @@ WHITE_LIST = {
     "online_config", "online_config_derive", "match_template", "tidb_query_codegen",
     "panic_hook", "fuzz", "fuzzer_afl", "fuzzer_honggfuzz", "fuzzer_libfuzzer",
     "coprocessor_plugin_api", "example_plugin", "memory_trace_macros", "case_macros",
+    "tracker"
 }
 
 JEMALLOC_SYMBOL = ["je_arena_boot", " malloc"]

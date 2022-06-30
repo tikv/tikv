@@ -8,7 +8,7 @@
 //! The entry point is `run_tikv`.
 //!
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
-//! We keep these components in the `TiKVServer` struct.
+//! We keep these components in the `TiKvServer` struct.
 
 use std::{
     cmp,
@@ -25,13 +25,24 @@ use std::{
     u64,
 };
 
+use api_version::{dispatch_api_version, KvFormat};
+use backup_stream::{
+    config::BackupStreamConfigManager,
+    metadata::{ConnectionConfig, LazyEtcdClient},
+    observer::BackupStreamObserver,
+};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
+use engine_rocks::{
+    from_rocks_compression_type,
+    raw::{Cache, Env},
+    FlowInfo, RocksEngine,
+};
+use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines,
-    FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
+    RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -40,10 +51,11 @@ use file_system::{
 };
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
+use grpcio_health::HealthService;
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    resource_usage_agent::create_resource_metering_pub_sub,
+    kvrpcpb::ApiVersion, resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -56,51 +68,101 @@ use raftstore::{
     store::{
         config::RaftstoreConfigManager,
         fsm,
-        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
+        fsm::store::{
+            RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
+        },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMsg,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
     },
 };
 use security::SecurityManager;
 use tikv::{
-    config::{ConfigController, DBConfigManger, DBType, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    import::{ImportSSTService, SSTImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
-    server::raftkv::ReplicaReadLockChecker,
     server::{
-        config::Config as ServerConfig,
-        config::ServerConfigManager,
+        config::{Config as ServerConfig, ServerConfigManager},
         create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
+        raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        ttl::TTLChecker,
-        Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
+        ttl::TtlChecker,
+        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
+        GRPC_THREAD_PREFIX,
     },
     storage::{
-        self, config_manager::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
-        txn::flow_controller::FlowController, Engine,
+        self,
+        config_manager::StorageConfigManger,
+        mvcc::MvccConsistencyCheckObserver,
+        txn::flow_controller::{EngineFlowController, FlowController},
+        Engine,
     },
 };
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
-    quota_limiter::QuotaLimiter,
-    sys::{disk, register_memory_usage_high_water, SysQuota},
+    metrics::INSTANCE_BACKEND_CPU_QUOTA,
+    quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
+    sys::{cpu_time::ProcessStat, disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
-    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
 use tokio::runtime::Builder;
 
-use crate::raft_engine_switch::*;
-use crate::{memory::*, setup::*, signal_handler};
+use crate::{
+    memory::*, raft_engine_switch::*, setup::*, signal_handler,
+    tikv_util::sys::thread::ThreadBuildWrapper,
+};
+
+// minimum number of core kept for background requests
+const BACKGROUND_REQUEST_CORE_LOWER_BOUND: f64 = 1.0;
+// max ratio of core quota for background requests
+const BACKGROUND_REQUEST_CORE_MAX_RATIO: f64 = 0.95;
+// default ratio of core quota for background requests = core_number * 0.5
+const BACKGROUND_REQUEST_CORE_DEFAULT_RATIO: f64 = 0.5;
+// indication of TiKV instance is short of cpu
+const SYSTEM_BUSY_THRESHOLD: f64 = 0.80;
+// indication of TiKV instance in healthy state when cpu usage is in [0.5, 0.80)
+const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
+// pace of cpu quota adjustment
+const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
+
+#[inline]
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
+    let mut tikv = TiKvServer::<CER>::init(config);
+
+    // Must be called after `TiKvServer::init`.
+    let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
+    let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
+    register_memory_usage_high_water(high_water);
+
+    tikv.check_conflict_addr();
+    tikv.init_fs();
+    tikv.init_yatp();
+    tikv.init_encryption();
+    let fetcher = tikv.init_io_utility();
+    let listener = tikv.init_flow_receiver();
+    let (engines, engines_info) = tikv.init_raw_engines(listener);
+    tikv.init_engines(engines.clone());
+    let server_config = tikv.init_servers::<F>();
+    tikv.register_services();
+    tikv.init_metrics_flusher(fetcher, engines_info);
+    tikv.init_storage_stats_task(engines);
+    tikv.run_server(server_config);
+    tikv.run_status_server();
+    tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
+
+    signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
+    tikv.stop();
+}
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -123,40 +185,13 @@ pub fn run_tikv(config: TiKvConfig) {
 
     let _m = Monitor::default();
 
-    macro_rules! run_impl {
-        ($ER: ty) => {{
-            let mut tikv = TiKVServer::<$ER>::init(config);
-
-            // Must be called after `TiKVServer::init`.
-            let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
-            let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
-            register_memory_usage_high_water(high_water);
-
-            tikv.check_conflict_addr();
-            tikv.init_fs();
-            tikv.init_yatp();
-            tikv.init_encryption();
-            let fetcher = tikv.init_io_utility();
-            let listener = tikv.init_flow_receiver();
-            let (engines, engines_info) = tikv.init_raw_engines(listener);
-            tikv.init_engines(engines.clone());
-            let server_config = tikv.init_servers();
-            tikv.register_services();
-            tikv.init_metrics_flusher(fetcher, engines_info);
-            tikv.init_storage_stats_task(engines);
-            tikv.run_server(server_config);
-            tikv.run_status_server();
-
-            signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
-            tikv.stop();
-        }};
-    }
-
-    if !config.raft_engine.enable {
-        run_impl!(RocksEngine)
-    } else {
-        run_impl!(RaftLogEngine)
-    }
+    dispatch_api_version!(config.storage.api_version(), {
+        if !config.raft_engine.enable {
+            run_impl::<RocksEngine, API>(config)
+        } else {
+            run_impl::<RaftLogEngine, API>(config)
+        }
+    })
 }
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -165,9 +200,10 @@ const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
 const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A complete TiKV server.
-struct TiKVServer<ER: RaftEngine> {
+struct TiKvServer<ER: RaftEngine> {
     config: TiKvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
@@ -181,7 +217,7 @@ struct TiKVServer<ER: RaftEngine> {
     store_path: PathBuf,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    engines: Option<TiKVEngines<RocksEngine, ER>>,
+    engines: Option<TiKvEngines<RocksEngine, ER>>,
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
@@ -190,10 +226,11 @@ struct TiKVServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
 }
 
-struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
+struct TiKvEngines<EK: KvEngine, ER: RaftEngine> {
     engines: Engines<EK, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
     engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
@@ -203,7 +240,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
     node: Node<RpcClient, EK, ER>,
-    importer: Arc<SSTImporter>,
+    importer: Arc<SstImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
     rsmeter_pubsub_service: resource_metering::PubSubService,
@@ -213,8 +250,8 @@ type LocalServer<EK, ER> =
     Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
-impl<ER: RaftEngine> TiKVServer<ER> {
-    fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
+impl<ER: RaftEngine> TiKvServer<ER> {
+    fn init(mut config: TiKvConfig) -> TiKvServer<ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -258,14 +295,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
+        // use different quota for front-end and back-end requests
         let quota_limiter = Arc::new(QuotaLimiter::new(
             config.quota.foreground_cpu_time,
             config.quota.foreground_write_bandwidth,
             config.quota.foreground_read_bandwidth,
+            config.quota.background_cpu_time,
+            config.quota.background_write_bandwidth,
+            config.quota.background_read_bandwidth,
             config.quota.max_delay_duration,
+            config.quota.enable_auto_tune,
         ));
 
-        TiKVServer {
+        TiKvServer {
             config,
             cfg_controller: Some(cfg_controller),
             security_mgr,
@@ -288,6 +330,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             background_worker,
             flow_info_sender: None,
             flow_info_receiver: None,
+            sst_worker: None,
             quota_limiter,
         }
     }
@@ -481,34 +524,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .map(Arc::new);
     }
 
-    fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
-        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo<'_>) -> bool {
-            // When calculating region size, we only consider write and default
-            // column families.
-            let cf = info.cf_name();
-            if cf != CF_WRITE && cf != CF_DEFAULT {
-                return false;
-            }
-            // Compactions in level 0 and level 1 are very frequently.
-            if info.output_level() < 2 {
-                return false;
-            }
-
-            true
-        }
-
-        let ch = Mutex::new(self.router.clone());
-        let compacted_handler =
-            Box::new(move |compacted_event: engine_rocks::RocksCompactedEvent| {
-                let ch = ch.lock().unwrap();
-                let event = StoreMsg::CompactedEvent(compacted_event);
-                if let Err(e) = ch.send_control(event) {
-                    error_unknown!(?e; "send compaction finished event to raftstore failed");
-                }
-            });
-        engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
-    }
-
     fn init_flow_receiver(&mut self) -> engine_rocks::FlowListener {
         let (tx, rx) = mpsc::channel();
         self.flow_info_sender = Some(tx.clone());
@@ -526,7 +541,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.kv.clone(),
         );
 
-        self.engines = Some(TiKVEngines {
+        self.engines = Some(TiKvEngines {
             engines,
             store_meta,
             engine,
@@ -566,17 +581,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
     }
 
-    fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
-        let flow_controller = Arc::new(FlowController::new(
+    fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
+        let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
             self.flow_info_receiver.take().unwrap(),
-        ));
+        )));
         let gc_worker = self.init_gc_worker();
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
+
+        cfg_controller.register(
+            tikv::config::Module::Quota,
+            Box::new(QuotaLimitConfigManager::new(Arc::clone(
+                &self.quota_limiter,
+            ))),
+        );
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
@@ -601,6 +623,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let pd_worker = LazyWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
+        if let Some(sst_worker) = &mut self.sst_worker {
+            let sst_runner = RecoveryRunner::new(
+                engines.engines.kv.get_sync_db(),
+                engines.store_meta.clone(),
+                self.config.storage.background_error_recovery_window.into(),
+                DEFAULT_CHECK_INTERVAL,
+            );
+            sst_worker.start_with_timer(sst_runner);
+        }
+
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
@@ -617,11 +649,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
-                .on_thread_start(move || {
+                .after_start_wrapper(move || {
                     tikv_alloc::add_thread_memory_accessor();
                     tikv_util::thread_group::set_properties(props.clone());
                 })
-                .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
+                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
         );
@@ -666,7 +698,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage(
+        let storage = create_raft_storage::<_, _, _, F>(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -709,6 +741,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .encryption_key_manager(self.encryption_key_manager.clone())
+            .max_per_file_size(self.config.raft_store.max_snapshot_file_raw_size.0)
+            .enable_multi_snapshot_files(
+                self.pd_client
+                    .feature_gate()
+                    .can_enable(MULTI_FILES_SNAPSHOT_FEATURE),
+            )
             .build(snap_path);
 
         // Create coprocessor endpoint.
@@ -730,6 +768,23 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                     unified_read_pool.as_ref().unwrap().handle(),
                 )),
             );
+        }
+
+        // Register causal observer for RawKV API V2
+        if let ApiVersion::V2 = F::TAG {
+            let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
+                self.pd_client.clone(),
+                self.config.causal_ts.renew_interval.0,
+                self.config.causal_ts.renew_batch_min_size,
+            ));
+            if let Err(e) = tso {
+                panic!("Causal timestamp provider initialize failed: {:?}", e);
+            }
+            let causal_ts_provider = Arc::new(tso.unwrap());
+            info!("Causal timestamp provider startup.");
+
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         }
 
         // Register cdc.
@@ -768,9 +823,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         self.config
             .raft_store
-            .validate()
+            .validate(
+                self.config.coprocessor.region_split_size,
+                self.config.coprocessor.enable_region_bucket,
+                self.config.coprocessor.region_bucket_size,
+            )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        let health_service = HealthService::default();
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config.value().clone(),
@@ -779,6 +839,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.pd_client.clone(),
             self.state.clone(),
             self.background_worker.clone(),
+            Some(health_service.clone()),
         );
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
@@ -794,7 +855,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 &server_config.value(),
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
-                engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
                 resource_tag_factory,
                 Arc::clone(&self.quota_limiter),
             ),
@@ -807,6 +867,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
+            health_service,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -814,11 +875,50 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Box::new(ServerConfigManager::new(
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
+                server.get_grpc_mem_quota().clone(),
             )),
         );
 
+        // Start backup stream
+        if self.config.backup_stream.enable {
+            // Create backup stream.
+            let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
+            let backup_stream_scheduler = backup_stream_worker.scheduler();
+
+            // Register backup-stream observer.
+            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
+            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager.
+            cfg_controller.register(
+                tikv::config::Module::BackupStream,
+                Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
+            );
+
+            let etcd_cli = LazyEtcdClient::new(
+                self.config.pd.endpoints.as_slice(),
+                ConnectionConfig {
+                    keep_alive_interval: self.config.server.grpc_keepalive_time.0,
+                    keep_alive_timeout: self.config.server.grpc_keepalive_timeout.0,
+                    tls: self.security_mgr.tonic_tls_config(),
+                },
+            );
+            let backup_stream_endpoint = backup_stream::Endpoint::new(
+                node.id(),
+                etcd_cli,
+                self.config.backup_stream.clone(),
+                backup_stream_scheduler,
+                backup_stream_ob,
+                self.region_info_accessor.clone(),
+                self.router.clone(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+            );
+            backup_stream_worker.start(backup_stream_endpoint);
+            self.to_stop.push(backup_stream_worker);
+        }
+
         let import_path = self.store_path.join("import");
-        let mut importer = SSTImporter::new(
+        let mut importer = SstImporter::new(
             &self.config.import,
             import_path,
             self.encryption_key_manager.clone(),
@@ -853,7 +953,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         let split_config_manager =
-            SplitConfigManager(Arc::new(VersionTrack::new(self.config.split.clone())));
+            SplitConfigManager::new(Arc::new(VersionTrack::new(self.config.split.clone())));
         cfg_controller.register(
             tikv::config::Module::Split,
             Box::new(split_config_manager.clone()),
@@ -905,7 +1005,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         initial_metric(&self.config.metric);
         if self.config.storage.enable_ttl {
-            ttl_checker.start_with_timer(TTLChecker::new(
+            ttl_checker.start_with_timer(TtlChecker::new(
                 self.engines.as_ref().unwrap().engine.kv_engine(),
                 self.region_info_accessor.clone(),
                 self.config.storage.ttl_check_poll_interval.into(),
@@ -918,6 +1018,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,
+            self.config.storage.api_version(),
             self.pd_client.clone(),
             cdc_scheduler.clone(),
             self.router.clone(),
@@ -976,8 +1077,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let engines = self.engines.as_ref().unwrap();
 
         // Import SST service.
-        let import_service = ImportSSTService::new(
+        let import_service = ImportSstService::new(
             self.config.import.clone(),
+            self.config.raft_store.raft_entry_max_size,
             self.router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
@@ -1141,6 +1243,82 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             });
     }
 
+    // Only background cpu quota tuning is implemented at present. iops and frontend quota tuning is on the way
+    fn init_quota_tuning_task(&self, quota_limiter: Arc<QuotaLimiter>) {
+        // No need to do auto tune when capacity is really low
+        if SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO
+            < BACKGROUND_REQUEST_CORE_LOWER_BOUND
+        {
+            return;
+        };
+
+        // Determine the base cpu quota
+        let base_cpu_quota = {
+            // if cpu quota is not specified, start from optimistic case
+            if quota_limiter.cputime_limiter(false).is_infinite() {
+                let quota = 1000_f64
+                    * f64::max(
+                        BACKGROUND_REQUEST_CORE_LOWER_BOUND,
+                        SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_DEFAULT_RATIO,
+                    );
+                quota_limiter.set_cpu_time_limit(quota as usize, false);
+                quota
+            } else {
+                quota_limiter.cputime_limiter(false) / 1000_f64
+            }
+        };
+
+        // Calculate the celling and floor quota
+        let celling_quota = f64::min(
+            base_cpu_quota * 2.0,
+            1_000_f64 * SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO,
+        );
+        let floor_quota = f64::max(
+            base_cpu_quota * 0.5,
+            1_000_f64 * BACKGROUND_REQUEST_CORE_LOWER_BOUND,
+        );
+
+        let mut proc_stats: ProcessStat = ProcessStat::cur_proc_stat().unwrap();
+        self.background_worker.spawn_interval_task(
+            DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL,
+            move || {
+                if quota_limiter.auto_tune_enabled() {
+                    let old_quota = quota_limiter.cputime_limiter(false) / 1000_f64;
+                    let cpu_usage = match proc_stats.cpu_usage() {
+                        Ok(r) => r,
+                        Err(_e) => 0.0,
+                    };
+                    // Try tuning quota when cpu_usage is correctly collected.
+                    // rule based tuning:
+                    //      1) if instance is busy, shrink cpu quota for analyze by one quota pace until lower bound is hit;
+                    //      2) if instance cpu usage is healthy, no op;
+                    //      3) if instance is idle, increase cpu quota by one quota pace  until upper bound is hit.
+                    if cpu_usage > 0.0f64 {
+                        let mut target_quota = old_quota;
+
+                        let cpu_util = cpu_usage / SysQuota::cpu_cores_quota();
+                        if cpu_util >= SYSTEM_BUSY_THRESHOLD {
+                            target_quota =
+                                f64::max(target_quota - CPU_QUOTA_ADJUSTMENT_PACE, floor_quota);
+                        } else if cpu_util < SYSTEM_HEALTHY_THRESHOLD {
+                            target_quota =
+                                f64::min(target_quota + CPU_QUOTA_ADJUSTMENT_PACE, celling_quota);
+                        }
+
+                        if old_quota != target_quota {
+                            quota_limiter.set_cpu_time_limit(target_quota as usize, false);
+                            debug!(
+                                "cpu_time_limiter tuned for backend request";
+                                "cpu_util" => ?cpu_util,
+                                "new quota" => ?target_quota);
+                            INSTANCE_BACKEND_CPU_QUOTA.set(target_quota as i64);
+                        }
+                    }
+                }
+            },
+        );
+    }
+
     fn init_storage_stats_task(&self, engines: Engines<RocksEngine, ER>) {
         let config_disk_capacity: u64 = self.config.raft_store.capacity.0;
         let data_dir = self.config.storage.data_dir.clone();
@@ -1221,6 +1399,22 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             })
     }
 
+    fn init_sst_recovery_sender(&mut self) -> Option<Scheduler<String>> {
+        if !self
+            .config
+            .storage
+            .background_error_recovery_window
+            .is_zero()
+        {
+            let sst_worker = Box::new(LazyWorker::new("sst-recovery"));
+            let scheduler = sst_worker.scheduler();
+            self.sst_worker = Some(sst_worker);
+            Some(scheduler)
+        } else {
+            None
+        }
+    }
+
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
         let server = self.servers.as_mut().unwrap();
         server
@@ -1272,180 +1466,169 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         servers.lock_mgr.stop();
 
+        if let Some(sst_worker) = self.sst_worker {
+            sst_worker.stop_worker();
+        }
+
         self.to_stop.into_iter().for_each(|s| s.stop());
     }
 }
 
-impl TiKVServer<RocksEngine> {
+pub trait ConfiguredRaftEngine: RaftEngine {
+    fn build(
+        _: &TiKvConfig,
+        _: &Arc<Env>,
+        _: &Option<Arc<DataKeyManager>>,
+        _: &Option<Cache>,
+    ) -> Self;
+    fn as_rocks_engine(&self) -> Option<&RocksEngine> {
+        None
+    }
+    fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool) {}
+}
+
+impl ConfiguredRaftEngine for RocksEngine {
+    fn build(
+        config: &TiKvConfig,
+        env: &Arc<Env>,
+        key_manager: &Option<Arc<DataKeyManager>>,
+        block_cache: &Option<Cache>,
+    ) -> Self {
+        let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &config.storage.data_dir,
+            &config.raft_engine.config().dir,
+            &config.raft_store.raftdb_path,
+        );
+        let should_dump = raft_data_state_machine.before_open_target();
+
+        let raft_db_path = &config.raft_store.raftdb_path;
+        let config_raftdb = &config.raftdb;
+        let mut raft_db_opts = config_raftdb.build_opt();
+        raft_db_opts.set_env(env.clone());
+        let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
+        let raftdb =
+            engine_rocks::raw_util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
+                .expect("failed to open raftdb");
+        let mut raftdb = RocksEngine::from_db(Arc::new(raftdb));
+        raftdb.set_shared_block_cache(block_cache.is_some());
+
+        if should_dump {
+            let raft_engine =
+                RaftLogEngine::new(config.raft_engine.config(), key_manager.clone(), None)
+                    .expect("failed to open raft engine for migration");
+            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
+            raft_engine.stop();
+            drop(raft_engine);
+            raft_data_state_machine.after_dump_data();
+        }
+        raftdb
+    }
+
+    fn as_rocks_engine(&self) -> Option<&RocksEngine> {
+        Some(self)
+    }
+
+    fn register_config(&self, cfg_controller: &mut ConfigController, share_cache: bool) {
+        cfg_controller.register(
+            tikv::config::Module::Raftdb,
+            Box::new(DBConfigManger::new(
+                Arc::new(self.clone()),
+                DBType::Raft,
+                share_cache,
+            )),
+        );
+    }
+}
+
+impl ConfiguredRaftEngine for RaftLogEngine {
+    fn build(
+        config: &TiKvConfig,
+        env: &Arc<Env>,
+        key_manager: &Option<Arc<DataKeyManager>>,
+        block_cache: &Option<Cache>,
+    ) -> Self {
+        let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &config.storage.data_dir,
+            &config.raft_store.raftdb_path,
+            &config.raft_engine.config().dir,
+        );
+        let should_dump = raft_data_state_machine.before_open_target();
+
+        let raft_config = config.raft_engine.config();
+        let raft_engine =
+            RaftLogEngine::new(raft_config, key_manager.clone(), get_io_rate_limiter())
+                .expect("failed to open raft engine");
+
+        if should_dump {
+            let config_raftdb = &config.raftdb;
+            let mut raft_db_opts = config_raftdb.build_opt();
+            raft_db_opts.set_env(env.clone());
+            let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
+            let raftdb = engine_rocks::raw_util::new_engine_opt(
+                &config.raft_store.raftdb_path,
+                raft_db_opts,
+                raft_cf_opts,
+            )
+            .expect("failed to open raftdb for migration");
+            let raftdb = RocksEngine::from_db(Arc::new(raftdb));
+            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
+            raftdb.stop();
+            drop(raftdb);
+            raft_data_state_machine.after_dump_data();
+        }
+        raft_engine
+    }
+}
+
+impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
+    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
-        let shared_block_cache = block_cache.is_some();
         let env = self
             .config
             .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
             .unwrap();
 
-        let mut raft_data_state_machine = RaftDataStateMachine::new(
-            &self.config.raft_engine.config().dir,
-            &self.config.raft_store.raftdb_path,
+        // Create raft engine
+        let raft_engine = CER::build(
+            &self.config,
+            &env,
+            &self.encryption_key_manager,
+            &block_cache,
         );
-        let dump_source = raft_data_state_machine.before_open_target();
-
-        let raft_db_path = &self.config.raft_store.raftdb_path;
-        let config_raftdb = &self.config.raftdb;
-        let mut raft_db_opts = config_raftdb.build_opt();
-        raft_db_opts.set_env(env.clone());
-        let raft_cf_opts = config_raftdb.build_cf_opts(&block_cache);
-        let raftdb =
-            engine_rocks::raw_util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
-                .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
-        let mut raftdb = RocksEngine::from_db(Arc::new(raftdb));
-        raftdb.set_shared_block_cache(shared_block_cache);
-
-        if let Some(source) = dump_source {
-            let mut raft_engine_config = self.config.raft_engine.config();
-            raft_engine_config.dir = source.to_str().unwrap().to_owned();
-            let raft_engine = RaftLogEngine::new(
-                raft_engine_config,
-                self.encryption_key_manager.clone(),
-                None,
-            )
-            .expect("open raft engine");
-            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
-            raft_data_state_machine.after_dump_data();
-        }
 
         // Create kv engine.
-        let mut kv_db_opts = self.config.rocksdb.build_opt();
-        kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        kv_db_opts.add_event_listener(flow_listener);
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
-            &block_cache,
-            Some(&self.region_info_accessor),
-            self.config.storage.api_version(),
-        );
-        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
-            db_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
-        kv_engine.set_shared_block_cache(shared_block_cache);
-        let engines = Engines::new(kv_engine, raftdb);
-
-        let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(
-                engines.kv.clone(),
-                DBType::Kv,
-                self.config.storage.block_cache.shared,
-            )),
-        );
-        cfg_controller.register(
-            tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(
-                engines.raft.clone(),
-                DBType::Raft,
-                self.config.storage.block_cache.shared,
-            )),
-        );
-
-        let engines_info = Arc::new(EnginesResourceInfo::new(
-            engines.kv.clone(),
-            Some(engines.raft.clone()),
-            180, /*max_samples_to_preserve*/
-        ));
-
-        (engines, engines_info)
-    }
-}
-
-impl TiKVServer<RaftLogEngine> {
-    fn init_raw_engines(
-        &mut self,
-        flow_listener: engine_rocks::FlowListener,
-    ) -> (
-        Engines<RocksEngine, RaftLogEngine>,
-        Arc<EnginesResourceInfo>,
-    ) {
-        let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
-        let block_cache = self.config.storage.block_cache.build_shared_cache();
-
-        let mut raft_data_state_machine = RaftDataStateMachine::new(
-            &self.config.raft_store.raftdb_path,
-            &self.config.raft_engine.config().dir,
-        );
-        let dump_source = raft_data_state_machine.before_open_target();
-
-        let raft_config = self.config.raft_engine.config();
-        let raft_engine = RaftLogEngine::new(
-            raft_config,
-            self.encryption_key_manager.clone(),
-            get_io_rate_limiter(),
-        )
-        .unwrap_or_else(|e| fatal!("Failed to create raft engine: {}", e));
-
-        if let Some(source) = dump_source {
-            let config_raftdb = &self.config.raftdb;
-            let mut raft_db_opts = config_raftdb.build_opt();
-            raft_db_opts.set_env(env.clone());
-            let raft_cf_opts = config_raftdb.build_cf_opts(&block_cache);
-            let raftdb = engine_rocks::raw_util::new_engine_opt(
-                source.to_str().unwrap(),
-                raft_db_opts,
-                raft_cf_opts,
-            )
-            .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
-            let raftdb = RocksEngine::from_db(Arc::new(raftdb));
-            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
-            raft_data_state_machine.after_dump_data();
+        let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
+            .compaction_filter_router(self.router.clone())
+            .region_info_accessor(self.region_info_accessor.clone())
+            .sst_recovery_sender(self.init_sst_recovery_sender())
+            .flow_listener(flow_listener);
+        if let Some(cache) = block_cache {
+            builder = builder.block_cache(cache);
         }
-
-        // Create kv engine.
-        let mut kv_db_opts = self.config.rocksdb.build_opt();
-        kv_db_opts.set_env(env);
-        kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        kv_db_opts.add_event_listener(flow_listener);
-        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
-            &block_cache,
-            Some(&self.region_info_accessor),
-            self.config.storage.api_version(),
-        );
-        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
-            db_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
-        let shared_block_cache = block_cache.is_some();
-        kv_engine.set_shared_block_cache(shared_block_cache);
+        let factory = builder.build();
+        let kv_engine = factory
+            .create_shared_db()
+            .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
         let engines = Engines::new(kv_engine, raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
-                engines.kv.clone(),
+                Arc::new(factory),
                 DBType::Kv,
                 self.config.storage.block_cache.shared,
             )),
         );
+        engines
+            .raft
+            .register_config(cfg_controller, self.config.storage.block_cache.shared);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
-            engines.kv.clone(),
-            None, /*raft_engine*/
-            180,  /*max_samples_to_preserve*/
+            &engines, 180, /*max_samples_to_preserve*/
         ));
 
         (engines, engines_info)
@@ -1604,13 +1787,13 @@ pub struct EnginesResourceInfo {
 impl EnginesResourceInfo {
     const SCALE_FACTOR: u64 = 100;
 
-    pub fn new(
-        kv_engine: RocksEngine,
-        raft_engine: Option<RocksEngine>,
+    fn new<CER: ConfiguredRaftEngine>(
+        engines: &Engines<RocksEngine, CER>,
         max_samples_to_preserve: usize,
     ) -> Self {
+        let raft_engine = engines.raft.as_rocks_engine().cloned();
         EnginesResourceInfo {
-            kv_engine,
+            kv_engine: engines.kv.clone(),
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),

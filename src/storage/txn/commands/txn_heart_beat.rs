@@ -1,18 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
-};
-use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-    WriteResult,
-};
-use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot, TxnStatus};
 use txn_types::{Key, TimeStamp};
+
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
+    txn::{
+        commands::{
+            Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand,
+            WriteContext, WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Snapshot, TxnStatus,
+};
 
 command! {
     /// Heart beat of a transaction. It enlarges the primary lock's TTL.
@@ -37,6 +40,7 @@ command! {
 impl CommandExt for TxnHeartBeat {
     ctx!();
     tag!(txn_heart_beat);
+    request_type!(KvTxnHeartBeat);
     ts!(start_ts);
     write_bytes!(primary_key);
     gen_lock!(primary_key);
@@ -95,17 +99,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::TestEngineBuilder;
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::commands::WriteCommand;
-    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
-    use crate::storage::txn::tests::*;
-    use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use tikv_util::deadline::Deadline;
+
+    use super::*;
+    use crate::storage::{
+        kv::TestEngineBuilder,
+        lock_manager::DummyLockManager,
+        mvcc::tests::*,
+        txn::{commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
+        Engine,
+    };
 
     pub fn must_success<E: Engine>(
         engine: &E,

@@ -4,17 +4,18 @@
 use kvproto::kvrpcpb::{ExtraOp, LockInfo};
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::{LockManager, WaitTimeout};
-use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
-};
-use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-    WriteResult, WriteResultLockInfo,
-};
-use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::{
+    kv::WriteData,
+    lock_manager::{LockManager, WaitTimeout},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
+    txn::{
+        acquire_pessimistic_lock,
+        commands::{
+            Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand,
+            WriteContext, WriteResult, WriteResultLockInfo,
+        },
+        Error, ErrorInner, Result,
+    },
     Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
     Result as StorageResult, Snapshot,
 };
@@ -25,7 +26,8 @@ command! {
     /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock:
         cmd_ty => StorageResult<PessimisticLockRes>,
-        display => "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}", (keys.len, start_ts, for_update_ts, ctx),
+        display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} | {:?}",
+        (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, ctx),
         content => {
             /// The set of keys to lock.
             keys: Vec<(Key, bool)>,
@@ -51,6 +53,7 @@ command! {
 impl CommandExt for AcquirePessimisticLock {
     ctx!();
     tag!(acquire_pessimistic_lock);
+    request_type!(KvPessimisticLock);
     ts!(start_ts);
     property!(can_be_pipelined);
 
