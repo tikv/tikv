@@ -884,6 +884,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
                     error!("cdc schedule cdc task failed"; "error" => ?e);
                 }
+                CDC_RAW_REGION_OUTLIER_COUNT.inc();
             }
         }
     }
@@ -2096,6 +2097,7 @@ mod tests {
         {
             assert_eq!(region_id, dead_lock_region);
             assert_eq!(observe_id, ob_id);
+            assert_eq!(CDC_RAW_REGION_OUTLIER_COUNT.get(), 1);
         } else {
             panic!("unknown cdc event {:?}", task_recv);
         }

@@ -201,6 +201,12 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref CDC_RAW_REGION_OUTLIER_COUNT: IntGauge = register_int_gauge!(
+        "tikv_cdc_raw_region_outlier_deregister",
+        "The count of cdc region deregister because of outlier",
+    )
+    .unwrap();
+
     pub static ref CDC_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
         auto_flush_from!(CDC_ROCKSDB_PERF_COUNTER, PerfCounter);
 }
