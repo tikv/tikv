@@ -43,6 +43,8 @@ pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Resul
 }
 
 /// A storage for raft.
+///
+/// It's similar to `PeerStorage` in v1.
 #[derive(Debug)]
 pub struct Storage<ER> {
     engine: ER,
