@@ -504,7 +504,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             let observer = observer.observer.inner();
             observer.on_compute_engine_size(&mut store_size);
         }
-        return store_size;
+        store_size
     }
 
     pub fn on_role_change(&self, region: &Region, role_change: RoleChange) {
