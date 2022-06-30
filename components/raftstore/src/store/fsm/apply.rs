@@ -5613,10 +5613,10 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
         assert_eq!(apply_res.applied_index_term, 1);
-        let (r1, r8) = if let ExecResult::SplitRegion {
+        let (_, r8) = if let ExecResult::SplitRegion {
             regions,
-            derived,
-            new_split_regions,
+            derived: _,
+            new_split_regions: _,
         } = apply_res.exec_res.front().unwrap()
         {
             let r8 = regions.get(0).unwrap();
@@ -5637,8 +5637,8 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
         assert_eq!(apply_res.applied_index_term, 1);
-        // Will trigger commit.
-        let mut state: RaftApplyState = engine
+        // PrepareMerge will trigger commit.
+        let state: RaftApplyState = engine
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
             .unwrap()
             .unwrap_or_default();
