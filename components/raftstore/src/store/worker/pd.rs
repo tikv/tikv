@@ -58,7 +58,7 @@ use crate::store::{
     worker::{
         query_stats::QueryStats,
         split_controller::{SplitInfo, TOP_N},
-        AutoSplitController, ReadStats, WriteStats,
+        AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
     },
     Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
     RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
@@ -183,6 +183,8 @@ where
         id: u64,
         duration: RaftstoreDuration,
     },
+    RegisterRegionCPUCollector,
+    DeregisterRegionCPUCollector,
     RegionCPURecords(Arc<RawRecords>),
     ReportMinResolvedTS {
         store_id: u64,
@@ -405,6 +407,8 @@ where
             Task::UpdateSlowScore { id, ref duration } => {
                 write!(f, "compute slow score: id {}, duration {:?}", id, duration)
             }
+            Task::RegisterRegionCPUCollector => write!(f, "register region cpu collector"),
+            Task::DeregisterRegionCPUCollector => write!(f, "deregister region cpu collector"),
             Task::RegionCPURecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
             }
@@ -599,7 +603,25 @@ where
         scheduler: &Scheduler<Task<EK, ER>>,
     ) {
         let start_time = TiInstant::now();
-        auto_split_controller.refresh_cfg();
+        match auto_split_controller.refresh_and_check_cfg() {
+            SplitConfigChange::RegisterRegionCPUCollector => {
+                if let Err(e) = scheduler.schedule(Task::RegisterRegionCPUCollector) {
+                    error!(
+                        "failed to register the region cpu collector";
+                        "err" => ?e,
+                    );
+                }
+            }
+            SplitConfigChange::DeregisterRegionCPUCollector => {
+                if let Err(e) = scheduler.schedule(Task::DeregisterRegionCPUCollector) {
+                    error!(
+                        "failed to deregister the region cpu collector";
+                        "err" => ?e,
+                    );
+                }
+            }
+            SplitConfigChange::Noop => {}
+        }
         let mut others = vec![];
         while let Ok(other) = receiver.try_recv() {
             others.push(other);
@@ -842,7 +864,8 @@ where
     scheduler: Scheduler<Task<EK, ER>>,
     stats_monitor: StatsMonitor<EK, ER>,
 
-    _region_cpu_records_collector: CollectorGuard,
+    collector_reg_handle: CollectorRegHandle,
+    region_cpu_records_collector: Option<CollectorGuard>,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
 
@@ -879,6 +902,18 @@ where
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
     ) -> Runner<EK, ER, T> {
+        // Register the region CPU records collector.
+        let mut region_cpu_records_collector = None;
+        if auto_split_controller
+            .cfg
+            .region_cpu_overload_threshold_ratio
+            > 0.0
+        {
+            region_cpu_records_collector = Some(collector_reg_handle.register(
+                Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
+                false,
+            ));
+        }
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(
             interval,
@@ -888,11 +923,6 @@ where
         if let Err(e) = stats_monitor.start(auto_split_controller, region_read_progress, store_id) {
             error!("failed to start stats collector, error = {:?}", e);
         }
-
-        let _region_cpu_records_collector = collector_reg_handle.register(
-            Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
-            true,
-        );
 
         Runner {
             store_id,
@@ -905,7 +935,8 @@ where
             start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
-            _region_cpu_records_collector,
+            collector_reg_handle,
+            region_cpu_records_collector,
             region_cpu_records: HashMap::default(),
             concurrency_manager,
             snap_mgr,
@@ -966,6 +997,20 @@ where
             }
         };
         self.remote.spawn(f);
+    }
+
+    fn handle_register_region_cpu_collector(&mut self) {
+        if self.region_cpu_records_collector.is_some() {
+            return;
+        }
+        self.region_cpu_records_collector = Some(self.collector_reg_handle.register(
+            Box::new(RegionCPUMeteringCollector::new(self.scheduler.clone())),
+            false,
+        ));
+    }
+
+    fn handle_deregister_region_cpu_collector(&mut self) {
+        self.region_cpu_records_collector.take();
     }
 
     // Note: The parameter doesn't contain `self` because this function may
@@ -1928,6 +1973,8 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
+            Task::RegisterRegionCPUCollector => self.handle_register_region_cpu_collector(),
+            Task::DeregisterRegionCPUCollector => self.handle_deregister_region_cpu_collector(),
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTS {
                 store_id,

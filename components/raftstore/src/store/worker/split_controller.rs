@@ -519,10 +519,17 @@ pub struct SplitInfo {
     pub peer: Peer,
 }
 
+#[derive(PartialEq, Debug)]
+pub enum SplitConfigChange {
+    Noop,
+    RegisterRegionCPUCollector,
+    DeregisterRegionCPUCollector,
+}
+
 pub struct AutoSplitController {
     // RegionID -> Recorder
     pub recorders: HashMap<u64, Recorder>,
-    cfg: SplitConfig,
+    pub cfg: SplitConfig,
     cfg_tracker: Tracker<SplitConfig>,
 }
 
@@ -645,19 +652,36 @@ impl AutoSplitController {
             });
     }
 
-    pub fn refresh_cfg(&mut self) {
+    pub fn refresh_and_check_cfg(&mut self) -> SplitConfigChange {
+        let mut cfg_change = SplitConfigChange::Noop;
         if let Some(incoming) = self.cfg_tracker.any_new() {
+            if self.cfg.region_cpu_overload_threshold_ratio <= 0.0
+                && incoming.region_cpu_overload_threshold_ratio > 0.0
+            {
+                cfg_change = SplitConfigChange::RegisterRegionCPUCollector;
+            }
+            if self.cfg.region_cpu_overload_threshold_ratio > 0.0
+                && incoming.region_cpu_overload_threshold_ratio <= 0.0
+            {
+                cfg_change = SplitConfigChange::DeregisterRegionCPUCollector;
+            }
             self.cfg = incoming.clone();
         }
+        cfg_change
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
+    use tikv_util::config::VersionTrack;
     use txn_types::Key;
 
     use super::*;
-    use crate::store::{util::build_key_range, worker::split_config::DEFAULT_SAMPLE_NUM};
+    use crate::store::{
+        util::build_key_range,
+        worker::split_config::{DEFAULT_SAMPLE_NUM, REGION_CPU_OVERLOAD_THRESHOLD_RATIO},
+    };
 
     enum Position {
         Left,
@@ -1199,6 +1223,74 @@ mod tests {
             }
         }
         qps_stats
+    }
+
+    #[test]
+    fn test_refresh_and_check_cfg() {
+        let split_config = SplitConfig::default();
+        let mut split_cfg_manager =
+            SplitConfigManager::new(Arc::new(VersionTrack::new(split_config)));
+        let mut auto_split_controller = AutoSplitController::new(split_cfg_manager.clone());
+        assert_eq!(
+            auto_split_controller.refresh_and_check_cfg(),
+            SplitConfigChange::Noop,
+        );
+        assert_eq!(
+            auto_split_controller
+                .cfg
+                .region_cpu_overload_threshold_ratio,
+            REGION_CPU_OVERLOAD_THRESHOLD_RATIO
+        );
+        // Set to zero.
+        dispatch_split_cfg_change(
+            &mut split_cfg_manager,
+            "region_cpu_overload_threshold_ratio",
+            ConfigValue::F64(0.0),
+        );
+        assert_eq!(
+            auto_split_controller.refresh_and_check_cfg(),
+            SplitConfigChange::DeregisterRegionCPUCollector,
+        );
+        assert_eq!(
+            auto_split_controller
+                .cfg
+                .region_cpu_overload_threshold_ratio,
+            0.0
+        );
+        assert_eq!(
+            auto_split_controller.refresh_and_check_cfg(),
+            SplitConfigChange::Noop,
+        );
+        // Set to non-zero.
+        dispatch_split_cfg_change(
+            &mut split_cfg_manager,
+            "region_cpu_overload_threshold_ratio",
+            ConfigValue::F64(REGION_CPU_OVERLOAD_THRESHOLD_RATIO),
+        );
+        assert_eq!(
+            auto_split_controller.refresh_and_check_cfg(),
+            SplitConfigChange::RegisterRegionCPUCollector,
+        );
+        assert_eq!(
+            auto_split_controller
+                .cfg
+                .region_cpu_overload_threshold_ratio,
+            REGION_CPU_OVERLOAD_THRESHOLD_RATIO
+        );
+        assert_eq!(
+            auto_split_controller.refresh_and_check_cfg(),
+            SplitConfigChange::Noop,
+        );
+    }
+
+    fn dispatch_split_cfg_change(
+        split_cfg_manager: &mut SplitConfigManager,
+        cfg_name: &str,
+        cfg_value: ConfigValue,
+    ) {
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from(cfg_name), cfg_value);
+        split_cfg_manager.dispatch(config_change).unwrap();
     }
 
     #[bench]
