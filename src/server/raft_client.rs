@@ -692,6 +692,8 @@ where
             .keepalive_time(cfg.grpc_keepalive_time.0)
             .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
             .default_compression_algorithm(cfg.grpc_compression_algorithm())
+            .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
+            .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress)
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
@@ -1232,7 +1234,10 @@ mod tests {
         assert!(msg_buf.full());
 
         // update config
-        version_track.update(|cfg| cfg.max_grpc_send_msg_len *= 2);
+        let _ = version_track.update(|cfg| -> Result<(), ()> {
+            cfg.max_grpc_send_msg_len *= 2;
+            Ok(())
+        });
         msg_buf.clear();
 
         let new_max_msg_len =

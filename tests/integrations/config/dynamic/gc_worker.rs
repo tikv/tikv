@@ -145,19 +145,28 @@ fn test_change_io_limit_by_debugger() {
     });
 
     // Enable io iolimit
-    config_manager.update(|cfg: &mut GcConfig| cfg.max_write_bytes_per_sec = ReadableSize(1024));
+    let _ = config_manager.update(|cfg: &mut GcConfig| -> Result<(), ()> {
+        cfg.max_write_bytes_per_sec = ReadableSize(1024);
+        Ok(())
+    });
     validate(&scheduler, move |_, limiter: &Limiter| {
         assert_eq!(limiter.speed_limit(), 1024.0);
     });
 
     // Change io iolimit
-    config_manager.update(|cfg: &mut GcConfig| cfg.max_write_bytes_per_sec = ReadableSize(2048));
+    let _ = config_manager.update(|cfg: &mut GcConfig| -> Result<(), ()> {
+        cfg.max_write_bytes_per_sec = ReadableSize(2048);
+        Ok(())
+    });
     validate(&scheduler, move |_, limiter: &Limiter| {
         assert_eq!(limiter.speed_limit(), 2048.0);
     });
 
     // Disable io iolimit
-    config_manager.update(|cfg: &mut GcConfig| cfg.max_write_bytes_per_sec = ReadableSize(0));
+    let _ = config_manager.update(|cfg: &mut GcConfig| -> Result<(), ()> {
+        cfg.max_write_bytes_per_sec = ReadableSize(0);
+        Ok(())
+    });
     validate(&scheduler, move |_, limiter: &Limiter| {
         assert_eq!(limiter.speed_limit(), f64::INFINITY);
     });

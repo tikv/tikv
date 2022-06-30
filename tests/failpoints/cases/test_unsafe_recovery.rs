@@ -192,7 +192,7 @@ fn test_unsafe_recovery_execution_result_report() {
 }
 
 #[test]
-fn test_unsafe_recover_wait_for_snapshot_apply() {
+fn test_unsafe_recovery_wait_for_snapshot_apply() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
     cluster.cfg.raft_store.merge_max_log_gap = 3;
@@ -219,7 +219,6 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
         let _ = raft_gc_finished_tx.send(());
     })
     .unwrap();
-    // Add at least 4m data
     (0..10).for_each(|_| cluster.must_put(b"random_k", b"random_v"));
     // Unblock raft log GC.
     drop(raft_gc_triggered_tx);

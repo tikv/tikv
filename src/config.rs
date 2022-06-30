@@ -12,6 +12,7 @@ use std::{
     fs, i32,
     io::{Error as IoError, ErrorKind, Write},
     path::Path,
+    str,
     sync::{Arc, RwLock},
     usize,
 };
@@ -35,10 +36,10 @@ use engine_rocks::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE,
+    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, TabletAccessor,
+    TabletErrorCollector, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
-use file_system::{IOPriority, IORateLimiter};
+use file_system::IORateLimiter;
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
@@ -1494,31 +1495,39 @@ pub enum DBType {
     Raft,
 }
 
-pub struct DBConfigManger {
-    db: RocksEngine,
+pub struct DBConfigManger<T: TabletAccessor<RocksEngine>> {
+    tablet_accessor: Arc<T>,
     db_type: DBType,
     shared_block_cache: bool,
 }
 
-impl DBConfigManger {
-    pub fn new(db: RocksEngine, db_type: DBType, shared_block_cache: bool) -> Self {
+impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
+    pub fn new(tablet_accessor: Arc<T>, db_type: DBType, shared_block_cache: bool) -> Self {
         DBConfigManger {
-            db,
+            tablet_accessor,
             db_type,
             shared_block_cache,
         }
     }
-}
 
-impl DBConfigManger {
     fn set_db_config(&self, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
-        self.db.set_db_options(opts)?;
-        Ok(())
+        let mut error_collector = TabletErrorCollector::new();
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
+                error_collector.add_result(region_id, suffix, db.set_db_options(opts));
+            });
+        error_collector.take_result()
     }
 
     fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
+        let mut error_collector = TabletErrorCollector::new();
         self.validate_cf(cf)?;
-        self.db.set_options_cf(cf, opts)?;
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
+                error_collector.add_result(region_id, suffix, db.set_options_cf(cf, opts));
+            });
+        error_collector.take_result()?;
+
         // Write config to metric
         for (cfg_name, cfg_value) in opts {
             let cfg_value = match cfg_value {
@@ -1542,33 +1551,68 @@ impl DBConfigManger {
                  block-cache.capacity in storage module instead"
                 .into());
         }
-        let opt = self.db.get_options_cf(cf)?;
-        opt.set_block_cache_capacity(size.0)?;
+        // for multi-rocks, shared block cache has to be enabled and thus should shortcut in the above if statement.
+        assert!(self.tablet_accessor.is_single_engine());
+        let mut error_collector = TabletErrorCollector::new();
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
+                let r = db.get_options_cf(cf);
+                if let Ok(opt) = r {
+                    let r = opt.set_block_cache_capacity(size.0);
+                    if let Err(r) = r {
+                        error_collector.add_result(region_id, suffix, Err(r.into()));
+                    }
+                } else if let Err(r) = r {
+                    error_collector.add_result(region_id, suffix, Err(r));
+                }
+            });
         // Write config to metric
         CONFIG_ROCKSDB_GAUGE
             .with_label_values(&[cf, "block_cache_size"])
             .set(size.0 as f64);
-        Ok(())
+        error_collector.take_result()
     }
 
     fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> Result<(), Box<dyn Error>> {
-        let mut opt = self.db.as_inner().get_db_options();
-        opt.set_rate_bytes_per_sec(rate_bytes_per_sec)?;
-        Ok(())
+        let mut error_collector = TabletErrorCollector::new();
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
+                let mut opt = db.as_inner().get_db_options();
+                let r = opt.set_rate_bytes_per_sec(rate_bytes_per_sec);
+                if let Err(r) = r {
+                    error_collector.add_result(region_id, suffix, Err(r.into()));
+                }
+            });
+        error_collector.take_result()
     }
 
     fn set_rate_limiter_auto_tuned(
         &self,
         rate_limiter_auto_tuned: bool,
     ) -> Result<(), Box<dyn Error>> {
-        let mut opt = self.db.as_inner().get_db_options();
-        opt.set_auto_tuned(rate_limiter_auto_tuned)?;
-        // double check the new state
-        let new_auto_tuned = opt.get_auto_tuned();
-        if new_auto_tuned.is_none() || new_auto_tuned.unwrap() != rate_limiter_auto_tuned {
-            return Err("fail to set rate_limiter_auto_tuned".into());
-        }
-        Ok(())
+        let mut error_collector = TabletErrorCollector::new();
+        self.tablet_accessor
+            .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
+                let mut opt = db.as_inner().get_db_options();
+                let r = opt.set_auto_tuned(rate_limiter_auto_tuned);
+                if let Err(r) = r {
+                    error_collector.add_result(region_id, suffix, Err(r.into()));
+                } else {
+                    // double check the new state
+                    let new_auto_tuned = opt.get_auto_tuned();
+                    if new_auto_tuned.is_none()
+                        || new_auto_tuned.unwrap() != rate_limiter_auto_tuned
+                    {
+                        error_collector.add_result(
+                            region_id,
+                            suffix,
+                            Err("fail to set rate_limiter_auto_tuned".to_string().into()),
+                        );
+                    }
+                }
+            });
+
+        error_collector.take_result()
     }
 
     fn set_max_background_jobs(&self, max_background_jobs: i32) -> Result<(), Box<dyn Error>> {
@@ -1599,7 +1643,7 @@ impl DBConfigManger {
     }
 }
 
-impl ConfigManager for DBConfigManger {
+impl<T: TabletAccessor<RocksEngine> + Send + Sync> ConfigManager for DBConfigManger<T> {
     fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
@@ -2629,6 +2673,10 @@ pub struct QuotaConfig {
     pub foreground_write_bandwidth: ReadableSize,
     pub foreground_read_bandwidth: ReadableSize,
     pub max_delay_duration: ReadableDuration,
+    pub background_cpu_time: usize,
+    pub background_write_bandwidth: ReadableSize,
+    pub background_read_bandwidth: ReadableSize,
+    pub enable_auto_tune: bool,
 }
 
 impl Default for QuotaConfig {
@@ -2638,6 +2686,10 @@ impl Default for QuotaConfig {
             foreground_write_bandwidth: ReadableSize(0),
             foreground_read_bandwidth: ReadableSize(0),
             max_delay_duration: ReadableDuration::millis(500),
+            background_cpu_time: 0,
+            background_write_bandwidth: ReadableSize(0),
+            background_read_bandwidth: ReadableSize(0),
+            enable_auto_tune: false,
         }
     }
 }
@@ -3573,8 +3625,6 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
         ConfigValue::I32(_) => ConfigValue::from(v.parse::<i32>()?),
         ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
         ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
-        ConfigValue::BlobRunMode(_) => ConfigValue::from(v.parse::<BlobRunMode>()?),
-        ConfigValue::IOPriority(_) => ConfigValue::from(v.parse::<IOPriority>()?),
         ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
         _ => unreachable!(),
     };
@@ -3600,9 +3650,7 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                     match c {
                         ConfigValue::Duration(_)
                         | ConfigValue::Size(_)
-                        | ConfigValue::String(_)
-                        | ConfigValue::BlobRunMode(_)
-                        | ConfigValue::IOPriority(_) => Ok(true),
+                        | ConfigValue::String(_) => Ok(true),
                         ConfigValue::None => Err(Box::new(IoError::new(
                             ErrorKind::Other,
                             format!("unexpect none field: {:?}", c),
@@ -3740,7 +3788,7 @@ impl ConfigController {
         diff = {
             let incoming = self.get_current();
             let mut updated = incoming.clone();
-            updated.update(diff);
+            updated.update(diff)?;
             // Config might be adjusted in `validate`.
             updated.validate()?;
             incoming.diff(&updated)
@@ -3754,7 +3802,8 @@ impl ConfigController {
                     // dispatched to corresponding config manager, to avoid dispatch change twice
                     if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
-                            inner.current.update(to_update);
+                            // we already verified the correctness at the beginning of this function.
+                            inner.current.update(to_update).unwrap();
                             return Err(e);
                         }
                     }
@@ -3766,7 +3815,8 @@ impl ConfigController {
             }
         }
         debug!("all config change had been dispatched"; "change" => ?to_update);
-        inner.current.update(to_update);
+        // we already verified the correctness at the beginning of this function.
+        inner.current.update(to_update).unwrap();
         // Write change to the config file
         if let Some(change) = change {
             let content = {
@@ -3809,7 +3859,9 @@ mod tests {
 
     use api_version::{ApiV1, KvFormat};
     use case_macros::*;
-    use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
+    use engine_traits::{
+        ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as DBOptionsTrait, ALL_CFS,
+    };
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
     use itertools::Itertools;
@@ -3829,8 +3881,10 @@ mod tests {
     use crate::{
         server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
-            config_manager::StorageConfigManger, lock_manager::DummyLockManager,
-            txn::flow_controller::FlowController, Storage, TestStorageBuilder,
+            config_manager::StorageConfigManger,
+            lock_manager::DummyLockManager,
+            txn::flow_controller::{EngineFlowController, FlowController},
+            Storage, TestStorageBuilder,
         },
     };
 
@@ -4186,6 +4240,7 @@ mod tests {
         assert_eq!(res.get("raftstore.store-pool-size"), Some(&"17".to_owned()));
     }
 
+    #[allow(clippy::type_complexity)]
     fn new_engines<F: KvFormat>(
         cfg: TiKvConfig,
     ) -> (
@@ -4215,16 +4270,20 @@ mod tests {
                 .unwrap();
         let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
-        let flow_controller = Arc::new(FlowController::new(
+        let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &cfg.storage.flow_control,
             engine.clone(),
             rx,
-        ));
+        )));
 
         let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
         cfg_controller.register(
             Module::Rocksdb,
-            Box::new(DBConfigManger::new(engine.clone(), DBType::Kv, shared)),
+            Box::new(DBConfigManger::new(
+                Arc::new(engine.clone()),
+                DBType::Kv,
+                shared,
+            )),
         );
         let (scheduler, receiver) = dummy_scheduler();
         cfg_controller.register(
@@ -4334,7 +4393,7 @@ mod tests {
         cfg_controller
             .update_config("resolved-ts.advance-ts-interval", "100ms")
             .unwrap();
-        resolved_ts_cfg.update(rx.recv().unwrap());
+        resolved_ts_cfg.update(rx.recv().unwrap()).unwrap();
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
             ReadableDuration::millis(100)
@@ -4355,7 +4414,7 @@ mod tests {
         cfg_controller
             .update_config("resolved-ts.advance-ts-interval", "3s")
             .unwrap();
-        resolved_ts_cfg.update(rx.recv().unwrap());
+        resolved_ts_cfg.update(rx.recv().unwrap()).unwrap();
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
             ReadableDuration::secs(3)
@@ -4509,7 +4568,7 @@ mod tests {
         let diff = config_value_to_string(diff.into_iter().collect());
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].0.as_str(), "blob_run_mode");
-        assert_eq!(diff[0].1.as_str(), "kFallback");
+        assert_eq!(diff[0].1.as_str(), "fallback");
     }
 
     #[test]
@@ -4585,6 +4644,9 @@ mod tests {
         cfg.quota.foreground_cpu_time = 1000;
         cfg.quota.foreground_write_bandwidth = ReadableSize::mb(128);
         cfg.quota.foreground_read_bandwidth = ReadableSize::mb(256);
+        cfg.quota.background_cpu_time = 1000;
+        cfg.quota.background_write_bandwidth = ReadableSize::mb(128);
+        cfg.quota.background_read_bandwidth = ReadableSize::mb(256);
         cfg.quota.max_delay_duration = ReadableDuration::secs(1);
         cfg.validate().unwrap();
 
@@ -4592,7 +4654,11 @@ mod tests {
             cfg.quota.foreground_cpu_time,
             cfg.quota.foreground_write_bandwidth,
             cfg.quota.foreground_read_bandwidth,
+            cfg.quota.background_cpu_time,
+            cfg.quota.background_write_bandwidth,
+            cfg.quota.background_read_bandwidth,
             cfg.quota.max_delay_duration,
+            false,
         ));
 
         let cfg_controller = ConfigController::new(cfg.clone());
@@ -4624,7 +4690,7 @@ mod tests {
 
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(125));
 
         cfg_controller
@@ -4634,8 +4700,35 @@ mod tests {
         assert_eq!(cfg_controller.get_current(), cfg);
         let mut sample = quota_limiter.new_sample();
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
-        let should_delay = block_on(quota_limiter.async_consume(sample));
-        assert_eq!(should_delay, Duration::from_millis(250));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
+        assert_eq!(should_delay, Duration::from_millis(500));
+
+        cfg_controller
+            .update_config("quota.background-cpu-time", "2000")
+            .unwrap();
+        cfg.quota.background_cpu_time = 2000;
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        cfg_controller
+            .update_config("quota.background-write-bandwidth", "256MB")
+            .unwrap();
+        cfg.quota.background_write_bandwidth = ReadableSize::mb(256);
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        let mut sample = quota_limiter.new_sample();
+        sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
+        assert_eq!(should_delay, Duration::from_millis(125));
+
+        cfg_controller
+            .update_config("quota.background-read-bandwidth", "512MB")
+            .unwrap();
+        cfg.quota.background_read_bandwidth = ReadableSize::mb(512);
+        assert_eq!(cfg_controller.get_current(), cfg);
+        let mut sample = quota_limiter.new_sample();
+        sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
+        assert_eq!(should_delay, Duration::from_millis(500));
 
         cfg_controller
             .update_config("quota.max-delay-duration", "50ms")
@@ -4644,8 +4737,20 @@ mod tests {
         assert_eq!(cfg_controller.get_current(), cfg);
         let mut sample = quota_limiter.new_sample();
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
-        let should_delay = block_on(quota_limiter.async_consume(sample));
+        let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(50));
+
+        let mut sample = quota_limiter.new_sample();
+        sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
+        let should_delay = block_on(quota_limiter.consume_sample(sample, false));
+        assert_eq!(should_delay, Duration::from_millis(50));
+
+        assert_eq!(cfg.quota.enable_auto_tune, false);
+        cfg_controller
+            .update_config("quota.enable-auto-tune", "true")
+            .unwrap();
+        cfg.quota.enable_auto_tune = true;
+        assert_eq!(cfg_controller.get_current(), cfg);
     }
 
     #[test]

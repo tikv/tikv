@@ -20,6 +20,7 @@ use std::{
 };
 
 use rand::Rng;
+use tikv_util::sys::thread::StdThreadBuildWrapper;
 
 pub use crate::{
     encryption::*,
@@ -36,7 +37,7 @@ pub fn setup_for_ci() {
     // of time to avoid causing timeout.
     thread::Builder::new()
         .name(tikv_util::thd_name!("backtrace-loader"))
-        .spawn(::backtrace::Backtrace::new)
+        .spawn_wrapper(::backtrace::Backtrace::new)
         .unwrap();
 
     if env::var("CI").is_ok() {

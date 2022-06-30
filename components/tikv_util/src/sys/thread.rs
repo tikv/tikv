@@ -4,7 +4,9 @@
 //! Only Linux platform is implemented correctly, for other platform, it only guarantees
 //! successful compilation.
 
-use std::io;
+use std::{io, io::Result, sync::Mutex, thread};
+
+use collections::HashMap;
 
 /// A cross-platform CPU statistics data structure.
 #[derive(Debug, Copy, Clone, Default, PartialEq)]
@@ -361,14 +363,121 @@ pub fn current_thread_stat() -> io::Result<ThreadStat> {
     thread_stat(process_id(), thread_id())
 }
 
+pub trait StdThreadBuildWrapper {
+    fn spawn_wrapper<F, T>(self, f: F) -> io::Result<thread::JoinHandle<T>>
+    where
+        F: FnOnce() -> T,
+        F: Send + 'static,
+        T: Send + 'static;
+}
+
+pub trait ThreadBuildWrapper {
+    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static;
+
+    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static;
+}
+
+lazy_static::lazy_static! {
+    pub static ref THREAD_NAME_HASHMAP: Mutex<HashMap<Pid, String>> = Mutex::new(HashMap::default());
+}
+
+pub(crate) fn add_thread_name_to_map() {
+    if let Some(name) = std::thread::current().name() {
+        let tid = thread_id();
+        THREAD_NAME_HASHMAP
+            .lock()
+            .unwrap()
+            .insert(tid, name.to_string());
+        debug!("tid {} thread name is {}", tid, name);
+    }
+}
+
+pub(crate) fn remove_thread_name_from_map() {
+    let tid = thread_id();
+    THREAD_NAME_HASHMAP.lock().unwrap().remove(&tid);
+}
+
+impl StdThreadBuildWrapper for std::thread::Builder {
+    fn spawn_wrapper<F, T>(self, f: F) -> Result<std::thread::JoinHandle<T>>
+    where
+        F: FnOnce() -> T,
+        F: Send + 'static,
+        T: Send + 'static,
+    {
+        #[allow(clippy::disallowed_methods)]
+        self.spawn(|| {
+            add_thread_name_to_map();
+            let res = f();
+            remove_thread_name_from_map();
+            res
+        })
+    }
+}
+
+impl ThreadBuildWrapper for tokio::runtime::Builder {
+    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        #[allow(clippy::disallowed_methods)]
+        self.on_thread_start(move || {
+            add_thread_name_to_map();
+            f();
+        })
+    }
+
+    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        #[allow(clippy::disallowed_methods)]
+        self.on_thread_stop(move || {
+            f();
+            remove_thread_name_from_map();
+        })
+    }
+}
+
+impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
+    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        #[allow(clippy::disallowed_methods)]
+        self.after_start(move |_| {
+            add_thread_name_to_map();
+            f();
+        })
+    }
+
+    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        #[allow(clippy::disallowed_methods)]
+        self.before_stop(move |_| {
+            f();
+            remove_thread_name_from_map();
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
         collections::HashSet,
+        sync,
         sync::{Arc, Condvar, Mutex},
     };
 
+    use futures::executor::block_on;
+
     use super::*;
+    use crate::yatp_pool::{DefaultTicker, YatpPoolBuilder};
 
     #[test]
     fn test_thread_id() {
@@ -426,5 +535,64 @@ mod tests {
         for tid in &stopped_tids {
             assert!(!ids.contains(tid));
         }
+    }
+
+    #[test]
+    fn test_thread_name_wrapper() {
+        let thread_name = "thread_for_test";
+
+        let (tx, rx) = sync::mpsc::sync_channel(10);
+
+        let get_name = move || {
+            let tid = thread_id();
+            if let Some(name) = THREAD_NAME_HASHMAP.lock().unwrap().get(&tid) {
+                tx.clone().send(name.to_string()).unwrap();
+            } else {
+                panic!("thread not found");
+            }
+        };
+
+        // test std thread builder
+        std::thread::Builder::new()
+            .name(thread_name.to_string())
+            .spawn_wrapper(get_name.clone())
+            .unwrap()
+            .join()
+            .unwrap();
+
+        let name = rx.recv().unwrap();
+        assert_eq!(name, thread_name);
+
+        // test Yatp
+        let get_name_fn = get_name.clone();
+        block_on(
+            YatpPoolBuilder::new(DefaultTicker {})
+                .name_prefix(thread_name)
+                .after_start(|| {})
+                .before_stop(|| {})
+                .build_future_pool()
+                .spawn_handle(async move { get_name_fn() })
+                .unwrap(),
+        )
+        .unwrap();
+
+        let name = rx.recv().unwrap();
+        assert!(name.contains(thread_name));
+
+        // test tokio thread builder
+        let get_name_fn = get_name;
+        block_on(
+            tokio::runtime::Builder::new_multi_thread()
+                .thread_name(thread_name)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
+                .build()
+                .unwrap()
+                .spawn(async move { get_name_fn() }),
+        )
+        .unwrap();
+
+        let name = rx.recv().unwrap();
+        assert_eq!(name, thread_name);
     }
 }
