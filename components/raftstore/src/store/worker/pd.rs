@@ -598,6 +598,7 @@ where
         receiver: &Receiver<ReadStats>,
         scheduler: &Scheduler<Task<EK, ER>>,
     ) {
+        let start_time = TiInstant::now();
         auto_split_controller.refresh_cfg();
         let mut others = vec![];
         while let Ok(other) = receiver.try_recv() {
@@ -621,6 +622,7 @@ where
                 READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
             }
         }
+        LOAD_BASE_SPLIT_DURATION_HISTOGRAM.observe(start_time.saturating_elapsed_secs());
     }
 
     pub fn report_min_resolved_ts(
