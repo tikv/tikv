@@ -793,7 +793,6 @@ mod tests {
         host.on_empty_cmd(&region, 0, 0);
         assert_all!([&ob.called], &[88]);
 
-        let mut empty_req = RaftCmdRequest::default();
         host.on_compute_engine_size();
         assert_all!([&ob.called], &[107]); // 19
     }
