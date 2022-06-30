@@ -20,7 +20,7 @@ mod peer_storage;
 mod read_queue;
 mod region_snapshot;
 mod replication_mode;
-mod snap;
+pub mod snap;
 mod txn_ext;
 mod worker;
 
@@ -54,8 +54,8 @@ pub use self::{
     snap::{
         check_abort, copy_snapshot,
         snap_io::{apply_sst_cf_file, build_sst_cf_file_list},
-        ApplyOptions, CfFile, Error as SnapError, LockCFFileReader, SnapEntry, SnapKey,
-        SnapManager, SnapManagerBuilder, Snapshot, SnapshotStatistics,
+        ApplyOptions, CfFile, Error as SnapError, SnapEntry, SnapKey, SnapManager,
+        SnapManagerBuilder, Snapshot, SnapshotStatistics,
     },
     transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},

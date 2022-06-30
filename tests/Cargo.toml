@@ -45,7 +45,6 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
-mock-engine-store = { path = "../mock-engine-store", default-features = false }
 api_version = { path = "../components/api_version", default-features = false }
 batch-system = { path = "../components/batch-system", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
@@ -63,6 +62,7 @@ grpcio-health = { version = "0.10", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 libc = "0.2"
 log_wrappers = { path = "../components/log_wrappers" }
+mock-engine-store = { path = "../mock-engine-store", default-features = false }
 more-asserts = "0.2"
 online_config = { path = "../components/online_config", default-features = false }
 paste = "1.0"

@@ -128,10 +128,10 @@ paste = "1.0"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-prost = "0.7"
 pprof = { git = "https://github.com/tikv/pprof-rs.git", rev = "a5a993a33a23557b27e633f18723366281d3b1c0", default-features = false, features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
+prost = "0.7"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
@@ -207,7 +207,6 @@ fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
-
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
@@ -216,9 +215,6 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229
 
 [workspace]
 members = [
-  "mock-engine-store",
-  "raftstore-proxy",
-  "gen-proxy-ffi",
   "components/api_version",
   "components/backup",
   "components/backup-stream",
@@ -277,6 +273,9 @@ members = [
   "fuzz/fuzzer-afl",
   "fuzz/fuzzer-honggfuzz",
   "fuzz/fuzzer-libfuzzer",
+  "gen-proxy-ffi",
+  "mock-engine-store",
+  "raftstore-proxy",
   "tests",
 ]
 default-members = ["raftstore-proxy"]

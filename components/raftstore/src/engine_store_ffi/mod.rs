@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 pub mod interfaces;
 
+mod lock_cf_reader;
 mod read_index_helper;
 mod utils;
 
@@ -29,13 +30,13 @@ pub use crate::engine_store_ffi::interfaces::root::DB::{
     KVGetStatus, RaftCmdHeader, RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr,
     RawCppStringPtr, RawVoidPtr, SSTReaderPtr, StoreStats, WriteCmdType, WriteCmdsView,
 };
-use crate::{
-    engine_store_ffi::interfaces::root::DB::{
+use crate::engine_store_ffi::{
+    interfaces::root::DB::{
         ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawRustPtr,
         SSTReaderInterfaces, SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER,
         RAFT_STORE_PROXY_VERSION,
     },
-    store::LockCFFileReader,
+    lock_cf_reader::LockCFFileReader,
 };
 
 impl From<&[u8]> for BaseBuffView {
