@@ -55,8 +55,7 @@ tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dependencies.rocksdb]
-git = "https://github.com/tabokie/rust-rocksdb.git"
-branch = "6.29.tikv"
+git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
 features = ["encryption"]
 
