@@ -13,6 +13,7 @@ pub struct MvccProperties {
     pub num_deletes: u64,      // The number of MVCC deletes of all rows.
     pub num_versions: u64,     // The number of MVCC versions of all rows.
     pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
+    pub min_ttl_ts: TimeStamp, // The minimal ttl timestamp.
 }
 
 impl MvccProperties {
@@ -25,6 +26,7 @@ impl MvccProperties {
             num_deletes: 0,
             num_versions: 0,
             max_row_versions: 0,
+            min_ttl_ts: TimeStamp::max(),
         }
     }
 
@@ -36,6 +38,7 @@ impl MvccProperties {
         self.num_deletes += other.num_deletes;
         self.num_versions += other.num_versions;
         self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
+        self.min_ttl_ts = cmp::min(self.min_ttl_ts, other.min_ttl_ts);
     }
 }
 

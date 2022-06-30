@@ -21,7 +21,7 @@ use tikv_util::{
     },
     info,
 };
-use txn_types::{Key, Write, WriteType};
+use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::{
     decode_properties::{DecodeProperties, IndexHandle, IndexHandles},
@@ -571,6 +571,11 @@ impl TablePropertiesCollector for RawMvccPropertiesCollector {
         if let Ok(raw_value) = decode_raw_value {
             if raw_value.is_valid(current_ts) {
                 self.props.num_puts += 1;
+                if !raw_value.is_delete {
+                    let expire_ts = raw_value.expire_ts.unwrap();
+                    self.props.min_ttl_ts =
+                        cmp::min(self.props.min_ttl_ts, TimeStamp::from(expire_ts));
+                }
             } else {
                 self.props.num_deletes += 1;
             }

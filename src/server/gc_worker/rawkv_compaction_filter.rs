@@ -96,6 +96,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         GC_COMPACTION_FILTER_PERFORM.inc();
 
         if !check_need_gc(safe_point.into(), ratio_threshold, context) {
+            println!("!check_need_gc");
             debug!("skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP.inc();
             return std::ptr::null_mut();
@@ -188,8 +189,10 @@ fn check_need_gc(
     ratio_threshold: f64,
     context: &CompactionFilterContext,
 ) -> bool {
+    println!("======check_need_gc01======");
     let check_props = |props: &MvccProperties| -> (bool, bool /*skip_more_checks*/) {
         if props.min_ts > safe_point {
+            println!("props.min_ts > safe_point");
             return (false, false);
         }
         if ratio_threshold < 1.0 || context.is_bottommost_level() {
@@ -207,6 +210,11 @@ fn check_need_gc(
         if props.num_deletes as f64 > props.num_puts as f64 * ratio_threshold {
             return (true, false);
         }
+
+        if props.min_ttl_ts > safe_point {
+            return (false, false);
+        }
+
         (props.max_row_versions > 1024, false)
     };
 
@@ -227,7 +235,6 @@ fn check_need_gc(
             }
         }
     }
-
     (needs_gc >= ((context.file_numbers().len() + 1) / 2)) || check_props(&sum_props).0
 }
 
@@ -411,66 +418,6 @@ pub mod tests {
         let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
         let res = keys::data_key(encode_key.as_encoded());
         res
-    }
-
-    #[test]
-    fn test_check_need_gc() {
-        let mut cfg = DbConfig::default();
-        cfg.defaultcf.disable_auto_compactions = true;
-        cfg.defaultcf.dynamic_level_bytes = false;
-
-        let engine = TestEngineBuilder::new()
-            .api_version(ApiVersion::V2)
-            .build_with_cfg(&cfg)
-            .unwrap();
-        let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
-
-        let user_key = b"r\0aaaaaaaaaaa";
-
-        let test_raws = vec![
-            (user_key, 100, false),
-            (user_key, 90, false),
-            (user_key, 70, false),
-        ];
-
-        let modifies = test_raws
-            .into_iter()
-            .map(|(key, ts, is_delete)| {
-                (
-                    make_key(key, ts),
-                    ApiV2::encode_raw_value(RawValue {
-                        user_value: &[0; 10][..],
-                        expire_ts: Some(TimeStamp::max().into_inner()),
-                        is_delete,
-                    }),
-                )
-            })
-            .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded_slice(k.as_slice()), v))
-            .collect();
-
-        let ctx = Context {
-            api_version: ApiVersion::V2,
-            ..Default::default()
-        };
-        let batch = WriteData::from_modifies(modifies);
-
-        engine.write(&ctx, batch).unwrap();
-
-        gc_runner
-            .safe_point(TimeStamp::new(1).into_inner())
-            .gc_raw(&raw_engine);
-        assert_eq!(GC_COMPACTION_FILTER_PERFORM.get(), 1);
-        assert_eq!(GC_COMPACTION_FILTER_SKIP.get(), 1);
-
-        // Set enable_compaction_filter = false
-        // do_check_allowed will return false
-        gc_runner
-            .safe_point(TimeStamp::physical_now())
-            .gc_raw_enable_filter(&raw_engine, false);
-
-        assert_eq!(GC_COMPACTION_FILTER_PERFORM.get(), 1);
-        assert_eq!(GC_COMPACTION_FILTER_SKIP.get(), 1);
     }
 
     #[test]
