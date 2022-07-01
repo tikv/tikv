@@ -47,6 +47,9 @@ use txn_types::{Key, TimeStamp};
 
 #[test]
 fn test_txn_create_compaction_filter() {
+    GC_COMPACTION_FILTER_PERFORM.reset();
+    GC_COMPACTION_FILTER_SKIP.reset();
+    
     let mut cfg = DbConfig::default();
     cfg.writecf.disable_auto_compactions = true;
     cfg.writecf.dynamic_level_bytes = false;
@@ -83,6 +86,9 @@ fn test_txn_create_compaction_filter() {
 
 #[test]
 fn test_txn_mvcc_filtered() {
+    MVCC_VERSIONS_HISTOGRAM.reset();
+    GC_COMPACTION_FILTERED.reset();
+
     let engine = TestEngineBuilder::new().build().unwrap();
     let raw_engine = engine.get_rocksdb();
     let value = vec![b'v'; 512];
@@ -126,6 +132,9 @@ fn test_txn_mvcc_filtered() {
 
 #[test]
 fn test_txn_gc_keys_handled() {
+    GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
+    GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
+
     let engine = TestEngineBuilder::new().build().unwrap();
     let prefixed_engine = PrefixedEngine(engine.clone());
 
@@ -196,6 +205,9 @@ fn test_txn_gc_keys_handled() {
 
 #[test]
 fn test_raw_mvcc_filtered() {
+    MVCC_VERSIONS_HISTOGRAM.reset();
+    GC_COMPACTION_FILTERED.reset();
+
     let mut cfg = DbConfig::default();
     cfg.defaultcf.disable_auto_compactions = true;
     cfg.defaultcf.dynamic_level_bytes = false;
@@ -259,6 +271,9 @@ fn test_raw_mvcc_filtered() {
 
 #[test]
 fn test_raw_gc_keys_handled() {
+    GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
+    GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
+
     let engine = TestEngineBuilder::new()
         .api_version(ApiVersion::V2)
         .build()
