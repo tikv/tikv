@@ -1,7 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    ops::Deref,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -114,10 +113,8 @@ impl KvEngineFactory {
 
             true
         }
-        // sender is ref CompactedEventSender
-        let sender = Deref::deref(self.compact_event_sender.as_ref().unwrap());
         Some(CompactionListener::new(
-            CompactedEventSender::clone(sender),
+            self.compact_event_sender.as_ref().unwrap().clone(),
             Some(size_change_filter),
         ))
     }

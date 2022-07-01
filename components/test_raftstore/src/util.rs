@@ -44,10 +44,10 @@ use raft::eraftpb::ConfChangeType;
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::{
     store::{fsm::RaftRouter, *},
-    Result,
+    RaftRouterCompactedEventSender, Result,
 };
 use rand::RngCore;
-use server::{raftstore_v1::CompactedEventSenderV1, server::ConfiguredRaftEngine};
+use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
 use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
@@ -658,7 +658,7 @@ pub fn create_test_engine(
         builder = builder.block_cache(cache);
     }
     if let Some(router) = router {
-        builder = builder.compaction_event_sender(Arc::new(CompactedEventSenderV1 {
+        builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router),
         }));
     }

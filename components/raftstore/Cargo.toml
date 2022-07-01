@@ -38,6 +38,7 @@ crc32fast = "1.2"
 crossbeam = "0.8"
 derivative = "2"
 encryption = { path = "../encryption", default-features = false }
+engine_rocks = { path = "../engine_rocks", default-features = false } 
 
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915

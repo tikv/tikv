@@ -14,11 +14,13 @@ extern crate test;
 #[macro_use]
 extern crate derivative;
 
+pub mod compacted_event_sender;
 pub mod coprocessor;
 pub mod errors;
 pub mod router;
 pub mod store;
 pub use self::{
+    compacted_event_sender::RaftRouterCompactedEventSender,
     coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback},
     errors::{DiscardReason, Error, Result},
 };

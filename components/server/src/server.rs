@@ -75,6 +75,7 @@ use raftstore::{
         AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
     },
+    RaftRouterCompactedEventSender,
 };
 use security::SecurityManager;
 use tikv::{
@@ -118,8 +119,8 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    memory::*, raft_engine_switch::*, raftstore_v1::CompactedEventSenderV1, setup::*,
-    signal_handler, tikv_util::sys::thread::ThreadBuildWrapper,
+    memory::*, raft_engine_switch::*, setup::*, signal_handler,
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 // minimum number of core kept for background requests
@@ -1601,7 +1602,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
 
         // Create kv engine.
         let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
-            .compaction_event_sender(Arc::new(CompactedEventSenderV1 {
+            .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
                 router: Mutex::new(self.router.clone()),
             }))
             .region_info_accessor(self.region_info_accessor.clone())
