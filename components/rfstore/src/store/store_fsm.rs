@@ -973,15 +973,6 @@ impl<'a> StoreMsgHandler<'a> {
         self.ctx.peers.insert(id, new_peer);
     }
 
-    pub(crate) fn close(&mut self, id: u64) {
-        if let Some(peer) = self.ctx.peers.get(&id) {
-            let mut guard = peer.peer_fsm.lock().unwrap();
-            guard.peer.pending_remove = true;
-            drop(guard);
-        }
-        self.ctx.peers.remove(&id);
-    }
-
     fn get_peer(&mut self, region_id: u64) -> PeerStates {
         self.ctx.peers.get(&region_id).unwrap().clone()
     }
@@ -1253,6 +1244,7 @@ impl<'a> StoreMsgHandler<'a> {
             .peer
             .handle_raft_ready(&mut self.ctx.raft_ctx, None);
         if remove_self {
+            drop(peer_fsm);
             self.on_destroy_peer(region_id, false);
         }
         self.maybe_apply(region_id)
@@ -1350,7 +1342,7 @@ impl<'a> StoreMsgHandler<'a> {
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
 
         peer_fsm.stop();
-        self.close(region_id);
+        self.ctx.peers.remove(&region_id);
         self.ctx.global.engines.kv.remove_shard(region_id);
     }
 
