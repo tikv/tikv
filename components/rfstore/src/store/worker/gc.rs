@@ -115,6 +115,12 @@ impl GcRunner {
             let meta = fs::metadata(&path)?;
             if self.is_old_file(meta) {
                 self.importer.delete(sst_meta)?;
+                info!(
+                    "gc runner delete sst uuid {:?} file {:?} timeout {:?}",
+                    sst_meta.get_uuid(),
+                    path,
+                    self.timeout
+                );
             }
         }
         Ok(())
