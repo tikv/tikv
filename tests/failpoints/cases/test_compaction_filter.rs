@@ -76,6 +76,9 @@ fn test_txn_create_compaction_filter() {
             .get(),
         1
     );
+
+    GC_COMPACTION_FILTER_PERFORM.reset();
+    GC_COMPACTION_FILTER_SKIP.reset();
 }
 
 #[test]
@@ -116,6 +119,9 @@ fn test_txn_mvcc_filtered() {
             .get(),
         1
     );
+
+    MVCC_VERSIONS_HISTOGRAM.reset();
+    GC_COMPACTION_FILTERED.reset();
 }
 
 #[test]
@@ -183,6 +189,9 @@ fn test_txn_gc_keys_handled() {
             .get(),
         3
     );
+
+    GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
+    GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 }
 
 #[test]
@@ -243,6 +252,9 @@ fn test_raw_mvcc_filtered() {
             .get(),
         1
     );
+
+    MVCC_VERSIONS_HISTOGRAM.reset();
+    GC_COMPACTION_FILTERED.reset();
 }
 
 #[test]
@@ -335,4 +347,7 @@ fn test_raw_gc_keys_handled() {
             .get(),
         1
     );
+
+    GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
+    GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 }
