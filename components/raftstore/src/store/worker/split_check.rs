@@ -352,7 +352,7 @@ where
         let region_id = region.get_id();
         let is_key_range = start_key.is_some() && end_key.is_some();
         let start_key = if is_key_range {
-            // This key is from a request, which should be encoded first.
+            // This key is usually from a request, which should be encoded first.
             keys::data_key(Key::from_raw(&start_key.unwrap()).as_encoded().as_slice())
         } else {
             keys::enc_start_key(region)

@@ -5504,10 +5504,12 @@ where
         source: &str,
         _cb: Callback<EK::Snapshot>,
     ) {
+        let is_key_range = start_key.is_some() && end_key.is_some();
         info!(
             "on half split";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
+            "is_key_range" => is_key_range,
             "policy" => ?policy,
             "source" => source,
         );
@@ -5517,6 +5519,7 @@ where
                 "not leader, skip";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
             );
             return;
         }
@@ -5527,11 +5530,18 @@ where
                 "receive a stale halfsplit message";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
             );
             return;
         }
 
-        let split_check_bucket_ranges = self.gen_bucket_range_for_update();
+        // Do not check the bucket ranges if we want to split the region with a given key range,
+        // this is to avoid compatibility issues.
+        let split_check_bucket_ranges = if !is_key_range {
+            self.gen_bucket_range_for_update()
+        } else {
+            None
+        };
         #[cfg(any(test, feature = "testexport"))]
         {
             if let Callback::Test { cb } = _cb {
@@ -5555,6 +5565,7 @@ where
                 "failed to schedule split check";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
                 "err" => %e,
             );
         }
