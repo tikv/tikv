@@ -208,7 +208,6 @@ lazy_static! {
         &["key_mode", "cf", "tag"]
     )
     .unwrap();
-
     pub static ref GC_KEY_FAILURES: IntCounter = register_int_counter!(
         "tikv_gcworker_gc_key_failures",
         "Counter of gc key failures"

@@ -72,8 +72,8 @@ pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
 const GC_MAX_PENDING_TASKS: usize = 4096;
 
-pub const TXN_KEYMODE: &str = "txn";
-pub const RAW_KEYMODE: &str = "raw";
+pub const STAT_TXN_KEYMODE: &str = "txn";
+pub const STAT_RAW_KEYMODE: &str = "raw";
 
 /// Provides safe point.
 pub trait GcSafePointProvider: Send + 'static {
@@ -199,7 +199,7 @@ where
 }
 
 /// Used to perform GC operations on the engine.
-struct GcRunner<E, RR>
+pub struct GcRunner<E, RR>
 where
     E: Engine,
     RR: RaftStoreRouter<E::Local>,
@@ -396,7 +396,7 @@ where
         Ok(())
     }
 
-    fn gc_keys(
+    pub fn gc_keys(
         &mut self,
         keys: Vec<Key>,
         safe_point: TimeStamp,
@@ -472,7 +472,6 @@ where
             }
         }
         Self::flush_txn(txn, &self.limiter, &self.engine)?;
-
         Ok((handled_keys, wasted_keys))
     }
 
@@ -531,7 +530,7 @@ where
                     wasted_keys += 1;
                 }
 
-                gc_info.report_metrics(RAW_KEYMODE);
+                gc_info.report_metrics(STAT_RAW_KEYMODE);
 
                 next_gc_key = keys.next();
                 gc_info = GcInfo::default();
@@ -544,6 +543,7 @@ where
         }
 
         Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+
         Ok((handled_keys, wasted_keys))
     }
 
@@ -603,7 +603,7 @@ where
         Ok(())
     }
 
-    fn mut_stats(&mut self, key_mode: GcKeyMode) -> &mut Statistics {
+    pub fn mut_stats(&mut self, key_mode: GcKeyMode) -> &mut Statistics {
         let stats = self
             .stats_map
             .entry(key_mode)
@@ -746,7 +746,8 @@ where
     }
 
     fn update_statistics_metrics(&mut self, key_mode: GcKeyMode) {
-        if let Some(stats) = self.stats_map.get_mut(&key_mode) {
+        if let Some(mut_stats) = self.stats_map.get_mut(&key_mode) {
+            let stats = mem::take(mut_stats);
             for (cf, cf_details) in stats.details_enum().iter() {
                 for (tag, count) in cf_details.iter() {
                     GC_KEYS_COUNTER_STATIC
@@ -830,10 +831,10 @@ where
                 match self.gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
-                            .with_label_values(&[TXN_KEYMODE])
+                            .with_label_values(&[STAT_TXN_KEYMODE])
                             .inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED
-                            .with_label_values(&[TXN_KEYMODE])
+                            .with_label_values(&[STAT_TXN_KEYMODE])
                             .inc_by(wasted as _);
                         update_metrics(false);
                     }
@@ -856,10 +857,10 @@ where
                 match self.raw_gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
-                            .with_label_values(&[RAW_KEYMODE])
+                            .with_label_values(&[STAT_RAW_KEYMODE])
                             .inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED
-                            .with_label_values(&[RAW_KEYMODE])
+                            .with_label_values(&[STAT_RAW_KEYMODE])
                             .inc_by(wasted as _);
                         update_metrics(false);
                     }
@@ -915,7 +916,7 @@ where
                 }
                 info!("write GcTask::OrphanVersions success"; "id" => id);
                 GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-                    .with_label_values(&[TXN_KEYMODE, "cleaned"])
+                    .with_label_values(&[STAT_TXN_KEYMODE, "cleaned"])
                     .inc_by(wb.count() as u64);
                 update_metrics(false);
             }
@@ -1272,8 +1273,7 @@ mod tests {
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
-    use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
-    use engine_traits::KvEngine;
+    use engine_rocks::{util::get_cf_handle, RocksEngine};
     use futures::executor::block_on;
     use kvproto::{
         kvrpcpb::{ApiVersion, Op},
@@ -1283,7 +1283,6 @@ mod tests {
     use raftstore::{
         coprocessor::{region_info_accessor::RegionInfoAccessor, RegionChangeEvent},
         router::RaftStoreBlackHole,
-        store::RegionSnapshot,
     };
     use tikv_kv::Snapshot;
     use tikv_util::{codec::number::NumberEncoder, future::paired_future_callback};
@@ -1292,11 +1291,9 @@ mod tests {
     use super::*;
     use crate::{
         config::DbConfig,
+        server::gc_worker::{MockSafePointProvider, PrefixedEngine},
         storage::{
-            kv::{
-                self, metrics::GcKeyMode, write_modifies, Callback as EngineCallback, Modify,
-                Result as EngineResult, SnapContext, TestEngineBuilder, WriteData,
-            },
+            kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::DummyLockManager,
             mvcc::{tests::must_get_none, MAX_TXN_WRITE_SIZE},
             txn::{
@@ -1308,108 +1305,6 @@ mod tests {
             Engine, Storage, TestStorageBuilderApiV1,
         },
     };
-
-    /// A wrapper of engine that adds the 'z' prefix to keys internally.
-    /// For test engines, they writes keys into db directly, but in production a 'z' prefix will be
-    /// added to keys by raftstore layer before writing to db. Some functionalities of `GCWorker`
-    /// bypasses Raft layer, so they needs to know how data is actually represented in db. This
-    /// wrapper allows test engines write 'z'-prefixed keys to db.
-    #[derive(Clone)]
-    struct PrefixedEngine(kv::RocksEngine);
-
-    impl Engine for PrefixedEngine {
-        // Use RegionSnapshot which can remove the z prefix internally.
-        type Snap = RegionSnapshot<RocksSnapshot>;
-        type Local = RocksEngine;
-
-        fn kv_engine(&self) -> RocksEngine {
-            self.0.kv_engine()
-        }
-
-        fn snapshot_on_kv_engine(
-            &self,
-            start_key: &[u8],
-            end_key: &[u8],
-        ) -> kv::Result<Self::Snap> {
-            let mut region = Region::default();
-            region.set_start_key(start_key.to_owned());
-            region.set_end_key(end_key.to_owned());
-            // Use a fake peer to avoid panic.
-            region.mut_peers().push(Default::default());
-            Ok(RegionSnapshot::from_snapshot(
-                Arc::new(self.kv_engine().snapshot()),
-                Arc::new(region),
-            ))
-        }
-
-        fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
-            for modify in &mut modifies {
-                match modify {
-                    Modify::Delete(_, ref mut key) => {
-                        let bytes = keys::data_key(key.as_encoded());
-                        *key = Key::from_encoded(bytes);
-                    }
-                    Modify::Put(_, ref mut key, _) => {
-                        let bytes = keys::data_key(key.as_encoded());
-                        *key = Key::from_encoded(bytes);
-                    }
-                    Modify::PessimisticLock(ref mut key, _) => {
-                        let bytes = keys::data_key(key.as_encoded());
-                        *key = Key::from_encoded(bytes);
-                    }
-                    Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
-                        let bytes = keys::data_key(key1.as_encoded());
-                        *key1 = Key::from_encoded(bytes);
-                        let bytes = keys::data_end_key(key2.as_encoded());
-                        *key2 = Key::from_encoded(bytes);
-                    }
-                }
-            }
-            write_modifies(&self.kv_engine(), modifies)
-        }
-
-        fn async_write(
-            &self,
-            ctx: &Context,
-            mut batch: WriteData,
-            callback: EngineCallback<()>,
-        ) -> EngineResult<()> {
-            batch.modifies.iter_mut().for_each(|modify| match modify {
-                Modify::Delete(_, ref mut key) => {
-                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
-                }
-                Modify::Put(_, ref mut key, _) => {
-                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
-                }
-                Modify::PessimisticLock(ref mut key, _) => {
-                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
-                }
-                Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
-                    *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
-                    *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
-                }
-            });
-            self.0.async_write(ctx, batch, callback)
-        }
-
-        fn async_snapshot(
-            &self,
-            ctx: SnapContext<'_>,
-            callback: EngineCallback<Self::Snap>,
-        ) -> EngineResult<()> {
-            self.0.async_snapshot(
-                ctx,
-                Box::new(move |r| {
-                    callback(r.map(|snap| {
-                        let mut region = Region::default();
-                        // Add a peer to pass initialized check.
-                        region.mut_peers().push(Peer::default());
-                        RegionSnapshot::from_snapshot(snap, Arc::new(region))
-                    }))
-                }),
-            )
-        }
-    }
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
@@ -1683,13 +1578,6 @@ mod tests {
         assert_eq!(res[..], expected_lock_info[3..9]);
     }
 
-    struct MockSafePointProvider(u64);
-    impl GcSafePointProvider for MockSafePointProvider {
-        fn get_safe_point(&self) -> Result<TimeStamp> {
-            Ok(self.0.into())
-        }
-    }
-
     #[test]
     fn test_gc_keys_with_region_info_provider() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -1781,12 +1669,6 @@ mod tests {
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
             }
         }
-        assert_eq!(
-            GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
-                .with_label_values(&[TXN_KEYMODE])
-                .get(),
-            80
-        );
     }
 
     #[test]
@@ -1984,7 +1866,6 @@ mod tests {
 
         // Test tombstone counter works
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.seek_tombstone, 0);
-
         runner
             .gc_keys(
                 vec![Key::from_raw(b"k2\x00")],
@@ -1995,7 +1876,6 @@ mod tests {
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.seek_tombstone, 20);
 
         // gc_keys with single key
-
         runner
             .mut_stats(GcKeyMode::txn)
             .mut_cf_statistics(CF_WRITE)

@@ -34,7 +34,7 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
-    server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager, TXN_KEYMODE},
+    server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager, STAT_TXN_KEYMODE},
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
 
@@ -82,13 +82,13 @@ lazy_static! {
     )
     .unwrap();
     // A counter for skip performing GC in compactions.
-    static ref GC_COMPACTION_FILTER_SKIP: IntCounterVec = register_int_counter_vec!(
+    pub static ref GC_COMPACTION_FILTER_SKIP: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_skip",
         "Skip to create compaction filter for GC because of table properties",
         &["key_mode"]
     )
     .unwrap();
-    static ref GC_COMPACTION_FILTER_PERFORM: IntCounterVec = register_int_counter_vec!(
+    pub static ref GC_COMPACTION_FILTER_PERFORM: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_filter_perform",
         "perfrom GC in compaction filter",
         &["key_mode"]
@@ -246,12 +246,12 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         }
         drop(gc_context_option);
         GC_COMPACTION_FILTER_PERFORM
-            .with_label_values(&[TXN_KEYMODE])
+            .with_label_values(&[STAT_TXN_KEYMODE])
             .inc();
         if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP
-                .with_label_values(&[TXN_KEYMODE])
+                .with_label_values(&[STAT_TXN_KEYMODE])
                 .inc();
             return std::ptr::null_mut();
         }
@@ -364,12 +364,12 @@ impl WriteCompactionFilter {
                 match e {
                     ScheduleError::Full(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&[TXN_KEYMODE, "full"])
+                            .with_label_values(&[STAT_TXN_KEYMODE, "full"])
                             .inc();
                     }
                     ScheduleError::Stopped(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&[TXN_KEYMODE, "stopped"])
+                            .with_label_values(&[STAT_TXN_KEYMODE, "stopped"])
                             .inc();
                     }
                 }
@@ -440,7 +440,7 @@ impl WriteCompactionFilter {
                     if self.is_bottommost_level {
                         self.mvcc_deletion_overlaps = Some(0);
                         GC_COMPACTION_FILTER_MVCC_DELETION_MET
-                            .with_label_values(&[TXN_KEYMODE])
+                            .with_label_values(&[STAT_TXN_KEYMODE])
                             .inc();
                     }
                 }
@@ -519,14 +519,14 @@ impl WriteCompactionFilter {
     fn switch_key_metrics(&mut self) {
         if self.versions != 0 {
             self.versions_hist
-                .with_label_values(&[TXN_KEYMODE])
+                .with_label_values(&[STAT_TXN_KEYMODE])
                 .observe(self.versions as f64);
             self.total_versions += self.versions;
             self.versions = 0;
         }
         if self.filtered != 0 {
             self.filtered_hist
-                .with_label_values(&[TXN_KEYMODE])
+                .with_label_values(&[STAT_TXN_KEYMODE])
                 .observe(self.filtered as f64);
             self.total_filtered += self.filtered;
             self.filtered = 0;
@@ -535,13 +535,13 @@ impl WriteCompactionFilter {
 
     fn flush_metrics(&self) {
         GC_COMPACTION_FILTERED
-            .with_label_values(&[TXN_KEYMODE])
+            .with_label_values(&[STAT_TXN_KEYMODE])
             .inc_by(self.total_filtered as u64);
         GC_COMPACTION_MVCC_ROLLBACK
-            .with_label_values(&[TXN_KEYMODE])
+            .with_label_values(&[STAT_TXN_KEYMODE])
             .inc_by(self.mvcc_rollback_and_locks as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-            .with_label_values(&[TXN_KEYMODE, "generated"])
+            .with_label_values(&[STAT_TXN_KEYMODE, "generated"])
             .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
@@ -633,7 +633,7 @@ impl CompactionFilter for WriteCompactionFilter {
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
                 GC_COMPACTION_FAILURE
-                    .with_label_values(&[TXN_KEYMODE, "filter"])
+                    .with_label_values(&[STAT_TXN_KEYMODE, "filter"])
                     .inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
@@ -933,39 +933,6 @@ pub mod tests {
         assert!(is_compaction_filter_allowed(&cfg_value, &gate));
     }
 
-    #[test]
-    fn test_check_need_gc() {
-        let mut cfg = DbConfig::default();
-        cfg.writecf.disable_auto_compactions = true;
-        cfg.writecf.dynamic_level_bytes = false;
-        let dir = tempfile::TempDir::new().unwrap();
-        let builder = TestEngineBuilder::new().path(dir.path());
-        let engine = builder.build_with_cfg(&cfg).unwrap();
-        let raw_engine = engine.get_rocksdb();
-
-        let mut gc_runner = TestGCRunner::new(0);
-        let value = vec![b'v'; 512];
-
-        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
-        must_commit(&engine, b"zkey", 100, 110);
-
-        gc_runner
-            .safe_point(TimeStamp::new(1).into_inner())
-            .gc(&raw_engine);
-        assert_eq!(
-            GC_COMPACTION_FILTER_PERFORM
-                .with_label_values(&[TXN_KEYMODE])
-                .get(),
-            1
-        );
-        assert_eq!(
-            GC_COMPACTION_FILTER_SKIP
-                .with_label_values(&[TXN_KEYMODE])
-                .get(),
-            1
-        );
-    }
-
     // Test compaction filter won't break basic GC rules.
     #[test]
     fn test_compaction_filter_basic() {
@@ -978,24 +945,10 @@ pub mod tests {
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
         must_commit(&engine, b"zkey", 100, 110);
         gc_runner.safe_point(50).gc(&raw_engine);
-        assert_eq!(
-            MVCC_VERSIONS_HISTOGRAM
-                .with_label_values(&[TXN_KEYMODE])
-                .get_sample_sum(),
-            0 as f64
-        );
-        assert_eq!(
-            GC_COMPACTION_FILTERED
-                .with_label_values(&[TXN_KEYMODE])
-                .get(),
-            0
-        );
-
         must_get(&engine, b"zkey", 110, &value);
 
         // GC can't delete keys before the safe ponit if they are latest versions.
         gc_runner.safe_point(200).gc(&raw_engine);
-
         must_get(&engine, b"zkey", 110, &value);
 
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 120);
@@ -1003,23 +956,10 @@ pub mod tests {
 
         // GC can't delete the latest version before the safe ponit.
         gc_runner.safe_point(115).gc(&raw_engine);
-
         must_get(&engine, b"zkey", 110, &value);
 
         // GC a version will also delete the key on default CF.
         gc_runner.safe_point(200).gc(&raw_engine);
-        assert_eq!(
-            MVCC_VERSIONS_HISTOGRAM
-                .with_label_values(&[TXN_KEYMODE])
-                .get_sample_sum(),
-            4_f64
-        );
-        assert_eq!(
-            GC_COMPACTION_FILTERED
-                .with_label_values(&[TXN_KEYMODE])
-                .get(),
-            1
-        );
         must_get_none(&engine, b"zkey", 110);
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
@@ -1065,12 +1005,6 @@ pub mod tests {
         // A GC task should be emit after older versions are cleaned.
         gc_and_check(true, b"zkey");
 
-        assert_eq!(
-            GC_COMPACTION_FILTER_MVCC_DELETION_MET
-                .with_label_values(&[TXN_KEYMODE])
-                .get(),
-            2
-        );
         // Clean the engine, prepare for later tests.
         raw_engine
             .delete_ranges_cf(

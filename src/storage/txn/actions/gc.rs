@@ -3,7 +3,7 @@
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::{
-    server::gc_worker::TXN_KEYMODE,
+    server::gc_worker::STAT_TXN_KEYMODE,
     storage::{
         mvcc::{GcInfo, MvccReader, MvccTxn, Result as MvccResult, MAX_TXN_WRITE_SIZE},
         Snapshot,
@@ -18,7 +18,7 @@ pub fn gc<'a, S: Snapshot>(
 ) -> MvccResult<GcInfo> {
     let gc = Gc::new(txn, reader, key);
     let info = gc.run(safe_point)?;
-    info.report_metrics(TXN_KEYMODE);
+    info.report_metrics(STAT_TXN_KEYMODE);
 
     Ok(info)
 }

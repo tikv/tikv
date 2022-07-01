@@ -61,7 +61,6 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 30).unwrap()
     )
     .unwrap();
-
     pub static ref GC_DELETE_VERSIONS_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_storage_mvcc_gc_delete_versions",
         "Histogram of versions deleted by gc for each key",
@@ -69,7 +68,6 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 30).unwrap()
     )
     .unwrap();
-
     pub static ref CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_concurrency_manager_lock_duration",
         "Histogram of the duration of lock key in the concurrency manager",

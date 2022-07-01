@@ -1,27 +1,146 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod applied_lock_collector;
-mod compaction_filter;
+pub mod compaction_filter;
 mod config;
 mod gc_manager;
 mod gc_worker;
-mod rawkv_compaction_filter;
+pub mod rawkv_compaction_filter;
+
+use std::sync::Arc;
 
 // TODO: Use separated error type for GCWorker instead.
 #[cfg(any(test, feature = "failpoints"))]
 pub use compaction_filter::test_utils::{gc_by_compact, TestGCRunner};
 pub use compaction_filter::WriteCompactionFilterFactory;
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
-use engine_traits::MvccProperties;
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngine, MvccProperties};
 pub use gc_manager::AutoGcConfig;
 pub use gc_worker::{
-    sync_gc, GcSafePointProvider, GcTask, GcWorker, GC_MAX_EXECUTING_TASKS, RAW_KEYMODE,
-    TXN_KEYMODE,
+    sync_gc, GcRunner, GcSafePointProvider, GcTask, GcWorker, GC_MAX_EXECUTING_TASKS,
+    STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
 };
+use kvproto::{
+    kvrpcpb::Context,
+    metapb::{Peer, Region},
+};
+use raftstore::store::RegionSnapshot;
 pub use rawkv_compaction_filter::RawCompactionFilterFactory;
-use txn_types::TimeStamp;
+use tikv_kv::{write_modifies, Modify, SnapContext, WriteData};
+use txn_types::{Key, TimeStamp};
 
-pub use crate::storage::{Callback, Error, ErrorInner, Result};
+pub use crate::storage::{
+    kv,
+    kv::{Callback as EngineCallback, Result as EngineResult},
+    Callback, Engine, Error, ErrorInner, Result,
+};
+
+/// A wrapper of engine that adds the 'z' prefix to keys internally.
+/// For test engines, they writes keys into db directly, but in production a 'z' prefix will be
+/// added to keys by raftstore layer before writing to db. Some functionalities of `GCWorker`
+/// bypasses Raft layer, so they needs to know how data is actually represented in db. This
+/// wrapper allows test engines write 'z'-prefixed keys to db.
+#[derive(Clone)]
+#[cfg(any(test, feature = "testexport"))]
+pub struct PrefixedEngine(pub kv::RocksEngine);
+
+impl Engine for PrefixedEngine {
+    // Use RegionSnapshot which can remove the z prefix internally.
+    type Snap = RegionSnapshot<RocksSnapshot>;
+    type Local = RocksEngine;
+
+    fn kv_engine(&self) -> RocksEngine {
+        self.0.kv_engine()
+    }
+
+    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> kv::Result<Self::Snap> {
+        let mut region = Region::default();
+        region.set_start_key(start_key.to_owned());
+        region.set_end_key(end_key.to_owned());
+        // Use a fake peer to avoid panic.
+        region.mut_peers().push(Default::default());
+        Ok(RegionSnapshot::from_snapshot(
+            Arc::new(self.kv_engine().snapshot()),
+            Arc::new(region),
+        ))
+    }
+
+    fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
+        for modify in &mut modifies {
+            match modify {
+                Modify::Delete(_, ref mut key) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
+                Modify::Put(_, ref mut key, _) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
+                Modify::PessimisticLock(ref mut key, _) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
+                Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                    let bytes = keys::data_key(key1.as_encoded());
+                    *key1 = Key::from_encoded(bytes);
+                    let bytes = keys::data_end_key(key2.as_encoded());
+                    *key2 = Key::from_encoded(bytes);
+                }
+            }
+        }
+        write_modifies(&self.kv_engine(), modifies)
+    }
+
+    fn async_write(
+        &self,
+        ctx: &Context,
+        mut batch: WriteData,
+        callback: EngineCallback<()>,
+    ) -> EngineResult<()> {
+        batch.modifies.iter_mut().for_each(|modify| match modify {
+            Modify::Delete(_, ref mut key) => {
+                *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+            }
+            Modify::Put(_, ref mut key, _) => {
+                *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+            }
+            Modify::PessimisticLock(ref mut key, _) => {
+                *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+            }
+            Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
+                *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
+                *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
+            }
+        });
+        self.0.async_write(ctx, batch, callback)
+    }
+
+    fn async_snapshot(
+        &self,
+        ctx: SnapContext<'_>,
+        callback: EngineCallback<Self::Snap>,
+    ) -> EngineResult<()> {
+        self.0.async_snapshot(
+            ctx,
+            Box::new(move |r| {
+                callback(r.map(|snap| {
+                    let mut region = Region::default();
+                    // Add a peer to pass initialized check.
+                    region.mut_peers().push(Peer::default());
+                    RegionSnapshot::from_snapshot(snap, Arc::new(region))
+                }))
+            }),
+        )
+    }
+}
+
+pub struct MockSafePointProvider(pub u64);
+impl GcSafePointProvider for MockSafePointProvider {
+    fn get_safe_point(&self) -> Result<TimeStamp> {
+        Ok(self.0.into())
+    }
+}
 
 // Returns true if it needs gc.
 // This is for optimization purpose, does not mean to be accurate.

@@ -28,7 +28,7 @@ use crate::{
             GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
             GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
         },
-        GcTask, RAW_KEYMODE,
+        GcTask, STAT_RAW_KEYMODE,
     },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
@@ -130,7 +130,7 @@ impl CompactionFilter for RawCompactionFilter {
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
                 GC_COMPACTION_FAILURE
-                    .with_label_values(&[RAW_KEYMODE, "filter"])
+                    .with_label_values(&[STAT_RAW_KEYMODE, "filter"])
                     .inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
@@ -205,7 +205,7 @@ impl RawCompactionFilter {
             // If it's the latest version, and it's deleted or expired, it needs to be sent to GCWorker to be processed asynchronously.
             if !raw_value.is_valid(self.current_ts) {
                 GC_COMPACTION_FILTER_MVCC_DELETION_MET
-                    .with_label_values(&[RAW_KEYMODE])
+                    .with_label_values(&[STAT_RAW_KEYMODE])
                     .inc();
                 self.raw_handle_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
@@ -252,12 +252,12 @@ impl RawCompactionFilter {
                 match e {
                     ScheduleError::Full(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&[RAW_KEYMODE, "full"])
+                            .with_label_values(&[STAT_RAW_KEYMODE, "full"])
                             .inc();
                     }
                     ScheduleError::Stopped(_) => {
                         GC_COMPACTION_FAILURE
-                            .with_label_values(&[RAW_KEYMODE, "stopped"])
+                            .with_label_values(&[STAT_RAW_KEYMODE, "stopped"])
                             .inc();
                     }
                 }
@@ -275,14 +275,14 @@ impl RawCompactionFilter {
     fn switch_key_metrics(&mut self) {
         if self.versions != 0 {
             self.versions_hist
-                .with_label_values(&[RAW_KEYMODE])
+                .with_label_values(&[STAT_RAW_KEYMODE])
                 .observe(self.versions as f64);
             self.total_versions += self.versions;
             self.versions = 0;
         }
         if self.filtered != 0 {
             self.filtered_hist
-                .with_label_values(&[RAW_KEYMODE])
+                .with_label_values(&[STAT_RAW_KEYMODE])
                 .observe(self.filtered as f64);
             self.total_filtered += self.filtered;
             self.filtered = 0;
@@ -291,10 +291,10 @@ impl RawCompactionFilter {
 
     fn flush_metrics(&self) {
         GC_COMPACTION_FILTERED
-            .with_label_values(&[RAW_KEYMODE])
+            .with_label_values(&[STAT_RAW_KEYMODE])
             .inc_by(self.total_filtered as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-            .with_label_values(&[RAW_KEYMODE, "generated"])
+            .with_label_values(&[STAT_RAW_KEYMODE, "generated"])
             .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
@@ -309,6 +309,13 @@ impl RawCompactionFilter {
             }
         }
     }
+}
+
+#[cfg(any(test, feature = "testexport"))]
+pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
+    let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
+    let res = keys::data_key(encode_key.as_encoded());
+    res
 }
 
 #[cfg(test)]
@@ -326,12 +333,6 @@ pub mod tests {
     use crate::{
         config::DbConfig, server::gc_worker::TestGCRunner, storage::kv::TestEngineBuilder,
     };
-
-    pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
-        let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
-        let res = keys::data_key(encode_key.as_encoded());
-        res
-    }
 
     #[test]
     fn test_raw_compaction_filter() {
@@ -379,19 +380,6 @@ pub mod tests {
 
         gc_runner.safe_point(80).gc_raw(&raw_engine);
 
-        assert_eq!(
-            MVCC_VERSIONS_HISTOGRAM
-                .with_label_values(&[RAW_KEYMODE])
-                .get_sample_sum(),
-            1_f64
-        );
-        assert_eq!(
-            GC_COMPACTION_FILTERED
-                .with_label_values(&[RAW_KEYMODE])
-                .get(),
-            1
-        );
-
         // If ts(70) < safepoint(80), and this userkey's latest verion is not deleted or expired, this version will be removed in do_filter.
         let entry70 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(b"r\0a", 70).as_slice())
@@ -399,19 +387,6 @@ pub mod tests {
         assert!(entry70.is_none());
 
         gc_runner.safe_point(90).gc_raw(&raw_engine);
-
-        assert_eq!(
-            MVCC_VERSIONS_HISTOGRAM
-                .with_label_values(&[RAW_KEYMODE])
-                .get_sample_sum(),
-            1_f64
-        );
-        assert_eq!(
-            GC_COMPACTION_FILTERED
-                .with_label_values(&[RAW_KEYMODE])
-                .get(),
-            1
-        );
 
         let entry100 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(user_key, 100).as_slice())
@@ -498,13 +473,6 @@ pub mod tests {
         let check_key_del = make_key(user_key_del, 1);
         let (prefix_del, _commit_ts) = ApiV2::split_ts(check_key_del.as_slice()).unwrap();
         gc_and_check(true, prefix_del);
-
-        assert_eq!(
-            GC_COMPACTION_FILTER_MVCC_DELETION_MET
-                .with_label_values(&[RAW_KEYMODE])
-                .get(),
-            1
-        );
 
         // Clean the engine, prepare for later tests.
         let range_start_key =
