@@ -56,6 +56,7 @@ const CTR_IV_16: usize = 16;
 pub enum Iv {
     Gcm([u8; GCM_IV_12]),
     Ctr([u8; CTR_IV_16]),
+    Empty,
 }
 
 impl Iv {
@@ -94,6 +95,7 @@ impl Iv {
         match self {
             Iv::Ctr(iv) => iv,
             Iv::Gcm(iv) => iv,
+            Iv::Empty => &[],
         }
     }
 
@@ -105,6 +107,7 @@ impl Iv {
                 Ok(())
             }
             Iv::Gcm(_) => Err(box_err!("offset addition is not supported for GCM mode")),
+            Iv::Empty => Err(box_err!("empty Iv")),
         }
     }
 }

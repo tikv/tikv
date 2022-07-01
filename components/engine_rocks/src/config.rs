@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::str::FromStr;
+use std::{convert::TryFrom, str::FromStr};
 
 use online_config::ConfigValue;
 use rocksdb::{
@@ -225,21 +225,22 @@ pub enum BlobRunMode {
 
 impl From<BlobRunMode> for ConfigValue {
     fn from(mode: BlobRunMode) -> ConfigValue {
-        ConfigValue::BlobRunMode(format!("k{:?}", mode))
+        let str_value = match mode {
+            BlobRunMode::Normal => "normal",
+            BlobRunMode::ReadOnly => "read-only",
+            BlobRunMode::Fallback => "fallback",
+        };
+        ConfigValue::String(str_value.into())
     }
 }
 
-impl From<ConfigValue> for BlobRunMode {
-    fn from(c: ConfigValue) -> BlobRunMode {
-        if let ConfigValue::BlobRunMode(s) = c {
-            match s.as_str() {
-                "kNormal" => BlobRunMode::Normal,
-                "kReadOnly" => BlobRunMode::ReadOnly,
-                "kFallback" => BlobRunMode::Fallback,
-                m => panic!("expect: kNormal, kReadOnly or kFallback, got: {:?}", m),
-            }
+impl TryFrom<ConfigValue> for BlobRunMode {
+    type Error = String;
+    fn try_from(c: ConfigValue) -> Result<BlobRunMode, Self::Error> {
+        if let ConfigValue::String(s) = c {
+            Self::from_str(&s)
         } else {
-            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", c);
+            panic!("expect: ConfigValue::String, got: {:?}", c);
         }
     }
 }

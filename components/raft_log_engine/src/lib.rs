@@ -21,4 +21,6 @@
 extern crate tikv_util;
 
 mod engine;
+mod perf_context;
+
 pub use engine::{RaftEngineConfig, RaftLogBatch, RaftLogEngine, ReadableSize, RecoveryMode};
