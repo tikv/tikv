@@ -1111,18 +1111,6 @@ where
         store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
-        let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
-            Err(e) => {
-                error!(
-                    "get disk stat for rocksdb failed";
-                    "engine_path" => store_info.kv_engine.path(),
-                    "err" => ?e
-                );
-                return;
-            }
-            Ok(stats) => stats,
-        };
-
         let mut report_peers = HashMap::default();
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
@@ -1150,31 +1138,14 @@ where
         }
 
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
-
-        let (capacity, used_size, available) =
-            if let Some(engine_size) = self.coprocessor_host.on_compute_engine_size() {
-                (engine_size.capacity, engine_size.used, engine_size.avail)
-            } else {
-                let disk_cap = disk_stats.total_space();
-                let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
-                    disk_cap
-                } else {
-                    store_info.capacity
-                };
-                let used_size = self.snap_mgr.get_total_snap_size().unwrap()
-                    + store_info
-                        .kv_engine
-                        .get_engine_used_size()
-                        .expect("kv engine used size")
-                    + store_info
-                        .raft_engine
-                        .get_engine_size()
-                        .expect("raft engine used size");
-                let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-                // We only care about rocksdb SST file size, so we should check disk available here.
-                available = cmp::min(available, disk_stats.available_space());
-                (capacity, used_size, available)
-            };
+        let (capacity, used_size, available) = match collect_engine_size(
+            &self.coprocessor_host,
+            Some(&store_info),
+            self.snap_mgr.get_total_snap_size().unwrap(),
+        ) {
+            Some((capacity, used_size, available)) => (capacity, used_size, available),
+            None => return,
+        };
 
         stats.set_capacity(capacity);
         stats.set_used_size(used_size);
@@ -2199,6 +2170,48 @@ fn collect_report_read_peer_stats(
     stats
 }
 
+fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
+    coprocessor_host: &CoprocessorHost<EK>,
+    store_info: Option<&StoreInfo<EK, ER>>,
+    snap_mgr_size: u64,
+) -> Option<(u64, u64, u64)> {
+    if let Some(engine_size) = coprocessor_host.on_compute_engine_size() {
+        Some((engine_size.capacity, engine_size.used, engine_size.avail))
+    } else {
+        let store_info = store_info.unwrap();
+        let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
+            Err(e) => {
+                error!(
+                    "get disk stat for rocksdb failed";
+                    "engine_path" => store_info.kv_engine.path(),
+                    "err" => ?e
+                );
+                return None;
+            }
+            Ok(stats) => stats,
+        };
+        let disk_cap = disk_stats.total_space();
+        let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
+            disk_cap
+        } else {
+            store_info.capacity
+        };
+        let used_size = snap_mgr_size
+            + store_info
+                .kv_engine
+                .get_engine_used_size()
+                .expect("kv engine used size")
+            + store_info
+                .raft_engine
+                .get_engine_size()
+                .expect("raft engine used size");
+        let mut available = capacity.checked_sub(used_size).unwrap_or_default();
+        // We only care about rocksdb SST file size, so we should check disk available here.
+        available = cmp::min(available, disk_stats.available_space());
+        Some((capacity, used_size, available))
+    }
+}
+
 fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
     stat.get_get() + stat.get_coprocessor() + stat.get_scan()
 }
@@ -2389,8 +2402,11 @@ mod tests {
         );
     }
 
+    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use metapb::Peer;
     use resource_metering::{RawRecord, TagInfos};
+
+    use crate::coprocessor::{BoxPdTaskObserver, Coprocessor, EngineSize, PdTaskObserver};
 
     #[test]
     fn test_calculate_region_cpu_records() {
@@ -2494,5 +2510,37 @@ mod tests {
             let report = bucket.new_report(UnixSecs::now());
             assert_eq!(report.stats.get_read_qps(), expected);
         }
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct PdObserver {}
+
+    impl Coprocessor for PdObserver {}
+
+    impl PdTaskObserver for PdObserver {
+        fn on_compute_engine_size(&self, s: &mut Option<EngineSize>) {
+            let _ = s.insert(EngineSize {
+                capacity: 444,
+                used: 111,
+                avail: 333,
+            });
+        }
+    }
+
+    #[test]
+    fn test_pd_task_observer() {
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        let obs = PdObserver::default();
+        host.registry
+            .register_pd_task_observer(1, BoxPdTaskObserver::new(obs));
+        let store_size = collect_engine_size::<KvTestEngine, RaftTestEngine>(&host, None, 0);
+        let (cap, used, avail) = if let Some((cap, used, avail)) = store_size {
+            (cap, used, avail)
+        } else {
+            panic!("store_size should not be none");
+        };
+        assert_eq!(cap, 444);
+        assert_eq!(used, 111);
+        assert_eq!(avail, 333);
     }
 }
