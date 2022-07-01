@@ -49,7 +49,7 @@ use txn_types::{Key, TimeStamp};
 fn test_txn_create_compaction_filter() {
     GC_COMPACTION_FILTER_PERFORM.reset();
     GC_COMPACTION_FILTER_SKIP.reset();
-    
+
     let mut cfg = DbConfig::default();
     cfg.writecf.disable_auto_compactions = true;
     cfg.writecf.dynamic_level_bytes = false;
