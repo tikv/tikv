@@ -805,7 +805,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 self.config.causal_ts.renew_batch_min_size,
             ));
             if let Err(e) = tso {
-                panic!("Causal timestamp provider initialize failed: {:?}", e);
+                fatal!("Causal timestamp provider initialize failed: {:?}", e);
             }
             let causal_ts_provider = Arc::new(tso.unwrap());
             info!("Causal timestamp provider startup.");
