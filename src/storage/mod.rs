@@ -2463,6 +2463,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
 
+                let encoded_ranges: Vec<KeyRange> = ranges
+                    .iter()
+                    .map(|range| {
+                        let mut new_range = KeyRange::new();
+                        new_range.set_start_key(
+                            F::encode_raw_key(range.get_start_key(), None).into_encoded(),
+                        );
+                        new_range.set_end_key(
+                            F::encode_raw_key(range.get_end_key(), None).into_encoded(),
+                        );
+                        new_range
+                    })
+                    .collect();
+
                 let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
@@ -2475,20 +2489,23 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let cf = Self::rawkv_cf("", api_version)?;
 
                 let begin_instant = tikv_util::time::Instant::now();
-                let mut stats = Vec::with_capacity(ranges.len());
+                let mut stats = Vec::with_capacity(encoded_ranges.len());
                 let ret = store
-                    .raw_checksum_ranges(cf, &ranges, &mut stats)
+                    .raw_checksum_ranges(cf, &encoded_ranges, &mut stats)
                     .await
                     .map_err(Error::from);
-                stats.iter().zip(ranges.iter()).for_each(|(stats, range)| {
-                    tls_collect_read_flow(
-                        ctx.get_region_id(),
-                        Some(range.get_start_key()),
-                        Some(range.get_end_key()),
-                        stats,
-                        buckets.as_ref(),
-                    );
-                });
+                stats
+                    .iter()
+                    .zip(encoded_ranges.iter())
+                    .for_each(|(stats, range)| {
+                        tls_collect_read_flow(
+                            ctx.get_region_id(),
+                            Some(range.get_start_key()),
+                            Some(range.get_end_key()),
+                            stats,
+                            buckets.as_ref(),
+                        );
+                    });
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(begin_instant.saturating_elapsed().as_secs_f64());
@@ -4559,6 +4576,25 @@ mod tests {
         let mut range = KeyRange::default();
         range.set_start_key(b"r\0a".to_vec());
         range.set_end_key(b"r\0z".to_vec());
+        assert_eq!(
+            (checksum, total_kvs, total_bytes),
+            block_on(storage.raw_checksum(ctx.clone(), ChecksumAlgorithm::Crc64Xor, vec![range]))
+                .unwrap(),
+        );
+
+        let mut range = KeyRange::default();
+        range.set_start_key(Key::from_raw(b"r\0a").into_encoded());
+        range.set_end_key(b"r\0f0".to_vec());
+        // the start key is encoded, so it's bigger than the first key.
+        let digest = crc64fast::Digest::new();
+        checksum = 0;
+        total_kvs = 0;
+        total_bytes = 0;
+        for &(ref key, ref value) in &test_data[1..] {
+            total_kvs += 1;
+            total_bytes += (key.len() + value.len()) as u64;
+            checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
+        }
         assert_eq!(
             (checksum, total_kvs, total_bytes),
             block_on(storage.raw_checksum(ctx, ChecksumAlgorithm::Crc64Xor, vec![range])).unwrap(),
