@@ -297,7 +297,7 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
-	@cargo install -q cargo-sort 
+	@cargo install --force -q cargo-sort
 
 gen_proxy_ffi: pre-format
 	./gen-proxy-ffi.sh
