@@ -481,7 +481,8 @@ where
     pub ready_count: usize,
     pub has_ready: bool,
     pub current_time: Option<Timespec>,
-    pub perf_context: EK::PerfContext,
+    pub raft_perf_context: ER::PerfContext,
+    pub kv_perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
     /// Disk usage for the store itself.
@@ -1280,7 +1281,11 @@ where
             ready_count: 0,
             has_ready: false,
             current_time: None,
-            perf_context: self
+            raft_perf_context: self
+                .engines
+                .raft
+                .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
+            kv_perf_context: self
                 .engines
                 .kv
                 .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
