@@ -60,18 +60,12 @@ pub mod tests {
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Default)]
     pub struct TestRawTsTracker {}
 
     impl RawTsTracker for TestRawTsTracker {
         fn track_ts(&self, _region_id: u64, _ts: TimeStamp) -> Result<()> {
             Ok(())
-        }
-    }
-
-    impl TestRawTsTracker {
-        pub fn default() -> Self {
-            Self {}
         }
     }
 }

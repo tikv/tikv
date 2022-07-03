@@ -207,6 +207,12 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref CDC_RAW_REGION_OUTLIER_RESOLVED_TS: IntGauge = register_int_gauge!(
+        "tikv_cdc_raw_region_outlier_resolved_ts",
+        "The resolved_ts of cdc raw outlier region",
+    )
+    .unwrap();
+
     pub static ref CDC_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
         auto_flush_from!(CDC_ROCKSDB_PERF_COUNTER, PerfCounter);
 }

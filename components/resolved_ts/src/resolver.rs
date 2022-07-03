@@ -26,7 +26,7 @@ impl ResolvedTs {
             txn_ts: TimeStamp::zero(),
         }
     }
-    pub fn get_min(&self) -> TimeStamp {
+    pub fn min(&self) -> TimeStamp {
         cmp::min(self.raw_ts, self.txn_ts)
     }
 
@@ -102,7 +102,7 @@ impl Resolver {
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {
-        self.resolved_ts.get_min()
+        self.resolved_ts.min()
     }
 
     pub fn size(&self) -> usize {
@@ -362,7 +362,7 @@ mod tests {
                     Event::RawUnlock(ts) => resolver.raw_untrack_lock(ts.into()),
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(
-                            resolver.resolve(min_ts.into()).get_min(),
+                            resolver.resolve(min_ts.into()).min(),
                             expect.into(),
                             "case {}",
                             i

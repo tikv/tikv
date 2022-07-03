@@ -423,7 +423,7 @@ impl Delegate {
         debug!("cdc resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => ?resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
-            .observe((min_ts.physical() - resolved_ts.get_min().physical()) as f64 / 1000f64);
+            .observe((min_ts.physical() - resolved_ts.min().physical()) as f64 / 1000f64);
         Some(resolved_ts)
     }
 

@@ -70,7 +70,10 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
 // Suppress repeat resolved ts lag warning.
 const WARN_RESOLVED_TS_COUNT_THRESHOLD: usize = 10;
+// raw region's outlier detection.
 const RAW_RESOLVED_TS_OUTLIER_THRESHOLD: Duration = Duration::from_secs(60);
+// if raw region's count is more than 10, begin detect outlier.
+const RAW_RESOLVED_TS_OUTLIER_COUNT_THRESHOLD: usize = 10;
 
 pub enum Deregister {
     Downstream {
@@ -251,7 +254,7 @@ impl fmt::Debug for Task {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ResolvedRegion {
     region_id: u64,
     resolved_ts: TimeStamp,
@@ -319,46 +322,48 @@ impl ResolvedRegionHeap {
         self.clear();
         self.heap.shrink_to(min_capacity);
     }
+}
 
+// need to sort all timestamps, vec.sort() is more efficient.
+struct ResolvedRegionVec {
+    // BinaryHeap is max heap, so we reverse order to get a min heap.
+    vec: Vec<ResolvedRegion>,
+}
+
+impl ResolvedRegionVec {
+    fn push(&mut self, region_id: u64, resolved_ts: TimeStamp) {
+        self.vec.push(ResolvedRegion {
+            region_id,
+            resolved_ts,
+        })
+    }
     // extreme outier match the following two conditions:
     // 1. https://en.wikipedia.org/wiki/Box_plot
     // 2. the gap with min_ts is larger than RAW_RESOLVED_TS_OUTLIER_THRESHOLD.
-    fn get_extreme_outlier(&self, min_ts: TimeStamp) -> Vec<u64> {
-        if self.heap.is_empty() {
-            return vec![];
-        } else if self.heap.len() < 4 {
-            // if count is smaller than 4, just return one outlier if exists.
-            let resolved = self.heap.peek().unwrap().0.resolved_ts;
-            if Duration::from_millis(min_ts.physical().saturating_sub(resolved.physical()))
-                > RAW_RESOLVED_TS_OUTLIER_THRESHOLD
-            {
-                return vec![self.heap.peek().unwrap().0.region_id];
-            }
-        } else {
-            let ts_vec: Vec<TimeStamp> = self.heap.iter().map(|iter| iter.0.resolved_ts).collect();
-            let size = ts_vec.len();
-            let q1_ts = ts_vec[(size + 1) / 4];
-            let q3_ts = ts_vec[3 * (size + 1) / 4];
+    // return one region at maximum.
+    fn get_extreme_outlier(&mut self, min_ts: TimeStamp) -> Option<ResolvedRegion> {
+        // When the number is small, the confidence of outlier detection is low.
+        if self.vec.len() > RAW_RESOLVED_TS_OUTLIER_COUNT_THRESHOLD {
+            self.vec.sort();
+            let size = self.vec.len();
+            let q1_ts = self.vec[(size + 1) / 4].resolved_ts;
+            let q3_ts = self.vec[3 * (size + 1) / 4].resolved_ts;
             let delta = q3_ts.physical().saturating_sub(q1_ts.physical());
-            let outliers: Vec<u64> = self
-                .heap
-                .iter()
-                .filter(|iter| {
-                    q1_ts
+            let first_resolved_region = &self.vec[0];
+            if q1_ts
+                .physical()
+                .saturating_sub(first_resolved_region.resolved_ts.physical())
+                > 3 * delta
+                && Duration::from_millis(
+                    min_ts
                         .physical()
-                        .saturating_sub(iter.0.resolved_ts.physical())
-                        > 3 * delta
-                        && Duration::from_millis(
-                            min_ts
-                                .physical()
-                                .saturating_sub(iter.0.resolved_ts.physical()),
-                        ) > RAW_RESOLVED_TS_OUTLIER_THRESHOLD
-                })
-                .map(|iter| iter.0.region_id)
-                .collect();
-            return outliers;
+                        .saturating_sub(first_resolved_region.resolved_ts.physical()),
+                ) > RAW_RESOLVED_TS_OUTLIER_THRESHOLD
+            {
+                return Some(first_resolved_region.to_owned());
+            }
         }
-        return vec![];
+        None
     }
 }
 
@@ -872,15 +877,14 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     // detect outlier raw regions, schedule deregister for outlier raw regions.
     fn handle_raw_outlier_regions(
         &self,
-        raw_resolved_regions: &ResolvedRegionHeap,
+        raw_resolved_regions: &mut ResolvedRegionVec,
         min_ts: TimeStamp,
     ) {
-        let outliers = raw_resolved_regions.get_extreme_outlier(min_ts);
-        for region_id in outliers {
-            if let Some(delegate) = self.capture_regions.get(&region_id) {
+        if let Some(region) = raw_resolved_regions.get_extreme_outlier(min_ts) {
+            if let Some(delegate) = self.capture_regions.get(&region.region_id) {
                 let observe_id = delegate.handle.id;
                 let deregister = Deregister::Delegate {
-                    region_id,
+                    region_id: region.region_id,
                     observe_id,
                     err: Error::Other(box_err!("raw region dead lock")),
                 };
@@ -888,6 +892,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     error!("cdc schedule cdc task failed"; "error" => ?e);
                 }
                 CDC_RAW_REGION_OUTLIER_COUNT.inc();
+                CDC_RAW_REGION_OUTLIER_RESOLVED_TS.set(region.resolved_ts.physical() as i64);
             }
         }
     }
@@ -897,9 +902,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let resolved_regions = &mut self.resolved_region_heap;
         resolved_regions.clear();
         // rawkv only, if user does not use rawkv apiv2, raw_resolved_regions should be empty.
-        let mut raw_resolved_regions = ResolvedRegionHeap {
-            heap: BinaryHeap::new(),
-        };
+        let mut raw_resolved_regions = ResolvedRegionVec { vec: vec![] };
 
         let total_region_count = regions.len();
         self.min_resolved_ts = TimeStamp::max();
@@ -917,16 +920,16 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     advance_failed_stale += 1;
                 }
                 if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
-                    if resolved_ts.get_min() < self.min_resolved_ts {
-                        self.min_resolved_ts = resolved_ts.get_min();
+                    if resolved_ts.min() < self.min_resolved_ts {
+                        self.min_resolved_ts = resolved_ts.min();
                         self.min_ts_region_id = region_id;
                     }
-                    resolved_regions.push(region_id, resolved_ts.get_min());
+                    resolved_regions.push(region_id, resolved_ts.min());
                     if resolved_ts.is_min_ts_from_raw() {
                         raw_resolved_regions.push(region_id, resolved_ts.raw_ts)
                     }
 
-                    if resolved_ts.get_min() == old_resolved_ts {
+                    if resolved_ts.min() == old_resolved_ts {
                         advance_failed_same += 1;
                     } else {
                         advance_ok += 1;
@@ -969,7 +972,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         self.broadcast_resolved_ts(normal_min_resolved_ts, normal_regions);
 
         // rawkv only, if user does not use rawkv apiv2, raw_resolved_regions should be empty.
-        self.handle_raw_outlier_regions(&raw_resolved_regions, min_ts);
+        self.handle_raw_outlier_regions(&mut raw_resolved_regions, min_ts);
     }
 
     fn broadcast_resolved_ts(&self, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
@@ -1998,7 +2001,7 @@ mod tests {
         suite.run(Task::RawTrackTs { region_id, ts });
         let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
         let resolver = delegate.resolver.as_mut().unwrap();
-        let raw_resolved_ts = resolver.resolve(TimeStamp::compose(20, 0)).get_min();
+        let raw_resolved_ts = resolver.resolve(TimeStamp::compose(20, 0)).min();
         assert_eq!(raw_resolved_ts, ts);
     }
 
@@ -2073,7 +2076,7 @@ mod tests {
             suite.run(Task::RawTrackTs { region_id, ts });
             let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
             let resolver = delegate.resolver.as_mut().unwrap();
-            let raw_resolved_ts = resolver.resolve(u64::MAX.into()).get_min();
+            let raw_resolved_ts = resolver.resolve(u64::MAX.into()).min();
             assert_eq!(raw_resolved_ts, ts);
         }
         let ob_id = suite
@@ -2101,6 +2104,10 @@ mod tests {
             assert_eq!(region_id, dead_lock_region);
             assert_eq!(observe_id, ob_id);
             assert_eq!(CDC_RAW_REGION_OUTLIER_COUNT.get(), 1);
+            assert_eq!(
+                CDC_RAW_REGION_OUTLIER_RESOLVED_TS.get(),
+                dead_lock_ts.physical() as i64
+            );
         } else {
             panic!("unknown cdc event {:?}", task_recv);
         }
@@ -2684,18 +2691,16 @@ mod tests {
         heap1.push(1, 1.into());
         heap1.clear();
         assert!(heap1.heap.is_empty());
+    }
 
-        let mut heap2 = ResolvedRegionHeap {
-            heap: BinaryHeap::new(),
-        };
-        assert_eq!(heap2.get_extreme_outlier(1.into()).is_empty(), true);
+    #[test]
+    fn test_resolved_region_vec() {
+        let mut heap2 = ResolvedRegionVec { vec: vec![] };
+        assert_eq!(heap2.get_extreme_outlier(1.into()).is_none(), true);
         heap2.push(5, TimeStamp::compose(5, 0));
         heap2.push(3, TimeStamp::compose(3, 0));
         heap2.push(4, TimeStamp::compose(4, 0));
-        assert_eq!(
-            heap2.get_extreme_outlier(TimeStamp::compose(60_010, 0)),
-            vec![3]
-        );
+        assert_eq!(heap2.get_extreme_outlier(1.into()).is_none(), true);
         for i in 2000..3000 {
             heap2.push(i, TimeStamp::compose(i, 0));
         }
@@ -2703,12 +2708,17 @@ mod tests {
         assert_eq!(
             heap2
                 .get_extreme_outlier(TimeStamp::compose(2000, 0))
-                .is_empty(),
+                .is_none(),
             true
         );
-        // 3 4 5 are extreme outliers
-        let mut outlier = heap2.get_extreme_outlier(TimeStamp::compose(60_010, 0));
-        outlier.sort_unstable();
-        assert_eq!(outlier, vec![3, 4, 5]);
+        // region 3 is extreme outlier
+        let outlier = heap2.get_extreme_outlier(TimeStamp::compose(60_010, 0));
+        assert_eq!(
+            outlier.unwrap(),
+            ResolvedRegion {
+                region_id: 3,
+                resolved_ts: TimeStamp::compose(3, 0)
+            }
+        );
     }
 }
