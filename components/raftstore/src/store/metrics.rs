@@ -662,6 +662,11 @@ lazy_static! {
         linear_buckets(0.0, 0.05, 20).unwrap()
     ).unwrap();
 
+    pub static ref LOAD_BASE_SPLIT_DURATION_HISTOGRAM : Histogram = register_histogram!(
+        "tikv_load_base_split_duration_seconds",
+        "Histogram of the time load base split costs in seconds"
+    ).unwrap();
+
     pub static ref QUERY_REGION_VEC: HistogramVec = register_histogram_vec!(
         "tikv_query_region",
         "Histogram of query",
