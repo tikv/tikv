@@ -2428,9 +2428,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         &self,
         ctx: Context,
         algorithm: ChecksumAlgorithm,
-        ranges: Vec<KeyRange>,
+        mut ranges: Vec<KeyRange>,
     ) -> impl Future<Output = Result<(u64, u64, u64)>> {
-        // TODO: Modify this method in another PR for backup & restore feature of Api V2.
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -2462,20 +2461,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .iter()
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
-
-                let encoded_ranges: Vec<KeyRange> = ranges
-                    .iter()
-                    .map(|range| {
-                        let mut new_range = KeyRange::new();
-                        new_range.set_start_key(
-                            F::encode_raw_key(range.get_start_key(), None).into_encoded(),
-                        );
-                        new_range.set_end_key(
-                            F::encode_raw_key(range.get_end_key(), None).into_encoded(),
-                        );
-                        new_range
-                    })
-                    .collect();
+                let mut encoded_ranges = Vec::with_capacity(ranges.len());
+                for i in 0..ranges.len() {
+                    let mut new_range = KeyRange::new();
+                    new_range.set_start_key(
+                        F::encode_raw_key_owned(ranges[i].take_start_key(), None).into_encoded(),
+                    );
+                    new_range.set_end_key(
+                        F::encode_raw_key_owned(ranges[i].take_end_key(), None).into_encoded(),
+                    );
+                    encoded_ranges.push(new_range);
+                }
 
                 let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
