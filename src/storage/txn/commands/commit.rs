@@ -71,6 +71,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
             rows,
             pr,
             lock_info: None,
+            released_locks: Some(released_locks),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

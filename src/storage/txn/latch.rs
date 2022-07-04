@@ -6,6 +6,8 @@ use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::usize;
 
+use crate::storage::txn::commands::ReleasedLocks;
+use crate::storage::txn::scheduler::LockDiagnosticInfo;
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 
@@ -142,17 +144,25 @@ impl Lock {
 pub struct Latches {
     slots: Vec<CachePadded<Mutex<Latch>>>,
     size: usize,
+    lock_diag_info_ch: std::sync::mpsc::Sender<super::scheduler::LockDiagnosticInfo>,
 }
 
 impl Latches {
     /// Creates latches.
     ///
     /// The size will be rounded up to the power of 2.
-    pub fn new(size: usize) -> Latches {
+    pub fn new(
+        size: usize,
+        lock_diag_info_ch: std::sync::mpsc::Sender<super::scheduler::LockDiagnosticInfo>,
+    ) -> Latches {
         let size = usize::next_power_of_two(size);
         let mut slots = Vec::with_capacity(size);
         (0..size).for_each(|_| slots.push(Mutex::new(Latch::new()).into()));
-        Latches { slots, size }
+        Latches {
+            slots,
+            size,
+            lock_diag_info_ch,
+        }
     }
 
     /// Tries to acquire the latches specified by the `lock` for command with ID `who`.
@@ -186,7 +196,15 @@ impl Latches {
     /// Releases all latches owned by the `lock` of command with ID `who`, returns the wakeup list.
     ///
     /// Preconditions: the caller must ensure the command is at the front of the latches.
-    pub fn release(&self, lock: &Lock, who: u64) -> Vec<u64> {
+    pub fn release(
+        &self,
+        lock: &Lock,
+        who: u64,
+        released_locks: Option<ReleasedLocks>,
+        lock_diag_info: Option<LockDiagnosticInfo>,
+    ) -> Vec<u64> {
+        let now = std::time::SystemTime::now();
+
         let mut wakeup_list: Vec<u64> = vec![];
         for &key_hash in &lock.required_hashes[..lock.owned_count] {
             let mut latch = self.lock_latch(key_hash);
@@ -197,6 +215,18 @@ impl Latches {
                 wakeup_list.push(wakeup);
             }
         }
+
+        if let (Some(lock_diag_info), Some(released_locks)) = (lock_diag_info, released_locks) {
+            for h in released_locks.hashes {
+                let mut info = lock_diag_info.clone();
+                info.time = now;
+                info.hash = h;
+                info.start_ts = released_locks.start_ts;
+                info.commit_ts = released_locks.commit_ts;
+                self.lock_diag_info_ch.send(info).unwrap();
+            }
+        }
+
         wakeup_list
     }
 
@@ -209,10 +239,12 @@ impl Latches {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::channel;
 
     #[test]
     fn test_wakeup() {
-        let latches = Latches::new(256);
+        let (tx, _rx) = channel();
+        let latches = Latches::new(256, tx);
 
         let keys_a = vec!["k1", "k3", "k5"];
         let mut lock_a = Lock::new(keys_a.iter());
@@ -230,7 +262,7 @@ mod tests {
         assert_eq!(acquired_b, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a);
+        let wakeup = latches.release(&lock_a, cid_a, None, None);
         assert_eq!(wakeup[0], cid_b);
 
         // b acquire lock success
@@ -240,7 +272,8 @@ mod tests {
 
     #[test]
     fn test_wakeup_by_multi_cmds() {
-        let latches = Latches::new(256);
+        let (tx, _rx) = channel();
+        let latches = Latches::new(256, tx);
 
         let keys_a = vec!["k1", "k2", "k3"];
         let keys_b = vec!["k4", "k5", "k6"];
@@ -265,7 +298,7 @@ mod tests {
         assert_eq!(acquired_c, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a);
+        let wakeup = latches.release(&lock_a, cid_a, None, None);
         assert_eq!(wakeup[0], cid_c);
 
         // c acquire lock failed again, cause b occupied slot 4
@@ -273,7 +306,7 @@ mod tests {
         assert_eq!(acquired_c, false);
 
         // b release lock, and get wakeup list
-        let wakeup = latches.release(&lock_b, cid_b);
+        let wakeup = latches.release(&lock_b, cid_b, None, None);
         assert_eq!(wakeup[0], cid_c);
 
         // finally c acquire lock success
@@ -283,7 +316,8 @@ mod tests {
 
     #[test]
     fn test_wakeup_by_small_latch_slot() {
-        let latches = Latches::new(5);
+        let (tx, _rx) = channel();
+        let latches = Latches::new(5, tx);
 
         let keys_a = vec!["k1", "k2", "k3"];
         let keys_b = vec!["k6", "k7", "k8"];
@@ -314,7 +348,7 @@ mod tests {
         assert_eq!(acquired_d, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a);
+        let wakeup = latches.release(&lock_a, cid_a, None, None);
         assert_eq!(wakeup[0], cid_c);
 
         // c acquire lock success
@@ -322,7 +356,7 @@ mod tests {
         assert_eq!(acquired_c, true);
 
         // b release lock, and get wakeup list
-        let wakeup = latches.release(&lock_b, cid_b);
+        let wakeup = latches.release(&lock_b, cid_b, None, None);
         assert_eq!(wakeup[0], cid_d);
 
         // finally d acquire lock success

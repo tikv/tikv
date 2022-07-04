@@ -164,6 +164,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             rows,
             pr,
             lock_info,
+            released_locks: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
         })

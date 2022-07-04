@@ -21,20 +21,23 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
+use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::{mem, u64};
 
-use collections::HashMap;
-use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
+
+use collections::HashMap;
+use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
@@ -50,7 +53,7 @@ use crate::storage::kv::{
 use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
 use crate::storage::metrics::{self, *};
 use crate::storage::txn::commands::{
-    ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
+    ReleasedLocks, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
 };
 use crate::storage::txn::sched_pool::tls_collect_query;
 use crate::storage::txn::{
@@ -304,10 +307,66 @@ impl<L: LockManager> SchedulerInner<L> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum LockDiagnosticEventType {
+    None,
+    AcquireLatch,
+    InheritLatch,
+    WaitLock,
+    ReleaseCommitted,
+    ReleaseOther,
+}
+
+#[derive(Debug, Clone)]
+pub struct LockDiagnosticInfo {
+    pub time: SystemTime,
+    pub event_type: LockDiagnosticEventType,
+    pub key: txn_types::Key,
+    pub hash: u64,
+    pub start_ts: TimeStamp,
+    pub for_update_ts: TimeStamp,
+    pub commit_ts: TimeStamp,
+    pub wait_for_txn: TimeStamp,
+    pub wake_up_txn: TimeStamp,
+}
+
+impl Default for LockDiagnosticInfo {
+    fn default() -> Self {
+        LockDiagnosticInfo {
+            time: std::time::UNIX_EPOCH,
+            event_type: LockDiagnosticEventType::None,
+            key: txn_types::Key::from_encoded(vec![]),
+            hash: 0,
+            start_ts: 0.into(),
+            for_update_ts: 0.into(),
+            commit_ts: 0.into(),
+            wait_for_txn: 0.into(),
+            wake_up_txn: 0.into(),
+        }
+    }
+}
+
+impl Display for LockDiagnosticInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: txn: {}, for_update_ts: {}, commit_ts: {}, wake_up_txn: {}, event: {:?}, key: {},",
+            chrono::DateTime::<chrono::Local>::from(self.time).format("%F %T%.6f"),
+            self.start_ts,
+            self.for_update_ts,
+            self.commit_ts,
+            self.wake_up_txn,
+            self.event_type,
+            self.key,
+        )
+    }
+}
+
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
 pub struct Scheduler<E: Engine, L: LockManager> {
     inner: Arc<SchedulerInner<L>>,
+    lock_diag_info_ch: std::sync::mpsc::Sender<LockDiagnosticInfo>,
     // The engine can be fetched from the thread local storage of scheduler threads.
     // So, we don't store the engine here.
     _engine: PhantomData<E>,
@@ -335,10 +394,39 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             task_slots.push(Mutex::new(Default::default()).into());
         }
 
+        let (tx, rx) = channel();
+
+        std::thread::spawn(move || {
+            let mut last_print_time = Instant::now();
+            let mut collected = Vec::with_capacity(200);
+            loop {
+                match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                    Ok(info) => {
+                        collected.push(info);
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (),
+                    Err(e @ std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        info!("lock diagnostic log collector thread exited"; "err" => ?e);
+                        return;
+                    }
+                }
+
+                if last_print_time.saturating_elapsed_secs() < 30.0 {
+                    continue;
+                }
+                last_print_time = Instant::now();
+                if collected.len() == 0 {
+                    continue;
+                }
+                info!("collected lock diagnostic info"; "info"=>?collected);
+                collected.clear();
+            }
+        });
+
         let inner = Arc::new(SchedulerInner {
             task_slots,
             id_alloc: AtomicU64::new(0).into(),
-            latches: Latches::new(config.scheduler_concurrency),
+            latches: Latches::new(config.scheduler_concurrency, tx.clone()),
             running_write_bytes: AtomicUsize::new(0).into(),
             sched_pending_write_threshold: config.scheduler_pending_write_threshold.0 as usize,
             worker_pool: SchedPool::new(
@@ -371,6 +459,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
         Scheduler {
             inner,
+            lock_diag_info_ch: tx,
             _engine: PhantomData,
         }
     }
@@ -396,8 +485,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Releases all the latches held by a command.
-    fn release_lock(&self, lock: &Lock, cid: u64) {
-        let wakeup_list = self.inner.latches.release(lock, cid);
+    fn release_lock(
+        &self,
+        lock: &Lock,
+        cid: u64,
+        released_locks: Option<ReleasedLocks>,
+        lock_diag_info: Option<LockDiagnosticInfo>,
+    ) {
+        let wakeup_list = self
+            .inner
+            .latches
+            .release(lock, cid, released_locks, lock_diag_info);
         for wcid in wakeup_list {
             self.try_to_wake_up(wcid);
         }
@@ -419,7 +517,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .entry(cid)
             .or_insert_with(|| self.inner.new_task_context(Task::new(cid, cmd), callback));
         let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
+        let acquire_time = SystemTime::now();
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
+            if tag == CommandKind::acquire_pessimistic_lock && self.record_diag_event() {
+                self.record_diag_info_for_pessimistic_lock_single_request(
+                    &tctx.task.as_ref().unwrap().cmd,
+                    acquire_time,
+                );
+            }
+
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
             let task = tctx.task.take().unwrap();
@@ -456,9 +562,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
+        let acquire_time = SystemTime::now();
         match self.inner.acquire_lock_on_wakeup(cid) {
             Ok(Some(task)) => {
                 fail_point!("txn_scheduler_try_to_wake_up");
+
+                let tag = task.cmd.tag();
+                if tag == CommandKind::acquire_pessimistic_lock && self.record_diag_event() {
+                    self.record_diag_info_for_pessimistic_lock_single_request(
+                        &task.cmd,
+                        acquire_time,
+                    );
+                }
+
                 self.execute(task);
             }
             Ok(None) => {}
@@ -473,6 +589,32 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         this.finish_with_err(cid, err);
                     })
                     .unwrap();
+            }
+        }
+    }
+
+    fn record_diag_info_for_pessimistic_lock_single_request(
+        &self,
+        cmd: &Command,
+        time: SystemTime,
+    ) {
+        if cmd.tag() == CommandKind::acquire_pessimistic_lock && self.record_diag_event() {
+            if let Command::AcquirePessimisticLock(cmd) = &cmd {
+                for k in &cmd.keys {
+                    self.lock_diag_info_ch
+                        .send(LockDiagnosticInfo {
+                            time,
+                            event_type: LockDiagnosticEventType::AcquireLatch,
+                            key: k.0.clone(),
+                            hash: k.0.gen_hash(),
+                            start_ts: cmd.start_ts,
+                            for_update_ts: cmd.for_update_ts,
+                            commit_ts: 0.into(),
+                            wait_for_txn: 0.into(),
+                            wake_up_txn: 0.into(),
+                        })
+                        .unwrap();
+                }
             }
         }
     }
@@ -562,7 +704,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             cb.execute(pr);
         }
 
-        self.release_lock(&tctx.lock, cid);
+        self.release_lock(&tctx.lock, cid, None, None);
     }
 
     /// Event handler for the success of read.
@@ -581,7 +723,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             tctx.cb.unwrap().execute(pr);
         }
 
-        self.release_lock(&tctx.lock, cid);
+        self.release_lock(&tctx.lock, cid, None, None);
     }
 
     /// Event handler for the success of write.
@@ -591,9 +733,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         pr: Option<ProcessResult>,
         result: EngineResult<()>,
         lock_guards: Vec<KeyHandleGuard>,
+        mut released_locks: Option<ReleasedLocks>,
         pipelined: bool,
         async_apply_prewrite: bool,
         tag: metrics::CommandKind,
+        mut lock_diag_info: Option<LockDiagnosticInfo>,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
         if pipelined {
@@ -621,9 +765,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         if let Some(cb) = tctx.cb {
             let pr = match result {
                 Ok(()) => pr.or(tctx.pr).unwrap(),
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
+                Err(e) => {
+                    if let Some(ref mut lock_diag_info) = lock_diag_info {
+                        lock_diag_info.event_type = LockDiagnosticEventType::ReleaseOther;
+                    }
+                    released_locks = None;
+                    ProcessResult::Failed {
+                        err: StorageError::from(e),
+                    }
+                }
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
@@ -635,7 +785,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        self.release_lock(&tctx.lock, cid);
+        self.release_lock(&tctx.lock, cid, released_locks, lock_diag_info);
     }
 
     /// Event handler for the request of waiting for lock
@@ -659,9 +809,23 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock,
             is_first_lock,
             wait_timeout,
-            diag_ctx,
+            diag_ctx.clone(),
         );
-        self.release_lock(&tctx.lock, cid);
+        let time = SystemTime::now();
+        self.release_lock(&tctx.lock, cid, None, None);
+        self.lock_diag_info_ch
+            .send(LockDiagnosticInfo {
+                time,
+                event_type: LockDiagnosticEventType::WaitLock,
+                key: txn_types::Key::from_raw(&diag_ctx.key),
+                hash: lock.hash,
+                start_ts,
+                for_update_ts: 0.into(),
+                commit_ts: 0.into(),
+                wait_for_txn: lock.ts,
+                wake_up_txn: 0.into(),
+            })
+            .unwrap();
     }
 
     fn early_response(
@@ -801,6 +965,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             rows,
             pr,
             lock_info,
+            mut released_locks,
             lock_guards,
             response_policy,
         } = match deadline
@@ -822,6 +987,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
+        if let Some(r) = &released_locks {
+            if r.is_empty() {
+                released_locks = None;
+            }
+        }
+
         if let Some(lock_info) = lock_info {
             let WriteResultLockInfo {
                 lock,
@@ -838,8 +1009,49 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
 
         let mut pr = Some(pr);
+
+        let lock_diag_info = if self.record_diag_event() {
+            if let Some(released_locks) = &released_locks {
+                if !released_locks.is_empty() {
+                    Some(LockDiagnosticInfo {
+                        time: std::time::UNIX_EPOCH,
+                        event_type: if tag == CommandKind::commit {
+                            LockDiagnosticEventType::ReleaseCommitted
+                        } else {
+                            LockDiagnosticEventType::ReleaseOther
+                        },
+                        key: txn_types::Key::from_encoded(vec![]),
+                        hash: 0,
+                        start_ts: released_locks.start_ts,
+                        for_update_ts: 0.into(),
+                        commit_ts: released_locks.commit_ts,
+                        wait_for_txn: 0.into(),
+                        wake_up_txn: 0.into(),
+                    })
+                } else {
+                    None
+                }
+            } else if lock_info.is_some() {
+                Some(LockDiagnosticInfo::default())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         if to_be_write.modifies.is_empty() {
-            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+            scheduler.on_write_finished(
+                cid,
+                pr,
+                Ok(()),
+                lock_guards,
+                released_locks,
+                false,
+                false,
+                tag,
+                lock_diag_info,
+            );
             return;
         }
 
@@ -859,7 +1071,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     engine.schedule_txn_extra(to_be_write.extra);
                 })
             }
-            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+            scheduler.on_write_finished(
+                cid,
+                pr,
+                Ok(()),
+                lock_guards,
+                released_locks,
+                false,
+                false,
+                tag,
+                lock_diag_info,
+            );
             return;
         }
 
@@ -1035,9 +1257,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         pr,
                         result,
                         lock_guards,
+                        released_locks,
                         pipelined,
                         is_async_apply_prewrite,
                         tag,
+                        lock_diag_info,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                         .get(tag)
@@ -1137,6 +1361,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             PessimisticLockMode::Sync
         }
     }
+
+    fn record_diag_event(&self) -> bool {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            % 60
+            == 0
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -1153,7 +1386,14 @@ enum PessimisticLockMode {
 mod tests {
     use std::thread;
 
-    use super::*;
+    use futures_executor::block_on;
+    use kvproto::kvrpcpb::{BatchRollbackRequest, CheckTxnStatusRequest, Context};
+
+    use raftstore::store::{ReadStats, WriteStats};
+    use tikv_util::config::ReadableSize;
+    use tikv_util::future::paired_future_callback;
+    use txn_types::{Key, OldValues};
+
     use crate::storage::{
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
@@ -1165,12 +1405,8 @@ mod tests {
         txn::{commands, latch::*},
         TestEngineBuilder,
     };
-    use futures_executor::block_on;
-    use kvproto::kvrpcpb::{BatchRollbackRequest, CheckTxnStatusRequest, Context};
-    use raftstore::store::{ReadStats, WriteStats};
-    use tikv_util::config::ReadableSize;
-    use tikv_util::future::paired_future_callback;
-    use txn_types::{Key, OldValues};
+
+    use super::*;
 
     #[derive(Clone)]
     struct DummyReporter;
@@ -1264,7 +1500,8 @@ mod tests {
                 .into(),
         ];
 
-        let latches = Latches::new(1024);
+        let (tx, _rx) = channel();
+        let latches = Latches::new(1024, tx);
         let write_locks: Vec<Lock> = write_cmds
             .into_iter()
             .enumerate()
@@ -1287,7 +1524,7 @@ mod tests {
             if id != 0 {
                 assert!(latches.acquire(&mut lock, id));
             }
-            let unlocked = latches.release(&lock, id);
+            let unlocked = latches.release(&lock, id, None, None);
             if id as u64 == max_id {
                 assert!(unlocked.is_empty());
             } else {
@@ -1342,7 +1579,7 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
-        scheduler.release_lock(&lock, cid);
+        scheduler.release_lock(&lock, cid, None, None);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
@@ -1524,7 +1761,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         // When releasing the lock, the queuing tasks should be all waken up without stack overflow.
-        scheduler.release_lock(&lock, cid);
+        scheduler.release_lock(&lock, cid, None, None);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();

@@ -576,16 +576,13 @@ impl<K: PrewriteKind> Prewriter<K> {
         };
 
         let mut result = if locks.is_empty() {
+            let (one_pc_commit_ts, released_locks) =
+                one_pc_commit_ts(self.try_one_pc, &mut txn, final_min_commit_ts, lock_manager);
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
                     min_commit_ts: async_commit_ts,
-                    one_pc_commit_ts: one_pc_commit_ts(
-                        self.try_one_pc,
-                        &mut txn,
-                        final_min_commit_ts,
-                        lock_manager,
-                    ),
+                    one_pc_commit_ts,
                 },
             };
             let extra = TxnExtra {
@@ -606,6 +603,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 rows,
                 pr,
                 lock_info: None,
+                released_locks,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -624,6 +622,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 rows,
                 pr,
                 lock_info: None,
+                released_locks: None,
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -747,7 +746,7 @@ pub fn one_pc_commit_ts(
     txn: &mut MvccTxn,
     final_min_commit_ts: TimeStamp,
     lock_manager: &impl LockManager,
-) -> TimeStamp {
+) -> (TimeStamp, Option<ReleasedLocks>) {
     if try_one_pc {
         assert_ne!(final_min_commit_ts, TimeStamp::zero());
         // All keys can be successfully locked and `try_one_pc` is set. Try to directly
@@ -756,10 +755,10 @@ pub fn one_pc_commit_ts(
         if !released_locks.is_empty() {
             released_locks.wake_up(lock_manager);
         }
-        final_min_commit_ts
+        (final_min_commit_ts, Some(released_locks))
     } else {
         assert!(txn.locks_for_1pc.is_empty());
-        TimeStamp::zero()
+        (TimeStamp::zero(), None)
     }
 }
 

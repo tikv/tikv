@@ -341,11 +341,11 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 }
 
 #[derive(Default)]
-pub(super) struct ReleasedLocks {
-    start_ts: TimeStamp,
-    commit_ts: TimeStamp,
-    hashes: Vec<u64>,
-    pessimistic: bool,
+pub struct ReleasedLocks {
+    pub start_ts: TimeStamp,
+    pub commit_ts: TimeStamp,
+    pub hashes: Vec<u64>,
+    pub pessimistic: bool,
 }
 
 /// Represents for a scheduler command, when should the response sent to the client.
@@ -371,6 +371,7 @@ pub struct WriteResult {
     pub rows: usize,
     pub pr: ProcessResult,
     pub lock_info: Option<WriteResultLockInfo>,
+    pub released_locks: Option<ReleasedLocks>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
 }
@@ -425,8 +426,13 @@ impl ReleasedLocks {
     }
 
     // Wake up pessimistic transactions that waiting for these locks.
-    pub fn wake_up<L: LockManager>(self, lock_mgr: &L) {
-        lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
+    pub fn wake_up<L: LockManager>(&self, lock_mgr: &L) {
+        lock_mgr.wake_up(
+            self.start_ts,
+            self.hashes.clone(),
+            self.commit_ts,
+            self.pessimistic,
+        );
     }
 }
 

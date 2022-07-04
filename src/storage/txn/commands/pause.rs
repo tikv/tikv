@@ -43,6 +43,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Pause {
             rows: 0,
             pr: ProcessResult::Res,
             lock_info: None,
+            released_locks: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })
