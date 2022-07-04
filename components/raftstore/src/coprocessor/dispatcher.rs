@@ -510,6 +510,17 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
+    pub fn pre_commit(&self, region: &Region, is_finished: bool) -> bool {
+        let mut ctx = ObserverContext::new(region);
+        for observer in &self.registry.region_change_observers {
+            let observer = observer.observer.inner();
+            if !observer.pre_commit(&mut ctx, is_finished) {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn on_flush_applied_cmd_batch(
         &self,
         max_level: ObserveLevel,
