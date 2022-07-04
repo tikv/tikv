@@ -15531,7 +15531,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.80, sum(rate(tikv_load_base_split_duration_seconds_bucket{tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "expr": "histogram_quantile(0.80, sum(rate(tikv_load_base_split_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}[1m])) by (le, instance))",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
@@ -15541,7 +15541,7 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.90, sum(rate(tikv_load_base_split_duration_seconds_bucket{tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "expr": "histogram_quantile(0.90, sum(rate(tikv_load_base_split_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}[1m])) by (le, instance))",
               "hide": false,
               "interval": "",
               "intervalFactor": 2,
@@ -15550,7 +15550,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(tikv_load_base_split_duration_seconds_sum{tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(tikv_load_base_split_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
               "intervalFactor": 2,
