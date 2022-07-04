@@ -218,7 +218,8 @@ impl EngineStoreServerWrap {
     ) -> ffi_interfaces::EngineStoreApplyRes {
         let region_id = header.region_id;
         let node_id = (*self.engine_store_server).id;
-        info!("handle_admin_raft_cmd"; "request"=>?req, "response"=>?resp, "index"=>header.index, "region-id"=>header.region_id);
+        info!("handle_admin_raft_cmd";
+            "request"=>?req, "response"=>?resp, "index"=>header.index, "region-id"=>header.region_id);
         let do_handle_admin_raft_cmd =
             move |region: &mut Box<Region>, engine_store_server: &mut EngineStoreServer| {
                 if region.apply_state.get_applied_index() >= header.index {
@@ -425,16 +426,21 @@ impl EngineStoreServerWrap {
             }
         };
 
-        // We must have this region now.
         let region = match (*self.engine_store_server).kvstore.get_mut(&region_id) {
-            Some(r) => r,
+            Some(r) => Some(r),
             None => {
-                panic!("still can't find region {} for {}", region_id, node_id);
+                warn!(
+                    "still can't find region {} for {}, may be remove due to confchange",
+                    region_id, node_id
+                );
+                None
             }
         };
         match res {
             ffi_interfaces::EngineStoreApplyRes::Persist => {
-                write_to_db_data(&mut (*self.engine_store_server), region);
+                if let Some(region) = region {
+                    write_to_db_data(&mut (*self.engine_store_server), region);
+                }
             }
             _ => (),
         };
