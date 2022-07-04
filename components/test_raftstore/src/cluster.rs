@@ -190,6 +190,7 @@ pub struct Cluster<T: Simulator> {
     pub sst_workers_map: HashMap<u64, usize>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
+    pub proxy_compat: bool,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -224,6 +225,7 @@ impl<T: Simulator> Cluster<T> {
             pd_client,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
+            proxy_compat: false,
         }
     }
 
@@ -282,6 +284,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn make_global_ffi_helper_set(&mut self) {
         let mut engine_store_server =
             Box::new(mock_engine_store::EngineStoreServer::new(99999, None));
+        engine_store_server.proxy_compat = self.proxy_compat;
         let engine_store_server_wrap = Box::new(mock_engine_store::EngineStoreServerWrap::new(
             &mut *engine_store_server,
             None,
@@ -329,6 +332,7 @@ impl<T: Simulator> Cluster<T> {
         ));
         let mut engine_store_server =
             Box::new(mock_engine_store::EngineStoreServer::new(id, Some(engines)));
+        engine_store_server.proxy_compat = self.proxy_compat;
         let engine_store_server_wrap = Box::new(mock_engine_store::EngineStoreServerWrap::new(
             &mut *engine_store_server,
             Some(&mut *proxy_helper),

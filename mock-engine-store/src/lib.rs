@@ -63,6 +63,7 @@ pub struct EngineStoreServer {
     pub id: u64,
     pub engines: Option<Engines<RocksEngine, RaftTestEngine>>,
     pub kvstore: HashMap<RegionId, Box<Region>>,
+    pub proxy_compat: bool,
 }
 
 impl EngineStoreServer {
@@ -71,6 +72,7 @@ impl EngineStoreServer {
             id,
             engines,
             kvstore: Default::default(),
+            proxy_compat: false,
         }
     }
 
@@ -447,8 +449,9 @@ impl EngineStoreServerWrap {
         let region_id = header.region_id;
         let server = &mut (*self.engine_store_server);
         let kv = &mut (*self.engine_store_server).engines.as_mut().unwrap().kv;
+        let proxy_compat = server.proxy_compat;
 
-        let do_handle_write_raft_cmd = move |region: &mut Box<Region>| {
+        let mut do_handle_write_raft_cmd = move |region: &mut Box<Region>| {
             if region.apply_state.get_applied_index() >= header.index {
                 return ffi_interfaces::EngineStoreApplyRes::None;
             }
@@ -480,6 +483,9 @@ impl EngineStoreServerWrap {
             }
             // Advance apply index, but do not persist
             region.set_applied(header.index, header.term);
+            if !proxy_compat {
+                write_to_db_data(server, region);
+            }
             ffi_interfaces::EngineStoreApplyRes::None
         };
 

@@ -236,6 +236,7 @@ fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
 #[test]
 fn test_kv_write() {
     let mut cluster = new_node_cluster(0, 3);
+    cluster.proxy_compat = true;
 
     // No persist will be triggered by CompactLog
     fail::cfg("no_persist_compact_log", "return").unwrap();
