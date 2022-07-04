@@ -183,8 +183,7 @@ where
         id: u64,
         duration: RaftstoreDuration,
     },
-    RegisterRegionCPUCollector,
-    DeregisterRegionCPUCollector,
+    UpdateRegionCPUCollector(bool),
     RegionCPURecords(Arc<RawRecords>),
     ReportMinResolvedTS {
         store_id: u64,
@@ -351,7 +350,7 @@ where
                 log_wrappers::Value::key(split_key),
             ),
             Task::AutoSplit { ref split_infos } => {
-                write!(f, "auto split split regions, num is {}", split_infos.len(),)
+                write!(f, "auto split split regions, num is {}", split_infos.len())
             }
             Task::AskBatchSplit {
                 ref region,
@@ -407,8 +406,12 @@ where
             Task::UpdateSlowScore { id, ref duration } => {
                 write!(f, "compute slow score: id {}, duration {:?}", id, duration)
             }
-            Task::RegisterRegionCPUCollector => write!(f, "register region cpu collector"),
-            Task::DeregisterRegionCPUCollector => write!(f, "deregister region cpu collector"),
+            Task::UpdateRegionCPUCollector(is_register) => {
+                if is_register {
+                    return write!(f, "register region cpu collector");
+                }
+                write!(f, "deregister region cpu collector")
+            }
             Task::RegionCPURecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
             }
@@ -604,18 +607,11 @@ where
     ) {
         let start_time = TiInstant::now();
         match auto_split_controller.refresh_and_check_cfg() {
-            SplitConfigChange::RegisterRegionCPUCollector => {
-                if let Err(e) = scheduler.schedule(Task::RegisterRegionCPUCollector) {
+            SplitConfigChange::UpdateRegionCPUCollector(is_register) => {
+                if let Err(e) = scheduler.schedule(Task::UpdateRegionCPUCollector(is_register)) {
                     error!(
-                        "failed to register the region cpu collector";
-                        "err" => ?e,
-                    );
-                }
-            }
-            SplitConfigChange::DeregisterRegionCPUCollector => {
-                if let Err(e) = scheduler.schedule(Task::DeregisterRegionCPUCollector) {
-                    error!(
-                        "failed to deregister the region cpu collector";
+                        "failed to register or deregister the region cpu collector";
+                        "is_register" => is_register,
                         "err" => ?e,
                     );
                 }
@@ -999,7 +995,12 @@ where
         self.remote.spawn(f);
     }
 
-    fn handle_register_region_cpu_collector(&mut self) {
+    fn handle_update_region_cpu_collector(&mut self, is_register: bool) {
+        // If it's a deregister task, just take and drop the original collector.
+        if !is_register {
+            self.region_cpu_records_collector.take();
+            return;
+        }
         if self.region_cpu_records_collector.is_some() {
             return;
         }
@@ -1007,10 +1008,6 @@ where
             Box::new(RegionCPUMeteringCollector::new(self.scheduler.clone())),
             false,
         ));
-    }
-
-    fn handle_deregister_region_cpu_collector(&mut self) {
-        self.region_cpu_records_collector.take();
     }
 
     // Note: The parameter doesn't contain `self` because this function may
@@ -1973,8 +1970,9 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
-            Task::RegisterRegionCPUCollector => self.handle_register_region_cpu_collector(),
-            Task::DeregisterRegionCPUCollector => self.handle_deregister_region_cpu_collector(),
+            Task::UpdateRegionCPUCollector(is_register) => {
+                self.handle_update_region_cpu_collector(is_register)
+            }
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTS {
                 store_id,

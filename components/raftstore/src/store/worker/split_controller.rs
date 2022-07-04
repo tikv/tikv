@@ -522,8 +522,7 @@ pub struct SplitInfo {
 #[derive(PartialEq, Debug)]
 pub enum SplitConfigChange {
     Noop,
-    RegisterRegionCPUCollector,
-    DeregisterRegionCPUCollector,
+    UpdateRegionCPUCollector(bool),
 }
 
 pub struct AutoSplitController {
@@ -658,12 +657,12 @@ impl AutoSplitController {
             if self.cfg.region_cpu_overload_threshold_ratio <= 0.0
                 && incoming.region_cpu_overload_threshold_ratio > 0.0
             {
-                cfg_change = SplitConfigChange::RegisterRegionCPUCollector;
+                cfg_change = SplitConfigChange::UpdateRegionCPUCollector(true);
             }
             if self.cfg.region_cpu_overload_threshold_ratio > 0.0
                 && incoming.region_cpu_overload_threshold_ratio <= 0.0
             {
-                cfg_change = SplitConfigChange::DeregisterRegionCPUCollector;
+                cfg_change = SplitConfigChange::UpdateRegionCPUCollector(false);
             }
             self.cfg = incoming.clone();
         }
@@ -1249,7 +1248,7 @@ mod tests {
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::DeregisterRegionCPUCollector,
+            SplitConfigChange::UpdateRegionCPUCollector(false),
         );
         assert_eq!(
             auto_split_controller
@@ -1269,7 +1268,7 @@ mod tests {
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::RegisterRegionCPUCollector,
+            SplitConfigChange::UpdateRegionCPUCollector(true),
         );
         assert_eq!(
             auto_split_controller
