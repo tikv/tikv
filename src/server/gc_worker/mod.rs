@@ -15,9 +15,10 @@ pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 use engine_traits::MvccProperties;
 pub use gc_manager::AutoGcConfig;
 pub use gc_worker::{
-    sync_gc, GcSafePointProvider, GcTask, GcWorker, MockSafePointProvider, PrefixedEngine,
-    GC_MAX_EXECUTING_TASKS, STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
+    sync_gc, GcSafePointProvider, GcTask, GcWorker, STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
 };
+#[cfg(any(test, feature = "testexport"))]
+pub use gc_worker::{MockSafePointProvider, PrefixedEngine};
 pub use rawkv_compaction_filter::RawCompactionFilterFactory;
 use txn_types::TimeStamp;
 

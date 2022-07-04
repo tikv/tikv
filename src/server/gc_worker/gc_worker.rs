@@ -15,24 +15,34 @@ use std::{
 use api_version::{ApiV2, KvFormat};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{FlowInfo, RocksEngine, RocksSnapshot};
+use engine_rocks::FlowInfo;
+#[cfg(any(test, feature = "testexport"))]
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{
     raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
     WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
+#[cfg(any(test, feature = "testexport"))]
+use kvproto::metapb::Peer;
 use kvproto::{
     kvrpcpb::{Context, LockInfo},
-    metapb::{Peer, Region},
+    metapb::Region,
 };
 use pd_client::{FeatureGate, PdClient};
+#[cfg(any(test, feature = "testexport"))]
+use raftstore::store::RegionSnapshot;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoProvider},
     router::RaftStoreRouter,
-    store::{msg::StoreMsg, util::find_peer, RegionSnapshot},
+    store::{msg::StoreMsg, util::find_peer},
 };
-use tikv_kv::{write_modifies, CfStatistics, CursorBuilder, Modify, SnapContext, WriteData};
+#[cfg(any(test, feature = "testexport"))]
+use tikv_kv::write_modifies;
+use tikv_kv::{CfStatistics, CursorBuilder, Modify};
+#[cfg(any(test, feature = "testexport"))]
+use tikv_kv::{SnapContext, WriteData};
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
@@ -51,14 +61,15 @@ use super::{
     gc_manager::{AutoGcConfig, GcManager, GcManagerHandle},
     Callback, Error, ErrorInner, Result,
 };
+#[cfg(any(test, feature = "testexport"))]
+use crate::storage::{
+    kv,
+    kv::{Callback as EngineCallback, Result as EngineResult},
+};
 use crate::{
     server::metrics::*,
     storage::{
-        kv,
-        kv::{
-            metrics::GcKeyMode, Callback as EngineCallback, Engine, Result as EngineResult,
-            ScanMode, Statistics,
-        },
+        kv::{metrics::GcKeyMode, Engine, ScanMode, Statistics},
         mvcc::{GcInfo, MvccReader, MvccTxn},
         txn::{gc, Error as TxnError},
     },
@@ -72,7 +83,6 @@ const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
 /// versions are deleted.
 const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
-pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
 const GC_MAX_PENDING_TASKS: usize = 4096;
 
@@ -1271,10 +1281,11 @@ where
 /// added to keys by raftstore layer before writing to db. Some functionalities of `GCWorker`
 /// bypasses Raft layer, so they needs to know how data is actually represented in db. This
 /// wrapper allows test engines write 'z'-prefixed keys to db.
-#[derive(Clone)]
 #[cfg(any(test, feature = "testexport"))]
+#[derive(Clone)]
 pub struct PrefixedEngine(pub kv::RocksEngine);
 
+#[cfg(any(test, feature = "testexport"))]
 impl Engine for PrefixedEngine {
     // Use RegionSnapshot which can remove the z prefix internally.
     type Snap = RegionSnapshot<RocksSnapshot>;
@@ -1367,6 +1378,8 @@ impl Engine for PrefixedEngine {
 
 #[cfg(any(test, feature = "testexport"))]
 pub struct MockSafePointProvider(pub u64);
+
+#[cfg(any(test, feature = "testexport"))]
 impl GcSafePointProvider for MockSafePointProvider {
     fn get_safe_point(&self) -> Result<TimeStamp> {
         Ok(self.0.into())
@@ -1386,10 +1399,7 @@ mod tests {
     use api_version::{ApiV2, KvFormat, RawValue};
     use engine_rocks::{util::get_cf_handle, RocksEngine};
     use futures::executor::block_on;
-    use kvproto::{
-        kvrpcpb::{ApiVersion, Op},
-        metapb::Peer,
-    };
+    use kvproto::kvrpcpb::{ApiVersion, Op};
     use raft::StateRole;
     use raftstore::{
         coprocessor::{region_info_accessor::RegionInfoAccessor, RegionChangeEvent},
@@ -1402,7 +1412,7 @@ mod tests {
     use super::*;
     use crate::{
         config::DbConfig,
-        server::gc_worker::{MockSafePointProvider, PrefixedEngine},
+        server::gc_worker::PrefixedEngine,
         storage::{
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::DummyLockManager,
