@@ -1932,10 +1932,19 @@ macro_rules! txn_command_future {
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
             $prelude
+            let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+                $req.get_context(),
+                RequestType::Unknown,
+                0,
+            )));
+            set_tls_tracker_token(tracker);
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);
 
             async move {
+                defer!{{
+                    GLOBAL_TRACKERS.remove(tracker);
+                }};
                 let $v = match res {
                     Err(e) => Err(e),
                     Ok(_) => f.await?,
@@ -2188,6 +2197,7 @@ mod tests {
     use std::thread;
 
     use futures::{channel::oneshot, executor::block_on};
+    use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
 
@@ -2198,7 +2208,7 @@ mod tests {
 
         thread::Builder::new()
             .name("source".to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 block_on(signal_rx).unwrap();
                 tx.send(100).unwrap();
             })
@@ -2221,7 +2231,7 @@ mod tests {
         let (signal_tx, signal_rx) = oneshot::channel();
         thread::Builder::new()
             .name("source".to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tx.send(100).unwrap();
                 signal_tx.send(()).unwrap();
             })

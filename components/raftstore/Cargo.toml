@@ -85,6 +85,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
 tokio = { version = "1.5", features = ["sync", "rt-multi-thread"] }
+tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use collections::HashSet;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::MessageType;
+use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS};
 
 use super::metrics::*;
 
@@ -415,6 +416,7 @@ pub struct RaftMetrics {
     pub wf_persist_log: LocalHistogram,
     pub wf_commit_log: LocalHistogram,
     pub wf_commit_not_persist_log: LocalHistogram,
+    pub proposal_send_wait: LocalHistogram,
     pub raft_log_gc_skipped: RaftLogGcSkippedMetrics,
 }
 
@@ -439,6 +441,7 @@ impl RaftMetrics {
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            proposal_send_wait: PROPOSAL_SEND_WAIT_DURATION_HISTOGRAM.local(),
             raft_log_gc_skipped: RaftLogGcSkippedMetrics::default(),
         }
     }
@@ -461,6 +464,7 @@ impl RaftMetrics {
             self.wf_persist_log.flush();
             self.wf_commit_log.flush();
             self.wf_commit_not_persist_log.flush();
+            self.proposal_send_wait.flush();
         }
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
@@ -493,6 +497,54 @@ impl StoreWriteMetrics {
             self.wf_before_write.flush();
             self.wf_kvdb_end.flush();
             self.wf_write_end.flush();
+        }
+    }
+}
+
+/// Tracker for the durations of a raftstore request.
+/// If a global tracker is not available, it will fallback to an Instant.
+#[derive(Debug, Clone, Copy)]
+pub enum TimeTracker {
+    Tracker(TrackerToken),
+    Instant(std::time::Instant),
+}
+
+impl TimeTracker {
+    pub fn as_tracker_token(&self) -> Option<TrackerToken> {
+        match self {
+            TimeTracker::Tracker(tt) => Some(*tt),
+            TimeTracker::Instant(_) => None,
+        }
+    }
+
+    pub fn observe(
+        &self,
+        now: std::time::Instant,
+        local_metric: &LocalHistogram,
+        tracker_metric: impl FnOnce(&mut Tracker) -> &mut u64,
+    ) {
+        match self {
+            TimeTracker::Tracker(t) => {
+                if let Some(dur) = GLOBAL_TRACKERS
+                    .with_tracker(*t, |tracker| {
+                        tracker.metrics.write_instant.map(|write_instant| {
+                            let dur = now.saturating_duration_since(write_instant);
+                            let metric = tracker_metric(tracker);
+                            if *metric == 0 {
+                                *metric = dur.as_nanos() as u64;
+                            }
+                            dur
+                        })
+                    })
+                    .flatten()
+                {
+                    local_metric.observe(dur.as_secs_f64());
+                }
+            }
+            TimeTracker::Instant(t) => {
+                let dur = now.saturating_duration_since(*t);
+                local_metric.observe(dur.as_secs_f64());
+            }
         }
     }
 }

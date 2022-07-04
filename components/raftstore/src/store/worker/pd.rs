@@ -39,6 +39,7 @@ use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecord
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
+    sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -537,7 +538,7 @@ where
         }
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
@@ -1448,6 +1449,8 @@ where
                     } else {
                         CasualMessage::HalfSplitRegion {
                             region_epoch: epoch,
+                            start_key: None,
+                            end_key: None,
                             policy: split_region.get_policy(),
                             source: "pd",
                             cb: Callback::None,

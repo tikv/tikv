@@ -115,6 +115,8 @@ fn calc_cpu_load(elapsed_millis: usize, start_usage: f64, end_usage: f64) -> usi
 mod tests {
     use std::{thread, time::Duration};
 
+    use tikv_util::sys::thread::StdThreadBuildWrapper;
+
     use super::*;
 
     #[test]
@@ -124,7 +126,7 @@ mod tests {
         let l = loads.clone();
         thread::Builder::new()
             .name(THREAD_NAME.to_string())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 let mut stats = ThreadLoadStatistics::new(2, THREAD_NAME, Arc::clone(&l));
                 let start = Instant::now();
                 loop {
