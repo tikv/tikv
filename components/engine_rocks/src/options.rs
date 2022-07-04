@@ -38,11 +38,8 @@ impl RocksWriteOptions {
 impl From<engine_traits::WriteOptions> for RocksWriteOptions {
     fn from(opts: engine_traits::WriteOptions) -> Self {
         let mut r = RawWriteOptions::default();
-        // r.set_sync(opts.sync());
-        // Sync writes has to enable WAL.
-        r.set_sync(false);
+        r.set_sync(opts.sync());
         r.set_no_slowdown(opts.no_slowdown());
-        r.disable_wal(true);
         RocksWriteOptions(r)
     }
 }
