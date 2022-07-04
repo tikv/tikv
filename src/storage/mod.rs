@@ -4580,8 +4580,7 @@ mod tests {
         range.set_end_key(b"r\0z".to_vec());
         assert_eq!(
             (checksum, total_kvs, total_bytes),
-            block_on(storage.raw_checksum(ctx.clone(), ChecksumAlgorithm::Crc64Xor, vec![range]))
-                .unwrap(),
+            block_on(storage.raw_checksum(ctx, ChecksumAlgorithm::Crc64Xor, vec![range])).unwrap(),
         );
     }
 
