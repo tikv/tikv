@@ -39,6 +39,7 @@ macro_rules! command {
         pub struct $cmd {
             pub ctx: crate::storage::Context,
             pub deadline: ::tikv_util::deadline::Deadline,
+            pub lock_diag_info_ch: Option<std::sync::mpsc::Sender<crate::storage::txn::scheduler::LockDiagnosticInfo>>,
             $($(#[$inner_doc])* pub $arg: $arg_ty,)*
         }
 
@@ -57,6 +58,7 @@ macro_rules! command {
                 Command::$cmd($cmd {
                         ctx,
                         deadline,
+                        lock_diag_info_ch: None,
                         $($arg,)*
                 }).into()
             }

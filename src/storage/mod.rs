@@ -6799,6 +6799,9 @@ mod tests {
             hashes: Vec<u64>,
             commit_ts: TimeStamp,
             is_pessimistic_txn: bool,
+            _lock_diag_info_ch: Option<
+                std::sync::mpsc::Sender<super::txn::scheduler::LockDiagnosticInfo>,
+            >,
         ) {
             self.tx
                 .send(Msg::WakeUp {

@@ -140,7 +140,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         let mut rows = 0;
         if let SecondaryLocksStatus::RolledBack = &result {
             // Lock is only released when result is `RolledBack`.
-            released_locks.wake_up(context.lock_mgr);
+            released_locks.wake_up(context.lock_mgr, self.lock_diag_info_ch);
             // One row is mutated only when a secondary lock is rolled back.
             rows = 1;
         }
@@ -189,6 +189,7 @@ pub mod tests {
             keys: vec![Key::from_raw(key)],
             start_ts: lock_ts,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+            lock_diag_info_ch: None,
         };
         let result = command
             .process_write(
@@ -225,6 +226,7 @@ pub mod tests {
                 keys: vec![key],
                 start_ts: ts,
                 deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+                lock_diag_info_ch: None,
             };
             let result = command
                 .process_write(

@@ -125,6 +125,7 @@ pub mod tests {
             start_ts,
             advise_ttl,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+            lock_diag_info_ch: None,
         };
         let result = command
             .process_write(
@@ -165,6 +166,7 @@ pub mod tests {
             start_ts,
             advise_ttl,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+            lock_diag_info_ch: None,
         };
         assert!(
             command

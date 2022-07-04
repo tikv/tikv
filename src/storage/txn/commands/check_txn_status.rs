@@ -117,7 +117,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         released_locks.push(released);
         // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
         if let TxnStatus::TtlExpire = txn_status {
-            released_locks.wake_up(context.lock_mgr);
+            released_locks.wake_up(context.lock_mgr, self.lock_diag_info_ch);
         }
 
         let pr = ProcessResult::TxnStatus { txn_status };
@@ -171,6 +171,7 @@ pub mod tests {
         let lock_ts: TimeStamp = lock_ts.into();
         let command = crate::storage::txn::commands::CheckTxnStatus {
             ctx: Context::default(),
+            lock_diag_info_ch: None,
             primary_key: Key::from_raw(primary_key),
             lock_ts,
             caller_start_ts: caller_start_ts.into(),
@@ -225,6 +226,7 @@ pub mod tests {
             force_sync_commit,
             resolving_pessimistic_lock,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+            lock_diag_info_ch: None,
         };
         assert!(
             command

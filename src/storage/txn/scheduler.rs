@@ -315,6 +315,7 @@ pub enum LockDiagnosticEventType {
     WaitLock,
     ReleaseCommitted,
     ReleaseOther,
+    WakeUp,
 }
 
 #[derive(Debug, Clone)]
@@ -472,7 +473,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.inner.scale_pool_size(pool_size)
     }
 
-    pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
+    pub(in crate::storage) fn run_cmd(&self, mut cmd: Command, callback: StorageCallback) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
@@ -481,6 +482,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             });
             return;
         }
+        *(cmd.lock_diag_info_ch()) = Some(self.lock_diag_info_ch.clone());
         self.schedule_command(cmd, callback);
     }
 

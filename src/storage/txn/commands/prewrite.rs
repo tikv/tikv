@@ -6,6 +6,7 @@
 //! handling of the commands is similar. We therefore have a single type (Prewriter) to handle both
 //! kinds of prewrite.
 
+use crate::storage::txn::scheduler::LockDiagnosticInfo;
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
@@ -181,6 +182,8 @@ impl Prewrite {
 
             ctx: self.ctx,
             old_values: OldValues::default(),
+
+            lock_diag_info_ch: self.lock_diag_info_ch,
         }
     }
 }
@@ -321,6 +324,8 @@ impl PrewritePessimistic {
 
             ctx: self.ctx,
             old_values: OldValues::default(),
+
+            lock_diag_info_ch: self.lock_diag_info_ch,
         }
     }
 }
@@ -371,6 +376,8 @@ struct Prewriter<K: PrewriteKind> {
     old_values: OldValues,
     try_one_pc: bool,
     assertion_level: AssertionLevel,
+
+    lock_diag_info_ch: Option<std::sync::mpsc::Sender<LockDiagnosticInfo>>,
 
     ctx: Context,
 }
@@ -576,8 +583,13 @@ impl<K: PrewriteKind> Prewriter<K> {
         };
 
         let mut result = if locks.is_empty() {
-            let (one_pc_commit_ts, released_locks) =
-                one_pc_commit_ts(self.try_one_pc, &mut txn, final_min_commit_ts, lock_manager);
+            let (one_pc_commit_ts, released_locks) = one_pc_commit_ts(
+                self.try_one_pc,
+                &mut txn,
+                final_min_commit_ts,
+                lock_manager,
+                self.lock_diag_info_ch,
+            );
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
@@ -746,6 +758,7 @@ pub fn one_pc_commit_ts(
     txn: &mut MvccTxn,
     final_min_commit_ts: TimeStamp,
     lock_manager: &impl LockManager,
+    lock_diag_info_ch: Option<std::sync::mpsc::Sender<LockDiagnosticInfo>>,
 ) -> (TimeStamp, Option<ReleasedLocks>) {
     if try_one_pc {
         assert_ne!(final_min_commit_ts, TimeStamp::zero());
@@ -753,7 +766,7 @@ pub fn one_pc_commit_ts(
         // commit them.
         let released_locks = handle_1pc_locks(txn, final_min_commit_ts);
         if !released_locks.is_empty() {
-            released_locks.wake_up(lock_manager);
+            released_locks.wake_up(lock_manager, lock_diag_info_ch);
         }
         (final_min_commit_ts, Some(released_locks))
     } else {

@@ -20,8 +20,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
+use crate::storage::txn::scheduler::{LockDiagnosticEventType, LockDiagnosticInfo};
 use futures::compat::Compat01As03;
 use futures::compat::Future01CompatExt;
 use futures::future::Future;
@@ -111,6 +112,7 @@ pub enum Task {
         lock_ts: TimeStamp,
         hashes: Vec<u64>,
         commit_ts: TimeStamp,
+        lock_diag_info_ch: Option<std::sync::mpsc::Sender<LockDiagnosticInfo>>,
     },
     Dump {
         cb: Callback,
@@ -420,11 +422,18 @@ impl Scheduler {
         });
     }
 
-    pub fn wake_up(&self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
+    pub fn wake_up(
+        &self,
+        lock_ts: TimeStamp,
+        hashes: Vec<u64>,
+        commit_ts: TimeStamp,
+        lock_diag_info_ch: Option<std::sync::mpsc::Sender<LockDiagnosticInfo>>,
+    ) {
         self.notify_scheduler(Task::WakeUp {
             lock_ts,
             hashes,
             commit_ts,
+            lock_diag_info_ch,
         });
     }
 
@@ -512,13 +521,21 @@ impl WaiterManager {
         spawn_local(f);
     }
 
-    fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
+    fn handle_wake_up(
+        &mut self,
+        lock_ts: TimeStamp,
+        hashes: Vec<u64>,
+        commit_ts: TimeStamp,
+        lock_diag_info_ch: Option<std::sync::mpsc::Sender<LockDiagnosticInfo>>,
+    ) {
+        let lock_diag_info_ch = lock_diag_info_ch.as_ref();
         let mut wait_table = self.wait_table.borrow_mut();
         if wait_table.is_empty() {
             return;
         }
         let duration: Duration = self.wake_up_delay_duration.into();
         let new_timeout = Instant::now() + duration;
+        let time = SystemTime::now();
         for hash in hashes {
             let lock = Lock { ts: lock_ts, hash };
             if let Some((mut oldest, others)) = wait_table.remove_oldest_waiter(lock) {
@@ -526,7 +543,22 @@ impl WaiterManager {
                 self.detector_scheduler
                     .clean_up_wait_for(oldest.start_ts, oldest.lock);
                 oldest.conflict_with(lock_ts, commit_ts);
+                let wake_up_txn = oldest.start_ts;
                 oldest.notify();
+                if let Some(ch) = lock_diag_info_ch {
+                    ch.send(LockDiagnosticInfo {
+                        time,
+                        event_type: LockDiagnosticEventType::WakeUp,
+                        key: txn_types::Key::from_encoded(vec![]),
+                        hash,
+                        start_ts: lock_ts,
+                        for_update_ts: 0.into(),
+                        commit_ts,
+                        wait_for_txn: 0.into(),
+                        wake_up_txn,
+                    })
+                    .unwrap();
+                }
                 // Others will be waked up after `wake_up_delay_duration`.
                 //
                 // NOTE: Actually these waiters are waiting for an unknown transaction.
@@ -606,8 +638,9 @@ impl FutureRunnable<Task> for WaiterManager {
                 lock_ts,
                 hashes,
                 commit_ts,
+                lock_diag_info_ch,
             } => {
-                self.handle_wake_up(lock_ts, hashes, commit_ts);
+                self.handle_wake_up(lock_ts, hashes, commit_ts, lock_diag_info_ch);
                 TASK_COUNTER_METRICS.wake_up.inc();
             }
             Task::Dump { cb } => {
@@ -1187,7 +1220,7 @@ pub mod tests {
             waiters_info.push((waiter_ts, lock_info, f));
         }
         let commit_ts = 15.into();
-        scheduler.wake_up(lock_ts, lock_hashes, commit_ts);
+        scheduler.wake_up(lock_ts, lock_hashes, commit_ts, None);
         for (waiter_ts, lock_info, f) in waiters_info {
             assert_elapsed(
                 || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, commit_ts),
@@ -1221,7 +1254,7 @@ pub mod tests {
         let mut commit_ts = 30.into();
         // Each waiter should be waked up immediately in order.
         for (waiter_ts, mut lock_info, f) in waiters_info.drain(..waiters_info.len() - 1) {
-            scheduler.wake_up(lock.ts, vec![lock.hash], commit_ts);
+            scheduler.wake_up(lock.ts, vec![lock.hash], commit_ts, None);
             lock_info.set_lock_version(lock.ts.into_inner());
             assert_elapsed(
                 || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, commit_ts),
@@ -1286,7 +1319,7 @@ pub mod tests {
             tx.send(()).unwrap();
         });
         // It will increase waiter2's timeout to wake_up_delay_duration.
-        scheduler.wake_up(lock.ts, vec![lock.hash], commit_ts);
+        scheduler.wake_up(lock.ts, vec![lock.hash], commit_ts, None);
         assert_elapsed(
             || expect_write_conflict(block_on(f1).unwrap(), 20.into(), lock_info1, commit_ts),
             0,
@@ -1384,7 +1417,7 @@ pub mod tests {
             .add_waiter(dummy_waiter(10.into(), 20.into(), 10000));
         let hashes: Vec<u64> = (0..1000).collect();
         b.iter(|| {
-            waiter_mgr.handle_wake_up(20.into(), hashes.clone(), 30.into());
+            waiter_mgr.handle_wake_up(20.into(), hashes.clone(), 30.into(), None);
         });
     }
 }

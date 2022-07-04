@@ -84,6 +84,9 @@ pub trait LockManager: Clone + Send + 'static {
         hashes: Vec<u64>,
         commit_ts: TimeStamp,
         is_pessimistic_txn: bool,
+        lock_diag_info_ch: Option<
+            std::sync::mpsc::Sender<super::txn::scheduler::LockDiagnosticInfo>,
+        >,
     );
 
     /// Returns true if there are waiters in the `LockManager`.
@@ -119,6 +122,9 @@ impl LockManager for DummyLockManager {
         _hashes: Vec<u64>,
         _commit_ts: TimeStamp,
         _is_pessimistic_txn: bool,
+        _lock_diag_info_ch: Option<
+            std::sync::mpsc::Sender<super::txn::scheduler::LockDiagnosticInfo>,
+        >,
     ) {
     }
 

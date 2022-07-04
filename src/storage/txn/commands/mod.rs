@@ -426,12 +426,17 @@ impl ReleasedLocks {
     }
 
     // Wake up pessimistic transactions that waiting for these locks.
-    pub fn wake_up<L: LockManager>(&self, lock_mgr: &L) {
+    pub fn wake_up<L: LockManager>(
+        &self,
+        lock_mgr: &L,
+        lock_diag_info_ch: Option<std::sync::mpsc::Sender<super::scheduler::LockDiagnosticInfo>>,
+    ) {
         lock_mgr.wake_up(
             self.start_ts,
             self.hashes.clone(),
             self.commit_ts,
             self.pessimistic,
+            lock_diag_info_ch,
         );
     }
 }
@@ -676,6 +681,31 @@ impl Command {
 
     pub fn deadline(&self) -> Deadline {
         self.command_ext().deadline()
+    }
+
+    pub fn lock_diag_info_ch(
+        &mut self,
+    ) -> &mut Option<std::sync::mpsc::Sender<super::scheduler::LockDiagnosticInfo>> {
+        match self {
+            Command::Prewrite(t) => &mut t.lock_diag_info_ch,
+            Command::PrewritePessimistic(t) => &mut t.lock_diag_info_ch,
+            Command::AcquirePessimisticLock(t) => &mut t.lock_diag_info_ch,
+            Command::Commit(t) => &mut t.lock_diag_info_ch,
+            Command::Cleanup(t) => &mut t.lock_diag_info_ch,
+            Command::Rollback(t) => &mut t.lock_diag_info_ch,
+            Command::PessimisticRollback(t) => &mut t.lock_diag_info_ch,
+            Command::TxnHeartBeat(t) => &mut t.lock_diag_info_ch,
+            Command::CheckTxnStatus(t) => &mut t.lock_diag_info_ch,
+            Command::CheckSecondaryLocks(t) => &mut t.lock_diag_info_ch,
+            Command::ResolveLockReadPhase(t) => &mut t.lock_diag_info_ch,
+            Command::ResolveLock(t) => &mut t.lock_diag_info_ch,
+            Command::ResolveLockLite(t) => &mut t.lock_diag_info_ch,
+            Command::Pause(t) => &mut t.lock_diag_info_ch,
+            Command::MvccByKey(t) => &mut t.lock_diag_info_ch,
+            Command::MvccByStartTs(t) => &mut t.lock_diag_info_ch,
+            Command::RawCompareAndSwap(t) => &mut t.lock_diag_info_ch,
+            Command::RawAtomicStore(t) => &mut t.lock_diag_info_ch,
+        }
     }
 }
 

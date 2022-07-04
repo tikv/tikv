@@ -121,9 +121,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             }
         }
         let lock_mgr = context.lock_mgr;
+        let ch = self.lock_diag_info_ch;
         released_locks
             .into_iter()
-            .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
+            .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr, ch.clone()));
 
         let pr = if scan_key.is_none() {
             ProcessResult::Res
@@ -133,6 +134,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 deadline: self.deadline,
                 txn_status,
                 scan_key,
+                lock_diag_info_ch: ch,
             };
             ProcessResult::NextCommand {
                 cmd: Command::ResolveLockReadPhase(next_cmd),

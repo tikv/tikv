@@ -74,7 +74,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             };
             released_locks.push(released_lock?);
         }
-        released_locks.wake_up(context.lock_mgr);
+        released_locks.wake_up(context.lock_mgr, self.lock_diag_info_ch);
 
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
@@ -123,6 +123,7 @@ pub mod tests {
             start_ts,
             for_update_ts,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+            lock_diag_info_ch: None,
         };
         let lock_mgr = DummyLockManager;
         let write_context = WriteContext {
