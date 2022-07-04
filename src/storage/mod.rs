@@ -4552,6 +4552,7 @@ mod tests {
         let mut checksum: u64 = 0;
         let mut total_kvs: u64 = 0;
         let mut total_bytes: u64 = 0;
+        let mut is_first = true;
         // Write key-value pairs one by one
         for &(ref key, ref value) in &test_data {
             storage
@@ -4564,36 +4565,23 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
-            total_kvs += 1;
-            total_bytes += (key.len() + value.len()) as u64;
-            checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
+            // start key is set to b"r\0a0", if raw_checksum does not encode the key,
+            // first key will be included in checksum. This is for testing issue #12950.
+            if !is_first {
+                total_kvs += 1;
+                total_bytes += (key.len() + value.len()) as u64;
+                checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
+            }
+            is_first = false;
             rx.recv().unwrap();
         }
         let mut range = KeyRange::default();
-        range.set_start_key(b"r\0a".to_vec());
+        range.set_start_key(b"r\0a0".to_vec());
         range.set_end_key(b"r\0z".to_vec());
         assert_eq!(
             (checksum, total_kvs, total_bytes),
             block_on(storage.raw_checksum(ctx.clone(), ChecksumAlgorithm::Crc64Xor, vec![range]))
                 .unwrap(),
-        );
-
-        let mut range = KeyRange::default();
-        range.set_start_key(Key::from_raw(b"r\0a").into_encoded());
-        range.set_end_key(b"r\0f0".to_vec());
-        // the start key is encoded, so it's bigger than the first key.
-        let digest = crc64fast::Digest::new();
-        checksum = 0;
-        total_kvs = 0;
-        total_bytes = 0;
-        for &(ref key, ref value) in &test_data[1..] {
-            total_kvs += 1;
-            total_bytes += (key.len() + value.len()) as u64;
-            checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
-        }
-        assert_eq!(
-            (checksum, total_kvs, total_bytes),
-            block_on(storage.raw_checksum(ctx, ChecksumAlgorithm::Crc64Xor, vec![range])).unwrap(),
         );
     }
 
