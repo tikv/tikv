@@ -687,4 +687,12 @@ lazy_static! {
     .unwrap();
     pub static ref STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC: KeywisePessimisticLockDurationHistogramVec =
         auto_flush_from!(STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM, KeywisePessimisticLockDurationHistogramVec);
+    //
+    // pub static ref STORAGE_LOCK_WAIT_QUEUE_LENGTH_HISTOGRAM: Histogram = register_histogram!(
+    //     "tikv_storage_lock_wait_queue_length",
+    //     "Histogram of length of the lock wait queue that requests meets",
+    //     exponential_buckets(1, 2, 10).unwrap() // 1 ~ 1024
+    // )
+    // .unwrap();
+
 }

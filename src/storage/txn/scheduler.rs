@@ -22,13 +22,14 @@
 //! to the scheduler.
 
 use std::collections::{HashSet, VecDeque};
+use std::fmt::{Display, Formatter};
 use std::iter::Iterator;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::{mem, u64};
 
 use collections::HashMap;
@@ -353,10 +354,64 @@ impl<L: LockManager> SchedulerInner<L> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum LockDiagnosticEventType {
+    None,
+    AcquireLatch,
+    InheritLatch,
+    WaitLock,
+    ReleaseCommitted,
+    ReleaseOther,
+}
+
+#[derive(Debug, Clone)]
+pub struct LockDiagnosticInfo {
+    pub time: SystemTime,
+    pub event_type: LockDiagnosticEventType,
+    pub key: txn_types::Key,
+    pub start_ts: TimeStamp,
+    pub for_update_ts: TimeStamp,
+    pub commit_ts: TimeStamp,
+    pub wait_for_txn: TimeStamp,
+    pub wake_up_txn: TimeStamp,
+}
+
+impl Default for LockDiagnosticInfo {
+    fn default() -> Self {
+        LockDiagnosticInfo {
+            time: std::time::UNIX_EPOCH,
+            event_type: LockDiagnosticEventType::None,
+            key: txn_types::Key::from_encoded(vec![]),
+            start_ts: 0.into(),
+            for_update_ts: 0.into(),
+            commit_ts: 0.into(),
+            wait_for_txn: 0.into(),
+            wake_up_txn: 0.into(),
+        }
+    }
+}
+
+impl Display for LockDiagnosticInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: txn: {}, for_update_ts: {}, commit_ts: {}, wake_up_txn: {}, event: {:?}, key: {},",
+            chrono::DateTime::<chrono::Local>::from(self.time).format("%F %T%.6f"),
+            self.start_ts,
+            self.for_update_ts,
+            self.commit_ts,
+            self.wake_up_txn,
+            self.event_type,
+            self.key,
+        )
+    }
+}
+
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
 pub struct Scheduler<E: Engine, L: LockManager> {
     inner: Arc<SchedulerInner<L>>,
+    lock_diag_info_ch: std::sync::mpsc::Sender<LockDiagnosticInfo>,
     // The engine can be fetched from the thread local storage of scheduler threads.
     // So, we don't store the engine here.
     _engine: PhantomData<E>,
@@ -384,10 +439,39 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             task_slots.push(Mutex::new(Default::default()).into());
         }
 
+        let (tx, rx) = channel();
+
+        std::thread::spawn(move || {
+            let mut last_print_time = Instant::now();
+            let mut collected = Vec::with_capacity(200);
+            loop {
+                match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                    Ok(info) => {
+                        collected.push(info);
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (),
+                    Err(e @ std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        info!("lock diagnostic log collector thread exited"; "err" => ?e);
+                        return;
+                    }
+                }
+
+                if last_print_time.saturating_elapsed_secs() < 30.0 {
+                    continue;
+                }
+                last_print_time = Instant::now();
+                if collected.len() == 0 {
+                    continue;
+                }
+                info!("collected lock diagnostic info"; "info"=>?collected);
+                collected.clear();
+            }
+        });
+
         let inner = Arc::new(SchedulerInner {
             task_slots,
             id_alloc: AtomicU64::new(0).into(),
-            latches: Latches::new(config.scheduler_concurrency),
+            latches: Latches::new(config.scheduler_concurrency, tx.clone()),
             running_write_bytes: AtomicUsize::new(0).into(),
             sched_pending_write_threshold: config.scheduler_pending_write_threshold.0 as usize,
             worker_pool: SchedPool::new(
@@ -420,6 +504,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
         Scheduler {
             inner,
+            lock_diag_info_ch: tx,
             _engine: PhantomData,
         }
     }
@@ -457,6 +542,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         released_locks: Option<ReleasedLocks>,
         tag: metrics::CommandKind,
+        lock_diag_info: Option<LockDiagnosticInfo>,
     ) {
         let start_time = Instant::now();
         let next_cid_for_holding_latches = if released_locks.is_some() {
@@ -470,6 +556,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             wait_for_locks,
             released_locks,
             next_cid_for_holding_latches,
+            lock_diag_info,
         );
         for wcid in cmd_wakeup_list {
             self.try_to_wake_up(wcid);
@@ -512,7 +599,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .new_task_context(Task::new(cid, cmd), callback, prepared_latches)
         });
         let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
+        let acquire_time = SystemTime::now();
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
+            if tag == CommandKind::acquire_pessimistic_lock && self.record_diag_event() {
+                self.record_diag_info_for_pessimisitc_lock_single_request(
+                    &tctx.task.as_ref().unwrap().cmd,
+                    acquire_time,
+                );
+            }
+
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
             let task = tctx.task.take().unwrap();
@@ -549,9 +644,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
+        let acquire_time = SystemTime::now();
         match self.inner.acquire_lock_on_wakeup(cid) {
             Ok(Some(task)) => {
                 fail_point!("txn_scheduler_try_to_wake_up");
+
+                let tag = task.cmd.tag();
+                if tag == CommandKind::acquire_pessimistic_lock && self.record_diag_event() {
+                    self.record_diag_info_for_pessimisitc_lock_single_request(
+                        &task.cmd,
+                        acquire_time,
+                    );
+                }
+
                 self.execute(task);
             }
             Ok(None) => {}
@@ -566,6 +671,41 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         this.finish_with_err(cid, err);
                     })
                     .unwrap();
+            }
+        }
+    }
+
+    fn record_diag_info_for_pessimisitc_lock_single_request(
+        &self,
+        cmd: &Command,
+        time: SystemTime,
+    ) {
+        if cmd.tag() == CommandKind::acquire_pessimistic_lock && self.record_diag_event() {
+            if let Command::AcquirePessimisticLock(commands::AcquirePessimisticLock {
+                inner, ..
+            }) = &cmd
+            {
+                match inner {
+                    commands::acquire_pessimistic_lock::PessimisticLockCmdInner::SingleRequest {
+                        params,
+                        keys,
+                        ..
+                    } => {
+                        for k in keys {
+                            self.lock_diag_info_ch.send(LockDiagnosticInfo {
+                                time,
+                                event_type: LockDiagnosticEventType::AcquireLatch,
+                                key: k.0.clone(),
+                                start_ts: params.start_ts,
+                                for_update_ts: params.for_update_ts,
+                                commit_ts: 0.into(),
+                                wait_for_txn: 0.into(),
+                                wake_up_txn: 0.into(),
+                            }).unwrap();
+                        }
+                    }
+                    _ => {},
+                }
             }
         }
     }
@@ -807,7 +947,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             cb.execute(pr);
         }
 
-        self.release_latches(&tctx.lock, cid, None, None, tctx.tag);
+        self.release_latches(&tctx.lock, cid, None, None, tctx.tag, None);
     }
 
     /// Event handler for the success of read.
@@ -826,7 +966,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             tctx.cb.unwrap().execute(pr);
         }
 
-        self.release_latches(&tctx.lock, cid, None, None, tag);
+        self.release_latches(&tctx.lock, cid, None, None, tag, None);
     }
 
     /// Event handler for the success of write.
@@ -844,6 +984,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         pipelined: bool,
         async_apply_prewrite: bool,
         tag: metrics::CommandKind,
+        mut lock_diag_info: Option<LockDiagnosticInfo>,
     ) {
         assert!(!(wait_for_locks.is_some() && released_locks.is_some()));
 
@@ -874,6 +1015,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             let pr = match result {
                 Ok(()) => pr.or(tctx.pr).unwrap(),
                 Err(e) => {
+                    if let Some(ref mut lock_diag_info) = lock_diag_info {
+                        lock_diag_info.event_type = LockDiagnosticEventType::ReleaseOther;
+                    }
                     if !Self::need_wake_up_pessimistic_lock_on_error(&e) {
                         released_locks = None;
                     }
@@ -891,7 +1035,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             assert!((pipelined && wait_for_locks.is_none()) || async_apply_prewrite);
         }
-        self.release_latches(&tctx.lock, cid, wait_for_locks, released_locks, tag);
+        self.release_latches(
+            &tctx.lock,
+            cid,
+            wait_for_locks,
+            released_locks,
+            tag,
+            lock_diag_info,
+        );
 
         if let Some(secondaries) = pessimistic_lock_next_batch_secondaries {
             self.schedule_awakened_pessimistic_locks_suspended_secondaries(secondaries);
@@ -1220,6 +1371,36 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             None
         };
 
+        let lock_diag_info = if self.record_diag_event() {
+            if let Some(released_locks) = &released_locks {
+                if released_locks.0.len() != 0 {
+                    let first = &released_locks.0[0];
+                    Some(LockDiagnosticInfo {
+                        time: std::time::UNIX_EPOCH,
+                        event_type: if tag == CommandKind::commit {
+                            LockDiagnosticEventType::ReleaseCommitted
+                        } else {
+                            LockDiagnosticEventType::ReleaseOther
+                        },
+                        key: txn_types::Key::from_encoded(vec![]),
+                        start_ts: first.start_ts,
+                        for_update_ts: 0.into(),
+                        commit_ts: first.commit_ts,
+                        wait_for_txn: 0.into(),
+                        wake_up_txn: 0.into(),
+                    })
+                } else {
+                    None
+                }
+            } else if lock_info.is_some() {
+                Some(LockDiagnosticInfo::default())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         if to_be_write.modifies.is_empty() {
             scheduler.on_write_finished(
                 cid,
@@ -1232,6 +1413,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 false,
                 false,
                 tag,
+                lock_diag_info,
             );
             return;
         }
@@ -1264,6 +1446,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 false,
                 false,
                 tag,
+                lock_diag_info,
             );
             return;
         }
@@ -1449,6 +1632,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         pipelined,
                         is_async_apply_prewrite,
                         tag,
+                        lock_diag_info,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                         .get(tag)
@@ -1547,6 +1731,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             PessimisticLockMode::Sync
         }
+    }
+
+    fn record_diag_event(&self) -> bool {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            % 60
+            == 0
     }
 
     fn convert_to_keywise_callbacks(
@@ -1994,7 +2187,8 @@ mod tests {
                 .into(),
         ];
 
-        let latches = Latches::new(1024);
+        let (tx, _rx) = channel();
+        let latches = Latches::new(1024, tx);
         let write_locks: Vec<Lock> = write_cmds
             .into_iter()
             .enumerate()
@@ -2017,7 +2211,7 @@ mod tests {
             if id != 0 {
                 assert!(latches.acquire(&mut lock, id));
             }
-            let unlocked = latches.release(&lock, id, None, None, None).0;
+            let unlocked = latches.release(&lock, id, None, None, None, None).0;
             if id as u64 == max_id {
                 assert!(unlocked.is_empty());
             } else {
@@ -2072,7 +2266,7 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
-        scheduler.release_latches(&lock, cid, None, None, CommandKind::prewrite);
+        scheduler.release_latches(&lock, cid, None, None, CommandKind::prewrite, None);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
@@ -2254,7 +2448,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         // When releasing the lock, the queuing tasks should be all waken up without stack overflow.
-        scheduler.release_latches(&lock, cid, None, None, CommandKind::prewrite);
+        scheduler.release_latches(&lock, cid, None, None, CommandKind::prewrite, None);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
