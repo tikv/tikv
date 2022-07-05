@@ -42,5 +42,5 @@ pub use self::{
         Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
     },
     split_config::{SplitConfig, SplitConfigManager},
-    split_controller::{AutoSplitController, ReadStats, WriteStats},
+    split_controller::{AutoSplitController, ReadStats, SplitConfigChange, WriteStats},
 };

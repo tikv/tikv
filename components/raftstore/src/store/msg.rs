@@ -401,9 +401,13 @@ pub enum CasualMessage<EK: KvEngine> {
     CompactionDeclinedBytes {
         bytes: u64,
     },
-    /// Half split the target region.
+    /// Half split the target region with the given key range.
+    /// If the key range is not provided, the region's start key
+    /// and end key will be used by default.
     HalfSplitRegion {
         region_epoch: RegionEpoch,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
         policy: CheckPolicy,
         source: &'static str,
         cb: Callback<EK::Snapshot>,
