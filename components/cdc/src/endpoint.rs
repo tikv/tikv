@@ -70,8 +70,6 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
 // Suppress repeat resolved ts lag warning.
 const WARN_RESOLVED_TS_COUNT_THRESHOLD: usize = 10;
-// raw region's outlier detection.
-const RAW_RESOLVED_TS_OUTLIER_THRESHOLD: Duration = Duration::from_secs(60);
 // if raw region's count is more than 10, begin detect outlier.
 const RAW_RESOLVED_TS_OUTLIER_COUNT_THRESHOLD: usize = 10;
 
@@ -339,9 +337,13 @@ impl ResolvedRegionVec {
     }
     // extreme outier match the following two conditions:
     // 1. https://en.wikipedia.org/wiki/Box_plot
-    // 2. the gap with min_ts is larger than RAW_RESOLVED_TS_OUTLIER_THRESHOLD.
+    // 2. the gap with min_ts is larger than raw_min_ts_outlier_threshold.
     // return one region at maximum.
-    fn get_extreme_outlier(&mut self, min_ts: TimeStamp) -> Option<ResolvedRegion> {
+    fn get_extreme_outlier(
+        &mut self,
+        min_ts: TimeStamp,
+        threshold: Duration,
+    ) -> Option<ResolvedRegion> {
         // When the number is small, the confidence of outlier detection is low.
         if self.vec.len() > RAW_RESOLVED_TS_OUTLIER_COUNT_THRESHOLD {
             self.vec.sort();
@@ -358,7 +360,7 @@ impl ResolvedRegionVec {
                     min_ts
                         .physical()
                         .saturating_sub(first_resolved_region.resolved_ts.physical()),
-                ) > RAW_RESOLVED_TS_OUTLIER_THRESHOLD
+                ) > threshold
             {
                 return Some(first_resolved_region.to_owned());
             }
@@ -880,7 +882,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         raw_resolved_regions: &mut ResolvedRegionVec,
         min_ts: TimeStamp,
     ) {
-        if let Some(region) = raw_resolved_regions.get_extreme_outlier(min_ts) {
+        if let Some(region) = raw_resolved_regions
+            .get_extreme_outlier(min_ts, self.config.raw_min_ts_outlier_threshold.into())
+        {
             if let Some(delegate) = self.capture_regions.get(&region.region_id) {
                 let observe_id = delegate.handle.id;
                 let deregister = Deregister::Delegate {
@@ -2701,23 +2705,30 @@ mod tests {
     #[test]
     fn test_resolved_region_vec() {
         let mut heap2 = ResolvedRegionVec { vec: vec![] };
-        assert_eq!(heap2.get_extreme_outlier(1.into()).is_none(), true);
+        let threshold = Duration::from_secs(60);
+        assert_eq!(
+            heap2.get_extreme_outlier(1.into(), threshold).is_none(),
+            true
+        );
         heap2.push(5, TimeStamp::compose(5, 0));
         heap2.push(3, TimeStamp::compose(3, 0));
         heap2.push(4, TimeStamp::compose(4, 0));
-        assert_eq!(heap2.get_extreme_outlier(1.into()).is_none(), true);
+        assert_eq!(
+            heap2.get_extreme_outlier(1.into(), threshold).is_none(),
+            true
+        );
         for i in 2000..3000 {
             heap2.push(i, TimeStamp::compose(i, 0));
         }
         // 3,4,5 are outlier, but gap from input is smaller than 60s, so ret is empty.
         assert_eq!(
             heap2
-                .get_extreme_outlier(TimeStamp::compose(2000, 0))
+                .get_extreme_outlier(TimeStamp::compose(2000, 0), threshold)
                 .is_none(),
             true
         );
         // region 3 is extreme outlier
-        let outlier = heap2.get_extreme_outlier(TimeStamp::compose(60_010, 0));
+        let outlier = heap2.get_extreme_outlier(TimeStamp::compose(60_010, 0), threshold);
         assert_eq!(
             outlier.unwrap(),
             ResolvedRegion {
