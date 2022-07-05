@@ -62,7 +62,7 @@ impl<T> UnwrapExternCFunc<T> for std::option::Option<T> {
 pub struct RaftStoreProxy {
     status: AtomicU8,
     key_manager: Option<Arc<DataKeyManager>>,
-    read_index_client: Box<dyn read_index_helper::ReadIndex>,
+    read_index_client: Option<Box<dyn read_index_helper::ReadIndex>>,
     kv_engine: std::sync::RwLock<Option<engine_rocks::RocksEngine>>,
 }
 
@@ -78,7 +78,7 @@ impl RaftStoreProxy {
     pub fn new(
         status: AtomicU8,
         key_manager: Option<Arc<DataKeyManager>>,
-        read_index_client: Box<dyn read_index_helper::ReadIndex>,
+        read_index_client: Option<Box<dyn read_index_helper::ReadIndex>>,
         kv_engine: std::sync::RwLock<Option<engine_rocks::RocksEngine>>,
     ) -> Self {
         RaftStoreProxy {
@@ -212,6 +212,14 @@ pub extern "C" fn ffi_batch_read_index(
     fn_insert_batch_read_index_resp: Option<unsafe extern "C" fn(RawVoidPtr, BaseBuffView, u64)>,
 ) {
     assert!(!proxy_ptr.is_null());
+    unsafe {
+        match proxy_ptr.as_ref().read_index_client {
+            Option::None => {
+                return;
+            }
+            _ => {}
+        }
+    }
     debug_assert!(fn_insert_batch_read_index_resp.is_some());
     if view.len != 0 {
         assert_ne!(view.view, std::ptr::null());
@@ -229,6 +237,8 @@ pub extern "C" fn ffi_batch_read_index(
         let resp = proxy_ptr
             .as_ref()
             .read_index_client
+            .as_ref()
+            .unwrap()
             .batch_read_index(req_vec, time::Duration::from_millis(timeout_ms));
         assert_ne!(res, std::ptr::null_mut());
         for (r, region_id) in &resp {
@@ -301,12 +311,22 @@ pub extern "C" fn ffi_make_read_index_task(
     req_view: BaseBuffView,
 ) -> RawRustPtr {
     assert!(!proxy_ptr.is_null());
+    unsafe {
+        match proxy_ptr.as_ref().read_index_client {
+            Option::None => {
+                return RawRustPtr::default();
+            }
+            _ => {}
+        }
+    }
     let mut req = kvrpcpb::ReadIndexRequest::default();
     req.merge_from_bytes(req_view.to_slice()).unwrap();
     let task = unsafe {
         proxy_ptr
             .as_ref()
             .read_index_client
+            .as_ref()
+            .unwrap()
             .make_read_index_task(req)
     };
     return match task {
@@ -352,6 +372,14 @@ pub extern "C" fn ffi_poll_read_index_task(
     waker: RawVoidPtr,
 ) -> u8 {
     assert!(!proxy_ptr.is_null());
+    unsafe {
+        match proxy_ptr.as_ref().read_index_client {
+            Option::None => {
+                return 0;
+            }
+            _ => {}
+        }
+    }
     let task = unsafe {
         &mut *(task_ptr as *mut crate::engine_store_ffi::read_index_helper::ReadIndexTask)
     };
@@ -364,6 +392,8 @@ pub extern "C" fn ffi_poll_read_index_task(
         proxy_ptr
             .as_ref()
             .read_index_client
+            .as_ref()
+            .unwrap()
             .poll_read_index_task(task, waker)
     } {
         get_engine_store_server_helper().set_read_index_resp(resp_data, &res);

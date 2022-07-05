@@ -201,6 +201,11 @@ pub unsafe fn run_proxy(
                 .required(true)
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("only-decryption")
+                .long("only-decryption")
+                .help("Only do decryption in Proxy"),
+        )
         .get_matches_from(args);
 
     if matches.is_present("print-sample-config") {
@@ -245,7 +250,11 @@ pub unsafe fn run_proxy(
     }
 
     config.raft_store.engine_store_server_helper = engine_store_server_helper as *const _ as isize;
-    crate::server::run_tikv(config, engine_store_server_helper);
+    if matches.is_present("only-decryption") {
+        crate::server::run_tikv_only_decryption(config, engine_store_server_helper);
+    } else {
+        crate::server::run_tikv(config, engine_store_server_helper);
+    }
 }
 
 fn check_engine_label(matches: &clap::ArgMatches<'_>) {

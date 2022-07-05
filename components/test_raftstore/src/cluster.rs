@@ -320,10 +320,10 @@ impl<T: Simulator> Cluster<T> {
         let proxy = Box::new(raftstore::engine_store_ffi::RaftStoreProxy::new(
             AtomicU8::new(raftstore::engine_store_ffi::RaftProxyStatus::Idle as u8),
             key_mgr.clone(),
-            Box::new(raftstore::engine_store_ffi::ReadIndexClient::new(
+            Some(Box::new(raftstore::engine_store_ffi::ReadIndexClient::new(
                 router.clone(),
                 SysQuota::cpu_cores_quota() as usize * 2,
-            )),
+            ))),
             std::sync::RwLock::new(Some(engines.kv.clone())),
         ));
 
