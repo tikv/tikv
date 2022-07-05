@@ -546,18 +546,20 @@ impl WaiterManager {
                 let wake_up_txn = oldest.start_ts;
                 oldest.notify();
                 if let Some(ch) = lock_diag_info_ch {
-                    ch.send(LockDiagnosticInfo {
-                        time,
-                        event_type: LockDiagnosticEventType::WakeUp,
-                        key: txn_types::Key::from_encoded(vec![]),
-                        hash,
-                        start_ts: lock_ts,
-                        for_update_ts: 0.into(),
-                        commit_ts,
-                        wait_for_txn: 0.into(),
-                        wake_up_txn,
-                    })
-                    .unwrap();
+                    if self.record_diag_event() {
+                        ch.send(LockDiagnosticInfo {
+                            time,
+                            event_type: LockDiagnosticEventType::WakeUp,
+                            key: txn_types::Key::from_encoded(vec![]),
+                            hash,
+                            start_ts: lock_ts,
+                            for_update_ts: 0.into(),
+                            commit_ts,
+                            wait_for_txn: 0.into(),
+                            wake_up_txn,
+                        })
+                        .unwrap();
+                    }
                 }
                 // Others will be waked up after `wake_up_delay_duration`.
                 //
@@ -574,6 +576,15 @@ impl WaiterManager {
                 }
             }
         }
+    }
+
+    fn record_diag_event(&self) -> bool {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            % 60
+            == 0
     }
 
     fn handle_dump(&self, cb: Callback) {

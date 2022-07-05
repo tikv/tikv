@@ -815,19 +815,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
         let time = SystemTime::now();
         self.release_lock(&tctx.lock, cid, None, None);
-        self.lock_diag_info_ch
-            .send(LockDiagnosticInfo {
-                time,
-                event_type: LockDiagnosticEventType::WaitLock,
-                key: txn_types::Key::from_raw(&diag_ctx.key),
-                hash: lock.hash,
-                start_ts,
-                for_update_ts: 0.into(),
-                commit_ts: 0.into(),
-                wait_for_txn: lock.ts,
-                wake_up_txn: 0.into(),
-            })
-            .unwrap();
+        if self.record_diag_event() {
+            self.lock_diag_info_ch
+                .send(LockDiagnosticInfo {
+                    time,
+                    event_type: LockDiagnosticEventType::WaitLock,
+                    key: txn_types::Key::from_raw(&diag_ctx.key),
+                    hash: lock.hash,
+                    start_ts,
+                    for_update_ts: 0.into(),
+                    commit_ts: 0.into(),
+                    wait_for_txn: lock.ts,
+                    wake_up_txn: 0.into(),
+                })
+                .unwrap();
+        }
     }
 
     fn early_response(
