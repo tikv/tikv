@@ -2440,9 +2440,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         &self,
         ctx: Context,
         algorithm: ChecksumAlgorithm,
-        ranges: Vec<KeyRange>,
+        mut ranges: Vec<KeyRange>,
     ) -> impl Future<Output = Result<(u64, u64, u64)>> {
-        // TODO: Modify this method in another PR for backup & restore feature of Api V2.
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -2474,6 +2473,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .iter()
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
+                for range in ranges.iter_mut() {
+                    let start_key = F::encode_raw_key_owned(range.take_start_key(), None);
+                    let end_key = F::encode_raw_key_owned(range.take_end_key(), None);
+                    range.set_start_key(start_key.into_encoded());
+                    range.set_end_key(end_key.into_encoded());
+                }
 
                 let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
@@ -4564,6 +4569,7 @@ mod tests {
         let mut checksum: u64 = 0;
         let mut total_kvs: u64 = 0;
         let mut total_bytes: u64 = 0;
+        let mut is_first = true;
         // Write key-value pairs one by one
         for &(ref key, ref value) in &test_data {
             storage
@@ -4576,13 +4582,18 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
-            total_kvs += 1;
-            total_bytes += (key.len() + value.len()) as u64;
-            checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
+            // start key is set to b"r\0a\0", if raw_checksum does not encode the key,
+            // first key will be included in checksum. This is for testing issue #12950.
+            if !is_first {
+                total_kvs += 1;
+                total_bytes += (key.len() + value.len()) as u64;
+                checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
+            }
+            is_first = false;
             rx.recv().unwrap();
         }
         let mut range = KeyRange::default();
-        range.set_start_key(b"r\0a".to_vec());
+        range.set_start_key(b"r\0a\0".to_vec());
         range.set_end_key(b"r\0z".to_vec());
         assert_eq!(
             (checksum, total_kvs, total_bytes),
