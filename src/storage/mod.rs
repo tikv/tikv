@@ -2461,16 +2461,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .iter()
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
-                let mut encoded_ranges = Vec::with_capacity(ranges.len());
-                for i in 0..ranges.len() {
-                    let mut new_range = KeyRange::new();
-                    new_range.set_start_key(
-                        F::encode_raw_key_owned(ranges[i].take_start_key(), None).into_encoded(),
-                    );
-                    new_range.set_end_key(
-                        F::encode_raw_key_owned(ranges[i].take_end_key(), None).into_encoded(),
-                    );
-                    encoded_ranges.push(new_range);
+                for range in ranges.iter_mut() {
+                    let start_key = F::encode_raw_key_owned(range.take_start_key(), None);
+                    let end_key = F::encode_raw_key_owned(range.take_end_key(), None);
+                    range.set_start_key(start_key.into_encoded());
+                    range.set_end_key(end_key.into_encoded());
                 }
 
                 let command_duration = tikv_util::time::Instant::now();
@@ -2485,23 +2480,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let cf = Self::rawkv_cf("", api_version)?;
 
                 let begin_instant = tikv_util::time::Instant::now();
-                let mut stats = Vec::with_capacity(encoded_ranges.len());
+                let mut stats = Vec::with_capacity(ranges.len());
                 let ret = store
-                    .raw_checksum_ranges(cf, &encoded_ranges, &mut stats)
+                    .raw_checksum_ranges(cf, &ranges, &mut stats)
                     .await
                     .map_err(Error::from);
-                stats
-                    .iter()
-                    .zip(encoded_ranges.iter())
-                    .for_each(|(stats, range)| {
-                        tls_collect_read_flow(
-                            ctx.get_region_id(),
-                            Some(range.get_start_key()),
-                            Some(range.get_end_key()),
-                            stats,
-                            buckets.as_ref(),
-                        );
-                    });
+                stats.iter().zip(ranges.iter()).for_each(|(stats, range)| {
+                    tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(range.get_start_key()),
+                        Some(range.get_end_key()),
+                        stats,
+                        buckets.as_ref(),
+                    );
+                });
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(begin_instant.saturating_elapsed().as_secs_f64());
@@ -4576,7 +4568,7 @@ mod tests {
             rx.recv().unwrap();
         }
         let mut range = KeyRange::default();
-        range.set_start_key(b"r\0a0".to_vec());
+        range.set_start_key(b"r\0a\0".to_vec());
         range.set_end_key(b"r\0z".to_vec());
         assert_eq!(
             (checksum, total_kvs, total_bytes),
