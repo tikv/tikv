@@ -109,7 +109,11 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     }
 
     fn data_size(&self) -> usize {
-        self.wbs.iter().fold(0, |a, b| a + b.data_size())
+        let mut size: usize = 0;
+        for i in 0..=self.index {
+            size += self.wbs[i].data_size();
+        }
+        size
     }
 
     fn count(&self) -> usize {
@@ -133,6 +137,11 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
             self.wbs[i].clear();
         }
         self.save_points.clear();
+        // Avoid making the wbs too big at one time, then the memory will be kept
+        // after reusing
+        if self.index > WRITE_BATCH_MAX_BATCH + 1 {
+            self.wbs.shrink_to(WRITE_BATCH_MAX_BATCH + 1);
+        }
         self.index = 0;
     }
 
