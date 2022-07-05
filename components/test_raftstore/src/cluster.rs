@@ -1761,6 +1761,8 @@ impl<T: Simulator> Cluster<T> {
             region.get_id(),
             CasualMessage::HalfSplitRegion {
                 region_epoch: region.get_region_epoch().clone(),
+                start_key: None,
+                end_key: None,
                 policy: CheckPolicy::Scan,
                 source: "test",
                 cb,
