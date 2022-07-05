@@ -553,19 +553,25 @@ where
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
-                let mut thread_stats = ThreadInfoStatistics::new();
+                // Create different `ThreadInfoStatistics` for different purposes to
+                // make sure the record won't be disturbed.
+                let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
+                let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) =
                     timer_rx.recv_timeout(tick_interval)
                 {
                     if is_enable_tick(timer_cnt, collect_store_infos_interval) {
-                        StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
+                        StatsMonitor::collect_store_infos(
+                            &mut collect_store_infos_thread_stats,
+                            &scheduler,
+                        );
                     }
                     if is_enable_tick(timer_cnt, load_base_split_check_interval) {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
                             &read_stats_receiver,
                             &cpu_stats_receiver,
-                            &mut thread_stats,
+                            &mut load_base_split_thread_stats,
                             &scheduler,
                         );
                     }
