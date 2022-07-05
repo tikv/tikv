@@ -32,7 +32,6 @@ pprof-fp = ["tikv/pprof-fp"]
 
 [dependencies]
 clap = "2.32"
-serde_derive = "1.0"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 server = { path = "../../components/server", default-features = false }
 tikv = { path = "../../", default-features = false }

@@ -71,7 +71,6 @@ rand = "0.8"
 resolved_ts = { path = "../../components/resolved_ts", default-features = false }
 resource_metering = { path = "../resource_metering" }
 security = { path = "../security", default-features = false, features = ["tonic"] }
-serde = "1.0"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
@@ -83,9 +82,6 @@ tokio = { version = "1.5", features = ["rt-multi-thread"] }
 toml = "0.5"
 txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-
-[dev-dependencies]
-serde = { version = "1.0", features = ["derive"] }
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"

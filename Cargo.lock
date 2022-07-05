@@ -5058,7 +5058,6 @@ dependencies = [
  "resolved_ts",
  "resource_metering",
  "security",
- "serde",
  "serde_json",
  "signal-hook",
  "slog",
@@ -6175,7 +6174,6 @@ version = "0.0.1"
 dependencies = [
  "cc",
  "clap 2.33.0",
- "serde_derive",
  "serde_json",
  "server",
  "tikv",
