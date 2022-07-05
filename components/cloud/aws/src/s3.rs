@@ -158,6 +158,10 @@ pub struct S3Storage {
 }
 
 impl S3Storage {
+    pub fn name() -> &'static str {
+        STORAGE_NAME
+    }
+
     pub fn from_input(input: InputConfig) -> io::Result<Self> {
         Self::new(Config::from_input(input)?)
     }
