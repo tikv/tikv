@@ -910,6 +910,7 @@ where
             max_election_tick: cfg.raft_max_election_timeout_ticks,
             max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
+            judge_split_prevote: true,
             applied: applied_index,
             check_quorum: true,
             skip_bcast_commit: true,
