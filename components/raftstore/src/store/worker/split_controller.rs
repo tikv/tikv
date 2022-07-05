@@ -862,7 +862,7 @@ impl AutoSplitController {
         // TODO: avoid unnecessary split by introducing the feedback mechanism from PD.
         if !top_cpu_usage.is_empty() && !is_grpc_poll_busy {
             // Calculate by using the latest CPU usage.
-            top_cpu_usage.sort_by(|a, b| {
+            top_cpu_usage.sort_unstable_by(|a, b| {
                 let cpu_usage_a = self.recorders.get(a).unwrap().cpu_usage;
                 let cpu_usage_b = self.recorders.get(b).unwrap().cpu_usage;
                 cpu_usage_b.partial_cmp(&cpu_usage_a).unwrap()

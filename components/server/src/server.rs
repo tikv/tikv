@@ -763,7 +763,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         let mut unified_read_pool_scale_receiver = None;
         if self.config.readpool.is_unified_pool_enabled() {
-            let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel::<usize>(10);
+            let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel(10);
             cfg_controller.register(
                 tikv::config::Module::Readpool,
                 Box::new(ReadPoolConfigManager(
