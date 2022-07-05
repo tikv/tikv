@@ -4582,7 +4582,7 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
-            // start key is set to b"r\0a0", if raw_checksum does not encode the key,
+            // start key is set to b"r\0a\0", if raw_checksum does not encode the key,
             // first key will be included in checksum. This is for testing issue #12950.
             if !is_first {
                 total_kvs += 1;
