@@ -395,6 +395,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "async-channel",
+ "aws",
  "collections",
  "concurrency_manager",
  "crc64fast",

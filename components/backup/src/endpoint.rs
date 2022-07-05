@@ -9,6 +9,7 @@ use std::{
 };
 
 use async_channel::SendError;
+use aws::S3Storage;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, SstCompressionType};
@@ -50,8 +51,6 @@ use crate::{
     writer::{BackupWriterBuilder, CfNameWrap},
     Error, *,
 };
-
-use aws::S3Storage;
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
 
@@ -1069,7 +1068,12 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 /// A name consists with five parts: store id, region_id, a epoch version, the hash of range start key and timestamp.
 /// range start key is used to keep the unique file name for file, to handle different tables exists on the same region.
 /// local unix timestamp is used to keep the unique file name for file, to handle receive the same request after connection reset.
-pub fn backup_file_name(store_id: u64, region: &Region, key: Option<String>, storage_name: &str) -> String {
+pub fn backup_file_name(
+    store_id: u64,
+    region: &Region,
+    key: Option<String>,
+    storage_name: &str,
+) -> String {
     let start = SystemTime::now();
     let since_the_epoch = start
         .duration_since(UNIX_EPOCH)
@@ -1095,7 +1099,7 @@ pub fn backup_file_name(store_id: u64, region: &Region, key: Option<String>, sto
                     since_the_epoch.as_millis()
                 )
             }
-        },
+        }
         None => {
             if storage_name == S3Storage::name() {
                 format!(
@@ -1112,7 +1116,7 @@ pub fn backup_file_name(store_id: u64, region: &Region, key: Option<String>, sto
                     region.get_region_epoch().get_version()
                 )
             }
-        },
+        }
     }
 }
 
