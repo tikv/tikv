@@ -1925,8 +1925,8 @@ pub fn get_flatten_cfg_info(cfg: &TiKvConfig) -> Vec<Value> {
     let mut key_buf = String::new();
     let mut res = Vec::new();
     flatten_value(
-        &default_value.as_object().unwrap(),
-        &cfg_value.as_object().unwrap(),
+        default_value.as_object().unwrap(),
+        cfg_value.as_object().unwrap(),
         &mut key_buf,
         &mut res,
     );
@@ -1955,7 +1955,7 @@ mod tests {
         labels.insert("zone".into(), Value::String("test".into()));
         expected.insert("server.labels", Value::Object(labels));
         expected.insert(
-            "raftstore.raft-log-gc-count-limit".into(),
+            "raftstore.raft-log-gc-count-limit",
             Value::Number(123.into()),
         );
 
