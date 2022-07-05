@@ -583,10 +583,17 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
-        if !delegate.pending_remove {
-            delegate.write_apply_state(self.kv_wb_mut());
+        if apply_ctx.host.pre_commit(&self.region, true) {
+            if !delegate.pending_remove {
+                delegate.write_apply_state(self.kv_wb_mut());
+            }
+            self.commit_opt(delegate, false);
+        } else {
+            debug!("do not persist when finish_for";
+                "region" => ?self.region,
+                "tag" => self.tag,
+            );
         }
-        self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
@@ -1064,6 +1071,7 @@ where
                 self.last_flush_applied_index != self.apply_state.get_applied_index();
             if has_unflushed_data && should_write_to_engine(&cmd)
                 || apply_ctx.kv_wb().should_write_to_engine()
+                || apply_ctx.host.pre_commit(&self.region, false)
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
@@ -4885,6 +4893,12 @@ mod tests {
         fn on_applied_current_term(&self, _: raft::StateRole, _: &Region) {}
     }
 
+    impl RegionChangeObserver for ApplyObserver {
+        fn pre_commit(&self, _: &mut ObserverContext<'_>, _is_finished: bool) -> bool {
+            false
+        }
+    }
+
     #[test]
     fn test_handle_raft_committed_entries() {
         let (_path, engine) = create_tmp_engine("test-delegate");
@@ -5494,6 +5508,66 @@ mod tests {
             let bucket_version = delegate.buckets.as_ref().unwrap().meta.version;
             assert_eq!(bucket_version, 2);
         });
+    }
+
+    #[test]
+    fn test_exec_observer() {
+        let (_path, engine) = create_tmp_engine("test-delegate");
+        let (_import_dir, importer) = create_tmp_importer("test-delegate");
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        let obs = ApplyObserver::default();
+        host.registry
+            .register_region_change_observer(1, BoxAdminObserver::new(obs));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = Config::default();
+        let (router, mut system) = create_apply_batch_system(&cfg);
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg: Arc::new(VersionTrack::new(cfg)),
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engine: engine.clone(),
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-handle-raft".to_owned(), builder);
+
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(1, peer_id));
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let mut index_id = 1;
+        let put_entry = EntryBuilder::new(index_id, 1)
+            .put(b"k1", b"v1")
+            .put(b"k2", b"v2")
+            .put(b"k3", b"v3")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
+        let apply_res = fetch_apply_res(&rx);
+
+        let state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(apply_res.apply_state.get_index(), state.get_index() + 1);
+
+        system.shutdown();
     }
 
     #[test]

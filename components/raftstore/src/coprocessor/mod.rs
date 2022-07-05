@@ -201,9 +201,11 @@ pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
 
-    /// Hook to call when we commit in ApplyDelegate.
+    /// Should be called everytime before we commit in a WriteBatch in ApplyDelegate.
     /// Returns false if we can't commit at this time.
-    fn pre_commit(&self, _: &mut ObserverContext<'_>, _is_finished: bool) -> bool { true }
+    fn pre_commit(&self, _: &mut ObserverContext<'_>, _is_finished: bool) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug, Default)]
