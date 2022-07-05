@@ -12,6 +12,7 @@
 
 use std::{
     cmp,
+    collections::HashSet,
     convert::TryFrom,
     env, fmt,
     net::SocketAddr,
@@ -57,6 +58,7 @@ use kvproto::{
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
     kvrpcpb::ApiVersion, resource_usage_agent::create_resource_metering_pub_sub,
 };
+use lazy_static::lazy_static;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
@@ -77,6 +79,7 @@ use raftstore::{
     },
 };
 use security::SecurityManager;
+use serde_json::{to_value, Map, Value};
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
@@ -1849,5 +1852,120 @@ impl IOBudgetAdjustor for EnginesResourceInfo {
         // The target global write flow slides between Bandwidth / 2 and Bandwidth.
         let score = 0.5 + score / 2.0;
         (total_budgets as f32 * score) as usize
+    }
+}
+
+// currently, only support return json result
+pub fn get_flatten_cfg_info(cfg: &TiKvConfig) -> Vec<Value> {
+    fn append_sub_key(key: &mut String, sub_key: &str) {
+        if !key.is_empty() {
+            key.push('.');
+        }
+
+        key.push_str(sub_key);
+    }
+
+    fn pop_sub_key(key: &mut String, sub_key: &str) {
+        let len = if key.len() > sub_key.len() {
+            key.len() - sub_key.len() - 1
+        } else {
+            0
+        };
+        key.truncate(len);
+    }
+
+    fn to_cfg_value(default_value: &Value, cfg_value: Option<&Value>, key: &str) -> Value {
+        let mut res = Map::with_capacity(2);
+        res.insert("Name".into(), Value::String(key.into()));
+        res.insert("DefaultValue".into(), default_value.clone());
+        if let Some(cfg_val) = cfg_value {
+            if default_value != cfg_val {
+                res.insert("ValueInFile".into(), cfg_val.clone());
+            }
+        }
+
+        Value::Object(res)
+    }
+
+    // configs that should not be flatten because the config type is HashMap instead of submodule.
+    lazy_static! {
+        static ref NO_FLATTEN_CFGS: HashSet<&'static str> = {
+            let mut set = HashSet::new();
+            set.insert("server.labels");
+            set
+        };
+    }
+
+    fn flatten_value(
+        default_obj: &Map<String, Value>,
+        value_obj: &Map<String, Value>,
+        key_buf: &mut String,
+        res: &mut Vec<Value>,
+    ) {
+        for (k, v) in default_obj.iter() {
+            let cfg_val = value_obj.get(k);
+            append_sub_key(key_buf, k);
+            if v.is_object() && !NO_FLATTEN_CFGS.contains(key_buf.as_str()) {
+                flatten_value(
+                    v.as_object().unwrap(),
+                    cfg_val.unwrap().as_object().unwrap(),
+                    key_buf,
+                    res,
+                );
+            } else {
+                res.push(to_cfg_value(v, cfg_val, key_buf));
+            }
+            pop_sub_key(key_buf, k);
+        }
+    }
+
+    let cfg_value = to_value(cfg).unwrap();
+    let default_value = to_value(TiKvConfig::default()).unwrap();
+
+    let mut key_buf = String::new();
+    let mut res = Vec::new();
+    flatten_value(
+        &default_value.as_object().unwrap(),
+        &cfg_value.as_object().unwrap(),
+        &mut key_buf,
+        &mut res,
+    );
+    res
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::{Map, Value};
+    use tikv::config::TiKvConfig;
+
+    use super::get_flatten_cfg_info;
+
+    #[test]
+    fn test_flatten_cfg() {
+        let mut cfg = TiKvConfig::default();
+        cfg.server.labels.insert("zone".into(), "test".into());
+        cfg.raft_store.raft_log_gc_count_limit = Some(123);
+
+        let flattened = get_flatten_cfg_info(&cfg);
+
+        let mut expected = HashMap::new();
+        let mut labels = Map::new();
+        labels.insert("zone".into(), Value::String("test".into()));
+        expected.insert("server.labels", Value::Object(labels));
+        expected.insert(
+            "raftstore.raft-log-gc-count-limit".into(),
+            Value::Number(123.into()),
+        );
+
+        for v in &flattened {
+            let obj = v.as_object().unwrap();
+            if let Some(v) = expected.get(&obj["Name"].as_str().unwrap()) {
+                assert_eq!(v, &obj["ValueInFile"]);
+            } else {
+                assert!(!obj.contains_key("ValueInFile"));
+            }
+        }
     }
 }
