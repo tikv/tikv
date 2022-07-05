@@ -719,7 +719,7 @@ impl AutoSplitController {
         region_cpu_map
     }
 
-    fn collect_thread_usage_and_count(thread_stats: &ThreadInfoStatistics, name: &str) -> f64 {
+    fn collect_thread_usage(thread_stats: &ThreadInfoStatistics, name: &str) -> f64 {
         thread_stats
             .get_cpu_usages()
             .iter()
@@ -745,8 +745,8 @@ impl AutoSplitController {
         let region_cpu_map = self.collect_cpu_stats(cpu_stats_vec);
         // Prepare some diagnostic info.
         let (grpc_thread_usage, unified_read_pool_thread_usage) = (
-            Self::collect_thread_usage_and_count(thread_stats, "grpc-server"),
-            Self::collect_thread_usage_and_count(thread_stats, "unified-read-po"),
+            Self::collect_thread_usage(thread_stats, "grpc-server"),
+            Self::collect_thread_usage(thread_stats, "unified-read-po"),
         );
         let (is_grpc_poll_busy, is_unified_read_pool_busy) = (
             self.is_grpc_poll_busy(grpc_thread_usage),
@@ -896,7 +896,7 @@ impl AutoSplitController {
                     .inc();
             }
         }
-        // Clean up the recorders.
+        // Clean up the rest top CPU usage recorders.
         for region_id in top_cpu_usage {
             self.recorders.remove(&region_id);
         }

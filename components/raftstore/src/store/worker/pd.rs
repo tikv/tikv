@@ -1859,8 +1859,8 @@ where
                         if let Ok(Some(region)) =
                             pd_client.get_region_by_id(split_info.region_id).await
                         {
+                            // Try to split the region with the given split key.
                             if let Some(split_key) = split_info.split_key {
-                                // Split the region with the given split key.
                                 Self::handle_ask_batch_split(
                                     router.clone(),
                                     scheduler.clone(),
@@ -1873,8 +1873,11 @@ where
                                     String::from("auto_split"),
                                     remote.clone(),
                                 );
-                            } else {
-                                // Split the region on half within the given key range.
+                                return;
+                            }
+                            // Try to split the region on half within the given key range
+                            // if there is no `split_key` been given.
+                            if split_info.start_key.is_some() && split_info.end_key.is_some() {
                                 let start_key = split_info.start_key.unwrap();
                                 let end_key = split_info.end_key.unwrap();
                                 let region_id = region.get_id();
