@@ -889,8 +889,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     err: Error::Other(box_err!("raw region dead lock")),
                 };
                 warn!(
-                    "deregister raw region {} as resolved_ts has much lag, dead lock may occurs.",
-                    region.region_id
+                    "cdc deregister raw region as resolved_ts has much lag, dead lock may occurs.";
+                    "region_id" => region.region_id,
+                    "resolved_ts" => region.resolved_ts,
                 );
                 if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
                     error!("cdc schedule cdc task failed"; "error" => ?e);
