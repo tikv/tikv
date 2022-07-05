@@ -228,6 +228,7 @@ struct TiKvServer<ER: RaftEngine> {
     background_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
+    tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
 }
 
 struct TiKvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -332,6 +333,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             flow_info_receiver: None,
             sst_worker: None,
             quota_limiter,
+            tablet_factory: None,
         }
     }
 
@@ -715,7 +717,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         cfg_controller.register(
             tikv::config::Module::Storage,
             Box::new(StorageConfigManger::new(
-                self.engines.as_ref().unwrap().engine.kv_engine(),
+                self.tablet_factory.as_ref().unwrap().clone(),
                 self.config.storage.block_cache.shared,
                 ttl_scheduler,
                 flow_controller,
@@ -1609,6 +1611,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             builder = builder.block_cache(cache);
         }
         let factory = builder.build();
+        let factory = Arc::new(factory);
         let kv_engine = factory
             .create_shared_db()
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
@@ -1618,11 +1621,12 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
-                Arc::new(factory),
+                std::clone::Clone::clone(&factory),
                 DBType::Kv,
                 self.config.storage.block_cache.shared,
             )),
         );
+        self.tablet_factory = Some(factory);
         engines
             .raft
             .register_config(cfg_controller, self.config.storage.block_cache.shared);

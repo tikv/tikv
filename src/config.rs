@@ -3860,7 +3860,8 @@ mod tests {
     use api_version::{ApiV1, KvFormat};
     use case_macros::*;
     use engine_traits::{
-        ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as DBOptionsTrait, ALL_CFS,
+        ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as DBOptionsTrait, DummyFactory,
+        ALL_CFS,
     };
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
@@ -4289,7 +4290,7 @@ mod tests {
         cfg_controller.register(
             Module::Storage,
             Box::new(StorageConfigManger::new(
-                engine,
+                Arc::new(DummyFactory::new(Some(engine), "".to_string())),
                 shared,
                 scheduler,
                 flow_controller.clone(),
