@@ -1222,8 +1222,10 @@ where
         if req.has_admin_request() {
             let cmd_type = req.get_admin_request().get_cmd_type();
             match cmd_type {
-                AdminCmdType::ComputeHash | AdminCmdType::VerifyHash | AdminCmdType::CompactLog => true,
-                _ => false
+                AdminCmdType::ComputeHash | AdminCmdType::VerifyHash | AdminCmdType::CompactLog => {
+                    true
+                }
+                _ => false,
             }
         } else {
             false
@@ -1255,7 +1257,8 @@ where
         // Remember if the raft cmd fails to be applied, it must have no side effects.
         // E.g. `RaftApplyState` must not be changed.
 
-        let (resp, exec_result) = if self.need_pre_exec(req) && ctx.host.pre_exec(&self.region, req) {
+        let (resp, exec_result) = if self.need_pre_exec(req) && ctx.host.pre_exec(&self.region, req)
+        {
             // One of the observers want to filter execution of the command.
             let mut resp = RaftCmdResponse::default();
             if !req.get_header().get_uuid().is_empty() {
@@ -4867,8 +4870,7 @@ mod tests {
         fn compute_hash(mut self, context: Vec<u8>) -> EntryBuilder {
             let mut req = AdminRequest::default();
             req.set_cmd_type(AdminCmdType::ComputeHash);
-            req.mut_compute_hash()
-                .set_context(context);
+            req.mut_compute_hash().set_context(context);
             self.req.set_admin_request(req);
             self
         }
@@ -5619,7 +5621,10 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 1);
         // Executing CompactLog is filtered and takes no effect.
         assert_eq!(apply_res.exec_res.len(), 0);
-        assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), index_id - 1);
+        assert_eq!(
+            apply_res.apply_state.get_truncated_state().get_index(),
+            index_id - 1
+        );
 
         index_id += 1;
         // Don't filter CompactLog
@@ -5638,12 +5643,13 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 1);
         // We can get exec result of CompactLog.
         assert_eq!(apply_res.exec_res.len(), 1);
-        assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), index_id);
+        assert_eq!(
+            apply_res.apply_state.get_truncated_state().get_index(),
+            index_id
+        );
 
         obs.filter_consistency_check.store(true, Ordering::SeqCst);
-        let compute_hash_entry = EntryBuilder::new(index_id, 1)
-            .compute_hash(vec![])
-            .build();
+        let compute_hash_entry = EntryBuilder::new(index_id, 1).compute_hash(vec![]).build();
         router.schedule_task(
             1,
             Msg::apply(apply(peer_id, 1, 1, vec![compute_hash_entry], vec![])),
