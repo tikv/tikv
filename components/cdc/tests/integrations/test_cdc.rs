@@ -216,9 +216,6 @@ fn test_cdc_rawkv_basic() {
             Box::new(|delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams().len(), 1);
-                let resolver = d.resolver.as_ref().unwrap();
-                let lock_keys = resolver.locks().keys();
-                assert_eq!(lock_keys.len(), 0);
             }),
         )))
         .unwrap();

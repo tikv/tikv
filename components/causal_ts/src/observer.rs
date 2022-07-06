@@ -165,14 +165,14 @@ pub mod tests {
     use txn_types::{Key, TimeStamp};
 
     use super::*;
-    use crate::{tests::TestRawTsTracker, BatchTsoProvider};
+    use crate::{tests::DummyRawTsTracker, BatchTsoProvider};
 
-    fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>, TestRawTsTracker> {
+    fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>, DummyRawTsTracker> {
         let pd_cli = Arc::new(TestPdClient::new(0, true));
         pd_cli.set_tso(100.into());
         let causal_ts_provider =
             Arc::new(block_on(BatchTsoProvider::new_opt(pd_cli, Duration::ZERO, 100)).unwrap());
-        CausalObserver::new(causal_ts_provider, TestRawTsTracker::default())
+        CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default())
     }
 
     #[test]

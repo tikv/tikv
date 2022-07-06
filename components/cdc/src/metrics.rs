@@ -201,15 +201,10 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref CDC_RAW_REGION_OUTLIER_COUNT: IntCounter = register_int_counter!(
-        "tikv_cdc_raw_region_outlier_deregister",
-        "The count of cdc region deregister because of outlier",
-    )
-    .unwrap();
-
-    pub static ref CDC_RAW_REGION_OUTLIER_RESOLVED_TS: IntGauge = register_int_gauge!(
-        "tikv_cdc_raw_region_outlier_resolved_ts",
-        "The resolved_ts of cdc raw outlier region",
+    pub static ref CDC_RAW_OUTLIER_RESOLVED_TS_GAP: Histogram = register_histogram!(
+        "tikv_cdc_raw_outlier_resolved_ts_gap_seconds",
+        "Bucketed histogram of the gap between cdc raw outlier resolver_ts and current tso",
+        exponential_buckets(0.001, 2.0, 24).unwrap()
     )
     .unwrap();
 

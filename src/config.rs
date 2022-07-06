@@ -2508,6 +2508,8 @@ pub struct CdcConfig {
 
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
+
+    /// Threshold of raw regions' resolved_ts outlier detection. 60s by default.
     #[online_config(skip)]
     #[doc(hidden)]
     pub raw_min_ts_outlier_threshold: ReadableDuration,
