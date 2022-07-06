@@ -4864,6 +4864,15 @@ mod tests {
             self
         }
 
+        fn compute_hash(mut self, context: Vec<u8>) -> EntryBuilder {
+            let mut req = AdminRequest::default();
+            req.set_cmd_type(AdminCmdType::ComputeHash);
+            req.mut_compute_hash()
+                .set_context(context);
+            self.req.set_admin_request(req);
+            self
+        }
+
         fn build(mut self) -> Entry {
             self.entry
                 .set_data(self.req.write_to_bytes().unwrap().into());
@@ -4877,6 +4886,7 @@ mod tests {
         post_query_count: Arc<AtomicUsize>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
         filter_compact_log: Arc<AtomicBool>,
+        filter_consistency_check: Arc<AtomicBool>,
     }
 
     impl Coprocessor for ApplyObserver {}
@@ -4896,6 +4906,11 @@ mod tests {
             let cmd_type = req.get_cmd_type();
             if cmd_type == AdminCmdType::CompactLog
                 && self.filter_compact_log.deref().load(Ordering::SeqCst)
+            {
+                return true;
+            };
+            if (cmd_type == AdminCmdType::ComputeHash || cmd_type == AdminCmdType::VerifyHash)
+                && self.filter_consistency_check.deref().load(Ordering::SeqCst)
             {
                 return true;
             };
@@ -5539,8 +5554,8 @@ mod tests {
 
     #[test]
     fn test_exec_observer() {
-        let (_path, engine) = create_tmp_engine("test-delegate");
-        let (_import_dir, importer) = create_tmp_importer("test-delegate");
+        let (_path, engine) = create_tmp_engine("test-exec-observer");
+        let (_import_dir, importer) = create_tmp_importer("test-exec-observer");
         let mut host = CoprocessorHost::<KvTestEngine>::default();
         let obs = ApplyObserver::default();
         host.registry
@@ -5553,7 +5568,7 @@ mod tests {
         let (router, mut system) = create_apply_batch_system(&cfg);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
         let builder = super::Builder::<KvTestEngine> {
-            tag: "test-store".to_owned(),
+            tag: "test-exec-observer".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
             sender,
             region_scheduler,
@@ -5564,7 +5579,7 @@ mod tests {
             store_id: 1,
             pending_create_peers,
         };
-        system.spawn("test-handle-raft".to_owned(), builder);
+        system.spawn("test-exec-observer".to_owned(), builder);
 
         let peer_id = 3;
         let mut reg = Registration {
@@ -5578,6 +5593,7 @@ mod tests {
         reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
+        /// The following tests are to test if pre_exec works.
         let mut index_id = 1;
         let put_entry = EntryBuilder::new(1, 1)
             .put(b"k1", b"v1")
@@ -5603,7 +5619,7 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 1);
         // Executing CompactLog is filtered and takes no effect.
         assert_eq!(apply_res.exec_res.len(), 0);
-        assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
+        assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), index_id - 1);
 
         index_id += 1;
         // Don't filter CompactLog
@@ -5622,7 +5638,23 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 1);
         // We can get exec result of CompactLog.
         assert_eq!(apply_res.exec_res.len(), 1);
-        assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 2);
+        assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), index_id);
+
+        obs.filter_consistency_check.store(true, Ordering::SeqCst);
+        let compute_hash_entry = EntryBuilder::new(index_id, 1)
+            .compute_hash(vec![])
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(peer_id, 1, 1, vec![compute_hash_entry], vec![])),
+        );
+        let apply_res = fetch_apply_res(&rx);
+        // applied_index can still be advanced.
+        assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
+        assert_eq!(apply_res.applied_index_term, 1);
+        // We can't get exec result of ComputeHash.
+        assert_eq!(apply_res.exec_res.len(), 0);
+        obs.filter_consistency_check.store(false, Ordering::SeqCst);
 
         system.shutdown();
     }
