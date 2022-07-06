@@ -12,7 +12,10 @@ use file_system::calc_crc32_bytes;
 use futures::{executor::block_on, AsyncReadExt, StreamExt};
 use kvproto::{
     brpb::{BackupClient, BackupRequest, BackupResponse},
-    import_sstpb::{DownloadRequest, ImportSstClient, MultiIngestRequest, SstMeta},
+    import_sstpb::{
+        DownloadRequest, ImportSstClient, MultiIngestRequest, SstMeta, SwitchMode,
+        SwitchModeRequest,
+    },
 };
 use rand::Rng;
 use tempfile::Builder;
@@ -110,9 +113,14 @@ fn test_backup_and_import() {
     // Use importer to restore backup files.
     let node2_id = alloc_node_id();
     let mut cluster2 = ServerCluster::new(vec![node2_id], update_conf);
+    let context = cluster2.new_rpc_context(b"");
+    let channel = cluster2.get_client_channel(context.get_peer().get_store_id());
+    let import_sst_client = ImportSstClient::new(channel);
+    let mut switch_mode_req = SwitchModeRequest::default();
+    switch_mode_req.set_mode(SwitchMode::Import);
+    import_sst_client.switch_mode(&switch_mode_req).unwrap();
     let backend = make_local_backend(&storage_path);
     let storage = create_storage(&backend, Default::default()).unwrap();
-    let context = cluster2.new_rpc_context(b"");
     let mut metas = vec![];
     for resp in &resps1 {
         let mut sst_meta = SstMeta::default();
@@ -145,16 +153,12 @@ fn test_backup_and_import() {
         }
     }
     // Make ingest command.
-    let context = cluster2.new_rpc_context(b"");
-    let channel = cluster2.get_client_channel(context.get_peer().get_store_id());
-    let ingest_client = ImportSstClient::new(channel);
-
     let mut ingest = MultiIngestRequest::new();
     ingest.set_context(context);
     for (m, _) in &metas {
         ingest.mut_ssts().push(m.clone());
     }
-    let resp = ingest_client.multi_ingest(&ingest).unwrap();
+    let resp = import_sst_client.multi_ingest(&ingest).unwrap();
     assert!(!resp.has_error(), "{:?}", resp);
 
     // Backup file should have same contents.
@@ -175,6 +179,9 @@ fn test_backup_and_import() {
         files2.extend_from_slice(resp.get_files());
     }
     assert_same_files(files1, files2);
+    let mut switch_mode_req = SwitchModeRequest::default();
+    switch_mode_req.set_mode(SwitchMode::Normal);
+    import_sst_client.switch_mode(&switch_mode_req).unwrap();
     std::thread::sleep(Duration::from_secs(2));
     let importer = cluster2.get_sst_importer(node2_id);
     let ssts = importer.list_ssts().unwrap();

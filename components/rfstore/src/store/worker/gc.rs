@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    fmt::{Display, Formatter},
+    fmt::{Display, Formatter, Write},
     fs,
     fs::Metadata,
     path::Path,
@@ -115,11 +115,13 @@ impl GcRunner {
             let meta = fs::metadata(&path)?;
             if self.is_old_file(meta) {
                 self.importer.delete(sst_meta)?;
+                let mut uuid = String::new();
+                for &b in sst_meta.get_uuid() {
+                    write!(uuid, "{:X}", b).expect("Unable to write");
+                }
                 info!(
-                    "gc runner delete sst uuid {:?} file {:?} timeout {:?}",
-                    sst_meta.get_uuid(),
-                    path,
-                    self.timeout
+                    "gc runner delete sst uuid {} file {:?} timeout {:?}",
+                    uuid, path, self.timeout
                 );
             }
         }
