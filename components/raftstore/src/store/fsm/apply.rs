@@ -5620,10 +5620,7 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 1);
         // Executing CompactLog is filtered and takes no effect.
         assert_eq!(apply_res.exec_res.len(), 0);
-        assert_eq!(
-            apply_res.apply_state.get_truncated_state().get_index(),
-            index_id - 1
-        );
+        assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
 
         index_id += 1;
         // Don't filter CompactLog
@@ -5644,9 +5641,10 @@ mod tests {
         assert_eq!(apply_res.exec_res.len(), 1);
         assert_eq!(
             apply_res.apply_state.get_truncated_state().get_index(),
-            index_id
+            index_id - 1
         );
 
+        index_id += 1;
         obs.filter_consistency_check.store(true, Ordering::SeqCst);
         let compute_hash_entry = EntryBuilder::new(index_id, 1).compute_hash(vec![]).build();
         router.schedule_task(
