@@ -1218,6 +1218,18 @@ where
         exec_result
     }
 
+    fn need_pre_exec(&self, req: &RaftCmdRequest) -> bool {
+        if req.has_admin_request() {
+            let cmd_type = req.get_admin_request().get_cmd_type();
+            match cmd_type {
+                AdminCmdType::ComputeHash | AdminCmdType::VerifyHash | AdminCmdType::CompactLog => true,
+                _ => false
+            }
+        } else {
+            false
+        }
+    }
+
     /// Applies raft command.
     ///
     /// An apply operation can fail in the following situations:
@@ -1243,7 +1255,7 @@ where
         // Remember if the raft cmd fails to be applied, it must have no side effects.
         // E.g. `RaftApplyState` must not be changed.
 
-        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req) {
+        let (resp, exec_result) = if self.need_pre_exec(req) && ctx.host.pre_exec(&self.region, req) {
             // One of the observers want to filter execution of the command.
             let mut resp = RaftCmdResponse::default();
             if !req.get_header().get_uuid().is_empty() {
@@ -5560,12 +5572,13 @@ mod tests {
             ..Default::default()
         };
         reg.region.set_id(1);
-        reg.region.mut_peers().push(new_peer(2, peer_id));
+        reg.region.mut_peers().push(new_peer(1, peer_id));
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_conf_ver(1);
         reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
+        let mut index_id = 1;
         let put_entry = EntryBuilder::new(1, 1)
             .put(b"k1", b"v1")
             .epoch(1, 3)
@@ -5573,25 +5586,30 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
         fetch_apply_res(&rx);
 
-        let compact_entry = EntryBuilder::new(2, 1)
-            .compact_log(1, 2)
+        index_id += 1;
+        let compact_entry = EntryBuilder::new(index_id, 1)
+            .compact_log(index_id - 1, 2)
             .epoch(1, 3)
             .build();
+        // Filter CompactLog
         obs.filter_compact_log.store(true, Ordering::SeqCst);
         router.schedule_task(
             1,
             Msg::apply(apply(peer_id, 1, 1, vec![compact_entry], vec![])),
         );
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.apply_state.get_applied_index(), 2);
+        // applied_index can still be advanced.
+        assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
         assert_eq!(apply_res.applied_index_term, 1);
-        // CompactLog is filtered and takes no effect.
+        // Executing CompactLog is filtered and takes no effect.
         assert_eq!(apply_res.exec_res.len(), 0);
         assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
 
+        index_id += 1;
+        // Don't filter CompactLog
         obs.filter_compact_log.store(false, Ordering::SeqCst);
-        let compact_entry = EntryBuilder::new(3, 1)
-            .compact_log(2, 2)
+        let compact_entry = EntryBuilder::new(index_id, 1)
+            .compact_log(index_id - 1, 2)
             .epoch(1, 3)
             .build();
         router.schedule_task(
@@ -5599,8 +5617,10 @@ mod tests {
             Msg::apply(apply(peer_id, 1, 1, vec![compact_entry], vec![])),
         );
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.apply_state.get_applied_index(), 3);
+        // applied_index can still be advanced.
+        assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
         assert_eq!(apply_res.applied_index_term, 1);
+        // We can get exec result of CompactLog.
         assert_eq!(apply_res.exec_res.len(), 1);
         assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 2);
 
