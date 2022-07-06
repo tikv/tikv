@@ -2198,6 +2198,7 @@ mod tests {
         suite.run(Task::MinTS {
             regions: region_ids,
             min_ts: cur_tso,
+            current_ts: cur_tso,
         });
         let task_recv = suite
             .task_rx
