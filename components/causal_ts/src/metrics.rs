@@ -20,7 +20,14 @@ lazy_static! {
         "tikv_causal_ts_provider_tso_batch_renew_duration_seconds",
         "Histogram of the duration of TSO batch renew",
         &["result", "reason"],
-        exponential_buckets(1e-6, 2.0, 20).unwrap() // 1us ~ 1s
+        exponential_buckets(1e-4, 2.0, 20).unwrap() // 0.1ms ~ 104s
+    )
+    .unwrap();
+    pub static ref TS_PROVIDER_TSO_BATCH_LIST_COUNTING: HistogramVec = register_histogram_vec!(
+        "tikv_causal_ts_provider_tso_batch_list_counting",
+        "Histogram of TSO batch list counting",
+        &["type"],
+        exponential_buckets(10.0, 2.0, 20).unwrap() // 10 ~ 10,000,000
     )
     .unwrap();
 }

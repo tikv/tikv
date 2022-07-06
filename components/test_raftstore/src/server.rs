@@ -360,6 +360,7 @@ impl ServerCluster {
                     self.pd_client.clone(),
                     cfg.causal_ts.renew_interval.0,
                     cfg.causal_ts.renew_batch_min_size,
+                    cfg.causal_ts.batch_list_capacity,
                 ))
                 .unwrap(),
             );

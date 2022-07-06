@@ -19,6 +19,13 @@ pub struct Config {
     /// One TSO is required for every batch of Raft put messages, so by default 1K tso/s should be enough.
     /// Benchmark showed that with a 8.6w raw_put per second, the TSO requirement is 600 per second.
     pub renew_batch_min_size: u32,
+    /// Capacity of internal TSO batch list.
+    ///
+    /// Default is 50.
+    /// It is used to limit size for efficiency, and keep TSO fresh.
+    /// The related feature is not stable, so this item is hidden.
+    #[doc(hidden)]
+    pub batch_list_capacity: u32,
 }
 
 impl Config {
@@ -38,6 +45,7 @@ impl Default for Config {
         Self {
             renew_interval: ReadableDuration::millis(crate::tso::TSO_BATCH_RENEW_INTERVAL_DEFAULT),
             renew_batch_min_size: crate::tso::TSO_BATCH_MIN_SIZE_DEFAULT,
+            batch_list_capacity: crate::tso::TSO_BATCH_LIST_CAPACITY,
         }
     }
 }
