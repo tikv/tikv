@@ -294,6 +294,13 @@ fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
     key
 }
 
+fn region_local_state_key(applied_index: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(REGION_STATE_KEY.len() + 8);
+    key.extend_from_slice(REGION_STATE_KEY);
+    key.extend_from_slice(&applied_index.to_be_bytes());
+    key
+}
+
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
         self.0
@@ -322,6 +329,17 @@ impl RaftLogBatchTrait for RaftLogBatch {
                 raft_seqno_relation_key(relation.sequence_number),
                 relation,
             )
+            .map_err(transfer_error)
+    }
+
+    fn put_region_state_with_index(
+        &mut self,
+        raft_group_id: u64,
+        applied_index: u64,
+        state: &RegionLocalState,
+    ) -> Result<()> {
+        self.0
+            .put_message(raft_group_id, region_local_state_key(applied_index), state)
             .map_err(transfer_error)
     }
 
@@ -377,6 +395,27 @@ impl RaftEngineReadOnly for RaftLogEngine {
         self.0
             .get_message(raft_group_id, RAFT_LOG_STATE_KEY)
             .map_err(transfer_error)
+    }
+
+    fn get_region_state_with_index(
+        &self,
+        raft_group_id: u64,
+        applied_index: u64,
+    ) -> Result<Option<kvproto::raft_serverpb::RegionLocalState>> {
+        let mut res = None;
+        self.0
+            .scan_message(
+                raft_group_id,
+                Some(REGION_STATE_KEY),
+                Some(&region_local_state_key(applied_index + 1)),
+                true,
+                |_, value| {
+                    res = Some(value);
+                    Ok(false)
+                },
+            )
+            .map_err(transfer_error)?;
+        Ok(res)
     }
 
     fn get_seqno_relation(
@@ -537,31 +576,6 @@ impl RaftEngine for RaftLogEngine {
             .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)?;
         self.0.write(&mut batch.0, false).map_err(transfer_error)?;
-        Ok(())
-    }
-
-    fn put_region_state(&self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
-        let mut batch = Self::LogBatch::default();
-        batch
-            .0
-            .put_message(raft_group_id, REGION_STATE_KEY.to_vec(), state)
-            .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
-        Ok(())
-    }
-
-    fn scan_region_state<F>(&self, mut f: F) -> Result<()>
-    where
-        F: FnMut(u64, RegionLocalState) -> Result<bool>,
-    {
-        for rid in self.raft_groups() {
-            let state = self.get_region_state(rid)?;
-            if let Some(state) = state {
-                if !f(rid, state)? {
-                    break;
-                }
-            }
-        }
         Ok(())
     }
 

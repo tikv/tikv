@@ -22,6 +22,12 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
 
+    fn get_region_state_with_index(
+        &self,
+        raft_group_id: u64,
+        applied_index: u64,
+    ) -> Result<Option<RegionLocalState>>;
+
     fn get_seqno_relation(
         &self,
         raft_group_id: u64,
@@ -111,12 +117,6 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
 
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
 
-    fn put_region_state(&self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
-
-    fn scan_region_state<F>(&self, f: F) -> Result<()>
-    where
-        F: FnMut(u64, RegionLocalState) -> Result<bool>;
-
     /// Like `cut_logs` but the range could be very large. Return the deleted count.
     /// Generally, `from` can be passed in `0`.
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
@@ -174,6 +174,13 @@ pub trait RaftLogBatch: Send {
         &mut self,
         raft_group_id: u64,
         relation: &RegionSequenceNumberRelation,
+    ) -> Result<()>;
+
+    fn put_region_state_with_index(
+        &mut self,
+        raft_group_id: u64,
+        applied_index: u64,
+        state: &RegionLocalState,
     ) -> Result<()>;
 
     /// The data size of this RaftLogBatch.

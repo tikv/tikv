@@ -1,21 +1,26 @@
 use std::{
     cmp,
     collections::{BTreeMap, VecDeque},
+    iter::FromIterator,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
+use collections::HashMap;
 use lazy_static::lazy_static;
+
+use crate::cf_defs::DATA_CFS;
 
 lazy_static! {
     static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
     pub static ref MEMTABLE_SEALED_COUNTER_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
     pub static ref SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
-    pub static ref FLUSHED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
+    pub static ref FLUSHED_MAX_SEQUENCE_NUMBERS: HashMap<&'static str, AtomicU64> =
+        HashMap::from_iter(DATA_CFS.iter().map(|cf| (*cf, AtomicU64::new(0))));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SequenceNumber {
-    pub seqno: u64,
+    pub number: u64,
     pub version: usize,
     start_counter: usize,
     end_counter: usize,
@@ -24,7 +29,7 @@ pub struct SequenceNumber {
 impl SequenceNumber {
     pub fn start() -> Self {
         SequenceNumber {
-            seqno: 0,
+            number: 0,
             start_counter: SEQUENCE_NUMBER_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst) + 1,
             end_counter: 0,
             version: 0,
@@ -32,13 +37,13 @@ impl SequenceNumber {
     }
 
     pub fn end(&mut self, number: u64) {
-        self.seqno = number;
+        self.number = number;
         self.end_counter = SEQUENCE_NUMBER_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
         self.version = MEMTABLE_SEALED_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
     }
 
     pub fn max(left: Self, right: Self) -> Self {
-        match left.seqno.cmp(&right.seqno) {
+        match left.number.cmp(&right.number) {
             cmp::Ordering::Less | cmp::Ordering::Equal => right,
             cmp::Ordering::Greater => left,
         }
@@ -113,7 +118,7 @@ mod tests {
         assert_eq!(
             window.push(sn1),
             Some(SequenceNumber {
-                seqno: 1,
+                number: 1,
                 start_counter: 1,
                 end_counter: 1,
                 version: 0
@@ -130,7 +135,7 @@ mod tests {
         assert_eq!(
             window.push(sn4),
             Some(SequenceNumber {
-                seqno: 4,
+                number: 4,
                 start_counter: 2,
                 end_counter: 4,
                 version: 0
@@ -141,7 +146,7 @@ mod tests {
         assert_eq!(
             window.push(sn5),
             Some(SequenceNumber {
-                seqno: 10,
+                number: 10,
                 start_counter: 5,
                 end_counter: 5,
                 version: 0

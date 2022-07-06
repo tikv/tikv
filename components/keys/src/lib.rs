@@ -203,6 +203,14 @@ pub fn region_state_key(region_id: u64) -> [u8; 11] {
     make_region_meta_key(region_id, REGION_STATE_SUFFIX)
 }
 
+pub fn region_state_key_with_index(region_id: u64, index: u64) -> [u8; 19] {
+    let mut key = [0; 19];
+    let meta_key = make_region_meta_key(region_id, REGION_STATE_SUFFIX);
+    key[0..11].copy_from_slice(&meta_key);
+    BigEndian::write_u64(&mut key[11..19], index);
+    key
+}
+
 pub fn validate_data_key(key: &[u8]) -> bool {
     key.starts_with(DATA_PREFIX_KEY)
 }

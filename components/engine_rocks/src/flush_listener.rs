@@ -7,7 +7,7 @@ use rocksdb::{EventListener, FlushJobInfo, MemTableInfo};
 use tikv_util::{
     debug,
     sequence_number::{
-        FLUSHED_MAX_SEQUENCE_NUMBER, MEMTABLE_SEALED_COUNTER_ALLOCATOR, SYNCED_MAX_SEQUENCE_NUMBER,
+        FLUSHED_MAX_SEQUENCE_NUMBERS, MEMTABLE_SEALED_COUNTER_ALLOCATOR, SYNCED_MAX_SEQUENCE_NUMBER,
     },
 };
 
@@ -30,10 +30,12 @@ impl EventListener for FlushListener {
 
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         let flush_seqno = info.largest_seqno();
+        let cf = info.cf_name();
+        let flushed_max_seqno = FLUSHED_MAX_SEQUENCE_NUMBERS.get(cf).unwrap();
         // notify store to GC relations and raft logs
-        let mut current = FLUSHED_MAX_SEQUENCE_NUMBER.load(Ordering::SeqCst);
+        let mut current = flushed_max_seqno.load(Ordering::SeqCst);
         while current < flush_seqno {
-            if let Err(cur) = FLUSHED_MAX_SEQUENCE_NUMBER.compare_exchange_weak(
+            if let Err(cur) = flushed_max_seqno.compare_exchange_weak(
                 current,
                 flush_seqno,
                 Ordering::SeqCst,
@@ -65,7 +67,7 @@ mod tests {
         ColumnFamilyOptions, MiscExt, Mutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
     };
     use rocksdb::DBOptions as RawDBOptions;
-    use tikv_util::sequence_number::{FLUSHED_MAX_SEQUENCE_NUMBER, SYNCED_MAX_SEQUENCE_NUMBER};
+    use tikv_util::sequence_number::{FLUSHED_MAX_SEQUENCE_NUMBERS, SYNCED_MAX_SEQUENCE_NUMBER};
 
     use crate::{
         util::{new_engine_opt, RocksCFOptions},
@@ -97,10 +99,11 @@ mod tests {
         let seq = batch.write_opt(&write_opts).unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);
         engine.flush(true).unwrap();
-        assert_eq!(FLUSHED_MAX_SEQUENCE_NUMBER.load(Ordering::SeqCst), 3);
+        let flushed_max_seqno = FLUSHED_MAX_SEQUENCE_NUMBERS.get(CF_DEFAULT).unwrap();
+        assert_eq!(flushed_max_seqno.load(Ordering::SeqCst), 3);
         let seq = batch.write_opt(&write_opts).unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);
         engine.flush(true).unwrap();
-        assert_eq!(FLUSHED_MAX_SEQUENCE_NUMBER.load(Ordering::SeqCst), 4);
+        assert_eq!(flushed_max_seqno.load(Ordering::SeqCst), 4);
     }
 }

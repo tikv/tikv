@@ -62,6 +62,14 @@ impl RaftEngineReadOnly for PanicEngine {
     ) -> Result<Option<RegionSequenceNumberRelation>> {
         panic!()
     }
+
+    fn get_region_state_with_index(
+        &self,
+        raft_group_id: u64,
+        applied_index: u64,
+    ) -> Result<Option<RegionLocalState>> {
+        todo!()
+    }
 }
 
 impl RaftEngineDebug for PanicEngine {
@@ -151,17 +159,6 @@ impl RaftEngine for PanicEngine {
     fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
         panic!()
     }
-
-    fn put_region_state(&self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
-        panic!()
-    }
-
-    fn scan_region_state<F>(&self, f: F) -> Result<()>
-    where
-        F: FnMut(u64, RegionLocalState) -> Result<bool>,
-    {
-        panic!()
-    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
@@ -213,6 +210,15 @@ impl RaftLogBatch for PanicWriteBatch {
         &mut self,
         raft_group_id: u64,
         relation: &RegionSequenceNumberRelation,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_region_state_with_index(
+        &mut self,
+        raft_group_id: u64,
+        applied_index: u64,
+        state: &RegionLocalState,
     ) -> Result<()> {
         panic!()
     }

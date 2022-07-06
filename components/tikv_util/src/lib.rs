@@ -44,6 +44,7 @@ pub mod future;
 #[macro_use]
 pub mod macros;
 pub mod callback;
+pub mod cf_defs;
 pub mod deadline;
 pub mod keybuilder;
 pub mod logger;
