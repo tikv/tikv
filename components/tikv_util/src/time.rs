@@ -284,6 +284,12 @@ pub enum Instant {
     MonotonicCoarse(Timespec),
 }
 
+impl Default for Instant {
+    fn default() -> Instant {
+        Instant::now()
+    }
+}
+
 impl Instant {
     pub fn now() -> Instant {
         Instant::Monotonic(monotonic_now())

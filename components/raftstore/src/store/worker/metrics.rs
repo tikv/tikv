@@ -31,9 +31,7 @@ make_auto_flush_static_metric! {
     pub struct SnapHistogram : LocalHistogram {
         "type" => SnapType,
     }
-}
 
-make_static_metric! {
     pub label_enum RejectReason {
         store_id_mismatch,
         peer_id_mismatch,
@@ -44,11 +42,13 @@ make_static_metric! {
         epoch,
         applied_term,
         channel_full,
+        cache_miss,
         safe_ts,
+        witness,
     }
 
-    pub struct ReadRejectCounter : IntCounter {
-       "reason" => RejectReason
+    pub struct ReadRejectCounter : LocalIntCounter {
+       "reason" => RejectReason,
     }
 }
 
@@ -112,7 +112,7 @@ lazy_static! {
     )
     .unwrap();
     pub static ref LOCAL_READ_REJECT: ReadRejectCounter =
-        ReadRejectCounter::from(&LOCAL_READ_REJECT_VEC);
+        auto_flush_from!(&LOCAL_READ_REJECT_VEC, ReadRejectCounter);
     pub static ref LOCAL_READ_EXECUTED_REQUESTS: IntCounter = register_int_counter!(
         "tikv_raftstore_local_read_executed_requests",
         "Total number of requests directly executed by local reader."

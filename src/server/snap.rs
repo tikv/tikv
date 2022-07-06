@@ -231,7 +231,7 @@ impl RecvSnapContext {
         let _with_io_type = WithIOType::new(io_type);
 
         let snap = {
-            let s = match snap_mgr.get_snapshot_for_receiving(&key, data) {
+            let s = match snap_mgr.get_snapshot_for_receiving(&key, snapshot.take_meta()) {
                 Ok(s) => s,
                 Err(e) => return Err(box_err!("{} failed to create snapshot file: {:?}", key, e)),
             };

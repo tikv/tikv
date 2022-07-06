@@ -1252,6 +1252,13 @@ where
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no unavailable
     /// snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
+        let peer = util::find_peer(&self.region, self.peer_id).unwrap();
+        if peer.is_witness {
+            return Err(raft::Error::Store(
+                raft::StorageError::SnapshotTemporarilyUnavailable,
+            ));
+        }
+
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
 
@@ -1308,12 +1315,14 @@ where
             )));
         }
 
+        let is_witness = util::find_peer(&self.region, to).unwrap().is_witness;
         info!(
             "requesting snapshot";
             "region_id" => self.region.get_id(),
             "peer_id" => self.peer_id,
             "request_index" => request_index,
             "request_peer" => to,
+            "is_witness" => is_witness,
         );
 
         if !tried || !last_canceled {
@@ -1332,7 +1341,14 @@ where
         if let Some(peer) = self.region().get_peers().iter().find(|p| p.id == to) {
             to_store_id = peer.store_id;
         }
-        let task = GenSnapTask::new(self.region.get_id(), index, canceled, sender, to_store_id);
+        let task = GenSnapTask::new(
+            self.region.get_id(),
+            index,
+            canceled,
+            sender,
+            to_store_id,
+            is_witness,
+        );
 
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
@@ -1906,6 +1922,7 @@ pub fn do_snapshot<E>(
     last_applied_index_term: u64,
     last_applied_state: RaftApplyState,
     for_balance: bool,
+    for_witness: bool,
     allow_multi_files_snapshot: bool,
 ) -> raft::Result<Snapshot>
 where
@@ -1975,6 +1992,7 @@ where
         &mut snap_data,
         &mut stat,
         allow_multi_files_snapshot,
+        for_witness,
     )?;
     snap_data.mut_meta().set_for_balance(for_balance);
     let v = snap_data.write_to_bytes()?;

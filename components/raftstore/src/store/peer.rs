@@ -30,9 +30,9 @@ use kvproto::{
     metapb::{self, PeerRole},
     pdpb::{self, PeerStats},
     raft_cmdpb::{
-        self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-        PutRequest, RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest,
-        TransferLeaderResponse,
+        self, AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
+        CommitMergeRequest, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
+        TransferLeaderRequest, TransferLeaderResponse,
     },
     raft_serverpb::{
         ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -225,6 +225,7 @@ bitflags! {
         const SPLIT          = 0b0000_0010;
         const PREPARE_MERGE  = 0b0000_0100;
         const COMMIT_MERGE   = 0b0000_1000;
+        const NO_ADMIN       = 0b0001_0000;
     }
 }
 
@@ -1518,6 +1519,11 @@ where
     }
 
     #[inline]
+    pub fn is_witness(&self) -> bool {
+        self.peer.is_witness
+    }
+
+    #[inline]
     pub fn get_role(&self) -> StateRole {
         self.raft_group.raft.state
     }
@@ -1834,7 +1840,6 @@ where
             if p.get_id() == self.peer.get_id() {
                 continue;
             }
-            // TODO
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
                 let elapsed = instant.saturating_elapsed();
                 if elapsed >= max_duration {
@@ -2077,6 +2082,7 @@ where
                             "region_id" => self.region_id,
                         );
                     }
+                    self.maybe_witness_transfer_leader(ctx);
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -3572,9 +3578,7 @@ where
             return Ok(());
         }
 
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["conf_change", "reject_unsafe"])
-            .inc();
+        PEER_ADMIN_CMD_COUNTER.conf_change.reject_unsafe.inc();
 
         // Waking it up to replicate logs to candidate.
         self.should_wake_up = true;
@@ -3603,6 +3607,68 @@ where
         };
         prs.apply_conf(cfg, changes, self.raft_group.raft.raft_log.last_index());
         Ok(prs)
+    }
+
+    pub fn maybe_witness_transfer_leader<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+        if !(self.is_witness() && self.is_leader()) {
+            return;
+        }
+
+        if self.raft_group.raft.lead_transferee.is_some() {
+            // already being in transfer leader
+            return;
+        }
+
+        let prs = self.raft_group.raft.prs();
+        // find other peers that are not down
+        let (_, peer) = self
+            .region()
+            .get_peers()
+            .iter()
+            .filter(|peer| peer.id != self.peer.id)
+            .filter(|peer| !peer.is_witness)
+            .filter(|peer| {
+                if let Some(instant) = self.peer_heartbeats.get(&peer.get_id()) {
+                    let elapsed = instant.saturating_elapsed();
+                    if elapsed < ctx.cfg.max_peer_down_duration.0 {
+                        return true;
+                    }
+                }
+                false
+            })
+            .fold((0, None), |(max_matched, chosen), peer| {
+                if let Some(pr) = prs.get(peer.id) {
+                    if pr.matched.cmp(&max_matched) == cmp::Ordering::Greater {
+                        return (pr.matched, Some(peer));
+                    }
+                }
+                (max_matched, chosen)
+            });
+
+        if peer.is_none() {
+            return;
+        }
+
+        let mut admin = AdminRequest::default();
+        admin.set_cmd_type(AdminCmdType::TransferLeader);
+        admin.mut_transfer_leader().set_peer(peer.unwrap().clone());
+
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(self.region_id);
+        req.mut_header()
+            .set_region_epoch(self.region().get_region_epoch().clone());
+        req.mut_header().set_peer(self.peer.clone());
+        req.set_admin_request(admin);
+
+        let cmd = RaftCommand::new(req, Callback::None);
+        if let Err(e) = ctx.router.send_raft_command(cmd) {
+            error!(
+                "witness send transfer leader failed";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "err" => ?e,
+            );
+        }
     }
 
     pub fn transfer_leader(&mut self, peer: &metapb::Peer) {
@@ -4169,6 +4235,7 @@ where
         }
 
         if !req.has_admin_request() {
+            ctx.insert(ProposalContext::NO_ADMIN);
             return Ok(ctx);
         }
 
@@ -4321,6 +4388,11 @@ where
         peer_disk_usage: DiskUsage,
         reply_cmd: bool, // whether it is a reply to a TransferLeader command
     ) {
+        if self.is_witness() {
+            // shouldn't transfer leader to witness peer
+            return;
+        }
+
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         if pending_snapshot
             || from != self.leader_id()

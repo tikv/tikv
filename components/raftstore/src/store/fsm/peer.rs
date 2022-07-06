@@ -407,6 +407,11 @@ where
     }
 
     fn can_batch(&self, cfg: &Config, req: &RaftCmdRequest, req_size: u32) -> bool {
+        // if has admin request
+        if req.has_admin_request() {
+            return false;
+        }
+
         // No batch request whose size exceed 20% of raft_entry_max_size,
         // so total size of request in batch_raft_request would not exceed
         // (40% + 20%) of raft_entry_max_size
@@ -1924,6 +1929,7 @@ where
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
 
         self.check_force_leader();
+        self.fsm.peer.maybe_witness_transfer_leader(&self.ctx);
 
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
@@ -2478,6 +2484,9 @@ where
             }
             ExtraMessageType::MsgHibernateResponse => {
                 self.on_hibernate_response(msg.get_from_peer());
+            }
+            ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
+                unimplemented!();
             }
         }
     }
@@ -3402,6 +3411,7 @@ where
             // Please take a look at test case test_redundant_conf_change_by_snapshot.
         }
 
+        let prev_peer_is_witness = self.fsm.peer.is_witness();
         self.update_region(cp.region);
 
         fail_point!("change_peer_after_update_region");
@@ -3413,6 +3423,38 @@ where
             let (store_id, peer_id) = (peer.get_store_id(), peer.get_id());
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
+                    if peer_id == self.fsm.peer_id() {
+                        match (prev_peer_is_witness, peer.is_witness) {
+                            (false, true) => {
+                                // If the previous peer is not witness, but the new peer is witness,
+                                // we need to cleanup the kv data of this region
+                                let _ = self.fsm.peer.get_store().clear_data();
+                            }
+                            (true, false) => {
+                                // unreachable
+                                panic!(
+                                    "{} is witness, but the new peer is not witness",
+                                    self.fsm.peer.tag
+                                );
+                                // // set to uninitialized
+                                // self.fsm.peer.pending
+                                // // If the previous peer is witness, but the new peer is not witness,
+                                // if self
+                                //     .fsm
+                                //     .peer
+                                //     .raft_group
+                                //     .request_snapshot(self.fsm.peer.get_store().first_index())
+                                //     .is_err()
+                                // {
+                                //     // dropped, need to request later
+                                //     // TODO:
+                                // }
+                                // if self.fsm.peer.raft_group.raft.pending_request_snapshot == INVALID_INDEX {
+                            }
+                            _ => {}
+                        }
+                    }
+
                     let group_id = self
                         .ctx
                         .global_replication_state
@@ -4665,6 +4707,17 @@ where
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 
+        // peer_id must be the same as peer's.
+        if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
+            self.ctx.raft_metrics.invalid_proposal.mismatch_peer_id += 1;
+            return Err(e);
+        }
+
+        // Forbid reads and writes when it's a witness
+        if self.fsm.peer.is_witness() {
+            return Err(Error::RecoveryInProgress(self.region_id()));
+        }
+
         if self.fsm.peer.force_leader.is_some() {
             // in force leader state, forbid requests to make the recovery progress less error-prone
             if !(msg.has_admin_request()
@@ -4699,11 +4752,7 @@ where
             self.register_raft_base_tick();
             return Err(Error::NotLeader(region_id, leader));
         }
-        // peer_id must be the same as peer's.
-        if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
-            self.ctx.raft_metrics.invalid_proposal.mismatch_peer_id += 1;
-            return Err(e);
-        }
+
         // check whether the peer is initialized.
         if !self.fsm.peer.is_initialized() {
             self.ctx
@@ -4958,14 +5007,21 @@ where
         }
 
         let mut total_gc_logs = 0;
-
+        let mut has_witness = false;
+        for p in self.region().get_peers() {
+            if p.is_witness {
+                has_witness = true;
+                break;
+            }
+        }
         let first_idx = self.fsm.peer.get_store().first_index();
 
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
-        } else if (applied_idx > first_idx
-            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
-            || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0)
+        } else if !has_witness
+            && ((applied_idx > first_idx
+                && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
+                || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0))
         {
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {

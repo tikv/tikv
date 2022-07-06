@@ -79,6 +79,7 @@ pub enum Task<S> {
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
         to_store_id: u64,
+        for_witness: bool,
     },
     Apply {
         region_id: u64,
@@ -267,6 +268,7 @@ where
         kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
+        for_witness: bool,
         allow_multi_files_snapshot: bool,
     ) -> Result<()> {
         // do we need to check leader here?
@@ -278,6 +280,7 @@ where
             last_applied_index_term,
             last_applied_state,
             for_balance,
+            for_witness,
             allow_multi_files_snapshot,
         ));
         // Only enable the fail point when the region id is equal to 1, which is
@@ -307,6 +310,7 @@ where
         canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
+        for_witness: bool,
         allow_multi_files_snapshot: bool,
     ) {
         fail_point!("before_region_gen_snap", |_| ());
@@ -330,6 +334,7 @@ where
             kv_snap,
             notifier,
             for_balance,
+            for_witness,
             allow_multi_files_snapshot,
         ) {
             error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
@@ -710,6 +715,7 @@ where
                 notifier,
                 for_balance,
                 to_store_id,
+                for_witness,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
@@ -748,6 +754,7 @@ where
                         canceled,
                         notifier,
                         for_balance,
+                        for_witness,
                         allow_multi_files_snapshot,
                     );
                     tikv_alloc::remove_thread_memory_accessor();

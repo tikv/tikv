@@ -301,18 +301,18 @@ impl ReadDelegate {
         }
     }
 
-    fn is_in_leader_lease(&self, ts: Timespec, metrics: &mut ReadMetrics) -> bool {
+    fn is_in_leader_lease(&self, ts: Timespec) -> bool {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
                 if lease.inspect(Some(ts)) == LeaseState::Valid {
                     return true;
                 } else {
-                    metrics.rejected_by_lease_expire += 1;
+                    LOCAL_READ_REJECT.lease_expire.inc();
                     debug!("rejected by lease expire"; "tag" => &self.tag);
                 }
             } else {
-                metrics.rejected_by_term_mismatch += 1;
+                LOCAL_READ_REJECT.term_mismatch.inc();
                 debug!("rejected by term mismatch"; "tag" => &self.tag);
             }
         }
@@ -323,7 +323,6 @@ impl ReadDelegate {
     fn check_stale_read_safe<S: Snapshot>(
         &self,
         read_ts: u64,
-        metrics: &mut ReadMetrics,
     ) -> std::result::Result<(), ReadResponse<S>> {
         let safe_ts = self.read_progress.safe_ts();
         if safe_ts >= read_ts {
@@ -335,7 +334,7 @@ impl ReadDelegate {
             "safe ts" => safe_ts,
             "read ts" => read_ts
         );
-        metrics.rejected_by_safe_timestamp += 1;
+        LOCAL_READ_REJECT.safe_ts.inc();
         let mut response = cmd_resp::new_error(Error::DataIsNotReady {
             region_id: self.region.get_id(),
             peer_id: self.peer_id,
@@ -489,14 +488,14 @@ where
         match ProposalRouter::send(&self.router, cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
-                self.metrics.rejected_by_channel_full += 1;
+                LOCAL_READ_REJECT.channel_full.inc();
                 err.set_message(RAFTSTORE_IS_BUSY.to_owned());
                 err.mut_server_is_busy()
                     .set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 cmd = c;
             }
             Err(TrySendError::Disconnected(c)) => {
-                self.metrics.rejected_by_no_region += 1;
+                LOCAL_READ_REJECT.no_region.inc();
                 err.set_message(format!("region {} is missing", region_id));
                 err.mut_region_not_found().set_region_id(region_id);
                 cmd = c;
@@ -525,7 +524,7 @@ where
             Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
             _ => {
                 debug!("update local read delegate"; "region_id" => region_id);
-                self.metrics.rejected_by_cache_miss += 1;
+                LOCAL_READ_REJECT.cache_miss.inc();
 
                 let (meta_len, meta_reader) = {
                     let meta = self.store_meta.lock().unwrap();
@@ -563,7 +562,7 @@ where
         let store_id = self.store_id.get().unwrap();
 
         if let Err(e) = util::check_store_id(req, store_id) {
-            self.metrics.rejected_by_store_id_mismatch += 1;
+            LOCAL_READ_REJECT.store_id_mismatch.inc();
             debug!("rejected by store id not match"; "err" => %e);
             return Err(e);
         }
@@ -573,7 +572,7 @@ where
         let delegate = match self.get_delegate(region_id) {
             Some(d) => d,
             None => {
-                self.metrics.rejected_by_no_region += 1;
+                LOCAL_READ_REJECT.no_region.inc();
                 debug!("rejected by no region"; "region_id" => region_id);
                 return Ok(None);
             }
@@ -583,8 +582,17 @@ where
 
         // Check peer id.
         if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
-            self.metrics.rejected_by_peer_id_mismatch += 1;
+            LOCAL_READ_REJECT.peer_id_mismatch.inc();
             return Err(e);
+        }
+
+        // Check witness
+        if util::find_peer(&delegate.region, delegate.peer_id)
+            .unwrap()
+            .is_witness
+        {
+            LOCAL_READ_REJECT.witness.inc();
+            return Err(Error::RecoveryInProgress(region_id));
         }
 
         // Check term.
@@ -594,13 +602,13 @@ where
                 "delegate_term" => delegate.term,
                 "header_term" => req.get_header().get_term(),
             );
-            self.metrics.rejected_by_term_mismatch += 1;
+            LOCAL_READ_REJECT.term_mismatch.inc();
             return Err(e);
         }
 
         // Check region epoch.
         if util::check_region_epoch(req, &delegate.region, false).is_err() {
-            self.metrics.rejected_by_epoch += 1;
+            LOCAL_READ_REJECT.epoch.inc();
             // Stale epoch, redirect it to raftstore to get the latest region.
             debug!("rejected by epoch not match"; "tag" => &delegate.tag);
             return Ok(None);
@@ -608,7 +616,6 @@ where
 
         let mut inspector = Inspector {
             delegate: &delegate,
-            metrics: &mut self.metrics,
         };
         match inspector.inspect(req) {
             Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
@@ -641,7 +648,7 @@ where
                             }
                             None => monotonic_raw_now(),
                         };
-                        if !delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
+                        if !delegate.is_in_leader_lease(snapshot_ts) {
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
                             return;
@@ -659,9 +666,7 @@ where
                     RequestPolicy::StaleRead => {
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
                         assert!(read_ts > 0);
-                        if let Err(resp) =
-                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
-                        {
+                        if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
                             cb.invoke_read(resp);
                             return;
                         }
@@ -670,9 +675,7 @@ where
                         let response = self.execute(&req, &delegate.region, None, read_id);
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
-                        if let Err(resp) =
-                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
-                        {
+                        if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
                             cb.invoke_read(resp);
                             return;
                         }
@@ -745,12 +748,11 @@ where
     }
 }
 
-struct Inspector<'r, 'm> {
+struct Inspector<'r> {
     delegate: &'r ReadDelegate,
-    metrics: &'m mut ReadMetrics,
 }
 
-impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
+impl<'r> RequestInspector for Inspector<'r> {
     fn has_applied_to_current_term(&mut self) -> bool {
         if self.delegate.applied_index_term == self.delegate.term {
             true
@@ -763,7 +765,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
             );
 
             // only for metric.
-            self.metrics.rejected_by_applied_term += 1;
+            LOCAL_READ_REJECT.applied_term.inc();
             false
         }
     }
@@ -775,7 +777,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
             LeaseState::Valid
         } else {
             debug!("rejected by leader lease"; "tag" => &self.delegate.tag);
-            self.metrics.rejected_by_no_lease += 1;
+            LOCAL_READ_REJECT.no_lease.inc();
             LeaseState::Expired
         }
     }
@@ -783,49 +785,15 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
 
 const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct ReadMetrics {
     local_executed_requests: u64,
     local_executed_stale_read_requests: u64,
     local_executed_snapshot_cache_hit: u64,
     // TODO: record rejected_by_read_quorum.
-    rejected_by_store_id_mismatch: u64,
-    rejected_by_peer_id_mismatch: u64,
-    rejected_by_term_mismatch: u64,
-    rejected_by_lease_expire: u64,
-    rejected_by_no_region: u64,
-    rejected_by_no_lease: u64,
-    rejected_by_epoch: u64,
-    rejected_by_applied_term: u64,
-    rejected_by_channel_full: u64,
-    rejected_by_cache_miss: u64,
-    rejected_by_safe_timestamp: u64,
     renew_lease_advance: u64,
 
     last_flush_time: Instant,
-}
-
-impl Default for ReadMetrics {
-    fn default() -> ReadMetrics {
-        ReadMetrics {
-            local_executed_requests: 0,
-            local_executed_stale_read_requests: 0,
-            local_executed_snapshot_cache_hit: 0,
-            rejected_by_store_id_mismatch: 0,
-            rejected_by_peer_id_mismatch: 0,
-            rejected_by_term_mismatch: 0,
-            rejected_by_lease_expire: 0,
-            rejected_by_no_region: 0,
-            rejected_by_no_lease: 0,
-            rejected_by_epoch: 0,
-            rejected_by_applied_term: 0,
-            rejected_by_channel_full: 0,
-            rejected_by_cache_miss: 0,
-            rejected_by_safe_timestamp: 0,
-            renew_lease_advance: 0,
-            last_flush_time: Instant::now(),
-        }
-    }
 }
 
 impl ReadMetrics {
@@ -839,62 +807,6 @@ impl ReadMetrics {
     }
 
     fn flush(&mut self) {
-        if self.rejected_by_store_id_mismatch > 0 {
-            LOCAL_READ_REJECT
-                .store_id_mismatch
-                .inc_by(self.rejected_by_store_id_mismatch);
-            self.rejected_by_store_id_mismatch = 0;
-        }
-        if self.rejected_by_peer_id_mismatch > 0 {
-            LOCAL_READ_REJECT
-                .peer_id_mismatch
-                .inc_by(self.rejected_by_peer_id_mismatch);
-            self.rejected_by_peer_id_mismatch = 0;
-        }
-        if self.rejected_by_term_mismatch > 0 {
-            LOCAL_READ_REJECT
-                .term_mismatch
-                .inc_by(self.rejected_by_term_mismatch);
-            self.rejected_by_term_mismatch = 0;
-        }
-        if self.rejected_by_lease_expire > 0 {
-            LOCAL_READ_REJECT
-                .lease_expire
-                .inc_by(self.rejected_by_lease_expire);
-            self.rejected_by_lease_expire = 0;
-        }
-        if self.rejected_by_no_region > 0 {
-            LOCAL_READ_REJECT
-                .no_region
-                .inc_by(self.rejected_by_no_region);
-            self.rejected_by_no_region = 0;
-        }
-        if self.rejected_by_no_lease > 0 {
-            LOCAL_READ_REJECT.no_lease.inc_by(self.rejected_by_no_lease);
-            self.rejected_by_no_lease = 0;
-        }
-        if self.rejected_by_epoch > 0 {
-            LOCAL_READ_REJECT.epoch.inc_by(self.rejected_by_epoch);
-            self.rejected_by_epoch = 0;
-        }
-        if self.rejected_by_applied_term > 0 {
-            LOCAL_READ_REJECT
-                .applied_term
-                .inc_by(self.rejected_by_applied_term);
-            self.rejected_by_applied_term = 0;
-        }
-        if self.rejected_by_channel_full > 0 {
-            LOCAL_READ_REJECT
-                .channel_full
-                .inc_by(self.rejected_by_channel_full);
-            self.rejected_by_channel_full = 0;
-        }
-        if self.rejected_by_safe_timestamp > 0 {
-            LOCAL_READ_REJECT
-                .safe_ts
-                .inc_by(self.rejected_by_safe_timestamp);
-            self.rejected_by_safe_timestamp = 0;
-        }
         if self.local_executed_snapshot_cache_hit > 0 {
             LOCAL_READ_EXECUTED_CACHE_REQUESTS.inc_by(self.local_executed_snapshot_cache_hit);
             self.local_executed_snapshot_cache_hit = 0;
@@ -1071,8 +983,8 @@ mod tests {
 
         // The region is not register yet.
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.rejected_by_no_region, 1);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 1);
+        assert_eq!(LOCAL_READ_REJECT.no_region, 1);
+        assert_eq!(LOCAL_READ_REJECT.cache_miss, 1);
         assert!(reader.delegates.get(&1).is_none());
 
         // Register region 1
@@ -1101,8 +1013,8 @@ mod tests {
 
         // The applied_index_term is stale
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 2);
-        assert_eq!(reader.metrics.rejected_by_applied_term, 1);
+        assert_eq!(LOCAL_READ_REJECT.cache_miss, 2);
+        assert_eq!(LOCAL_READ_REJECT.applied_term, 1);
 
         // Make the applied_index_term matches current term.
         let pg = Progress::applied_index_term(term6);
@@ -1113,7 +1025,7 @@ mod tests {
         let task =
             RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
+        assert_eq!(LOCAL_READ_REJECT.cache_miss, 3);
 
         // Let's read.
         let task = RaftCommand::<KvTestSnapshot>::new(
@@ -1128,7 +1040,7 @@ mod tests {
         // Wait for expiration.
         thread::sleep(Duration::seconds(1).to_std().unwrap());
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.rejected_by_lease_expire, 1);
+        assert_eq!(LOCAL_READ_REJECT.lease_expire, 1);
 
         // Renew lease.
         lease.renew(monotonic_raw_now());
@@ -1148,8 +1060,8 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        assert_eq!(reader.metrics.rejected_by_store_id_mismatch, 1);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
+        assert_eq!(reader.metrics.LOCAL_READ_REJECT.store_id_mismatch, 1);
+        assert_eq!(LOCAL_READ_REJECT.cache_miss, 3);
 
         // metapb::Peer id mismatch.
         let mut cmd_peer_id = cmd.clone();
@@ -1169,7 +1081,7 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        assert_eq!(reader.metrics.rejected_by_peer_id_mismatch, 1);
+        assert_eq!(LOCAL_READ_REJECT.peer_id_mismatch, 1);
 
         // Read quorum.
         let mut cmd_read_quorum = cmd.clone();
@@ -1188,7 +1100,7 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        assert_eq!(reader.metrics.rejected_by_term_mismatch, 1);
+        assert_eq!(LOCAL_READ_REJECT.term_mismatch, 1);
 
         // Stale epoch.
         let mut epoch12 = epoch13;
@@ -1196,17 +1108,14 @@ mod tests {
         let mut cmd_epoch = cmd.clone();
         cmd_epoch.mut_header().set_region_epoch(epoch12);
         must_redirect(&mut reader, &rx, cmd_epoch);
-        assert_eq!(reader.metrics.rejected_by_epoch, 1);
+        assert_eq!(LOCAL_READ_REJECT.epoch, 1);
 
         // Expire lease manually, and it can not be renewed.
-        let previous_lease_rejection = reader.metrics.rejected_by_lease_expire;
+        let previous_lease_rejection = LOCAL_READ_REJECT.lease_expire;
         lease.expire();
         lease.renew(monotonic_raw_now());
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(
-            reader.metrics.rejected_by_lease_expire,
-            previous_lease_rejection + 1
-        );
+        assert_eq!(LOCAL_READ_REJECT.lease_expire, previous_lease_rejection + 1);
 
         // Channel full.
         reader.propose_raft_command(None, cmd.clone(), Callback::None);
@@ -1221,10 +1130,10 @@ mod tests {
         );
         rx.try_recv().unwrap();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
-        assert_eq!(reader.metrics.rejected_by_channel_full, 1);
+        assert_eq!(LOCAL_READ_REJECT.channel_full, 1);
 
         // Reject by term mismatch in lease.
-        let previous_term_rejection = reader.metrics.rejected_by_term_mismatch;
+        let previous_term_rejection = LOCAL_READ_REJECT.term_mismatch;
         let mut cmd9 = cmd.clone();
         cmd9.mut_header().set_term(term6 + 3);
         {
@@ -1251,11 +1160,8 @@ mod tests {
                 .request,
             cmd9
         );
-        assert_eq!(
-            reader.metrics.rejected_by_term_mismatch,
-            previous_term_rejection + 1,
-        );
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 4);
+        assert_eq!(LOCAL_READ_REJECT.term_mismatch, previous_term_rejection + 1,);
+        assert_eq!(LOCAL_READ_REJECT.cache_miss, 4);
 
         // Stale local ReadDelegate
         cmd.mut_header().set_term(term6 + 3);
@@ -1269,10 +1175,10 @@ mod tests {
         let task =
             RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
+        assert_eq!(LOCAL_READ_REJECT.cache_miss, 5);
 
         // Stale read
-        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 0);
+        assert_eq!(LOCAL_READ_REJECT.safe_timestamp, 0);
         read_progress.update_safe_ts(1, 1);
         assert_eq!(read_progress.safe_ts(), 1);
 
@@ -1293,13 +1199,13 @@ mod tests {
             })),
         );
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
+        assert_eq!(LOCAL_READ_REJECT.safe_timestamp, 1);
 
         read_progress.update_safe_ts(1, 2);
         assert_eq!(read_progress.safe_ts(), 2);
         let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
+        assert_eq!(LOCAL_READ_REJECT.safe_timestamp, 1);
 
         // Remove invalid delegate
         let reader_clone = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();

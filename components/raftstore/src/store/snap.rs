@@ -846,6 +846,7 @@ impl Snapshot {
         region: &Region,
         stat: &mut SnapshotStatistics,
         allow_multi_files_snapshot: bool,
+        for_witness: bool,
     ) -> RaftStoreResult<()>
     where
         EK: KvEngine,
@@ -875,55 +876,59 @@ impl Snapshot {
         }
 
         let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
-        for (cf_enum, cf) in SNAPSHOT_CFS_ENUM_PAIR {
-            self.switch_to_cf_file(cf)?;
-            let cf_file = &mut self.cf_files[self.cf_index];
-            let cf_stat = if plain_file_used(cf_file.cf) {
-                let key_mgr = self.mgr.encryption_key_manager.as_ref();
-                snap_io::build_plain_cf_file::<EK>(cf_file, key_mgr, kv_snap, &begin_key, &end_key)?
-            } else {
-                snap_io::build_sst_cf_file_list::<EK>(
-                    cf_file,
-                    engine,
-                    kv_snap,
-                    &begin_key,
-                    &end_key,
-                    self.mgr
-                        .get_actual_max_per_file_size(allow_multi_files_snapshot),
-                    &self.mgr.limiter,
-                )?
-            };
-            cf_file.kv_count = cf_stat.key_count as u64;
-            if cf_file.kv_count > 0 {
-                // Use `kv_count` instead of file size to check empty files because encrypted sst files
-                // contain some metadata so their sizes will never be 0.
-                self.mgr.rename_tmp_cf_file_for_send(cf_file)?;
-            } else {
-                for tmp_file_path in cf_file.tmp_file_paths() {
-                    let tmp_file_path = Path::new(&tmp_file_path);
-                    delete_file_if_exist(tmp_file_path)?;
-                }
-                if let Some(ref mgr) = self.mgr.encryption_key_manager {
+        if !for_witness {
+            for (cf_enum, cf) in SNAPSHOT_CFS_ENUM_PAIR {
+                self.switch_to_cf_file(cf)?;
+                let cf_file = &mut self.cf_files[self.cf_index];
+                let cf_stat = if plain_file_used(cf_file.cf) {
+                    let key_mgr = self.mgr.encryption_key_manager.as_ref();
+                    snap_io::build_plain_cf_file::<EK>(
+                        cf_file, key_mgr, kv_snap, &begin_key, &end_key,
+                    )?
+                } else {
+                    snap_io::build_sst_cf_file_list::<EK>(
+                        cf_file,
+                        engine,
+                        kv_snap,
+                        &begin_key,
+                        &end_key,
+                        self.mgr
+                            .get_actual_max_per_file_size(allow_multi_files_snapshot),
+                        &self.mgr.limiter,
+                    )?
+                };
+                cf_file.kv_count = cf_stat.key_count as u64;
+                if cf_file.kv_count > 0 {
+                    // Use `kv_count` instead of file size to check empty files because encrypted sst files
+                    // contain some metadata so their sizes will never be 0.
+                    self.mgr.rename_tmp_cf_file_for_send(cf_file)?;
+                } else {
                     for tmp_file_path in cf_file.tmp_file_paths() {
-                        mgr.delete_file(&tmp_file_path)?;
+                        let tmp_file_path = Path::new(&tmp_file_path);
+                        delete_file_if_exist(tmp_file_path)?;
+                    }
+                    if let Some(ref mgr) = self.mgr.encryption_key_manager {
+                        for tmp_file_path in cf_file.tmp_file_paths() {
+                            mgr.delete_file(&tmp_file_path)?;
+                        }
                     }
                 }
-            }
 
-            SNAPSHOT_CF_KV_COUNT
-                .get(*cf_enum)
-                .observe(cf_stat.key_count as f64);
-            SNAPSHOT_CF_SIZE
-                .get(*cf_enum)
-                .observe(cf_stat.total_size as f64);
-            info!(
-                "scan snapshot of one cf";
-                "region_id" => region.get_id(),
-                "snapshot" => self.path(),
-                "cf" => cf,
-                "key_count" => cf_stat.key_count,
-                "size" => cf_stat.total_size,
-            );
+                SNAPSHOT_CF_KV_COUNT
+                    .get(*cf_enum)
+                    .observe(cf_stat.key_count as f64);
+                SNAPSHOT_CF_SIZE
+                    .get(*cf_enum)
+                    .observe(cf_stat.total_size as f64);
+                info!(
+                    "scan snapshot of one cf";
+                    "region_id" => region.get_id(),
+                    "snapshot" => self.path(),
+                    "cf" => cf,
+                    "key_count" => cf_stat.key_count,
+                    "size" => cf_stat.total_size,
+                );
+            }
         }
 
         stat.kv_count = self.cf_files.iter().map(|cf| cf.kv_count as usize).sum();
@@ -1034,9 +1039,17 @@ impl Snapshot {
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         allow_multi_files_snapshot: bool,
+        for_witness: bool,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build::<EK>(engine, kv_snap, region, stat, allow_multi_files_snapshot)?;
+        self.do_build::<EK>(
+            engine,
+            kv_snap,
+            region,
+            stat,
+            allow_multi_files_snapshot,
+            for_witness,
+        )?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;
@@ -1564,13 +1577,11 @@ impl SnapManager {
     pub fn get_snapshot_for_receiving(
         &self,
         key: &SnapKey,
-        data: &[u8],
+        snapshot_meta: SnapshotMeta,
     ) -> RaftStoreResult<Box<Snapshot>> {
         let _lock = self.core.registry.rl();
-        let mut snapshot_data = RaftSnapshotData::default();
-        snapshot_data.merge_from_bytes(data)?;
         let base = &self.core.base;
-        let f = Snapshot::new_for_receiving(base, key, &self.core, snapshot_data.take_meta())?;
+        let f = Snapshot::new_for_receiving(base, key, &self.core, snapshot_meta)?;
         Ok(Box::new(f))
     }
 
