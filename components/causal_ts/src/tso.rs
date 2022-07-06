@@ -120,7 +120,7 @@ struct TsoBatchList {
     inner: RwLock<TsoBatchListInner>,
 
     /// Number of available TSO.
-    /// Using signed integer for avoiding a wrap around huge value in case the counting is not accurate.
+    /// Using signed integer for avoiding a wrap around huge value as it's not precisely counted.
     tso_count: AtomicI32,
 
     /// Statistics of TSO usage.
@@ -208,6 +208,7 @@ impl TsoBatchList {
                 self.tso_usage.fetch_add(1, Ordering::Relaxed);
                 self.tso_count.fetch_sub(1, Ordering::Relaxed);
                 if is_used_up {
+                    // TODO: make it async
                     self.remove_batch(key);
                 }
                 return Some(ts);
@@ -230,7 +231,7 @@ impl TsoBatchList {
         let key = new_batch.original_start().into_inner();
         {
             // Hold the write lock until new batch is inserted.
-            // Otherwise a `pop()` would acquire the lock, meet no TSO available and invoke renew request.
+            // Otherwise a `pop()` would acquire the lock, meet no TSO available, and invoke renew request.
             let mut inner = self.inner.write();
             if need_flush {
                 self.flush_internal(&mut inner);
@@ -242,7 +243,7 @@ impl TsoBatchList {
         }
 
         // remove items out of capacity limitation.
-        // TODO: make async
+        // TODO: make it async
         if self.inner.read().len() > self.capacity as usize {
             if let Some((_, batch)) = self.inner.write().pop_first() {
                 self.tso_count
@@ -390,8 +391,8 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
 
                 // Should only be invoked after successful renew. Otherwise the TSO usage will is lost,
                 // and batch size requirement will be less than expected.
-                // Note that invoked here is not accurate. There would be `get_ts()` before here
-                // after above `tso_batch_list.push()`, and make TSO usage a little bigger.
+                // Note that invoked here is not precise. There would be `get_ts()` before here
+                // after above `tso_batch_list.push()`, and make `tso_usage` a little bigger.
                 // This error is acceptable.
                 tso_batch_list.take_and_report_tso_usage();
 
@@ -461,13 +462,13 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
             // Note that there is a `TSO_BATCH_MAX_SIZE` limitation, so the request batch size will be less
             // than expected, and lower the tolerance of TSO service failure.
             // This issue would be improved by:
-            // 1. For causality scenario (leader transfer / region merged): invoke `get_ts()` with "after_ts".
-            // 2. For other scenario that need to flush global timestamp: schedule `get_batch_tso` requests
-            //    here to fulfill the requirement.
-            // TODO: fix this issue of `TSO_BATCH_MAX_SIZE` limitation.
+            // 1. For causality scenario (e.g. leader transfer): invoke `get_ts()` with "after_ts".
+            // 2. For other scenarios that need global flush: schedule PD TSO requests here to
+            //    fulfill the requirement.
+            // TODO: schedule tso requests exceed `TSO_BATCH_MAX_SIZE` limitation.
             tso_batch_list.tso_count() + tso_batch_list.tso_usage()
         } else {
-            // Batch twice number of TSO than used in last period.
+            // Batch twice number of TSO that used in last period.
             tso_batch_list.tso_usage() << 1
         };
         std::cmp::min(
