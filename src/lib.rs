@@ -77,7 +77,7 @@ pub fn tikv_version_info(build_time: Option<&str>) -> String {
 /// Prints the tikv version information to the standard output.
 pub fn log_tikv_info(build_time: Option<&str>) {
     info!("Welcome to TiKV");
-    println!(r"\n
+    println!(r"
  ========================================================================================
 ||  __          __  _                            _          _______ _ _  ____      __   ||
 ||  \ \        / / | |                          | |        |__   __(_) |/ /\ \    / /   ||
