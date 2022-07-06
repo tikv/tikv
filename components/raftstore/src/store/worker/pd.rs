@@ -58,7 +58,7 @@ use crate::store::{
     worker::{
         query_stats::QueryStats,
         split_controller::{SplitInfo, TOP_N},
-        AutoSplitController, ReadStats, WriteStats,
+        AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
     },
     Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
     RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
@@ -183,6 +183,7 @@ where
         id: u64,
         duration: RaftstoreDuration,
     },
+    UpdateRegionCPUCollector(bool),
     RegionCPURecords(Arc<RawRecords>),
     ReportMinResolvedTS {
         store_id: u64,
@@ -349,7 +350,7 @@ where
                 log_wrappers::Value::key(split_key),
             ),
             Task::AutoSplit { ref split_infos } => {
-                write!(f, "auto split split regions, num is {}", split_infos.len(),)
+                write!(f, "auto split split regions, num is {}", split_infos.len())
             }
             Task::AskBatchSplit {
                 ref region,
@@ -404,6 +405,12 @@ where
             }
             Task::UpdateSlowScore { id, ref duration } => {
                 write!(f, "compute slow score: id {}, duration {:?}", id, duration)
+            }
+            Task::UpdateRegionCPUCollector(is_register) => {
+                if is_register {
+                    return write!(f, "register region cpu collector");
+                }
+                write!(f, "deregister region cpu collector")
             }
             Task::RegionCPURecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
@@ -465,6 +472,7 @@ where
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
     read_stats_sender: Option<Sender<ReadStats>>,
+    cpu_stats_sender: Option<Sender<Arc<RawRecords>>>,
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
@@ -486,6 +494,7 @@ where
             handle: None,
             timer: None,
             read_stats_sender: None,
+            cpu_stats_sender: None,
             collect_store_infos_interval: interval,
             load_base_split_check_interval: cmp::min(
                 DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
@@ -530,6 +539,9 @@ where
         let (read_stats_sender, read_stats_receiver) = mpsc::channel();
         self.read_stats_sender = Some(read_stats_sender);
 
+        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::channel();
+        self.cpu_stats_sender = Some(cpu_stats_sender);
+
         let scheduler = self.scheduler.clone();
         let props = tikv_util::thread_group::current_properties();
 
@@ -541,17 +553,25 @@ where
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
-                let mut thread_stats = ThreadInfoStatistics::new();
+                // Create different `ThreadInfoStatistics` for different purposes to
+                // make sure the record won't be disturbed.
+                let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
+                let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) =
                     timer_rx.recv_timeout(tick_interval)
                 {
                     if is_enable_tick(timer_cnt, collect_store_infos_interval) {
-                        StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
+                        StatsMonitor::collect_store_infos(
+                            &mut collect_store_infos_thread_stats,
+                            &scheduler,
+                        );
                     }
                     if is_enable_tick(timer_cnt, load_base_split_check_interval) {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
                             &read_stats_receiver,
+                            &cpu_stats_receiver,
+                            &mut load_base_split_thread_stats,
                             &scheduler,
                         );
                     }
@@ -595,15 +615,35 @@ where
 
     pub fn load_base_split(
         auto_split_controller: &mut AutoSplitController,
-        receiver: &Receiver<ReadStats>,
+        read_stats_receiver: &Receiver<ReadStats>,
+        cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
+        thread_stats: &mut ThreadInfoStatistics,
         scheduler: &Scheduler<Task<EK, ER>>,
     ) {
-        auto_split_controller.refresh_cfg();
-        let mut others = vec![];
-        while let Ok(other) = receiver.try_recv() {
-            others.push(other);
+        let start_time = TiInstant::now();
+        match auto_split_controller.refresh_and_check_cfg() {
+            SplitConfigChange::UpdateRegionCPUCollector(is_register) => {
+                if let Err(e) = scheduler.schedule(Task::UpdateRegionCPUCollector(is_register)) {
+                    error!(
+                        "failed to register or deregister the region cpu collector";
+                        "is_register" => is_register,
+                        "err" => ?e,
+                    );
+                }
+            }
+            SplitConfigChange::Noop => {}
         }
-        let (top, split_infos) = auto_split_controller.flush(others);
+        let mut read_stats_vec = vec![];
+        while let Ok(read_stats) = read_stats_receiver.try_recv() {
+            read_stats_vec.push(read_stats);
+        }
+        let mut cpu_stats_vec = vec![];
+        while let Ok(cpu_stats) = cpu_stats_receiver.try_recv() {
+            cpu_stats_vec.push(cpu_stats);
+        }
+        thread_stats.record();
+        let (top_qps, split_infos) =
+            auto_split_controller.flush(read_stats_vec, cpu_stats_vec, thread_stats);
         auto_split_controller.clear();
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = scheduler.schedule(task) {
@@ -613,14 +653,15 @@ where
             );
         }
         for i in 0..TOP_N {
-            if i < top.len() {
+            if i < top_qps.len() {
                 READ_QPS_TOPN
                     .with_label_values(&[&i.to_string()])
-                    .set(top[i] as f64);
+                    .set(top_qps[i] as f64);
             } else {
                 READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
             }
         }
+        LOAD_BASE_SPLIT_DURATION_HISTOGRAM.observe(start_time.saturating_elapsed_secs());
     }
 
     pub fn report_min_resolved_ts(
@@ -652,14 +693,21 @@ where
         if let Some(h) = self.handle.take() {
             drop(self.timer.take());
             drop(self.read_stats_sender.take());
+            drop(self.cpu_stats_sender.take());
             if let Err(e) = h.join() {
                 error!("join stats collector failed"; "err" => ?e);
             }
         }
     }
 
-    pub fn get_read_stats_sender(&self) -> &Option<Sender<ReadStats>> {
+    #[inline(always)]
+    fn get_read_stats_sender(&self) -> &Option<Sender<ReadStats>> {
         &self.read_stats_sender
+    }
+
+    #[inline(always)]
+    fn get_cpu_stats_sender(&self) -> &Option<Sender<Arc<RawRecords>>> {
+        &self.cpu_stats_sender
     }
 }
 
@@ -840,7 +888,8 @@ where
     scheduler: Scheduler<Task<EK, ER>>,
     stats_monitor: StatsMonitor<EK, ER>,
 
-    _region_cpu_records_collector: CollectorGuard,
+    collector_reg_handle: CollectorRegHandle,
+    region_cpu_records_collector: Option<CollectorGuard>,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
 
@@ -877,6 +926,18 @@ where
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
     ) -> Runner<EK, ER, T> {
+        // Register the region CPU records collector.
+        let mut region_cpu_records_collector = None;
+        if auto_split_controller
+            .cfg
+            .region_cpu_overload_threshold_ratio
+            > 0.0
+        {
+            region_cpu_records_collector = Some(collector_reg_handle.register(
+                Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
+                false,
+            ));
+        }
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(
             interval,
@@ -886,11 +947,6 @@ where
         if let Err(e) = stats_monitor.start(auto_split_controller, region_read_progress, store_id) {
             error!("failed to start stats collector, error = {:?}", e);
         }
-
-        let _region_cpu_records_collector = collector_reg_handle.register(
-            Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
-            true,
-        );
 
         Runner {
             store_id,
@@ -903,7 +959,8 @@ where
             start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
-            _region_cpu_records_collector,
+            collector_reg_handle,
+            region_cpu_records_collector,
             region_cpu_records: HashMap::default(),
             concurrency_manager,
             snap_mgr,
@@ -964,6 +1021,21 @@ where
             }
         };
         self.remote.spawn(f);
+    }
+
+    fn handle_update_region_cpu_collector(&mut self, is_register: bool) {
+        // If it's a deregister task, just take and drop the original collector.
+        if !is_register {
+            self.region_cpu_records_collector.take();
+            return;
+        }
+        if self.region_cpu_records_collector.is_some() {
+            return;
+        }
+        self.region_cpu_records_collector = Some(self.collector_reg_handle.register(
+            Box::new(RegionCPUMeteringCollector::new(self.scheduler.clone())),
+            false,
+        ));
     }
 
     // Note: The parameter doesn't contain `self` because this function may
@@ -1640,6 +1712,12 @@ where
     // which is the read load portion of the write path.
     // TODO: more accurate CPU consumption of a specified region.
     fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
+        // Send Region CPU info to AutoSplitController inside the stats_monitor.
+        if let Some(cpu_stats_sender) = self.stats_monitor.get_cpu_stats_sender() {
+            if cpu_stats_sender.send(records.clone()).is_err() {
+                warn!("send region cpu info failed, are we shutting down?")
+            }
+        }
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 
@@ -1787,18 +1865,46 @@ where
                         if let Ok(Some(region)) =
                             pd_client.get_region_by_id(split_info.region_id).await
                         {
-                            Self::handle_ask_batch_split(
-                                router.clone(),
-                                scheduler.clone(),
-                                pd_client.clone(),
-                                region,
-                                vec![split_info.split_key],
-                                split_info.peer,
-                                true,
-                                Callback::None,
-                                String::from("auto_split"),
-                                remote.clone(),
-                            );
+                            // Try to split the region with the given split key.
+                            if let Some(split_key) = split_info.split_key {
+                                Self::handle_ask_batch_split(
+                                    router.clone(),
+                                    scheduler.clone(),
+                                    pd_client.clone(),
+                                    region,
+                                    vec![split_key],
+                                    split_info.peer,
+                                    true,
+                                    Callback::None,
+                                    String::from("auto_split"),
+                                    remote.clone(),
+                                );
+                                return;
+                            }
+                            // Try to split the region on half within the given key range
+                            // if there is no `split_key` been given.
+                            if split_info.start_key.is_some() && split_info.end_key.is_some() {
+                                let start_key = split_info.start_key.unwrap();
+                                let end_key = split_info.end_key.unwrap();
+                                let region_id = region.get_id();
+                                let msg = CasualMessage::HalfSplitRegion {
+                                    region_epoch: region.get_region_epoch().clone(),
+                                    start_key: Some(start_key.clone()),
+                                    end_key: Some(end_key.clone()),
+                                    policy: pdpb::CheckPolicy::Scan,
+                                    source: "auto_split",
+                                    cb: Callback::None,
+                                };
+                                if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg))
+                                {
+                                    error!("send auto half split request failed";
+                                        "region_id" => region_id,
+                                        "start_key" => log_wrappers::Value::key(&start_key),
+                                        "end_key" => log_wrappers::Value::key(&end_key),
+                                        "err" => ?e,
+                                    );
+                                }
+                            }
                         }
                     }
                 };
@@ -1926,6 +2032,9 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
+            Task::UpdateRegionCPUCollector(is_register) => {
+                self.handle_update_region_cpu_collector(is_register)
+            }
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTS {
                 store_id,

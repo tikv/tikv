@@ -761,13 +761,17 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             cop_read_pools.handle()
         };
 
+        let mut unified_read_pool_scale_receiver = None;
         if self.config.readpool.is_unified_pool_enabled() {
+            let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel(10);
             cfg_controller.register(
                 tikv::config::Module::Readpool,
                 Box::new(ReadPoolConfigManager(
                     unified_read_pool.as_ref().unwrap().handle(),
+                    unified_read_pool_scale_notifier,
                 )),
             );
+            unified_read_pool_scale_receiver = Some(rx);
         }
 
         // Register causal observer for RawKV API V2
@@ -960,7 +964,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             Box::new(split_config_manager.clone()),
         );
 
-        let auto_split_controller = AutoSplitController::new(split_config_manager);
+        let auto_split_controller = AutoSplitController::new(
+            split_config_manager,
+            self.config.server.grpc_concurrency,
+            self.config.readpool.unified.max_thread_count,
+            unified_read_pool_scale_receiver,
+        );
 
         // `ConsistencyCheckObserver` must be registered before `Node::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
