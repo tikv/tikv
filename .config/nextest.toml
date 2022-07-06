@@ -1,0 +1,7 @@
+[profile.ci]
+retries = 1 # Run at most 2 times
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 2 } # Timeout=120s
+
+[profile.ci.junit]
+path = "junit.xml"
