@@ -7,7 +7,7 @@ use std::{path::Path, process};
 use clap::{crate_authors, App, Arg};
 use serde_json::{Map, Value};
 use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
-use tikv::config::TiKvConfig;
+use tikv::config::{TiKvConfig, to_flatten_config_info};
 
 fn main() {
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
@@ -198,7 +198,7 @@ fn main() {
 
     let is_config_info = matches.is_present("config-info");
     if is_config_info {
-        let config_infos = server::server::get_flatten_cfg_info(&config);
+        let config_infos = to_flatten_config_info(&config);
         let mut result = Map::new();
         result.insert("Component".into(), "TiKV Server".into());
         result.insert("Version".into(), tikv::tikv_build_version().into());

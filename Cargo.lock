@@ -5044,7 +5044,6 @@ dependencies = [
  "hex 0.4.2",
  "keys",
  "kvproto",
- "lazy_static",
  "libc 0.2.125",
  "log",
  "log_wrappers",
