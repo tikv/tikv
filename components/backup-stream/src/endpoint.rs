@@ -454,7 +454,7 @@ where
             let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
             match range_init_result {
                 Ok(()) => {
-                    info!("backup stream success to initialize"; 
+                    info!("backup stream success to initialize";
                         "start_key" => utils::redact(&start_key),
                         "end_key" => utils::redact(&end_key),
                         "take" => ?start.saturating_elapsed(),)

@@ -149,6 +149,7 @@ pub enum Task {
     MinTS {
         regions: Vec<u64>,
         min_ts: TimeStamp,
+        current_ts: TimeStamp,
     },
     ResolverReady {
         observe_id: ObserveID,
@@ -209,9 +210,15 @@ impl fmt::Debug for Task {
                 .field("type", &"multi_batch")
                 .field("multi_batch", &multi.len())
                 .finish(),
-            Task::MinTS { ref min_ts, .. } => {
-                de.field("type", &"mit_ts").field("min_ts", min_ts).finish()
-            }
+            Task::MinTS {
+                ref min_ts,
+                ref current_ts,
+                ..
+            } => de
+                .field("type", &"mit_ts")
+                .field("current_ts", current_ts)
+                .field("min_ts", min_ts)
+                .finish(),
             Task::ResolverReady {
                 ref observe_id,
                 ref region,
@@ -408,6 +415,7 @@ pub struct Endpoint<T, E> {
     region_read_progress: RegionReadProgressRegistry,
 
     // Metrics and logging.
+    current_ts: TimeStamp,
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
     resolved_region_count: usize,
@@ -499,6 +507,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             region_read_progress,
             // Log the first resolved ts warning.
             warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
+            current_ts: TimeStamp::zero(),
         };
         ep.register_min_ts_event();
         ep
@@ -907,7 +916,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         }
     }
 
-    fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
+    fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
         // Reset resolved_regions to empty.
         let resolved_regions = &mut self.resolved_region_heap;
         resolved_regions.clear();
@@ -951,6 +960,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 }
             }
         }
+        self.current_ts = current_ts;
         let lag_millis = min_ts
             .physical()
             .saturating_sub(self.min_resolved_ts.physical());
@@ -1162,7 +1172,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 };
 
             if !regions.is_empty() {
-                match scheduler.schedule(Task::MinTS { regions, min_ts }) {
+                match scheduler.schedule(Task::MinTS {
+                    regions,
+                    min_ts,
+                    current_ts: min_ts_pd,
+                }) {
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                     // advance normally.
@@ -1249,7 +1263,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
         debug!("cdc run task"; "task" => %task);
 
         match task {
-            Task::MinTS { regions, min_ts } => self.on_min_ts(regions, min_ts),
+            Task::MinTS {
+                regions,
+                min_ts,
+                current_ts,
+            } => self.on_min_ts(regions, min_ts, current_ts),
             Task::Register {
                 request,
                 downstream,
@@ -1330,8 +1348,14 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoin
         if self.min_resolved_ts != TimeStamp::max() {
             CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
             CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
+            CDC_MIN_RESOLVED_TS_LAG.set(
+                self.current_ts
+                    .physical()
+                    .saturating_sub(self.min_resolved_ts.physical()) as i64,
+            );
         }
         self.min_resolved_ts = TimeStamp::max();
+        self.current_ts = TimeStamp::max();
         self.min_ts_region_id = 0;
 
         self.old_value_cache.flush_metrics();
@@ -2245,6 +2269,7 @@ mod tests {
         suite.run(Task::MinTS {
             regions: vec![1],
             min_ts: TimeStamp::from(1),
+            current_ts: TimeStamp::zero(),
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -2280,6 +2305,7 @@ mod tests {
         suite.run(Task::MinTS {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
+            current_ts: TimeStamp::zero(),
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -2324,6 +2350,7 @@ mod tests {
         suite.run(Task::MinTS {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
+            current_ts: TimeStamp::zero(),
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -2557,6 +2584,7 @@ mod tests {
         suite.run(Task::MinTS {
             regions: vec![1],
             min_ts: TimeStamp::from(1),
+            current_ts: TimeStamp::zero(),
         });
         // conn a must receive a resolved ts that only contains region 1.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 1);
@@ -2570,6 +2598,7 @@ mod tests {
         suite.run(Task::MinTS {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
+            current_ts: TimeStamp::zero(),
         });
         // conn a must receive a resolved ts that contains region 1 and region 2.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 2);
@@ -2583,6 +2612,7 @@ mod tests {
         suite.run(Task::MinTS {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
+            current_ts: TimeStamp::zero(),
         });
         // conn a must receive a resolved ts that contains region 1 and region 2.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 3);
@@ -2592,6 +2622,7 @@ mod tests {
         suite.run(Task::MinTS {
             regions: vec![1, 3],
             min_ts: TimeStamp::from(4),
+            current_ts: TimeStamp::zero(),
         });
         // conn a must receive a resolved ts that only contains region 1.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 4);
