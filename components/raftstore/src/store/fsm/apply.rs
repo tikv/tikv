@@ -5595,7 +5595,6 @@ mod tests {
         reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
-        /// The following tests are to test if pre_exec works.
         let mut index_id = 1;
         let put_entry = EntryBuilder::new(1, 1)
             .put(b"k1", b"v1")
