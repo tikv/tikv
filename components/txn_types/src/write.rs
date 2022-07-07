@@ -268,7 +268,7 @@ impl WriteRef<'_> {
             {
                 SHORT_VALUE_PREFIX => {
                     let len = b
-                        .read_u8()
+                        .read_var_u64()
                         .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
                     if b.len() < len as usize {
                         panic!(
@@ -307,7 +307,7 @@ impl WriteRef<'_> {
         b.encode_var_u64(self.start_ts.into_inner()).unwrap();
         if let Some(v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
-            b.push(v.len() as u8);
+            b.encode_var_u64(v.len() as u64).unwrap();
             b.extend_from_slice(v);
         }
         if self.has_overlapped_rollback {
@@ -324,7 +324,7 @@ impl WriteRef<'_> {
         let mut size = 1 + MAX_VAR_U64_LEN + self.has_overlapped_rollback as usize;
 
         if let Some(v) = &self.short_value {
-            size += 2 + v.len();
+            size += 1 + MAX_VAR_U64_LEN + v.len();
         }
         if self.gc_fence.is_some() {
             size += 1 + size_of::<u64>();
