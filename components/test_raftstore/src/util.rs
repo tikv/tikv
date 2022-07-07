@@ -13,7 +13,9 @@ use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::{config::BlobRunMode, raw::DB, Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{
+    config::BlobRunMode, raw::DB, Compat, FlushListener, RocksEngine, RocksSnapshot,
+};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
@@ -658,8 +660,12 @@ pub fn create_test_engine(
         builder = builder.block_cache(cache);
     }
     if let Some(router) = router {
-        builder = builder.compaction_filter_router(router);
+        builder = builder.compaction_filter_router(router.clone());
+        if cfg.raft_store.disable_kv_wal {
+            builder = builder.flush_listener(FlushListener::new(router));
+        }
     }
+
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
     let engines = Engines::new(engine, raft_engine);

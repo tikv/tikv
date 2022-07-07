@@ -68,7 +68,7 @@ impl RaftEngineReadOnly for PanicEngine {
         raft_group_id: u64,
         applied_index: u64,
     ) -> Result<Option<RegionLocalState>> {
-        todo!()
+        panic!()
     }
 }
 

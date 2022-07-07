@@ -1,20 +1,31 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::Ordering;
+use std::sync::{atomic::Ordering, Arc, Mutex};
 
 use parking_lot_core::SpinWait;
 use rocksdb::{EventListener, FlushJobInfo, MemTableInfo};
 use tikv_util::{
     debug,
     sequence_number::{
-        FLUSHED_MAX_SEQUENCE_NUMBERS, MEMTABLE_SEALED_COUNTER_ALLOCATOR, SYNCED_MAX_SEQUENCE_NUMBER,
+        Notifier, FLUSHED_MAX_SEQUENCE_NUMBERS, SYNCED_MAX_SEQUENCE_NUMBER,
+        VERSION_COUNTER_ALLOCATOR,
     },
 };
 
-#[derive(Clone, Default)]
-pub struct FlushListener;
+#[derive(Clone)]
+pub struct FlushListener<N> {
+    notifier: Arc<Mutex<N>>,
+}
 
-impl EventListener for FlushListener {
+impl<N: Notifier> FlushListener<N> {
+    pub fn new(notifier: N) -> Self {
+        FlushListener {
+            notifier: Arc::new(Mutex::new(notifier)),
+        }
+    }
+}
+
+impl<N: Notifier> EventListener for FlushListener<N> {
     fn on_flush_begin(&self, info: &FlushJobInfo) {
         let flush_seqno = info.largest_seqno();
         let mut spin_wait = SpinWait::new();
@@ -48,7 +59,7 @@ impl EventListener for FlushListener {
     }
 
     fn on_memtable_sealed(&self, info: &MemTableInfo) {
-        let version = MEMTABLE_SEALED_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst);
+        let version = VERSION_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst);
         debug!(
             "memtable sealed";
             "cf" => info.cf_name(),
@@ -56,6 +67,8 @@ impl EventListener for FlushListener {
             "earliest_seqno" => info.earliest_seqno(),
             "version" => version+1
         );
+        let notifier = self.notifier.lock().unwrap();
+        notifier.notify_seqno_version_updated(version);
     }
 }
 
@@ -67,12 +80,21 @@ mod tests {
         ColumnFamilyOptions, MiscExt, Mutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
     };
     use rocksdb::DBOptions as RawDBOptions;
-    use tikv_util::sequence_number::{FLUSHED_MAX_SEQUENCE_NUMBERS, SYNCED_MAX_SEQUENCE_NUMBER};
+    use tikv_util::sequence_number::{
+        Notifier, FLUSHED_MAX_SEQUENCE_NUMBERS, SYNCED_MAX_SEQUENCE_NUMBER,
+    };
 
     use crate::{
         util::{new_engine_opt, RocksCFOptions},
         FlushListener, RocksColumnFamilyOptions, RocksDBOptions,
     };
+
+    #[derive(Clone)]
+    struct TestNotifier;
+
+    impl Notifier for TestNotifier {
+        fn notify_seqno_version_updated(&self, _version: u64) {}
+    }
 
     #[test]
     fn test_flush_listener() {
@@ -82,7 +104,7 @@ mod tests {
             .unwrap();
         let path = dir.path().to_str().unwrap();
         let mut db_opts = RawDBOptions::new();
-        db_opts.add_event_listener(FlushListener::default());
+        db_opts.add_event_listener(FlushListener::new(TestNotifier));
         let cf_opts = RocksColumnFamilyOptions::new();
         let engine = new_engine_opt(
             path,

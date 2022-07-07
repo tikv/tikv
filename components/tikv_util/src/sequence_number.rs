@@ -2,7 +2,7 @@ use std::{
     cmp,
     collections::{BTreeMap, VecDeque},
     iter::FromIterator,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use collections::HashMap;
@@ -11,19 +11,23 @@ use lazy_static::lazy_static;
 use crate::cf_defs::DATA_CFS;
 
 lazy_static! {
-    static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
-    pub static ref MEMTABLE_SEALED_COUNTER_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
+    static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
+    pub static ref VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
     pub static ref SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
     pub static ref FLUSHED_MAX_SEQUENCE_NUMBERS: HashMap<&'static str, AtomicU64> =
         HashMap::from_iter(DATA_CFS.iter().map(|cf| (*cf, AtomicU64::new(0))));
 }
 
+pub trait Notifier: Send {
+    fn notify_seqno_version_updated(&self, version: u64);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SequenceNumber {
     pub number: u64,
-    pub version: usize,
-    start_counter: usize,
-    end_counter: usize,
+    pub version: u64,
+    start_counter: u64,
+    end_counter: u64,
 }
 
 impl SequenceNumber {
@@ -39,7 +43,7 @@ impl SequenceNumber {
     pub fn end(&mut self, number: u64) {
         self.number = number;
         self.end_counter = SEQUENCE_NUMBER_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
-        self.version = MEMTABLE_SEALED_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
+        self.version = VERSION_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
     }
 
     pub fn max(left: Self, right: Self) -> Self {
@@ -56,15 +60,15 @@ pub struct SequenceNumberWindow {
     // store received start counters which are bigger than last_start_counter + 1.
     pending_start_counter: VecDeque<bool>,
     // counter start from 1, so 0 means no start counter received.
-    last_ack_counter: usize,
+    last_ack_counter: u64,
     // (end_counter, sequence number)
-    pending_sequence: BTreeMap<usize, SequenceNumber>,
+    pending_sequence: BTreeMap<u64, SequenceNumber>,
     last_sequence: Option<SequenceNumber>,
 }
 
 impl SequenceNumberWindow {
     pub fn push(&mut self, sn: SequenceNumber) -> Option<SequenceNumber> {
-        let start_delta = sn.start_counter.checked_sub(self.last_ack_counter).unwrap();
+        let start_delta = sn.start_counter.checked_sub(self.last_ack_counter).unwrap() as usize;
         if start_delta > self.pending_start_counter.len() {
             self.pending_start_counter.resize(start_delta, false);
         }
@@ -85,7 +89,7 @@ impl SequenceNumberWindow {
                 }
             }
             self.pending_start_counter.drain(0..acks);
-            self.last_ack_counter += acks;
+            self.last_ack_counter += acks as u64;
             let mut sequences = self
                 .pending_sequence
                 .split_off(&(self.last_ack_counter + 1));

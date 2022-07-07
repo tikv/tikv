@@ -684,6 +684,10 @@ where
     GcSnapshotFinish,
 
     ApplyRes(Vec<Box<ApplyRes<EK::Snapshot>>>),
+
+    SeqnoVersionUpdated {
+        version: u64,
+    },
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -718,6 +722,11 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::ApplyRes(ref res) => write!(fmt, "ApplyRes {:?}", res),
+            StoreMsg::SeqnoVersionUpdated {
+                version: new_version,
+            } => {
+                write!(fmt, "SeqnoVersionUpdated {}", new_version)
+            }
         }
     }
 }

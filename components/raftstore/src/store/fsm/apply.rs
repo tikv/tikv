@@ -500,9 +500,9 @@ where
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
-            let (_, sequence_number) = self.write_to_db();
-            if sequence_number.is_some() {
-                delegate.last_sequence = sequence_number;
+            let (_, seqno) = self.write_to_db();
+            if seqno.is_some() {
+                delegate.last_write_seqno = seqno;
             }
             self.prepare_for(delegate);
             delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
@@ -626,7 +626,7 @@ where
         self.apply_res.push(Box::new(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
-            last_sequence: delegate.last_sequence,
+            last_seqno: delegate.last_write_seqno.take(),
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
@@ -667,10 +667,15 @@ where
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        let (is_synced, _) = self.write_to_db();
+        let (is_synced, seqno) = self.write_to_db();
 
         if !self.apply_res.is_empty() {
-            let apply_res = mem::take(&mut self.apply_res);
+            let mut apply_res = mem::take(&mut self.apply_res);
+            for res in &mut apply_res {
+                if res.as_ref().last_seqno.is_none() {
+                    res.as_mut().last_seqno = seqno;
+                }
+            }
             if self.disable_wal {
                 self.notifier.notify_store(apply_res);
             } else {
@@ -948,7 +953,7 @@ where
 
     buckets: Option<BucketStat>,
 
-    last_sequence: Option<SequenceNumber>,
+    last_write_seqno: Option<SequenceNumber>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -981,7 +986,7 @@ where
             raft_engine: reg.raft_engine,
             trace: ApplyMemoryTrace::default(),
             buckets: None,
-            last_sequence: None,
+            last_write_seqno: None,
         }
     }
 
@@ -3283,7 +3288,7 @@ where
     pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
     pub bucket_stat: Option<BucketStat>,
-    pub last_sequence: Option<SequenceNumber>,
+    pub last_seqno: Option<SequenceNumber>,
     pub region_local_state: Option<RegionLocalState>,
 }
 
@@ -3657,6 +3662,8 @@ where
                 // Commit the writebatch for ensuring the following snapshot can get all previous writes.
                 if apply_ctx.kv_wb().count() > 0 {
                     apply_ctx.commit(&mut self.delegate);
+                    // Call `finish_for` here for generating an ApplyRes to keep track of sequence number relation.
+                    apply_ctx.finish_for(&mut self.delegate, VecDeque::new());
                 }
                 ReadResponse {
                     response: Default::default(),

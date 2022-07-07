@@ -1615,7 +1615,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
         if self.config.raft_store.disable_kv_wal {
-            builder = builder.flush_listener(FlushListener::default());
+            builder = builder.flush_listener(FlushListener::new(self.router.clone()));
         }
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);

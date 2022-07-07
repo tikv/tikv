@@ -22,7 +22,7 @@ use tikv_util::worker::Scheduler;
 
 use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
-struct FactoryInner {
+struct FactoryInner<ER: RaftEngine> {
     env: Arc<Env>,
     region_info_accessor: Option<RegionInfoAccessor>,
     block_cache: Option<Cache>,
@@ -32,11 +32,11 @@ struct FactoryInner {
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
     root_db: Mutex<Option<RocksEngine>>,
-    flush_listener: Option<FlushListener>,
+    flush_listener: Option<FlushListener<RaftRouter<RocksEngine, ER>>>,
 }
 
 pub struct KvEngineFactoryBuilder<ER: RaftEngine> {
-    inner: FactoryInner,
+    inner: FactoryInner<ER>,
     router: Option<RaftRouter<RocksEngine, ER>>,
 }
 
@@ -74,7 +74,7 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
         self
     }
 
-    pub fn flush_listener(mut self, listener: FlushListener) -> Self {
+    pub fn flush_listener(mut self, listener: FlushListener<RaftRouter<RocksEngine, ER>>) -> Self {
         self.inner.flush_listener = Some(listener);
         self
     }
@@ -98,7 +98,7 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
 }
 
 pub struct KvEngineFactory<ER: RaftEngine> {
-    inner: Arc<FactoryInner>,
+    inner: Arc<FactoryInner<ER>>,
     router: Mutex<Option<RaftRouter<RocksEngine, ER>>>,
 }
 
