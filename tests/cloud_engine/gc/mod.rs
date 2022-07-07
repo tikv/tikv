@@ -169,7 +169,7 @@ fn test_raft_log_gc() {
                 {
                     break;
                 }
-                if i == 9 {
+                if i == 29 {
                     panic!("wait for memtable flush timeouts");
                 }
                 std::thread::sleep(Duration::from_millis(100));

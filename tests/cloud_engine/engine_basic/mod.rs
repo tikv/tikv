@@ -55,16 +55,13 @@ fn test_split_by_key() {
         if engine.get_all_shard_id_vers().len() > 1 {
             break;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        sleep();
     }
     let shard_stats = engine.get_all_shard_stats();
     assert!(shard_stats.len() > 1);
     let total_size: u64 = shard_stats.iter().map(|s| s.total_size).sum();
     assert!(total_size < 64 * 1024);
     cluster.stop();
-    // wait for compaction jobs done.
-    // TODO(x): make kvengine stop every threads.
-    std::thread::sleep(Duration::from_secs(1));
 }
 
 #[test]
@@ -72,7 +69,10 @@ fn test_remove_peer() {
     test_util::init_log_for_test();
     let node_ids = vec![alloc_node_id(), alloc_node_id(), alloc_node_id()];
     let mut cluster = ServerCluster::new(node_ids.clone(), |_, _| {});
+    cluster.wait_region_replicated(&[], 3);
     cluster.split(&i_to_key(5));
+    // Wait for region heartbeat to update region epoch in PD.
+    sleep();
     cluster.put_kv(0..10, i_to_key, i_to_key);
     let pd = cluster.get_pd_client();
     for _ in 0..100 {

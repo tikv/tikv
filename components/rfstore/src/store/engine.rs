@@ -7,7 +7,7 @@ use std::{
 
 use kvenginepb::ChangeSet;
 use tikv_util::{
-    mpsc,
+    info, mpsc,
     mpsc::{Receiver, Sender},
 };
 
@@ -71,6 +71,11 @@ pub struct MetaChangeListener {
 impl kvengine::MetaChangeListener for MetaChangeListener {
     fn on_change_set(&self, cs: ChangeSet) {
         let msg = StoreMsg::GenerateEngineChangeSet(cs);
-        self.sender.send(msg).unwrap();
+        if let Err(e) = self.sender.send(msg) {
+            info!(
+                "failed to to send meta change message, are we shutting down?";
+                "err" => ?e,
+            )
+        }
     }
 }
