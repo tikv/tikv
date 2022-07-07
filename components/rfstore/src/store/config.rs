@@ -170,6 +170,7 @@ impl Config {
         cfg.abnormal_leader_missing_duration = old.abnormal_leader_missing_duration;
         cfg.peer_stale_state_check_interval = old.peer_stale_state_check_interval;
         cfg.leader_transfer_max_log_lag = old.leader_transfer_max_log_lag;
+        cfg.raft_log_gc_tick_interval = old.raft_log_gc_tick_interval;
 
         cfg.region_split_size = old_cop.region_split_size;
         cfg.apply_pool_size = old.apply_batch_system.pool_size;

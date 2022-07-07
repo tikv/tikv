@@ -51,7 +51,7 @@ impl Default for InMemFS {
 impl InMemFS {
     pub fn new() -> Self {
         Self {
-            files: dashmap::DashMap::new(),
+            files: Default::default(),
             runtime: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(1)
                 .enable_all()

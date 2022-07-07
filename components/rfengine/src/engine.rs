@@ -145,12 +145,14 @@ impl RfEngine {
             let mut region_data = region_data.write().unwrap();
             let truncated = region_data.apply(batch_data);
             let truncated_index = region_data.truncated_idx;
+            let truncated_term = region_data.truncated_term;
             drop(region_data);
             if !truncated.is_empty() {
                 self.task_sender
                     .send(Task::Truncate {
                         region_id,
                         truncated_index,
+                        truncated_term,
                         truncated,
                     })
                     .unwrap();
@@ -192,6 +194,14 @@ impl RfEngine {
             .get(&region_id)
             .map(|data| data.read().unwrap().raft_logs.last_index())
             .and_then(|index| if index != 0 { Some(index) } else { None })
+    }
+
+    /// Returns (truncated_index, truncated_term).
+    pub fn get_truncated_state(&self, region_id: u64) -> Option<(u64, u64)> {
+        self.regions.get(&region_id).map(|data| {
+            let data = data.read().unwrap();
+            (data.truncated_idx, data.truncated_term)
+        })
     }
 
     pub fn get_state(&self, region_id: u64, key: &[u8]) -> Option<Bytes> {
@@ -374,6 +384,7 @@ pub(crate) struct RegionData {
     /// `truncated_idx` is the max index that doesn't exists.
     /// After truncating, the first index would be truncated_idx + 1.
     pub(crate) truncated_idx: u64,
+    pub(crate) truncated_term: u64,
     pub(crate) raft_logs: RaftLogs,
     pub(crate) states: BTreeMap<Bytes, Bytes>,
     pub(crate) dependents: HashSet<u64>,
@@ -404,6 +415,7 @@ impl RegionData {
         let mut truncated_blocks = vec![];
         if self.truncated_idx < batch.truncated_idx {
             self.truncated_idx = batch.truncated_idx;
+            self.truncated_term = batch.truncated_term;
         }
         if self.need_truncate() {
             truncated_blocks = self.raft_logs.truncate(self.truncated_idx);
@@ -512,7 +524,7 @@ mod tests {
                 let (key, val) = make_state_kv(1, idx);
                 wb.set_state(region_id, key.chunk(), val.chunk());
                 if idx % 100 == 0 && region_id != 1 {
-                    wb.truncate_raft_log(region_id, idx - 100);
+                    wb.truncate_raft_log(region_id, idx - 100, 1);
                 }
             }
             engine.write(wb).unwrap();
@@ -560,6 +572,7 @@ mod tests {
                 let new_data = new_data_ref.read().unwrap();
                 let old_data = old_entries_map.get(new_data_ref.key()).unwrap();
                 assert_eq!(old_data.truncated_idx, new_data.truncated_idx);
+                assert_eq!(old_data.truncated_term, new_data.truncated_term);
                 assert_eq!(
                     old_data.raft_logs.first_index(),
                     new_data.raft_logs.first_index()
@@ -659,7 +672,7 @@ mod tests {
         );
 
         region_batch = RegionBatch::new(1);
-        region_batch.truncate(5);
+        region_batch.truncate(5, 1);
         region_batch.set_state(b"k1", b"v1");
         region_batch.set_state(b"k2", b"v2");
         let truncated = region_data.apply(&region_batch);
@@ -687,11 +700,17 @@ mod tests {
         );
 
         region_batch = RegionBatch::new(1);
-        region_batch.truncate(5);
+        region_batch.truncate(5, 1);
         region_batch.set_state(b"k1", b"");
         assert!(region_data.apply(&region_batch).is_empty());
         assert!(region_data.get_state(b"k1").is_none());
         assert_eq!(region_data.get_state(b"k2"), Some(&b"v2".to_vec().into()));
+
+        region_batch = RegionBatch::new(1);
+        region_batch.truncate(100, 10);
+        assert!(region_data.apply(&region_batch).is_empty());
+        assert_eq!(region_data.truncated_idx, 100);
+        assert_eq!(region_data.truncated_term, 10);
     }
 
     #[test]

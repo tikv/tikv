@@ -112,6 +112,10 @@ impl ShardMeta {
         self.properties.get(key)
     }
 
+    pub fn set_property(&mut self, key: &str, value: &[u8]) {
+        self.properties.set(key, value);
+    }
+
     pub fn apply_change_set(&mut self, cs: &pb::ChangeSet) {
         if cs.sequence > 0 {
             self.seq = cs.sequence;

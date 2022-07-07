@@ -228,7 +228,7 @@ impl RaftLogs {
 
     /// Gets the entry with the corresponding `index`.
     pub(crate) fn get(&self, index: u64) -> Option<eraftpb::Entry> {
-        if index < self.first_index() || self.last_index() < index {
+        if index == 0 || index < self.first_index() || self.last_index() < index {
             return None;
         }
         let block_idx = match self.blocks.binary_search_by_key(&index, |b| b.last_index()) {

@@ -2,7 +2,6 @@
 
 use std::{
     cmp,
-    collections::VecDeque,
     ops::{Deref, DerefMut},
     sync::{atomic::AtomicU64, Arc},
     u64,
@@ -20,7 +19,7 @@ use kvproto::{
     },
     raft_serverpb::RaftMessage,
 };
-use raft::{self, eraftpb::MessageType};
+use raft::{self, eraftpb::MessageType, Storage};
 use raft_proto::eraftpb;
 use raftstore::store::util;
 use rand::{thread_rng, Rng};
@@ -29,14 +28,15 @@ use txn_types::{Key, WriteBatchFlags};
 
 use crate::{
     store::{
+        apply::TERM_KEY,
         cmd_resp::{bind_term, new_error},
         ingest::convert_sst,
         msg::Callback,
         notify_req_region_removed,
         peer::Peer,
-        util as _util, ApplyMsg, CasualMessage, Config, CustomBuilder, Engines, ExecResult,
-        MsgApplyResult, PdTask, PeerMsg, PersistReady, RaftContext, SignificantMsg, SnapState,
-        StoreMsg, Ticker, PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_SPLIT_CHECK,
+        util as _util, ApplyMsg, CasualMessage, Config, CustomBuilder, Engines, MsgApplyResult,
+        PdTask, PeerMsg, PersistReady, RaftContext, SignificantMsg, SnapState, StoreMsg, Ticker,
+        PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_RAFT_LOG_GC, PEER_TICK_SPLIT_CHECK,
         PEER_TICK_SWITCH_MEM_TABLE_CHECK,
     },
     DiscardReason, Error, RaftStoreRouter, Result,
@@ -255,6 +255,9 @@ impl<'a> PeerMsgHandler<'a> {
         if self.ticker.is_on_tick(PEER_TICK_SWITCH_MEM_TABLE_CHECK) {
             self.on_switch_mem_table_check_tick();
         }
+        if self.ticker.is_on_tick(PEER_TICK_RAFT_LOG_GC) {
+            self.on_raft_log_gc_tick();
+        }
     }
 
     fn start(&mut self) {
@@ -262,6 +265,7 @@ impl<'a> PeerMsgHandler<'a> {
         self.ticker.schedule(PEER_TICK_PD_HEARTBEAT);
         self.ticker.schedule(PEER_TICK_SPLIT_CHECK);
         self.ticker.schedule(PEER_TICK_SWITCH_MEM_TABLE_CHECK);
+        self.ticker.schedule(PEER_TICK_RAFT_LOG_GC);
     }
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
@@ -315,16 +319,32 @@ impl<'a> PeerMsgHandler<'a> {
         }
     }
 
-    fn on_apply_result(&mut self, mut res: MsgApplyResult) {
+    fn on_apply_result(&mut self, res: MsgApplyResult) {
         fail_point!("on_apply_res", |_| {});
+        if !self.fsm.peer.pending_apply_results.is_empty() {
+            // Apply results should be handled in order but there is a pending one, so
+            // delay to handle it.
+            self.fsm.peer.pending_apply_results.push(res);
+            return;
+        }
+        if !res.results.is_empty() {
+            self.fsm.peer.pending_apply_results.push(res);
+            // Some metadata change need to be handled by store FSM, so send the result to it
+            // and store FSM will handle all pending results of the peer.
+            self.ctx
+                .global
+                .router
+                .send_store(StoreMsg::ApplyResult(self.region_id()));
+            return;
+        }
         debug!(
             "async apply finish";
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
             "res" => ?res,
         );
+        // TODO(x) update metrics.
         self.fsm.peer.post_apply(self.ctx, &res);
-        self.on_ready_result(&mut res.results);
         if self.fsm.stopped {}
     }
 
@@ -550,35 +570,6 @@ impl<'a> PeerMsgHandler<'a> {
     fn destroy_regions_for_snapshot(&mut self, regions_to_destroy: Vec<(u64, bool)>) {
         if regions_to_destroy.is_empty() {}
         // TODO(x)
-    }
-
-    fn on_ready_result(&mut self, exec_results: &mut VecDeque<ExecResult>) {
-        // handle executing committed log results
-        while let Some(result) = exec_results.pop_front() {
-            match result {
-                ExecResult::ChangePeer(cp) => {
-                    if cp.index != raft::INVALID_INDEX {
-                        self.ctx.global.router.send_store(StoreMsg::ChangePeer(cp));
-                    }
-                }
-                ExecResult::SplitRegion { regions } => {
-                    self.ctx
-                        .global
-                        .router
-                        .send_store(StoreMsg::SplitRegion(regions));
-                }
-                ExecResult::DeleteRange { .. } => {
-                    // TODO: clean user properties?
-                }
-                ExecResult::UnsafeDestroy => {
-                    self.ctx
-                        .global
-                        .router
-                        .send_store(StoreMsg::DestroyPeer(self.region_id()));
-                }
-            }
-        }
-        // TODO(x) update metrics.
     }
 
     fn pre_propose_raft_command(
@@ -1000,16 +991,6 @@ impl<'a> PeerMsgHandler<'a> {
             error!("change set version not match change {:?}", &change; "region" => tag);
             return;
         }
-        if change.has_flush() {
-            let write_sequence = self
-                .peer
-                .mut_store()
-                .shard_meta
-                .as_ref()
-                .unwrap()
-                .data_sequence;
-            self.ctx.raft_wb.truncate_raft_log(tag.id(), write_sequence);
-        }
         if change.has_snapshot() {
             self.peer.mut_store().snap_state = SnapState::Relax;
         }
@@ -1071,6 +1052,85 @@ impl<'a> PeerMsgHandler<'a> {
             );
             raftstore::store::metrics::REGION_MAX_LOG_LAG
                 .observe((last_idx - replicated_idx) as f64);
+        }
+    }
+
+    fn on_raft_log_gc_tick(&mut self) {
+        self.ticker.schedule(PEER_TICK_RAFT_LOG_GC);
+        if !self.peer.is_initialized() {
+            return;
+        }
+
+        let last_idx = self.peer.get_store().last_index();
+        let replicated_idx = if self.peer.is_leader() {
+            self.peer
+                .raft_group
+                .raft
+                .prs()
+                .iter()
+                .filter_map(|(peer_id, pr)| {
+                    // Don't keep raft logs for down peer. It may be too long(default 10mins).
+                    (!self.peer.down_peer_ids.contains(peer_id)).then(|| pr.matched)
+                })
+                .min()
+                .unwrap_or(last_idx)
+        } else {
+            // Followers can't know the progress of other replicas, so they truncate logs as many
+            // as possible, but it may result in snapshot transport when becomes leader.
+            // One solution is that leader propagates truncated index to followers.
+            last_idx
+        };
+        assert!(
+            replicated_idx <= last_idx,
+            "expect replicated index {} <= last index {}",
+            replicated_idx,
+            last_idx
+        );
+
+        let region_id = self.region_id();
+        let mut persisted_log_idx = self.peer.get_store().data_persisted_log_index().unwrap();
+        let to_truncate_idx = if replicated_idx <= persisted_log_idx {
+            replicated_idx
+        } else {
+            let applied_idx = self.peer.get_store().applied_index();
+            let applied_term = self.peer.get_store().applied_index_term();
+            if persisted_log_idx < applied_idx {
+                let shard_data_all_persisted = self
+                    .ctx
+                    .global
+                    .engines
+                    .kv
+                    .get_shard(region_id)
+                    .unwrap()
+                    .data_all_persisted();
+                if shard_data_all_persisted {
+                    // Advance persisted log index to applied index manually because some raft logs(ChangeSet
+                    // and ConfChange) don't write data to kvengine, so they can't trigger memtable
+                    // flush which results in unGCed logs.
+                    let shard_meta = self.peer.mut_store().mut_engine_meta();
+                    shard_meta.data_sequence = applied_idx;
+                    shard_meta.set_property(TERM_KEY, &applied_term.to_le_bytes());
+                    let meta_data = shard_meta.marshal();
+                    info!(
+                        "advance data sequence from {} to {}", persisted_log_idx, applied_idx;
+                        "region" => region_id
+                    );
+                    self.ctx
+                        .raft_wb
+                        .set_state(region_id, _util::KV_ENGINE_META_KEY, &meta_data);
+                    persisted_log_idx = applied_idx;
+                }
+            }
+            std::cmp::min(replicated_idx, persisted_log_idx)
+        };
+
+        let truncated_idx = self.peer.get_store().truncated_index();
+        if to_truncate_idx > truncated_idx {
+            let to_truncate_term = self.peer.get_store().term(to_truncate_idx).unwrap();
+            self.ctx
+                .raft_wb
+                .truncate_raft_log(region_id, to_truncate_idx, to_truncate_term);
+            debug!("truncate raft logs"; "region_id" => region_id, "truncate_idx" => to_truncate_idx, "truncated_term" => to_truncate_term);
         }
     }
 }

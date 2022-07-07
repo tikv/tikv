@@ -315,6 +315,10 @@ impl Shard {
         let guard = self.data.read().unwrap();
         guard.mem_tbls[0].size()
     }
+
+    pub fn data_all_persisted(&self) -> bool {
+        self.data.read().unwrap().all_presisted()
+    }
 }
 
 #[derive(Clone)]
@@ -474,6 +478,10 @@ impl ShardDataCore {
 
     pub fn cover_full_table(&self, smallest: &[u8], biggest: &[u8]) -> bool {
         self.start <= smallest && biggest < self.end
+    }
+
+    pub fn all_presisted(&self) -> bool {
+        self.mem_tbls.len() == 1 && self.mem_tbls[0].size() == 0
     }
 }
 

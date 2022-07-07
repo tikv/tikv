@@ -7,9 +7,11 @@ use futures::executor::block_on;
 use grpcio::{Channel, ChannelBuilder, EnvBuilder, Environment};
 use kvproto::{
     kvrpcpb::{CommitRequest, Context, Mutation, Op, PrewriteRequest, SplitRegionRequest},
+    raft_cmdpb::RaftCmdRequest,
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
+use rfstore::{store::Callback, RaftStoreRouter};
 use security::SecurityManager;
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
@@ -56,14 +58,21 @@ impl ServerCluster {
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let env = Arc::new(EnvBuilder::new().cq_count(2).build());
         let pd_client = Arc::new(TestPdClient::new(1, false));
+        // Always shares the same in-memory DFS for test cluster.
+        let dfs = Arc::new(kvengine::dfs::InMemFS::new());
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         let mut servers = HashMap::new();
         let mut channels = HashMap::new();
         for node_id in nodes {
             let mut config = new_test_config(tmp_dir.path(), node_id);
             update_conf(node_id, &mut config);
-            let mut server =
-                TiKVServer::setup(config, security_mgr.clone(), env.clone(), pd_client.clone());
+            let mut server = TiKVServer::setup(
+                config,
+                security_mgr.clone(),
+                env.clone(),
+                pd_client.clone(),
+                dfs.clone(),
+            );
             server.run();
             let store_id = server.get_store_id();
             let addr = node_addr(node_id);
@@ -108,6 +117,11 @@ impl ServerCluster {
     pub fn stop(&mut self) {
         for (_, server) in self.servers.drain() {
             server.stop();
+        }
+    }
+    pub fn stop_node(&mut self, node_id: u16) {
+        if let Some(node) = self.servers.remove(&node_id) {
+            node.stop();
         }
     }
 
@@ -198,6 +212,11 @@ impl ServerCluster {
         server.get_kv_engine()
     }
 
+    pub fn get_rfengine(&self, node_id: u16) -> rfengine::RfEngine {
+        let server = self.servers.get(&node_id).unwrap();
+        server.get_raft_engine()
+    }
+
     pub fn get_snap(&self, node_id: u16, key: &[u8]) -> kvengine::SnapAccess {
         let engine = self.get_kvengine(node_id);
         let ctx = self.new_rpc_context(key);
@@ -222,6 +241,22 @@ impl ServerCluster {
     pub fn get_region_id(&self, key: &[u8]) -> u64 {
         let ctx = self.new_rpc_context(key);
         ctx.region_id
+    }
+
+    pub fn send_raft_command(&self, node_id: u16, cmd: RaftCmdRequest) {
+        let server = self.servers.get(&node_id).unwrap();
+        server.get_raft_router().send_command(cmd, Callback::None);
+    }
+
+    pub fn wait_region_replicated(&self, key: &[u8], replica_cnt: usize) {
+        for _ in 0..10 {
+            let region_info = self.pd_client.get_region_info(key).unwrap();
+            if region_info.region.get_peers().len() >= replica_cnt {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        panic!("region is not replicated");
     }
 }
 

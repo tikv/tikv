@@ -148,11 +148,11 @@ impl raft::Storage for PeerStorage {
     }
 
     fn first_index(&self) -> raft::Result<u64> {
-        Ok(self.shard_meta.as_ref().map_or(1, |m| m.data_sequence + 1))
+        Ok(self.first_index())
     }
 
     fn last_index(&self) -> raft::Result<u64> {
-        Ok(self.raft_state.last_index)
+        Ok(self.last_index())
     }
 
     fn snapshot(&self, request_index: u64, _to: u64) -> raft::Result<eraftpb::Snapshot> {
@@ -162,14 +162,13 @@ impl raft::Storage for PeerStorage {
                 StorageError::SnapshotTemporarilyUnavailable,
             ));
         }
-        let shard_meta = self.shard_meta.as_ref().unwrap();
-        let snap_index = shard_meta.data_sequence;
+        let snap_index = self.snapshot_index();
         if snap_index < request_index {
             info!("requesting index is too high"; "region" => self.tag(),
                 "request_index" => request_index, "snap_index" => snap_index);
             return Err(raft::Error::Store(StorageError::Unavailable));
         }
-        let snap_term = self.truncated_term();
+        let snap_term = self.snapshot_term();
 
         let mut snap = eraftpb::Snapshot::default();
         let change_set = self.shard_meta.as_ref().unwrap().to_change_set();
@@ -242,7 +241,7 @@ impl PeerStorage {
 
     #[inline]
     pub fn first_index(&self) -> u64 {
-        self.shard_meta.as_ref().map_or(0, |m| m.seq + 1)
+        self.truncated_index() + 1
     }
 
     #[inline]
@@ -282,15 +281,31 @@ impl PeerStorage {
 
     #[inline]
     pub fn truncated_index(&self) -> u64 {
-        self.shard_meta.as_ref().map_or(0, |m| m.data_sequence)
+        self.engines
+            .raft
+            .get_truncated_state(self.get_region_id())
+            .map(|s| std::cmp::max(s.0, RAFT_INIT_LOG_INDEX))
+            .unwrap_or(RAFT_INIT_LOG_INDEX)
     }
 
     #[inline]
     pub fn truncated_term(&self) -> u64 {
+        self.engines
+            .raft
+            .get_truncated_state(self.get_region_id())
+            .map(|s| std::cmp::max(s.1, RAFT_INIT_LOG_TERM))
+            .unwrap_or(RAFT_INIT_LOG_TERM)
+    }
+
+    pub fn snapshot_term(&self) -> u64 {
         self.shard_meta.as_ref().map_or(0, |m| {
             debug!("get property term key");
             m.get_property(TERM_KEY).unwrap().get_u64_le()
         })
+    }
+
+    pub fn snapshot_index(&self) -> u64 {
+        self.shard_meta.as_ref().unwrap().data_sequence
     }
 
     pub fn region(&self) -> &metapb::Region {
@@ -441,6 +456,8 @@ impl PeerStorage {
             KV_ENGINE_META_KEY,
             &change_set.write_to_bytes().unwrap(),
         );
+        ctx.raft_wb
+            .truncate_raft_log(region.get_id(), last_index, last_term);
         self.shard_meta = Some(kvengine::ShardMeta::new(&change_set));
         self.region = region;
         self.snap_state = SnapState::Applying;
@@ -470,6 +487,11 @@ impl PeerStorage {
             .parent
             .as_ref()
             .map(|parent| parent.id)
+    }
+
+    /// The last index of raft logs that have been applied and persisted to the state machine.
+    pub(crate) fn data_persisted_log_index(&self) -> Option<u64> {
+        self.shard_meta.as_ref().map(|meta| meta.data_sequence)
     }
 }
 
@@ -544,7 +566,11 @@ pub fn clear_meta(
     })
     .unwrap();
     if let Some(last_idx) = raft.get_last_index(region_id) {
-        raft_wb.truncate_raft_log(region_id, last_idx);
+        raft_wb.truncate_raft_log(
+            region_id,
+            last_idx,
+            raft.get_term(region_id, last_idx).unwrap(),
+        );
     }
 }
 

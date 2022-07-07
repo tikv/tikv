@@ -555,13 +555,6 @@ impl<'a> StoreMsgHandler<'a> {
             StoreMsg::Start { store } => self.start(store),
             StoreMsg::StoreUnreachable { store_id } => self.on_store_unreachable(store_id),
             StoreMsg::GenerateEngineChangeSet(cs) => self.on_generate_engine_meta_change(cs),
-            StoreMsg::SplitRegion(regions) => {
-                apply_region = self.on_split_region(regions);
-            }
-            StoreMsg::ChangePeer(cp) => {
-                apply_region = self.on_change_peer(cp);
-            }
-            StoreMsg::DestroyPeer(region_id) => self.on_destroy_peer(region_id, false),
             StoreMsg::RaftMessage(msg) => self.on_raft_message(msg),
             StoreMsg::SnapshotReady(region_id) => {
                 apply_region = self.on_snapshot_ready(region_id);
@@ -573,6 +566,9 @@ impl<'a> StoreMsgHandler<'a> {
                 callback,
             } => {
                 self.on_get_regions_in_range(start, end, callback);
+            }
+            StoreMsg::ApplyResult(region_id) => {
+                apply_region = self.on_apply_result(region_id);
             }
             StoreMsg::Stop => {
                 self.store.stopped = true;
@@ -977,7 +973,7 @@ impl<'a> StoreMsgHandler<'a> {
         self.ctx.peers.get(&region_id).unwrap().clone()
     }
 
-    fn on_split_region(&mut self, regions: Vec<metapb::Region>) -> Option<u64> {
+    fn on_split_region(&mut self, regions: Vec<metapb::Region>) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| { None });
         let derived = regions.last().unwrap().clone();
         let derived_peer = self.get_peer(derived.get_id());
@@ -1134,10 +1130,9 @@ impl<'a> StoreMsgHandler<'a> {
             self.register(new_peer);
         }
         fail_point!("after_split", self.ctx.store_id() == 3, |_| { None });
-        self.maybe_apply(region_id)
     }
 
-    fn on_change_peer(&mut self, cp: ChangePeer) -> Option<u64> {
+    fn on_change_peer(&mut self, cp: ChangePeer) {
         let region_id = cp.region.id;
         let peer = self.get_peer(region_id);
         let mut peer_fsm = peer.peer_fsm.lock().unwrap();
@@ -1247,7 +1242,6 @@ impl<'a> StoreMsgHandler<'a> {
             drop(peer_fsm);
             self.on_destroy_peer(region_id, false);
         }
-        self.maybe_apply(region_id)
     }
 
     fn maybe_apply(&mut self, region_id: u64) -> Option<u64> {
@@ -1390,5 +1384,45 @@ impl<'a> StoreMsgHandler<'a> {
             regions.push(RegionIDVer::from_region(region));
         }
         callback(regions)
+    }
+
+    fn on_apply_result(&mut self, region_id: u64) -> Option<u64> {
+        let peer = self.get_peer(region_id);
+        let apply_results = {
+            let mut peer_fsm = peer.peer_fsm.lock().unwrap();
+            std::mem::take(&mut peer_fsm.peer.pending_apply_results)
+        };
+        assert!(!apply_results.is_empty());
+        for mut apply_result in apply_results {
+            while let Some(result) = apply_result.results.pop_front() {
+                match result {
+                    ExecResult::ChangePeer(cp) => {
+                        if cp.index != raft::INVALID_INDEX {
+                            self.on_change_peer(cp);
+                        }
+                    }
+                    ExecResult::SplitRegion { regions } => {
+                        self.on_split_region(regions);
+                    }
+                    ExecResult::DeleteRange { .. } => {
+                        // TODO: clean user properties?
+                    }
+                    ExecResult::UnsafeDestroy => {
+                        self.on_destroy_peer(region_id, false);
+                    }
+                }
+            }
+            {
+                let mut peer_fsm = peer.peer_fsm.lock().unwrap();
+                peer_fsm
+                    .peer
+                    .post_apply(&mut self.ctx.raft_ctx, &apply_result);
+            }
+        }
+        let mut peer_fsm = peer.peer_fsm.lock().unwrap();
+        peer_fsm
+            .peer
+            .handle_raft_ready(&mut self.ctx.raft_ctx, None);
+        self.maybe_apply(region_id)
     }
 }

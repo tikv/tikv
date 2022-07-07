@@ -126,13 +126,18 @@ struct Servers {
 
 impl TiKVServer {
     pub fn new(mut config: TiKvConfig) -> TiKVServer {
-        let (security_mgr, env, pd) = Self::prepare(&mut config);
-        Self::setup(config, security_mgr, env, pd)
+        let (security_mgr, env, pd, dfs) = Self::prepare(&mut config);
+        Self::setup(config, security_mgr, env, pd, dfs)
     }
 
     pub fn prepare(
         config: &mut TiKvConfig,
-    ) -> (Arc<SecurityManager>, Arc<Environment>, Arc<dyn PdClient>) {
+    ) -> (
+        Arc<SecurityManager>,
+        Arc<Environment>,
+        Arc<dyn PdClient>,
+        Arc<dyn DFS>,
+    ) {
         // Sets the global logger ASAP.
         // It is okay to use the config w/o `validate()`,
         // because `initial_logger()` handles various conditions.
@@ -166,7 +171,27 @@ impl TiKVServer {
         );
         let pd_client =
             TiKVServer::connect_to_pd_cluster(config, env.clone(), Arc::clone(&security_mgr));
-        (security_mgr, env, pd_client)
+
+        let dfs_conf = &config.dfs;
+        let dfs: Arc<dyn DFS> = if dfs_conf.s3_bucket.is_empty() && dfs_conf.s3_endpoint.is_empty()
+            || dfs_conf.s3_endpoint == "local"
+        {
+            let local_path = PathBuf::from(&config.storage.data_dir).join(Path::new("local"));
+            Arc::new(kvengine::dfs::LocalFS::new(&local_path))
+        } else if dfs_conf.s3_endpoint == "memory" {
+            Arc::new(kvengine::dfs::InMemFS::new())
+        } else {
+            Arc::new(kvengine::dfs::S3FS::new(
+                dfs_conf.prefix.clone(),
+                dfs_conf.s3_endpoint.clone(),
+                dfs_conf.s3_key_id.clone(),
+                dfs_conf.s3_secret_key.clone(),
+                dfs_conf.s3_region.clone(),
+                dfs_conf.s3_bucket.clone(),
+            ))
+        };
+
+        (security_mgr, env, pd_client, dfs)
     }
 
     pub fn setup(
@@ -174,12 +199,13 @@ impl TiKVServer {
         security_mgr: Arc<SecurityManager>,
         env: Arc<Environment>,
         pd_client: Arc<dyn PdClient>,
+        dfs: Arc<dyn DFS>,
     ) -> TiKVServer {
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
         let config = cfg_controller.get_current();
 
-        let raw_engines = Self::init_raw_engines(pd_client.clone(), &config);
+        let raw_engines = Self::init_raw_engines(pd_client.clone(), &config, dfs);
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
@@ -799,33 +825,23 @@ impl TiKVServer {
     pub fn get_sst_importer(&self) -> Arc<SstImporter> {
         self.servers.as_ref().unwrap().importer.clone()
     }
+
+    pub fn get_raft_router(&self) -> RaftRouter {
+        self.router.clone()
+    }
 }
 
 impl TiKVServer {
-    fn init_raw_engines(pd: Arc<dyn pd_client::PdClient>, conf: &TiKvConfig) -> Engines {
+    fn init_raw_engines(
+        pd: Arc<dyn pd_client::PdClient>,
+        conf: &TiKvConfig,
+        dfs: Arc<dyn DFS>,
+    ) -> Engines {
         // Create raft engine.
         let raft_db_path = Path::new(&conf.raft_store.raftdb_path);
         let kv_engine_path = PathBuf::from(&conf.storage.data_dir).join(Path::new("db"));
         let wal_size = conf.raft_engine.config().target_file_size.0 as usize;
         let rf_engine = RfEngine::open(raft_db_path, wal_size).unwrap();
-        let dfs_conf = &conf.dfs;
-        let dfs: Arc<dyn DFS> = if dfs_conf.s3_bucket.is_empty() && dfs_conf.s3_endpoint.is_empty()
-            || dfs_conf.s3_endpoint == "local"
-        {
-            let local_path = PathBuf::from(&conf.storage.data_dir).join(Path::new("local"));
-            Arc::new(kvengine::dfs::LocalFS::new(&local_path))
-        } else if dfs_conf.s3_endpoint == "memory" {
-            Arc::new(kvengine::dfs::InMemFS::new())
-        } else {
-            Arc::new(kvengine::dfs::S3FS::new(
-                dfs_conf.prefix.clone(),
-                dfs_conf.s3_endpoint.clone(),
-                dfs_conf.s3_key_id.clone(),
-                dfs_conf.s3_secret_key.clone(),
-                dfs_conf.s3_region.clone(),
-                dfs_conf.s3_bucket.clone(),
-            ))
-        };
         let mut kv_opts = kvengine::Options::default();
         let capacity = match conf.storage.block_cache.capacity {
             None => {
@@ -839,7 +855,7 @@ impl TiKVServer {
         kv_opts.max_mem_table_size = conf.rocksdb.writecf.write_buffer_size.0;
         kv_opts.base_size = conf.coprocessor.region_split_size.0 / 16;
         kv_opts.max_block_cache_size = capacity as i64;
-        kv_opts.remote_compactor_addr = dfs_conf.remote_compactor_addr.clone();
+        kv_opts.remote_compactor_addr = conf.dfs.remote_compactor_addr.clone();
         let cf_opt = &conf.rocksdb.writecf;
         kv_opts.table_builder_options.block_size = cf_opt.block_size.0 as usize;
         kv_opts.table_builder_options.max_table_size = cf_opt.target_file_size_base.0 as usize;

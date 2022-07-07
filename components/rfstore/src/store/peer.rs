@@ -408,6 +408,8 @@ pub(crate) struct Peer {
     pub(crate) proposals: ProposalQueue,
     pending_reads: ReadIndexQueue,
 
+    pub(crate) pending_apply_results: Vec<MsgApplyResult>,
+
     // Index of last scheduled committed raft log.
     pub(crate) last_applying_idx: u64,
     // The index of the latest urgent proposal index.
@@ -422,7 +424,7 @@ pub(crate) struct Peer {
     pub peers_start_pending_time: Vec<(u64, Instant)>,
 
     /// A inaccurate cache about which peer is marked as down.
-    _down_peer_ids: Vec<u64>,
+    pub(crate) down_peer_ids: Vec<u64>,
 
     pub(crate) need_campaign: bool,
 
@@ -501,10 +503,11 @@ impl Peer {
             raft_group,
             proposals: ProposalQueue::default(),
             pending_reads: Default::default(),
+            pending_apply_results: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
-            _down_peer_ids: vec![],
+            down_peer_ids: vec![],
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             last_applying_idx: applied_index,
@@ -867,8 +870,9 @@ impl Peer {
     }
 
     /// Collects all down peers.
-    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
+    pub fn collect_down_peers(&mut self, max_duration: Duration) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
+        let mut down_peer_ids = Vec::new();
         for p in self.region().get_peers() {
             if p.get_id() == self.peer.get_id() {
                 continue;
@@ -879,9 +883,11 @@ impl Peer {
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(instant.saturating_elapsed().as_secs());
                     down_peers.push(stats);
+                    down_peer_ids.push(p.get_id());
                 }
             }
         }
+        self.down_peer_ids = down_peer_ids;
         down_peers
     }
 

@@ -14,7 +14,7 @@ use raftstore::store::util::KeysInfoFormatter;
 use tikv_util::time::Instant;
 
 use super::{Peer, RaftApplyState};
-use crate::store::{ApplyMetrics, ChangePeer, ExecResult, Proposal, RegionIDVer, RegionSnapshot};
+use crate::store::{ApplyMetrics, ExecResult, Proposal, RegionIDVer, RegionSnapshot};
 
 #[derive(Debug)]
 pub enum PeerMsg {
@@ -76,9 +76,6 @@ pub enum StoreMsg {
     },
     GenerateEngineChangeSet(kvenginepb::ChangeSet),
     RaftMessage(kvproto::raft_serverpb::RaftMessage),
-    SplitRegion(Vec<metapb::Region>),
-    ChangePeer(ChangePeer),
-    DestroyPeer(u64),
     SnapshotReady(u64),
     PendingNewRegions(Vec<u64>),
     GetRegionsInRange {
@@ -86,6 +83,7 @@ pub enum StoreMsg {
         end: Vec<u8>,
         callback: Box<dyn FnOnce(Vec<RegionIDVer>) + Send>,
     },
+    ApplyResult(u64 /* region_id */),
     Stop,
 }
 

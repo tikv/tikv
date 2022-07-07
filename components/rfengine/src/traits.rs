@@ -35,6 +35,9 @@ impl RaftEngineReadOnly for RfEngine {
             .get(&region_id)
             .ok_or(Error::EntriesCompacted)?;
         let region_data = region_data.read().unwrap();
+        if low <= region_data.truncated_idx {
+            return Err(Error::EntriesCompacted);
+        }
 
         let timer = Instant::now_coarse();
         let mut total_size = 0;
