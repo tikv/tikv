@@ -1252,6 +1252,12 @@ mod tests {
         table_key
     }
 
+    fn make_value(t: WriteType, value: &[u8], start_ts: u64) -> Vec<u8> {
+        let start_ts = TimeStamp::new(start_ts);
+        let w = Write::new(t, start_ts, Some(value.to_vec()));
+        w.as_ref().to_bytes()
+    }
+
     impl KvEventsBuilder {
         fn new(region_id: u64, region_resolved_ts: u64) -> Self {
             Self {
@@ -1290,9 +1296,14 @@ mod tests {
             })
         }
 
-        fn put_table(&mut self, cf: &'static str, table: i64, key: &[u8], value: &[u8]) {
+        fn put_table(&mut self, cf: CfName, table: i64, key: &[u8], value: &[u8]) {
             let table_key = make_table_key(table, key);
-            self.put_event(cf, table_key, value.to_vec());
+            let value = if cf == CF_WRITE {
+                make_value(WriteType::Put, value, 12345)
+            } else {
+                value.to_vec()
+            };
+            self.put_event(cf, table_key, value);
         }
 
         fn delete_table(&mut self, cf: &'static str, table: i64, key: &[u8]) {
@@ -1635,8 +1646,12 @@ mod tests {
                 .is_none()
         );
         check_on_events_result(&router.on_events(build_kv_event(10, 10)).await);
-        let _ = router.do_flush("error_prone", 42, TimeStamp::max()).await;
         let t = router.get_task_info("error_prone").await.unwrap();
+        let _ = router.do_flush("error_prone", 42, TimeStamp::max()).await;
+        assert_eq!(t.total_size() > 0, true);
+
+        t.set_flushing_status(true);
+        let _ = router.do_flush("error_prone", 42, TimeStamp::max()).await;
         assert_eq!(t.total_size(), 0);
         Ok(())
     }
