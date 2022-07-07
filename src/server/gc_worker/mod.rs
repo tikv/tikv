@@ -14,11 +14,11 @@ pub use compaction_filter::WriteCompactionFilterFactory;
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 use engine_traits::MvccProperties;
 pub use gc_manager::AutoGcConfig;
+#[cfg(any(test, feature = "testexport"))]
+pub use gc_worker::test_gc::{MockSafePointProvider, PrefixedEngine};
 pub use gc_worker::{
     sync_gc, GcSafePointProvider, GcTask, GcWorker, STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
 };
-#[cfg(any(test, feature = "testexport"))]
-pub use gc_worker::{MockSafePointProvider, PrefixedEngine};
 pub use rawkv_compaction_filter::RawCompactionFilterFactory;
 use txn_types::TimeStamp;
 
