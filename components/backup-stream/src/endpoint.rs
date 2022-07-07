@@ -28,11 +28,11 @@ use tikv_util::{
     box_err,
     config::ReadableDuration,
     debug, defer, info,
+    sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     warn,
     worker::{Runnable, Scheduler},
     HandyRwLock,
-    sys::thread::ThreadBuildWrapper,
 };
 use tokio::{
     io::Result as TokioResult,

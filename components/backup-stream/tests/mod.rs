@@ -148,7 +148,7 @@ impl SuiteBuilder {
 
             temp_files: TempDir::new("temp").unwrap(),
             flushed_files: TempDir::new("flush").unwrap(),
-            case_name: case.to_owned(),
+            case_name: case,
         };
         for id in 1..=(n as u64) {
             let worker = suite.start_br_stream_on(id);

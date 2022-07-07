@@ -33,10 +33,10 @@ etcd-client = { version = "0.7", features = ["pub-response-field", "tls"] }
 external_storage = { path = "../external_storage", default-features = false }
 external_storage_export = { path = "../external_storage/export", default-features = false }
 fail = { version = "0.5", optional = true }
-
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 file_system = { path = "../file_system" }
 futures = "0.3"
+
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.4"
