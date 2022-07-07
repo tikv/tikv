@@ -1701,6 +1701,16 @@ mod tests {
             key_ranges: vec![(b"c".to_vec(), b"d".to_vec())],
             extra_attachment: vec![],
         });
+        let multiple_key_ranges_tag = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 1,
+            peer_id: 0,
+            key_ranges: vec![
+                (b"a".to_vec(), b"b".to_vec()),
+                (b"c".to_vec(), b"d".to_vec()),
+            ],
+            extra_attachment: vec![],
+        });
         let empty_key_range_tag = Arc::new(TagInfos {
             store_id: 0,
             region_id: 1,
@@ -1710,13 +1720,18 @@ mod tests {
         });
 
         let test_cases = vec![
-            (300, 150, 50, Some(build_key_range(b"a", b"b", false))),
-            (150, 300, 50, Some(build_key_range(b"c", b"d", false))),
-            (150, 50, 300, Some(build_key_range(b"a", b"b", false))),
-            (50, 0, 50, Some(build_key_range(b"a", b"b", false))),
-            (0, 50, 50, Some(build_key_range(b"c", b"d", false))),
-            (0, 0, 100, None),
-            (0, 0, 0, None),
+            (300, 150, 50, 50, Some(build_key_range(b"a", b"b", false))),
+            (150, 300, 50, 50, Some(build_key_range(b"c", b"d", false))),
+            (150, 50, 300, 50, Some(build_key_range(b"a", b"b", false))),
+            (50, 150, 300, 50, Some(build_key_range(b"c", b"d", false))),
+            (150, 50, 50, 300, Some(build_key_range(b"a", b"b", false))),
+            (100, 0, 0, 0, Some(build_key_range(b"a", b"b", false))),
+            (50, 0, 0, 50, Some(build_key_range(b"a", b"b", false))),
+            (50, 0, 0, 100, Some(build_key_range(b"a", b"b", false))),
+            (50, 0, 50, 0, Some(build_key_range(b"a", b"b", false))),
+            (0, 50, 50, 0, Some(build_key_range(b"c", b"d", false))),
+            (0, 0, 0, 100, None),
+            (0, 0, 0, 0, None),
         ];
         for (i, test_case) in test_cases.iter().enumerate() {
             let mut raw_records = RawRecords::default();
@@ -1739,11 +1754,20 @@ mod tests {
                     write_keys: 0,
                 },
             );
-            // Empty key range with (test_case.2)ms CPU time.
+            // Multiple key ranges with (test_case.2)ms CPU time.
+            raw_records.records.insert(
+                multiple_key_ranges_tag.clone(),
+                RawRecord {
+                    cpu_time: test_case.2,
+                    read_keys: 0,
+                    write_keys: 0,
+                },
+            );
+            // Empty key range with (test_case.3)ms CPU time.
             raw_records.records.insert(
                 empty_key_range_tag.clone(),
                 RawRecord {
-                    cpu_time: test_case.2,
+                    cpu_time: test_case.3,
                     read_keys: 0,
                     write_keys: 0,
                 },
@@ -1758,13 +1782,13 @@ mod tests {
             );
             assert_eq!(
                 region_cpu_map.get(&1).unwrap().0,
-                (test_case.0 + test_case.1 + test_case.2) as f64 / 100.0,
+                (test_case.0 + test_case.1 + test_case.2 + test_case.3) as f64 / 100.0,
                 "test_collect_cpu_stats case: {}",
                 i
             );
             assert_eq!(
                 region_cpu_map.get(&1).unwrap().1,
-                test_case.3,
+                test_case.4,
                 "test_collect_cpu_stats case: {}",
                 i
             );
