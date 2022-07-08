@@ -334,7 +334,12 @@ fn main() {
                             .compact(host, db_type, &cf, from_key, to_key, threads, bottommost);
                     }
                 }
-                Cmd::Tombstone { regions, pd, force } => {
+                Cmd::Tombstone {
+                    regions,
+                    pd,
+                    force,
+                    undo,
+                } => {
                     if let Some(pd_urls) = pd {
                         let cfg = PdConfig {
                             endpoints: pd_urls,
@@ -346,7 +351,7 @@ fn main() {
                         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
                     } else {
                         assert!(force);
-                        debug_executor.set_region_tombstone_force(regions);
+                        debug_executor.set_region_tombstone_force(regions, undo);
                     }
                 }
                 Cmd::RecoverMvcc {
@@ -394,13 +399,18 @@ fn main() {
                 },
                 Cmd::RecreateRegion {
                     pd,
-                    region: region_id,
+                    region,
+                    start,
+                    end,
+                    force,
                 } => {
                     let pd_cfg = PdConfig {
                         endpoints: pd,
                         ..Default::default()
                     };
-                    debug_executor.recreate_region(mgr, &pd_cfg, region_id);
+                    let start_key = from_hex(&start).unwrap();
+                    let end_key = from_hex(&end).unwrap();
+                    debug_executor.recreate_region(mgr, &pd_cfg, region, start_key, end_key, force);
                 }
                 Cmd::ConsistencyCheck { region } => {
                     debug_executor.check_region_consistency(region);

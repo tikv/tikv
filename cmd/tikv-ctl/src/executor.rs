@@ -540,9 +540,9 @@ pub trait DebugExecutor {
         self.set_region_tombstone(regions);
     }
 
-    fn set_region_tombstone_force(&self, region_ids: Vec<u64>) {
+    fn set_region_tombstone_force(&self, region_ids: Vec<u64>, undo: bool) {
         self.check_local_mode();
-        self.set_region_tombstone_by_id(region_ids);
+        self.set_region_tombstone_by_id(region_ids, undo);
     }
 
     /// Recover the cluster when given `store_ids` are failed.
@@ -556,7 +556,15 @@ pub trait DebugExecutor {
     fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>);
 
     /// Recreate the region with metadata from pd, but alloc new id for it.
-    fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
+    fn recreate_region(
+        &self,
+        sec_mgr: Arc<SecurityManager>,
+        pd_cfg: &PdConfig,
+        region_id: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        force: bool,
+    );
 
     fn check_region_consistency(&self, _: u64);
 
@@ -619,7 +627,7 @@ pub trait DebugExecutor {
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
-    fn set_region_tombstone_by_id(&self, regions: Vec<u64>);
+    fn set_region_tombstone_by_id(&self, regions: Vec<u64>, undo: bool);
 
     fn recover_regions(&self, regions: Vec<Region>, read_only: bool);
 
@@ -769,7 +777,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
-    fn set_region_tombstone_by_id(&self, _: Vec<u64>) {
+    fn set_region_tombstone_by_id(&self, _: Vec<u64>, _: bool) {
         unimplemented!("only available for local mode");
     }
 
@@ -793,7 +801,15 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
-    fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
+    fn recreate_region(
+        &self,
+        _: Arc<SecurityManager>,
+        _: &PdConfig,
+        _: u64,
+        _: Vec<u8>,
+        _: Vec<u8>,
+        _: bool,
+    ) {
         unimplemented!("only available for local mode");
     }
 
@@ -931,9 +947,9 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         }
     }
 
-    fn set_region_tombstone_by_id(&self, region_ids: Vec<u64>) {
+    fn set_region_tombstone_by_id(&self, region_ids: Vec<u64>, undo: bool) {
         let ret = self
-            .set_region_tombstone_by_id(region_ids)
+            .set_region_tombstone_by_id(region_ids, undo)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone_by_id", e));
         if ret.is_empty() {
             println!("success!");
@@ -994,15 +1010,27 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         println!("success");
     }
 
-    fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
+    fn recreate_region(
+        &self,
+        mgr: Arc<SecurityManager>,
+        pd_cfg: &PdConfig,
+        region_id: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        force: bool,
+    ) {
         let rpc_client = RpcClient::new(pd_cfg, None, mgr)
             .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let mut region = match block_on(rpc_client.get_region_by_id(region_id)) {
             Ok(Some(region)) => region,
             Ok(None) => {
-                println!("no such region {} on PD", region_id);
-                tikv_util::logger::exit_process_gracefully(-1);
+                if force {
+                    Region::default()
+                } else {
+                    println!("no such region {} on PD", region_id);
+                    tikv_util::logger::exit_process_gracefully(-1);
+                }
             }
             Err(e) => perror_and_exit("RpcClient::get_region_by_id", e),
         };
@@ -1020,6 +1048,10 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         let old_version = region.get_region_epoch().get_version();
         region.mut_region_epoch().set_version(old_version + 1);
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
+        if force {
+            region.set_start_key(start_key);
+            region.set_end_key(end_key);
+        }
 
         region.peers.clear();
         let mut peer = Peer::default();

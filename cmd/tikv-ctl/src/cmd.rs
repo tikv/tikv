@@ -337,6 +337,10 @@ pub enum Cmd {
         #[structopt(long)]
         /// force execute without pd
         force: bool,
+
+        #[structopt(long)]
+        /// undo tombstone
+        undo: bool,
     },
     /// Recover mvcc data on one node by deleting corrupted keys
     RecoverMvcc {
@@ -392,6 +396,18 @@ pub enum Cmd {
         #[structopt(short = "r")]
         /// The origin region id
         region: u64,
+
+        #[structopt(long, default_value = "")]
+        /// hex start key
+        start: String,
+
+        #[structopt(long, default_value = "")]
+        /// hex end key
+        end: String,
+
+        #[structopt(long)]
+        /// replace the region range with the start and end key
+        force: bool,
     },
     /// Print the metrics
     Metrics {
