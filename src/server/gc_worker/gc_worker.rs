@@ -1262,7 +1262,7 @@ where
 }
 
 #[cfg(any(test, feature = "testexport"))]
-pub mod test_gc {
+pub mod test_gc_worker {
     use std::sync::Arc;
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
