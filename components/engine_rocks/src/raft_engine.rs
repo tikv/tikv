@@ -338,6 +338,34 @@ impl RaftEngine for RocksEngine {
     fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
         self.put_msg(keys::STORE_IDENT_KEY, ident)
     }
+
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<Error>,
+    {
+        let start_key = keys::REGION_META_MIN_KEY;
+        let end_key = keys::REGION_META_MAX_KEY;
+        let mut err = None;
+        self.scan(start_key, end_key, false, |key, _| {
+            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
+
+            match f(region_id) {
+                Ok(()) => Ok(true),
+                Err(e) => {
+                    err = Some(e);
+                    Ok(false)
+                }
+            }
+        })?;
+        match err {
+            None => Ok(()),
+            Some(e) => Err(e),
+        }
+    }
 }
 
 impl RaftLogBatch for RocksWriteBatch {
