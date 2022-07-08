@@ -2106,7 +2106,7 @@ fn test_rpc_wall_time() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let k = b"key".to_vec();
     let mut get_req = GetRequest::default();
-    get_req.set_context(ctx.clone());
+    get_req.set_context(ctx);
     get_req.key = k;
     get_req.version = 10;
     let get_resp = client.kv_get(&get_req).unwrap();

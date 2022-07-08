@@ -139,6 +139,7 @@ impl ReadPerfContext {
         tracker.metrics.block_cache_hit_count += self.block_cache_hit_count;
         tracker.metrics.block_read_byte += self.block_read_byte;
         tracker.metrics.block_read_count += self.block_read_count;
+        tracker.metrics.block_read_nanos += self.block_read_time;
         tracker.metrics.deleted_key_skipped_count += self.internal_delete_skipped_count;
         tracker.metrics.internal_key_skipped_count += self.internal_key_skipped_count;
     }
