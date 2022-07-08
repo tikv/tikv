@@ -619,7 +619,8 @@ impl Delegate {
         let max_raw_ts = TimeStamp::from(entries.last().unwrap().commit_ts);
         match self.resolver {
             Some(ref mut resolver) => {
-                resolver.raw_untrack_lock(max_raw_ts);
+                // use prev ts, see reason at CausalObserver::pre_propose_query
+                resolver.raw_untrack_lock(max_raw_ts.prev());
             }
             None => {
                 assert!(self.pending.is_some(), "region resolver not ready");
