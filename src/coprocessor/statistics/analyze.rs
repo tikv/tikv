@@ -748,6 +748,10 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
     }
 
     fn sampling(&mut self, data: Vec<Vec<u8>>) {
+        // We should tolerate the abnormal case => `self.max_sample_size == 0`.
+        if self.max_sample_size == 0 {
+            return;
+        }
         let mut need_push = false;
         let cur_rng = self.base.rng.gen_range(0, i64::MAX);
         if self.samples.len() < self.max_sample_size {
@@ -1328,6 +1332,35 @@ mod tests {
                 "v: {}",
                 v
             );
+        }
+    }
+
+    #[test]
+    fn test_abnormal_sampling() {
+        let sample_num = 0; // abnormal.
+        let row_num = 100;
+        let mut nums: Vec<Vec<u8>> = Vec::with_capacity(row_num);
+        for i in 0..row_num {
+            nums.push(
+                datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
+            );
+        }
+        {
+            // Test for ReservoirRowSampleCollector
+            let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
+            for row in &nums {
+                collector.sampling([row.clone()].to_vec());
+            }
+            assert_eq!(collector.samples.len(), 0);
+        }
+        {
+            // Test for BernoulliRowSampleCollector
+            let mut collector =
+                BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
+            for row in &nums {
+                collector.sampling([row.clone()].to_vec());
+            }
+            assert_eq!(collector.samples.len(), 0);
         }
     }
 }

@@ -6,6 +6,8 @@ mod metrics;
 mod slab;
 mod tls;
 
+use std::time::Instant;
+
 use kvproto::kvrpcpb as pb;
 
 pub use self::{
@@ -92,4 +94,27 @@ pub struct RequestMetrics {
     pub block_read_nanos: u64,
     pub internal_key_skipped_count: u64,
     pub deleted_key_skipped_count: u64,
+    // temp instant used in raftstore metrics, first be the instant when creating the write callback,
+    // then reset when it is ready to apply
+    pub write_instant: Option<Instant>,
+    pub wf_batch_wait_nanos: u64,
+    pub wf_send_to_queue_nanos: u64,
+    pub wf_persist_log_nanos: u64,
+    pub wf_before_write_nanos: u64,
+    pub wf_write_end_nanos: u64,
+    pub wf_kvdb_end_nanos: u64,
+    pub wf_commit_log_nanos: u64,
+    pub propose_send_wait_nanos: u64,
+    pub commit_not_persisted: bool,
+    pub store_mutex_lock_nanos: u64,
+    pub store_thread_wait_nanos: u64,
+    pub store_write_wal_nanos: u64,
+    pub store_write_memtable_nanos: u64,
+    pub store_time_nanos: u64,
+    pub apply_wait_nanos: u64,
+    pub apply_time_nanos: u64,
+    pub apply_mutex_lock_nanos: u64,
+    pub apply_thread_wait_nanos: u64,
+    pub apply_write_wal_nanos: u64,
+    pub apply_write_memtable_nanos: u64,
 }

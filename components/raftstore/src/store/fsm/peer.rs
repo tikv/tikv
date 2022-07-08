@@ -12,7 +12,7 @@ use std::{
     iter::{FromIterator, Iterator},
     mem,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
     u64,
 };
 
@@ -73,7 +73,7 @@ use crate::{
             ExecResult,
         },
         hibernate_state::{GroupState, HibernateState},
-        local_metrics::RaftMetrics,
+        local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
@@ -523,11 +523,11 @@ where
                 }))
             };
 
-            let times: SmallVec<[TiInstant; 4]> = cbs
+            let tokens: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { request_times, .. } = cb {
-                        Some(request_times[0])
+                    if let Callback::Write { trackers, .. } = cb {
+                        Some(trackers[0])
                     } else {
                         None
                     }
@@ -546,8 +546,8 @@ where
                 committed_cb,
             );
 
-            if let Callback::Write { request_times, .. } = &mut cb {
-                *request_times = times;
+            if let Callback::Write { trackers, .. } = &mut cb {
+                *trackers = tokens;
             }
 
             return Some((req, cb));
@@ -960,11 +960,20 @@ where
             }
             CasualMessage::HalfSplitRegion {
                 region_epoch,
+                start_key,
+                end_key,
                 policy,
                 source,
                 cb,
             } => {
-                self.on_schedule_half_split_region(&region_epoch, policy, source, cb);
+                self.on_schedule_half_split_region(
+                    &region_epoch,
+                    start_key,
+                    end_key,
+                    policy,
+                    source,
+                    cb,
+                );
             }
             CasualMessage::GcSnap { snaps } => {
                 self.on_gc_snap(snaps);
@@ -3297,7 +3306,7 @@ where
         let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
-            &mut self.ctx.perf_context,
+            &mut self.ctx.raft_perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
         ) {
@@ -4777,14 +4786,11 @@ where
         }
 
         if self.ctx.raft_metrics.waterfall_metrics {
-            if let Some(request_times) = cb.get_request_times() {
-                let now = TiInstant::now();
-                for t in request_times {
-                    self.ctx
-                        .raft_metrics
-                        .wf_batch_wait
-                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
-                }
+            let now = Instant::now();
+            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
+                tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
+                    &mut t.metrics.wf_batch_wait_nanos
+                });
             }
         }
 
@@ -5495,14 +5501,18 @@ where
     fn on_schedule_half_split_region(
         &mut self,
         region_epoch: &metapb::RegionEpoch,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
         policy: CheckPolicy,
         source: &str,
         _cb: Callback<EK::Snapshot>,
     ) {
+        let is_key_range = start_key.is_some() && end_key.is_some();
         info!(
             "on half split";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
+            "is_key_range" => is_key_range,
             "policy" => ?policy,
             "source" => source,
         );
@@ -5512,6 +5522,7 @@ where
                 "not leader, skip";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
             );
             return;
         }
@@ -5522,11 +5533,18 @@ where
                 "receive a stale halfsplit message";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
             );
             return;
         }
 
-        let split_check_bucket_ranges = self.gen_bucket_range_for_update();
+        // Do not check the bucket ranges if we want to split the region with a given key range,
+        // this is to avoid compatibility issues.
+        let split_check_bucket_ranges = if !is_key_range {
+            self.gen_bucket_range_for_update()
+        } else {
+            None
+        };
         #[cfg(any(test, feature = "testexport"))]
         {
             if let Callback::Test { cb } = _cb {
@@ -5537,13 +5555,20 @@ where
                 cb(peer_stat);
             }
         }
-        let task =
-            SplitCheckTask::split_check(region.clone(), false, policy, split_check_bucket_ranges);
+        let task = SplitCheckTask::split_check_key_range(
+            region.clone(),
+            start_key,
+            end_key,
+            false,
+            policy,
+            split_check_bucket_ranges,
+        );
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
                 "err" => %e,
             );
         }
@@ -5577,6 +5602,19 @@ where
 
         if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
             return;
+        }
+
+        if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
+            // Clean up the force leader state after a timeout, since the PD recovery process may
+            // have been aborted for some reasons.
+            if time.saturating_elapsed()
+                > cmp::max(
+                    self.ctx.cfg.peer_stale_state_check_interval.0,
+                    Duration::from_secs(60),
+                )
+            {
+                self.on_exit_force_leader();
+            }
         }
 
         if self.ctx.cfg.hibernate_regions {

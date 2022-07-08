@@ -1290,19 +1290,19 @@ mod tests {
         use tikv_util::config::ReadableDuration;
 
         /// Asserted that the snapshot can be retrieved in 500ms.
-        const SNAPSHOT_DURATION_MS: i64 = 500;
+        const SNAPSHOT_DURATION_MS: u64 = 500;
 
         /// Asserted that the delay caused by OS scheduling other tasks is smaller than 200ms.
         /// This is mostly for CI.
-        const HANDLE_ERROR_MS: i64 = 200;
+        const HANDLE_ERROR_MS: u64 = 200;
 
         /// The acceptable error range for a coarse timer. Note that we use CLOCK_MONOTONIC_COARSE
         /// which can be slewed by time adjustment code (e.g., NTP, PTP).
-        const COARSE_ERROR_MS: i64 = 50;
+        const COARSE_ERROR_MS: u64 = 50;
 
         /// The duration that payload executes.
-        const PAYLOAD_SMALL: i64 = 3000;
-        const PAYLOAD_LARGE: i64 = 6000;
+        const PAYLOAD_SMALL: u64 = 3000;
+        const PAYLOAD_LARGE: u64 = 6000;
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -1339,7 +1339,7 @@ mod tests {
         req_with_exec_detail.context.set_record_time_stat(true);
 
         {
-            let mut wait_time: i64 = 0;
+            let mut wait_time: u64 = 0;
 
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
@@ -1504,7 +1504,7 @@ mod tests {
         }
 
         {
-            let mut wait_time: i64 = 0;
+            let mut wait_time: u64 = 0;
 
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
