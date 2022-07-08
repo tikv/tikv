@@ -810,6 +810,11 @@ mod tests {
             assert_eq!(buf, region1_entries[..=i]);
         }
 
+        // Test fetch empty logs.
+        buf.clear();
+        assert_eq!(engine.fetch_entries_to(1, 1, 1, None, &mut buf).unwrap(), 0);
+        assert!(buf.is_empty());
+
         // Test `get_last_state_with_prefix`
         assert_eq!(
             engine

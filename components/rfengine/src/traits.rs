@@ -28,7 +28,9 @@ impl RaftEngineReadOnly for RfEngine {
         max_size: Option<usize>, // size limit of fetched entries
         buf: &mut Vec<Entry>,
     ) -> Result<usize> /* entry count */ {
-        debug_assert!(low < high);
+        if high <= low {
+            return Ok(0);
+        }
         let old_len = buf.len();
         let region_data = self
             .regions
