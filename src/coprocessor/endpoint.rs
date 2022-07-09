@@ -1388,7 +1388,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_wait_wall_time_ms(),
-                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+                wait_time.saturating_sub(HANDLE_ERROR_MS + COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1417,7 +1417,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_wait_wall_time_ms(),
-                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+                wait_time.saturating_sub(HANDLE_ERROR_MS + COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1569,7 +1569,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_wait_wall_time_ms(),
-                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+                wait_time.saturating_sub(HANDLE_ERROR_MS + COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1602,7 +1602,7 @@ mod tests {
                     .get_exec_details()
                     .get_time_detail()
                     .get_wait_wall_time_ms(),
-                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+                wait_time.saturating_sub(HANDLE_ERROR_MS + COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp[0]
@@ -1632,7 +1632,7 @@ mod tests {
                     .get_exec_details()
                     .get_time_detail()
                     .get_wait_wall_time_ms(),
-                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+                wait_time.saturating_sub(HANDLE_ERROR_MS + COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp[1]

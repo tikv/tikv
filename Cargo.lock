@@ -4169,12 +4169,14 @@ dependencies = [
 name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
+ "batch-system",
  "collections",
  "crossbeam",
  "engine_test",
  "engine_traits",
  "error_code",
  "fail",
+ "futures-util",
  "kvproto",
  "pd_client",
  "raft",
