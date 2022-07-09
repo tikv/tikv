@@ -381,12 +381,28 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         !batch.is_empty()
     }
 
+    fn set_reschedule_info(&mut nfsm: NormalFsm<N>, res_policy: ReschedulePolicy, stpped_policy: bool) {
+        p.policy = Some(ReschedulePolicy::Release(progress));
+        reschedule_fsms.push(i);
+    }
+
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
     pub fn poll(&mut self) {
         fail_point!("poll");
         let mut batch = Batch::with_capacity(self.max_batch_size);
         let mut reschedule_fsms = Vec::with_capacity(self.max_batch_size);
         let mut to_skip_end = Vec::with_capacity(self.max_batch_size);
+
+        let set_reschedule_info = |p, policy, i| {
+            p.policy = Some(policy);
+            reschedule_fsms.push(i);            
+        };
+        let set_reschedule_info_extra = |p, policy, i, skip_end| {
+            set_reschedule_info(p, policy, i);
+            if skip_end {
+                to_skip_end.push(i);
+            }
+        };
 
         // Fetch batch after every round is finished. It's helpful to protect regions
         // from becoming hungry if some regions are hot points. Since we fetch new fsm every time
@@ -395,10 +411,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         while run && self.fetch_fsm(&mut batch) {
             // If there is some region wait to be deal, we must deal with it even if it has overhead
             // max size of batch. It's helpful to protect regions from becoming hungry
-            // if some regions are hot points.
-            let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
-            // update some online config if needed.
+            // if some regions are hot points.            
             {
+                // update some online config if needed.
                 // TODO: rust 2018 does not support capture disjoint field within a closure.
                 // See https://github.com/rust-lang/rust/issues/53488 for more details.
                 // We can remove this once we upgrade to rust 2021 or later edition.
@@ -407,7 +422,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     *batch_size = cfg.max_batch_size();
                 });
             }
-            max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
+            let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
 
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());
@@ -423,11 +438,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 let p = p.as_mut().unwrap();
                 let res = self.handler.handle_normal(p);
                 if p.is_stopped() {
-                    p.policy = Some(ReschedulePolicy::Remove);
-                    reschedule_fsms.push(i);
+                    set_reschedule_info(p, ReschedulePolicy::Remove, i);                    
                 } else if p.get_priority() != self.handler.get_priority() {
-                    p.policy = Some(ReschedulePolicy::Schedule);
-                    reschedule_fsms.push(i);
+                    set_reschedule_info(p, ReschedulePolicy::Schedule, i);
                 } else {
                     if p.timer.saturating_elapsed() >= self.reschedule_duration {
                         hot_fsm_count += 1;
@@ -435,17 +448,12 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                         // it's possible all the hot regions are fetched in a batch the
                         // next time.
                         if hot_fsm_count % 2 == 0 {
-                            p.policy = Some(ReschedulePolicy::Schedule);
-                            reschedule_fsms.push(i);
+                            set_reschedule_info(p, ReschedulePolicy::Schedule, i);
                             continue;
                         }
                     }
                     if let HandleResult::StopAt { progress, skip_end } = res {
-                        p.policy = Some(ReschedulePolicy::Release(progress));
-                        reschedule_fsms.push(i);
-                        if skip_end {
-                            to_skip_end.push(i);
-                        }
+                        set_reschedule_info_extra(p, ReschedulePolicy::Release(progress), i, skip_end);
                     }
                 }
             }
@@ -463,14 +471,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 let p = batch.normals[fsm_cnt].as_mut().unwrap();
                 let res = self.handler.handle_normal(p);
                 if p.is_stopped() {
-                    p.policy = Some(ReschedulePolicy::Remove);
-                    reschedule_fsms.push(fsm_cnt);
+                    set_reschedule_info(p, ReschedulePolicy::Remove, fsm_cnt);         
                 } else if let HandleResult::StopAt { progress, skip_end } = res {
-                    p.policy = Some(ReschedulePolicy::Release(progress));
-                    reschedule_fsms.push(fsm_cnt);
-                    if skip_end {
-                        to_skip_end.push(fsm_cnt);
-                    }
+                    set_reschedule_info_extra(p, ReschedulePolicy::Release(progress), fsm_cnt, skip_end);  
                 }
                 fsm_cnt += 1;
             }
