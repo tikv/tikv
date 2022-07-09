@@ -15,6 +15,8 @@ use crate::store::{fsm::store::StoreMeta, util::RegionReadProgressRegistry};
 
 pub struct Runner {
     store_meta: Arc<Mutex<StoreMeta>>,
+    // Whether the `region_read_progress` is updating by other worker
+    is_progress_updating: bool,
     region_read_progress: RegionReadProgressRegistry,
 }
 
@@ -48,16 +50,22 @@ impl fmt::Display for Task {
 }
 
 impl Runner {
-    pub fn new(store_meta: Arc<Mutex<StoreMeta>>) -> Runner {
+    pub fn new(store_meta: Arc<Mutex<StoreMeta>>, is_progress_updating: bool) -> Runner {
         let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
         Runner {
             region_read_progress,
+            is_progress_updating,
             store_meta,
         }
     }
 
     // Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
     fn get_range_safe_ts(&self, key_range: KeyRange) -> u64 {
+        // The `region_read_progress` is not updating by other worker, return 0 directly
+        if !self.is_progress_updating {
+            return 0;
+        }
+        fail_point!("on_handle_get_store_ts");
         if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
             // Fast path to get the min `safe_ts` of all regions in this store
             self.region_read_progress.with(|registry| {
@@ -154,7 +162,7 @@ mod tests {
         }
 
         let meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-        let runner = Runner::new(meta.clone());
+        let runner = Runner::new(meta.clone(), true);
         assert_eq!(0, runner.get_range_safe_ts(key_range(b"", b"")));
         add_region(&meta, 1, key_range(b"", b"k1"), 100);
         assert_eq!(100, runner.get_range_safe_ts(key_range(b"", b"")));

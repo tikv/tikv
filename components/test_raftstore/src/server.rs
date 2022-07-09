@@ -349,6 +349,7 @@ impl ServerCluster {
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
+
             Some(rts_worker)
         } else {
             None
@@ -373,7 +374,9 @@ impl ServerCluster {
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
-        let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
+        // Start the `CheckLeader` runner
+        let check_leader_runner =
+            CheckLeaderRunner::new(store_meta.clone(), cfg.resolved_ts.enable);
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);

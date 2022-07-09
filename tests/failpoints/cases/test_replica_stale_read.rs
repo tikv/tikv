@@ -636,3 +636,49 @@ fn test_stale_read_future_ts_not_update_max_ts() {
     // `key3` is write as 1pc transaction so we can read `key3` without commit
     leader_client.must_kv_read_equal(b"key3".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
+
+// Testing that when `resolved-ts.enable` set to `false`, the `CheckLeader` request will
+// be handle as usually while the `GetStoreTs` request will return 0 directly
+#[test]
+fn test_disable_resolved_ts() {
+    use kvproto::kvrpcpb::{CheckLeaderRequest, KeyRange, StoreSafeTsRequest};
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.resolved_ts.enable = false;
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let leader_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
+
+    // `CheckLeader` request can still be handled as usual (namely for CDC)
+    let leader_info = cluster
+        .store_metas
+        .get(&1)
+        .unwrap()
+        .lock()
+        .unwrap()
+        .region_read_progress
+        .dump_leader_infos(&[1])
+        .get(&1)
+        .unwrap()
+        .1
+        .clone();
+    let mut req = CheckLeaderRequest::default();
+    req.set_regions(vec![leader_info].into());
+    let resp = leader_client.cli.check_leader(&req).unwrap();
+    assert_eq!(resp.get_regions(), &[1]);
+
+    // Panic when handling `GetStoreTsTask`
+    let on_handle_get_store_ts_fp = "on_handle_get_store_ts";
+    fail::cfg(on_handle_get_store_ts_fp, "panic").unwrap();
+
+    let mut key_range = KeyRange::default();
+    key_range.set_start_key(b"k".to_vec());
+    let mut req = StoreSafeTsRequest::default();
+    req.set_key_range(key_range);
+    // `StoreSafeTS` request should return 0 directly
+    let resp = leader_client.cli.get_store_safe_ts(&req).unwrap();
+    assert_eq!(resp.get_safe_ts(), 0);
+
+    fail::remove(on_handle_get_store_ts_fp);
+}
