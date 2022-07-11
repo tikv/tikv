@@ -268,9 +268,10 @@ fn test_unsafe_recovery_wait_for_snapshot_apply() {
         sleep_ms(100);
     }
     assert_ne!(store_report, None);
+
     fail::remove("worker_gc_raft_log");
     fail::remove("worker_gc_raft_log_finished");
-    fail::remove("raft_before_apply_snap_callback");
+    fail::remove("region_apply_snap");
 }
 
 #[test]

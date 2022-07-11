@@ -960,11 +960,20 @@ where
             }
             CasualMessage::HalfSplitRegion {
                 region_epoch,
+                start_key,
+                end_key,
                 policy,
                 source,
                 cb,
             } => {
-                self.on_schedule_half_split_region(&region_epoch, policy, source, cb);
+                self.on_schedule_half_split_region(
+                    &region_epoch,
+                    start_key,
+                    end_key,
+                    policy,
+                    source,
+                    cb,
+                );
             }
             CasualMessage::GcSnap { snaps } => {
                 self.on_gc_snap(snaps);
@@ -2479,6 +2488,9 @@ where
             ExtraMessageType::MsgHibernateResponse => {
                 self.on_hibernate_response(msg.get_from_peer());
             }
+            ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
+                unimplemented!()
+            }
         }
     }
 
@@ -3294,7 +3306,7 @@ where
         let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
-            &mut self.ctx.perf_context,
+            &mut self.ctx.raft_perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
         ) {
@@ -5489,14 +5501,18 @@ where
     fn on_schedule_half_split_region(
         &mut self,
         region_epoch: &metapb::RegionEpoch,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
         policy: CheckPolicy,
         source: &str,
         _cb: Callback<EK::Snapshot>,
     ) {
+        let is_key_range = start_key.is_some() && end_key.is_some();
         info!(
             "on half split";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
+            "is_key_range" => is_key_range,
             "policy" => ?policy,
             "source" => source,
         );
@@ -5506,6 +5522,7 @@ where
                 "not leader, skip";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
             );
             return;
         }
@@ -5516,11 +5533,18 @@ where
                 "receive a stale halfsplit message";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
             );
             return;
         }
 
-        let split_check_bucket_ranges = self.gen_bucket_range_for_update();
+        // Do not check the bucket ranges if we want to split the region with a given key range,
+        // this is to avoid compatibility issues.
+        let split_check_bucket_ranges = if !is_key_range {
+            self.gen_bucket_range_for_update()
+        } else {
+            None
+        };
         #[cfg(any(test, feature = "testexport"))]
         {
             if let Callback::Test { cb } = _cb {
@@ -5531,13 +5555,20 @@ where
                 cb(peer_stat);
             }
         }
-        let task =
-            SplitCheckTask::split_check(region.clone(), false, policy, split_check_bucket_ranges);
+        let task = SplitCheckTask::split_check_key_range(
+            region.clone(),
+            start_key,
+            end_key,
+            false,
+            policy,
+            split_check_bucket_ranges,
+        );
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
                 "err" => %e,
             );
         }

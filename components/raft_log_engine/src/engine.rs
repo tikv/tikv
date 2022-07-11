@@ -9,8 +9,8 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineDebug, RaftEngineReadOnly,
-    RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
+    CacheStats, EncryptionKeyManager, PerfContextExt, PerfContextKind, PerfLevel, RaftEngine,
+    RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::{
@@ -24,6 +24,8 @@ use raft_engine::{
 };
 pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
 use tikv_util::Either;
+
+use crate::perf_context::RaftEnginePerfContext;
 
 // A special region ID representing global state.
 const STORE_REGION_ID: u64 = 0;
@@ -222,6 +224,10 @@ impl FileSystem for ManagedFileSystem {
             })
         }
     }
+
+    fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        self.base_level_file_system.delete(path)
+    }
 }
 
 #[derive(Clone)]
@@ -258,6 +264,14 @@ impl RaftLogEngine {
 
     pub fn last_index(&self, raft_id: u64) -> Option<u64> {
         self.0.last_index(raft_id)
+    }
+}
+
+impl PerfContextExt for RaftLogEngine {
+    type PerfContext = RaftEnginePerfContext;
+
+    fn get_perf_context(&self, _level: PerfLevel, _kind: PerfContextKind) -> Self::PerfContext {
+        RaftEnginePerfContext
     }
 }
 
@@ -533,6 +547,14 @@ impl RaftEngine for RaftLogEngine {
 
     fn get_engine_size(&self) -> Result<u64> {
         Ok(self.0.get_used_size() as u64)
+    }
+
+    fn for_each_raft_group<E, F>(&self, _f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<engine_traits::Error>,
+    {
+        unimplemented!()
     }
 }
 
