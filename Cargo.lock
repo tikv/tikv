@@ -475,6 +475,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempdir",
+ "tempfile",
  "test_raftstore",
  "test_util",
  "thiserror",
@@ -758,6 +759,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "bitflags",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "criterion",

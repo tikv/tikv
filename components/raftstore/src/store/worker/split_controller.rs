@@ -53,7 +53,9 @@ const NO_BALANCE_KEY: &str = "no_balance_key";
 const NO_UNCROSS_KEY: &str = "no_uncross_key";
 // Split info for the top hot CPU region has been collected, ready to split.
 const READY_TO_SPLIT_CPU_TOP: &str = "ready_to_split_cpu_top";
-// The top hot CPU region is not ready to split.
+// Hottest key range for the top hot CPU region could not be found.
+const EMPTY_HOTTEST_KEY_RANGE: &str = "empty_hottest_key_range";
+// The top hot CPU region could not be split.
 const UNABLE_TO_SPLIT_CPU_TOP: &str = "unable_to_split_cpu_top";
 
 // It will return prefix sum of the given iter,
@@ -899,9 +901,13 @@ impl AutoSplitController {
                 );
             } else {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[UNABLE_TO_SPLIT_CPU_TOP])
+                    .with_label_values(&[EMPTY_HOTTEST_KEY_RANGE])
                     .inc();
             }
+        } else {
+            LOAD_BASE_SPLIT_EVENT
+                .with_label_values(&[UNABLE_TO_SPLIT_CPU_TOP])
+                .inc();
         }
         // Clean up the rest top CPU usage recorders.
         for region_id in top_cpu_usage {
