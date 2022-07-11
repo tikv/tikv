@@ -644,7 +644,7 @@ fn do_check_allowed(enable: bool, skip_vcheck: bool, feature_gate: &FeatureGate)
     enable && (skip_vcheck || feature_gate.can_enable(COMPACTION_FILTER_GC_FEATURE))
 }
 
-fn check_need_gc(
+pub fn check_need_gc(
     safe_point: TimeStamp,
     ratio_threshold: f64,
     context: &CompactionFilterContext,
@@ -769,17 +769,13 @@ pub mod test_utils {
         }
 
         fn prepare_gc(&self, engine: &RocksEngine) {
-            self.prepare_gc_enable_filter(engine, true);
-        }
-
-        fn prepare_gc_enable_filter(&self, engine: &RocksEngine, enable_compaction_filter: bool) {
             let safe_point = Arc::new(AtomicU64::new(self.safe_point));
             let cfg_tracker = {
                 let mut cfg = GcConfig::default();
                 if let Some(ratio_threshold) = self.ratio_threshold {
                     cfg.ratio_threshold = ratio_threshold;
                 }
-                cfg.enable_compaction_filter = enable_compaction_filter;
+                cfg.enable_compaction_filter = true;
                 GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg)))
             };
             let feature_gate = {
@@ -826,25 +822,6 @@ pub mod test_utils {
         pub fn gc_raw(&mut self, engine: &RocksEngine) {
             let _guard = LOCK.lock().unwrap();
             self.prepare_gc(engine);
-
-            let db = engine.as_inner();
-            let handle = get_cf_handle(db, CF_DEFAULT).unwrap();
-            let mut compact_opts = default_compact_options();
-            if let Some(target_level) = self.target_level {
-                compact_opts.set_change_level(true);
-                compact_opts.set_target_level(target_level as i32);
-            }
-            db.compact_range_cf_opt(handle, &compact_opts, None, None);
-            self.post_gc();
-        }
-
-        pub fn gc_raw_enable_filter(
-            &mut self,
-            engine: &RocksEngine,
-            enable_compaction_filter: bool,
-        ) {
-            let _guard = LOCK.lock().unwrap();
-            self.prepare_gc_enable_filter(engine, enable_compaction_filter);
 
             let db = engine.as_inner();
             let handle = get_cf_handle(db, CF_DEFAULT).unwrap();

@@ -13,20 +13,20 @@ use engine_rocks::{
         CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
         DBCompactionFilter,
     },
-    RocksEngine, RocksMvccProperties,
+    RocksEngine,
 };
-use engine_traits::{raw_ttl::ttl_current_ts, MiscExt, MvccProperties};
+use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
 use pd_client::{Feature, FeatureGate};
 use prometheus::local::LocalHistogram;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
-use txn_types::{Key, TimeStamp};
+use txn_types::Key;
 
 use crate::{
     server::gc_worker::{
         compaction_filter::{
-            CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
-            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+            check_need_gc, CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT,
+            GC_COMPACTION_FAILURE, GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
             GC_COMPACTION_FILTER_PERFORM, GC_COMPACTION_FILTER_SKIP, GC_CONTEXT,
         },
         GcTask,
@@ -67,17 +67,16 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             return std::ptr::null_mut();
         }
 
-        let (enable, skip_vcheck, ratio_threshold) = {
+        let (skip_vcheck, ratio_threshold) = {
             let value = &*gc_context.cfg_tracker.value();
             (
-                value.enable_compaction_filter,
                 value.compaction_filter_skip_version_check,
                 value.ratio_threshold,
             )
         };
 
         debug!(
-            "creating compaction filter"; "feature_enable" => enable,
+            "creating rawkv compaction filter";
             "skip_version_check" => skip_vcheck,
             "ratio_threshold" => ratio_threshold,
         );
@@ -86,7 +85,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             debug!("skip gc in compaction filter because the DB is stalled");
             return std::ptr::null_mut();
         }
-        if !do_check_allowed(enable, skip_vcheck, &gc_context.feature_gate) {
+        if !do_check_allowed(skip_vcheck, &gc_context.feature_gate) {
             debug!("skip gc in rawkv compaction filter because it's not allowed");
             return std::ptr::null_mut();
         }
@@ -179,60 +178,8 @@ impl CompactionFilter for RawCompactionFilter {
     }
 }
 
-fn do_check_allowed(enable: bool, skip_vcheck: bool, feature_gate: &FeatureGate) -> bool {
-    enable && (skip_vcheck || feature_gate.can_enable(COMPACTION_FILTER_RAWKV_GC_FEATURE))
-}
-
-fn check_need_gc(
-    safe_point: TimeStamp,
-    ratio_threshold: f64,
-    context: &CompactionFilterContext,
-) -> bool {
-    let check_props = |props: &MvccProperties| -> (bool, bool /*skip_more_checks*/) {
-        if props.min_ts > safe_point {
-            return (false, false);
-        }
-        if ratio_threshold < 1.0 || context.is_bottommost_level() {
-            // According to our tests, `split_ts` on keys and `parse_write` on values
-            // won't utilize much CPU. So always perform GC at the bottommost level
-            // to avoid garbage accumulation.
-            return (true, true);
-        }
-        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
-            // When comparing `num_versions` with `num_rows`, it's unnecessary to
-            // treat internal levels specially.
-            return (true, false);
-        }
-
-        if props.num_deletes as f64 > props.num_puts as f64 * ratio_threshold {
-            return (true, false);
-        }
-
-        if props.min_ttl_ts > safe_point {
-            return (false, false);
-        }
-
-        (props.max_row_versions > 1024, false)
-    };
-
-    let (mut sum_props, mut needs_gc) = (MvccProperties::new(), 0);
-    for i in 0..context.file_numbers().len() {
-        let table_props = context.table_properties(i);
-        let user_props = table_props.user_collected_properties();
-        if let Ok(props) = RocksMvccProperties::decode(user_props) {
-            sum_props.add(&props);
-            let (sst_needs_gc, skip_more_checks) = check_props(&props);
-            if sst_needs_gc {
-                needs_gc += 1;
-            }
-            if skip_more_checks {
-                // It's the bottommost level or ratio_threshold is less than 1.
-                needs_gc = context.file_numbers().len();
-                break;
-            }
-        }
-    }
-    (needs_gc >= ((context.file_numbers().len() + 1) / 2)) || check_props(&sum_props).0
+fn do_check_allowed(skip_vcheck: bool, feature_gate: &FeatureGate) -> bool {
+    skip_vcheck || feature_gate.can_enable(COMPACTION_FILTER_RAWKV_GC_FEATURE)
 }
 
 impl RawCompactionFilter {

@@ -70,15 +70,6 @@ fn test_check_need_gc() {
     assert_eq!(GC_COMPACTION_FILTER_PERFORM.get(), 0);
     assert_eq!(GC_COMPACTION_FILTER_SKIP.get(), 0);
 
-    // Set enable_compaction_filter = false
-    // do_check_allowed will return false
-    gc_runner
-        .safe_point(TimeStamp::physical_now())
-        .gc_raw_enable_filter(&raw_engine, false);
-
-    assert_eq!(GC_COMPACTION_FILTER_PERFORM.get(), 0);
-    assert_eq!(GC_COMPACTION_FILTER_SKIP.get(), 0);
-
     // The mvcc ts > gc safepoint,
     gc_runner
         .safe_point(TimeStamp::new(1).into_inner())
