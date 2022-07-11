@@ -8,3 +8,6 @@
 mod apply;
 mod peer;
 mod store;
+
+pub use peer::{PeerFsm, PeerFsmDelegate, SenderFsmPair};
+pub use store::{StoreFsm, StoreFsmDelegate};

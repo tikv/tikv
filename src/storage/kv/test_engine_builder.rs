@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use causal_ts::tests::DummyRawTsTracker;
 use engine_rocks::{raw::ColumnFamilyOptions, raw_util::CFOptions};
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IORateLimiter;
@@ -71,7 +72,8 @@ impl TestEngineBuilder {
     // Consider decoupling them.
     fn register_causal_observer(engine: &mut RocksEngine) {
         let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-        let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        let causal_ob =
+            causal_ts::CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default());
         engine.register_observer(|host| {
             causal_ob.register_to(host);
         });

@@ -55,7 +55,8 @@ use grpcio_health::HealthService;
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    kvrpcpb::ApiVersion, resource_usage_agent::create_resource_metering_pub_sub,
+    kvrpcpb::ApiVersion, logbackuppb::create_log_backup,
+    resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -244,6 +245,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
     rsmeter_pubsub_service: resource_metering::PubSubService,
+    backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
 }
 
 type LocalServer<EK, ER> =
@@ -774,25 +776,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             unified_read_pool_scale_receiver = Some(rx);
         }
 
-        // Register causal observer for RawKV API V2
-        if let ApiVersion::V2 = F::TAG {
-            let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
-                self.pd_client.clone(),
-                self.config.causal_ts.renew_interval.0,
-                self.config.causal_ts.renew_batch_min_size,
-            ));
-            if let Err(e) = tso {
-                panic!("Causal timestamp provider initialize failed: {:?}", e);
-            }
-            let causal_ts_provider = Arc::new(tso.unwrap());
-            info!("Causal timestamp provider startup.");
-
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        }
-
         // Register cdc.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        let mut cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
@@ -817,6 +802,23 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         } else {
             None
         };
+
+        // Register causal observer for RawKV API V2
+        if let ApiVersion::V2 = F::TAG {
+            let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
+                self.pd_client.clone(),
+                self.config.causal_ts.renew_interval.0,
+                self.config.causal_ts.renew_batch_min_size,
+            ));
+            if let Err(e) = tso {
+                fatal!("Causal timestamp provider initialize failed: {:?}", e);
+            }
+            let causal_ts_provider = Arc::new(tso.unwrap());
+            info!("Causal timestamp provider startup.");
+            cdc_ob.set_causal_ts_provider(causal_ts_provider.clone());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider, cdc_ob.clone());
+            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        }
 
         let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
         let check_leader_scheduler = self
@@ -884,7 +886,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         );
 
         // Start backup stream
-        if self.config.backup_stream.enable {
+        let backup_stream_scheduler = if self.config.backup_stream.enable {
             // Create backup stream.
             let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
             let backup_stream_scheduler = backup_stream_worker.scheduler();
@@ -910,7 +912,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 node.id(),
                 etcd_cli,
                 self.config.backup_stream.clone(),
-                backup_stream_scheduler,
+                backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.clone(),
                 self.router.clone(),
@@ -919,7 +921,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.to_stop.push(backup_stream_worker);
-        }
+            Some(backup_stream_scheduler)
+        } else {
+            None
+        };
 
         let import_path = self.store_path.join("import");
         let mut importer = SstImporter::new(
@@ -1076,6 +1081,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             cdc_scheduler,
             cdc_memory_quota,
             rsmeter_pubsub_service,
+            backup_stream_scheduler,
         });
 
         server_config
@@ -1196,6 +1202,17 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .is_some()
         {
             warn!("failed to register resource metering pubsub service");
+        }
+
+        if let Some(sched) = servers.backup_stream_scheduler.take() {
+            let pitr_service = backup_stream::Service::new(sched);
+            if servers
+                .server
+                .register_service(create_log_backup(pitr_service))
+                .is_some()
+            {
+                fatal!("failed to register log backup service");
+            }
         }
     }
 
