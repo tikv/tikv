@@ -1763,6 +1763,8 @@ pub mod tests {
         req.set_storage_backend(make_local_backend(&tmp1));
         req.set_start_key(b"r".to_vec());
         req.set_end_key(b"s".to_vec());
+        req.set_is_raw_kv(true);
+        req.set_dst_api_version(ApiVersion::V2);
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         let end_ts = ts_provider.get_ts().unwrap();
