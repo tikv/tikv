@@ -635,6 +635,17 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     }
 }
 
+impl<EK: KvEngine> PeerMsg<EK> {
+    /// For some specific kind of messages, it's actually acceptable if failed to send it by
+    /// `significant_send`. This function determine if the current message is acceptable to fail.
+    pub fn is_send_failure_ignorable(&self) -> bool {
+        match self {
+            PeerMsg::SignificantMsg(SignificantMsg::CaptureChange { .. }) => true,
+            _ => false,
+        }
+    }
+}
+
 pub enum StoreMsg<EK>
 where
     EK: KvEngine,
