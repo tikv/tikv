@@ -182,7 +182,7 @@ impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactoryV2<ER> {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{CF_WRITE, TabletFactory};
+    use engine_traits::{TabletFactory, CF_WRITE};
 
     use super::*;
     use crate::{config::TiKvConfig, server::KvEngineFactoryBuilder};
@@ -247,7 +247,9 @@ mod tests {
         assert_eq!(count, 1);
         assert!(factory.is_single_engine());
         assert!(shared_db.is_single_engine());
-        factory.set_shared_block_cache_capacity(1024 * 1024).unwrap(); 
+        factory
+            .set_shared_block_cache_capacity(1024 * 1024)
+            .unwrap();
         let opt = shared_db.get_options_cf(CF_DEFAULT).unwrap();
         assert_eq!(opt.get_block_cache_capacity(), 1024 * 1024);
     }
@@ -294,7 +296,9 @@ mod tests {
         assert!(result.is_err());
         assert!(!factory.is_single_engine());
 
-        factory.set_shared_block_cache_capacity(1024 * 1024).unwrap();
+        factory
+            .set_shared_block_cache_capacity(1024 * 1024)
+            .unwrap();
         let opt = tablet.get_options_cf(CF_WRITE).unwrap();
         assert_eq!(opt.get_block_cache_capacity(), 1024 * 1024);
     }
