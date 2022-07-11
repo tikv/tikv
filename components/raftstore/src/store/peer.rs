@@ -3524,9 +3524,21 @@ where
                         cp
                     ));
                 }
-                (ConfChangeType::RemoveNode, _)
-                | (ConfChangeType::AddNode, PeerRole::Voter)
-                | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {}
+                (ConfChangeType::RemoveNode, _) => {}
+                (ConfChangeType::AddNode, PeerRole::Voter)
+                | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {
+                    if peer.get_id() == self.peer_id()
+                        && !self.is_witness()
+                        && peer.get_is_witness()
+                        && self.is_leader()
+                    {
+                        return Err(box_err!(
+                            "{} invalid conf change request: {:?}, can not change leader to witness",
+                            self.tag,
+                            cp
+                        ));
+                    }
+                }
                 _ => {
                     return Err(box_err!(
                         "{} invalid conf change request: {:?}",

@@ -11,7 +11,6 @@ use test_raftstore::*;
 
 #[test]
 fn test_witness() {
-    test_util::init_log_for_test();
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
@@ -62,4 +61,32 @@ fn test_witness() {
         .must_add_peer(region.get_id(), peer_on_store3.clone());
     std::thread::sleep(Duration::from_millis(100));
     must_get_none(&cluster.get_engine(3), b"k1");
+}
+
+#[test]
+fn test_witness_leader() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k1", b"v1");
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let mut peer_on_store1 = find_peer(&region, nodes[1]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+
+    // nonwitness -> witness
+    peer_on_store1.set_is_witness(true);
+    cluster
+        .pd_client
+        .add_peer(region.get_id(), peer_on_store1.clone());
+
+    // change to witness failed
+    std::thread::sleep(Duration::from_millis(100));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 }
