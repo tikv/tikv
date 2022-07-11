@@ -583,15 +583,15 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
-        if apply_ctx.host.pre_commit(&self.region, true) {
+        if self.host.pre_commit(&delegate.region, true) {
             if !delegate.pending_remove {
                 delegate.write_apply_state(self.kv_wb_mut());
             }
             self.commit_opt(delegate, false);
         } else {
             debug!("do not persist when finish_for";
-                "region" => ?self.region,
-                "tag" => self.tag,
+                "region" => ?delegate.region,
+                "tag" => &delegate.tag,
             );
         }
         self.apply_res.push(ApplyRes {
@@ -5517,7 +5517,7 @@ mod tests {
         let mut host = CoprocessorHost::<KvTestEngine>::default();
         let obs = ApplyObserver::default();
         host.registry
-            .register_region_change_observer(1, BoxAdminObserver::new(obs));
+            .register_region_change_observer(1, BoxRegionChangeObserver::new(obs));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
@@ -5561,11 +5561,17 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
         let apply_res = fetch_apply_res(&rx);
 
+        // We don't persist when finish.
         let state: RaftApplyState = engine
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
             .unwrap()
             .unwrap_or_default();
-        assert_eq!(apply_res.apply_state.get_index(), state.get_index() + 1);
+        assert_eq!(
+            apply_res.apply_state.get_applied_index(),
+            state.get_applied_index() + 1
+        );
+
+        index_id += 1;
 
         system.shutdown();
     }
