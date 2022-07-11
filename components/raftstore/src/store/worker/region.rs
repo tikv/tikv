@@ -35,10 +35,7 @@ use yatp::{
 
 use super::metrics::*;
 use crate::{
-    coprocessor::{
-        ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost,
-        ObserverContext,
-    },
+    coprocessor::CoprocessorHost,
     store::{
         self, check_abort,
         peer_storage::{
@@ -889,7 +886,6 @@ mod tests {
     use keys::data_key;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use pd_client::RpcClient;
-    use prometheus::core::AtomicU64;
     use tempfile::Builder;
     use tikv_util::worker::{LazyWorker, Worker};
 
