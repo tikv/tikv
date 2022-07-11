@@ -475,6 +475,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempdir",
+ "tempfile",
  "test_raftstore",
  "test_util",
  "thiserror",
@@ -758,6 +759,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "bitflags",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "criterion",
@@ -2623,7 +2625,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#acfe326c7cb2bdcdbfc991cada1973a68f34836f"
+source = "git+https://github.com/pingcap/kvproto.git#a5d4ffd2ba337dad0bc99e9fb53bf665864a3f3b"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4168,12 +4170,14 @@ dependencies = [
 name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
+ "batch-system",
  "collections",
  "crossbeam",
  "engine_test",
  "engine_traits",
  "error_code",
  "fail",
+ "futures-util",
  "kvproto",
  "pd_client",
  "raft",
