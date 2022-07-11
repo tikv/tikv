@@ -1402,6 +1402,10 @@ where
         self.cache.is_empty()
     }
 
+    pub fn get_cache_indexes(&self) -> (Option<u64>, u64) {
+        (self.cache.first_index(), self.cache.persisted)
+    }
+
     pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
         if self.engines.raft.has_builtin_entry_cache() {
             let rid = self.get_region_id();

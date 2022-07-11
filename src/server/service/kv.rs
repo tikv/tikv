@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]: Tikv gRPC APIs implementation
-use std::sync::Arc;
+use std::{sync::Arc, time::SystemTime};
 
 use api_version::KvFormat;
 use fail::fail_point;
@@ -728,9 +728,10 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
                 for msg in batch_msg.take_msgs().into_iter() {
                     let mut ctx = msg.get_extra_ctx();
                     let start = tikv_util::codec::number::decode_u64(&mut ctx).unwrap();
-                    let end = tikv_util::time::timespec_to_ns(tikv_util::time::system_time_now());
-                    RAFT_MESSAGE_SEND_DURATION.observe((end - start) as f64);
-  
+                    if let Ok(end) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+                        RAFT_MESSAGE_SEND_DURATION.observe((end.as_micros() as u64 - start) as f64);
+                    }
+
                     if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
                         Self::handle_raft_message(store_id, &ch, msg, reject)
                     {

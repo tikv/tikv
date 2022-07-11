@@ -236,10 +236,6 @@ mod inner {
     }
 }
 
-pub fn system_time_now() -> Timespec {
-    inner::get_time(libc::CLOCK_REALTIME)
-}
-
 #[cfg(target_os = "linux")]
 mod inner {
     use std::io;

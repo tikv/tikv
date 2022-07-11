@@ -150,6 +150,10 @@ impl<S: Snapshot> ProposalQueue<S> {
             })
     }
 
+    fn oldest_proposal(&self) -> Option<Timespec> {
+        self.queue.front().and_then(|p| p.propose_time)
+    }
+
     fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
         self.queue
             .binary_search_by_key(&(term, index), |p: &Proposal<_>| (p.term, p.index))
@@ -727,6 +731,7 @@ where
     /// Record the propose instants to calculate the wait duration before
     /// the proposal is sent through the Raft client.
     pending_propose_instants: VecDeque<(u64, Instant)>,
+    long_uncomitted_check_count: u8,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -928,6 +933,7 @@ where
             proposals: ProposalQueue::new(tag.clone()),
             pending_reads: Default::default(),
             pending_propose_instants: Default::default(),
+            long_uncomitted_check_count: 0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -2789,6 +2795,39 @@ where
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
+    }
+
+    pub fn check_long_uncommitted_logs<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        use std::fmt::Write;
+
+        if let Some(t) = self.proposals.oldest_proposal() {
+            if ctx.current_time.is_none() {
+                ctx.current_time = Some(monotonic_raw_now());
+            }
+            let elapsed = (ctx.current_time.unwrap() - t).to_std().unwrap();
+            if elapsed >= Duration::from_secs(60 * self.long_uncomitted_check_count as u64 + 60) {
+                let mut buf = String::new();
+                let s = self.raft_group.status();
+                write!(buf, "{:?}", s.ss).unwrap();
+                if let Some(prs) = s.progress {
+                    for p in prs.iter() {
+                        write!(buf, "| {:?} |", p).unwrap();
+                    }
+                }
+                info!(
+                    "found long uncommitted logs";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "progress" => %buf,
+                    "cache" => ?self.get_store().get_cache_indexes(),
+                );
+                self.long_uncomitted_check_count += 1;
+            } else if elapsed < Duration::from_secs(60) {
+                self.long_uncomitted_check_count = 0;
+            }
+        } else {
+            self.long_uncomitted_check_count = 0;
+        }
     }
 
     fn on_persist_snapshot<T>(

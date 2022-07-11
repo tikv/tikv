@@ -12,7 +12,7 @@ use std::{
         atomic::{AtomicI32, AtomicU8, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use collections::{HashMap, HashSet};
@@ -983,7 +983,9 @@ where
     pub fn send(&mut self, mut msg: RaftMessage) -> result::Result<(), DiscardReason> {
         use crate::tikv_util::codec::number::NumberEncoder;
         let mut buf = vec![];
-        buf.encode_u64(tikv_util::time::timespec_to_ns(tikv_util::time::system_time_now())).unwrap();
+        if let Ok(t) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+            buf.encode_u64(t.as_micros() as u64).unwrap();
+        }
         msg.set_extra_ctx(buf);
         let store_id = msg.get_to_peer().store_id;
         let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num as u64;

@@ -1906,6 +1906,8 @@ where
             |_| {}
         );
 
+        self.fsm.peer.check_long_uncommitted_logs(self.ctx);
+
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_cache_metrics();
             return;
