@@ -19,6 +19,17 @@ pub struct KvEngineFactoryV2<ER: RaftEngine> {
     registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
 }
 
+// Extract tablet id and tablet suffix from the path.
+fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
+    let (mut tablet_id, mut tablet_suffix) = (0, 1);
+    if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
+        let mut split = s.split('_');
+        tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+    }
+    (tablet_id, tablet_suffix)
+}
+
 impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     fn create_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
         let mut reg = self.registry.lock().unwrap();
@@ -74,12 +85,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
                 path.to_str().unwrap_or_default()
             ));
         }
-        let (mut tablet_id, mut tablet_suffix) = (0, 1);
-        if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
-            let mut split = s.split('_');
-            tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
-        }
+        let (tablet_id, tablet_suffix) = get_id_and_suffix_from_path(path);
         self.create_tablet(tablet_id, tablet_suffix)
     }
 
@@ -132,7 +138,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     #[inline]
     fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<RocksEngine> {
         {
-            let reg = self.registry.lock().unwrap();
+            let mut reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Err(box_err!(
                     "region {} {} already exists",
@@ -140,6 +146,8 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
                     db.as_inner().path()
                 ));
             }
+            let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
+            reg.remove(&(old_id, old_suffix));
         }
 
         let db_path = self.tablet_path(id, suffix);
@@ -261,6 +269,10 @@ mod tests {
         assert!(!factory.is_tombstoned(1, 10));
         assert!(factory.load_tablet(&tablet_path, 1, 10).is_err());
         assert!(factory.load_tablet(&tablet_path, 1, 20).is_ok());
+        // After we load it as with the new id or suffix, we should be unable to get it with
+        // the old id and suffix in the cache.
+        assert!(factory.open_tablet_cache(1, 10).is_none());
+
         factory.mark_tombstone(1, 20);
         assert!(factory.is_tombstoned(1, 20));
         factory.destroy_tablet(1, 20).unwrap();
