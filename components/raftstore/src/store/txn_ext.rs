@@ -12,6 +12,8 @@ use parking_lot::RwLock;
 use prometheus::{register_int_gauge, IntGauge};
 use txn_types::{Key, PessimisticLock};
 
+use super::Config;
+
 /// Transaction extensions related to a peer.
 #[derive(Default)]
 pub struct TxnExt {
@@ -32,6 +34,15 @@ pub struct TxnExt {
 impl TxnExt {
     pub fn is_max_ts_synced(&self) -> bool {
         self.max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1
+    }
+
+    pub fn new(cfg: &Config) -> Self {
+        let pessimistic_locks =
+            RwLock::new(PeerPessimisticLocks::new(cfg.in_memory_capacity.0 as usize));
+        TxnExt {
+            pessimistic_locks,
+            max_ts_sync_status: Default::default(),
+        }
     }
 }
 
@@ -57,9 +68,6 @@ lazy_static! {
 }
 
 const GLOBAL_MEM_SIZE_LIMIT: usize = 100 << 20; // 100 MiB
-
-// 512 KiB, so pessimistic locks in one region can be proposed in a single command.
-const PEER_MEM_SIZE_LIMIT: usize = 512 << 10;
 
 /// Pessimistic locks of a region peer.
 #[derive(PartialEq)]
@@ -114,6 +122,27 @@ pub struct PeerPessimisticLocks {
     pub version: u64,
     /// Estimated memory used by the pessimistic locks.
     pub memory_size: usize,
+    /// The capacity of in-memory pessimistic locks.
+    pub capacity: usize,
+}
+
+impl PeerPessimisticLocks {
+    pub fn new(capacity: usize) -> Self {
+        PeerPessimisticLocks {
+            map: HashMap::default(),
+            status: LocksStatus::Normal,
+            term: 0,
+            version: 0,
+            memory_size: 0,
+            capacity,
+        }
+    }
+}
+
+impl Default for PeerPessimisticLocks {
+    fn default() -> Self {
+        PeerPessimisticLocks::new(512 << 10)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -129,22 +158,11 @@ impl fmt::Debug for PeerPessimisticLocks {
         f.debug_struct("PeerPessimisticLocks")
             .field("count", &self.map.len())
             .field("memory_size", &self.memory_size)
+            .field("capacity", &self.capacity)
             .field("status", &self.status)
             .field("term", &self.term)
             .field("version", &self.version)
             .finish()
-    }
-}
-
-impl Default for PeerPessimisticLocks {
-    fn default() -> Self {
-        PeerPessimisticLocks {
-            map: HashMap::default(),
-            status: LocksStatus::Normal,
-            term: 0,
-            version: 0,
-            memory_size: 0,
-        }
     }
 }
 
@@ -164,7 +182,7 @@ impl PeerPessimisticLocks {
                 incr += key.len() + lock.memory_size();
             }
         }
-        if self.memory_size + incr > PEER_MEM_SIZE_LIMIT
+        if self.memory_size + incr > self.capacity
             || GLOBAL_MEM_SIZE.get() as usize + incr > GLOBAL_MEM_SIZE_LIMIT
         {
             return Err(pairs);
@@ -234,7 +252,7 @@ impl PeerPessimisticLocks {
 
         let mut res: Vec<PeerPessimisticLocks> = regions
             .iter()
-            .map(|_| PeerPessimisticLocks::default())
+            .map(|_| PeerPessimisticLocks::new(self.capacity))
             .collect();
         // Locks that are marked deleted still need to be moved to the new regions,
         // and the deleted mark should also be cleared.

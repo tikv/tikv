@@ -976,7 +976,7 @@ where
             check_stale_peers: vec![],
             local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            txn_ext: Arc::new(TxnExt::default()),
+            txn_ext: Arc::new(TxnExt::new(cfg)),
             cmd_epoch_checker: Default::default(),
             disk_full_peers: DiskFullPeers::default(),
             dangerous_majority_set: false,

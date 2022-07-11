@@ -241,6 +241,7 @@ fn test_serde_custom_tikv_config() {
         reactive_memory_lock_timeout_tick: 8,
         report_region_buckets_tick_interval: ReadableDuration::secs(1234),
         max_snapshot_file_raw_size: ReadableSize::gb(10),
+        in_memory_capacity: ReadableSize::kb(130),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
