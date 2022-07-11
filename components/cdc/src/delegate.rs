@@ -28,7 +28,7 @@ use raftstore::{
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
-use resolved_ts::Resolver;
+use resolved_ts::{ResolvedTs, Resolver};
 use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
@@ -225,6 +225,8 @@ impl Drop for Pending {
 enum PendingLock {
     Track { key: Vec<u8>, start_ts: TimeStamp },
     Untrack { key: Vec<u8> },
+    RawTrack { ts: TimeStamp },
+    RawUntrack { ts: TimeStamp },
 }
 
 /// A CDC delegate of a raftstore region peer.
@@ -244,7 +246,6 @@ pub struct Delegate {
     pending: Option<Pending>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
-    has_resolver: bool,
 }
 
 impl Delegate {
@@ -259,12 +260,7 @@ impl Delegate {
             pending: Some(Pending::default()),
             txn_extra_op,
             failed: false,
-            has_resolver: false,
         }
-    }
-
-    pub fn has_resolver(&self) -> bool {
-        self.has_resolver
     }
 
     /// Let downstream subscribe the delegate.
@@ -273,9 +269,6 @@ impl Delegate {
         if self.region.is_some() {
             // Check if the downstream is out dated.
             self.check_epoch_on_ready(&downstream)?;
-        }
-        if downstream.kv_api == ChangeDataRequestKvApi::TiDb {
-            self.has_resolver = true;
         }
         self.add_downstream(downstream);
         Ok(())
@@ -401,6 +394,8 @@ impl Delegate {
             match lock {
                 PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key, None),
                 PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
+                PendingLock::RawTrack { ts } => resolver.raw_track_lock(ts),
+                PendingLock::RawUntrack { ts } => resolver.raw_untrack_lock(ts),
             }
         }
         self.resolver = Some(resolver);
@@ -416,7 +411,7 @@ impl Delegate {
     }
 
     /// Try advance and broadcast resolved ts.
-    pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
+    pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<ResolvedTs> {
         if self.resolver.is_none() {
             debug!("cdc region resolver not ready";
                 "region_id" => self.region_id, "min_ts" => min_ts);
@@ -426,9 +421,9 @@ impl Delegate {
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = resolver.resolve(min_ts);
         debug!("cdc resolved ts updated";
-            "region_id" => self.region_id, "resolved_ts" => resolved_ts);
+            "region_id" => self.region_id, "resolved_ts" => ?resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
-            .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
+            .observe((min_ts.physical() - resolved_ts.min().physical()) as f64 / 1000f64);
         Some(resolved_ts)
     }
 
@@ -613,10 +608,42 @@ impl Delegate {
             rows.push(v);
         }
         self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
+        self.sink_raw_downstream(raw_rows, index)
+    }
 
-        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
+    fn sink_raw_downstream(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        // the entry's timestamp is non-decreasing, the last has the max ts.
+        let max_raw_ts = TimeStamp::from(entries.last().unwrap().commit_ts);
+        match self.resolver {
+            Some(ref mut resolver) => {
+                // use prev ts, see reason at CausalObserver::pre_propose_query
+                resolver.raw_untrack_lock(max_raw_ts.prev());
+            }
+            None => {
+                assert!(self.pending.is_some(), "region resolver not ready");
+                let pending = self.pending.as_mut().unwrap();
+                pending
+                    .locks
+                    .push(PendingLock::RawUntrack { ts: max_raw_ts });
+            }
+        }
+        self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)
+    }
 
-        Ok(())
+    pub fn raw_track_ts(&mut self, ts: TimeStamp) {
+        match self.resolver {
+            Some(ref mut resolver) => {
+                resolver.raw_track_lock(ts);
+            }
+            None => {
+                assert!(self.pending.is_some(), "region resolver not ready");
+                let pending = self.pending.as_mut().unwrap();
+                pending.locks.push(PendingLock::RawTrack { ts });
+            }
+        }
     }
 
     fn sink_downstream(
