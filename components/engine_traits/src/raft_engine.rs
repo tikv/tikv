@@ -65,7 +65,7 @@ pub struct RaftLogGCTask {
     pub to: u64,
 }
 
-pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
+pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch;
@@ -138,6 +138,14 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     fn dump_stats(&self) -> Result<String>;
 
     fn get_engine_size(&self) -> Result<u64>;
+
+    /// Visit all available raft groups.
+    ///
+    /// If any error is returned, the iteration will stop.
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<Error>;
 }
 
 pub trait RaftLogBatch: Send {
