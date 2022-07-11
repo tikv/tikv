@@ -2489,7 +2489,7 @@ where
                 self.on_hibernate_response(msg.get_from_peer());
             }
             ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
-                // TODO(tier-cap)
+                unimplemented!()
             }
         }
     }

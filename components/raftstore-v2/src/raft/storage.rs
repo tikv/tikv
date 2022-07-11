@@ -2,23 +2,25 @@
 
 use engine_traits::{RaftEngine, RaftLogBatch};
 use kvproto::{
-    metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState},
+    metapb::{self, Region},
+    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raft::{
     eraftpb::{Entry, Snapshot},
-    GetEntriesContext, RaftState,
+    GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
-use slog::Logger;
+use raftstore::store::{util::find_peer, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use slog::{o, Logger};
+use tikv_util::box_err;
 
-use crate::Result;
+use crate::{Error, Result};
 
 pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
     let region_id = region.get_id();
 
     let mut state = RegionLocalState::default();
     state.set_region(region);
+    state.set_tablet_index(RAFT_INIT_LOG_INDEX);
     wb.put_region_state(region_id, &state)?;
 
     let mut apply_state = RaftApplyState::default();
@@ -41,18 +43,103 @@ pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Resul
 }
 
 /// A storage for raft.
+///
+/// It's similar to `PeerStorage` in v1.
+#[derive(Debug)]
 pub struct Storage<ER> {
     engine: ER,
+    peer: metapb::Peer,
+    region_state: RegionLocalState,
+    raft_state: RaftLocalState,
+    apply_state: RaftApplyState,
     logger: Logger,
 }
 
-impl<ER> Storage<ER> {
-    pub fn new(engine: ER, logger: Logger) -> Storage<ER> {
-        Storage { engine, logger }
+impl<ER: RaftEngine> Storage<ER> {
+    /// Creates a new storage.
+    ///
+    /// All metadata should be initialized before calling this method. If the region is destroyed
+    /// `None` will be returned.
+    pub fn new(
+        region_id: u64,
+        store_id: u64,
+        engine: ER,
+        logger: &Logger,
+    ) -> Result<Option<Storage<ER>>> {
+        let region_state = match engine.get_region_state(region_id) {
+            Ok(Some(s)) => s,
+            res => {
+                return Err(box_err!("failed to get region state: {:?}", res));
+            }
+        };
+
+        if region_state.get_state() == PeerState::Tombstone {
+            return Ok(None);
+        }
+
+        let peer = find_peer(region_state.get_region(), store_id);
+        let peer = match peer {
+            Some(p) if p.get_id() != INVALID_ID => p,
+            _ => {
+                return Err(box_err!("no valid peer found in {:?}", region_state));
+            }
+        };
+
+        let logger = logger.new(o!("region_id" => region_id, "peer_id" => peer.get_id()));
+
+        let raft_state = match engine.get_raft_state(region_id) {
+            Ok(Some(s)) => s,
+            res => {
+                return Err(box_err!("failed to get raft state: {:?}", res));
+            }
+        };
+
+        let apply_state = match engine.get_apply_state(region_id) {
+            Ok(Some(s)) => s,
+            res => {
+                return Err(box_err!("failed to get apply state: {:?}", res));
+            }
+        };
+
+        let mut s = Storage {
+            engine,
+            peer: peer.clone(),
+            region_state,
+            raft_state,
+            apply_state,
+            logger,
+        };
+        s.validate_state()?;
+        Ok(Some(s))
     }
 
-    pub fn applied_index(&self) -> u64 {
+    fn validate_state(&mut self) -> Result<()> {
         unimplemented!()
+    }
+
+    #[inline]
+    pub fn region_state(&self) -> &RegionLocalState {
+        &self.region_state
+    }
+
+    #[inline]
+    pub fn raft_state(&self) -> &RaftLocalState {
+        &self.raft_state
+    }
+
+    #[inline]
+    pub fn apply_state(&self) -> &RaftApplyState {
+        &self.apply_state
+    }
+
+    #[inline]
+    pub fn peer(&self) -> &metapb::Peer {
+        &self.peer
+    }
+
+    #[inline]
+    pub fn logger(&self) -> &Logger {
+        &self.logger
     }
 }
 
@@ -120,6 +207,7 @@ mod tests {
         let local_state = raft_engine.get_region_state(4).unwrap().unwrap();
         assert_eq!(local_state.get_state(), PeerState::Normal);
         assert_eq!(*local_state.get_region(), region);
+        assert_eq!(local_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
 
         let raft_state = raft_engine.get_raft_state(4).unwrap().unwrap();
         assert_eq!(raft_state.get_last_index(), RAFT_INIT_LOG_INDEX);
