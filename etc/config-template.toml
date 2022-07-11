@@ -803,10 +803,58 @@
 ## for the same CF.
 # compaction-guard-max-output-file-size = "128M"
 
-# format-version = 4
+## Available versions:
+##
+## 0 -- This version can be read by all TiKV releases. Doesn't support changing
+## checksum type (default is CRC32).
+##
+## 1 -- Can be read by all TiKV releases. Supports non-default checksum, like
+## xxHash. It is written by RocksDB when BlockBasedTableOptions::checksum is
+## something other than kCRC32c. (version 0 is silently upconverted)
+##
+## 2 -- Can be read by all TiKV releases. Changes the way we encode compressed
+## blocks with LZ4, BZip2 and Zlib compression.
+##
+## 3 -- Can be read by TiKV's versions since 2.1. Changes the way we encode the
+## keys in index blocks.
+## This option only affects newly written tables. When reading existing tables,
+## the information about version is read from the footer.
+##
+## 4 -- Can be read by RocksDB's versions since 3.0. Changes the way we encode
+## the values in index blocks.
+## This option only affects newly written tables. When reading existing tables,
+## the information about version is read from the footer.
+##
+## 5 -- Can be read by TiKV's releases since 6.2. Full and partitioned filters
+## use a generally faster and more accurate Bloom filter implementation, with a
+## different schema.
+##
+# format-version = 2
 
+## If enabled, prepopulate warm/hot blocks (data, uncompressed dict, index and
+## filter blocks) which are already in memory into block cache at the time of
+## flush. On a flush, the block that is in memory (in memtables) get flushed
+## to the device. If using Direct IO, additional IO is incurred to read this
+## data back into memory again, which is avoided by enabling this option. This
+## further helps if the workload exhibits high temporal locality, where most
+## of the reads go to recently written data. This also helps in case of
+## Distributed FileSystem.
+##
+##   disabled:   kDisabled
+##   flush-only: kFlushOnly
+##
 # prepopulate-block-cache = "disabled"
 
+## Use the specified checksum type. Newly created table files will be
+## protected with this checksum type. Old table files will still be readable,
+## even though they have different checksum type.
+##
+##   no:       kNoChecksum
+##   crc32c:   kCRC32c
+##   xxhash:   kxxHash
+##   xxhash64: kxxHash64
+##   xxh3:     kXXH3 (supported since TiKV 6.2)
+##
 # checksum = "crc32c"
 
 ## Options for "Default" Column Family for `Titan`.
@@ -893,7 +941,7 @@
 # enable-compaction-guard = true
 # compaction-guard-min-output-file-size = "8M"
 # compaction-guard-max-output-file-size = "128M"
-# format-version = 4
+# format-version = 2
 # prepopulate-block-cache = "disabled"
 # checksum = "crc32c"
 
@@ -917,7 +965,7 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
 # enable-compaction-guard = false
-# format-version = 4
+# format-version = 2
 # prepopulate-block-cache = "disabled"
 # checksum = "crc32c"
 
@@ -979,7 +1027,7 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
 # enable-compaction-guard = false
-# format-version = 4
+# format-version = 2
 # prepopulate-block-cache = "disabled"
 # checksum = "crc32c"
 
