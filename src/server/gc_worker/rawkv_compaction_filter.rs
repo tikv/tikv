@@ -96,7 +96,6 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         GC_COMPACTION_FILTER_PERFORM.inc();
 
         if !check_need_gc(safe_point.into(), ratio_threshold, context) {
-            println!("!check_need_gc");
             debug!("skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP.inc();
             return std::ptr::null_mut();
@@ -189,10 +188,8 @@ fn check_need_gc(
     ratio_threshold: f64,
     context: &CompactionFilterContext,
 ) -> bool {
-    println!("======check_need_gc01======");
     let check_props = |props: &MvccProperties| -> (bool, bool /*skip_more_checks*/) {
         if props.min_ts > safe_point {
-            println!("props.min_ts > safe_point");
             return (false, false);
         }
         if ratio_threshold < 1.0 || context.is_bottommost_level() {

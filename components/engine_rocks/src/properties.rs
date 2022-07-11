@@ -494,7 +494,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
     }
 }
 
-/// Can only be used for write CF.
+/// Can only be used for default CF.
 pub struct RawMvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
