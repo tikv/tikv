@@ -1020,7 +1020,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         if self.poll_ctx.trans.need_flush() {
             self.poll_ctx.trans.flush();
         }
-        if !self.poll_ctx.sync_write_worker.is_some() && 
+        if self.poll_ctx.sync_write_worker.is_none() && 
             self.need_flush_events {
             self.last_flush_time = TiInstant::now();
             self.need_flush_events = false;
