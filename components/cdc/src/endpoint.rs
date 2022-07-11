@@ -2249,9 +2249,14 @@ mod tests {
         };
         let ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
         let start_ts = ts_provider.get_ts().unwrap();
-        let _suite =
+        let mut suite =
             mock_endpoint_with_ts_provider(&cfg, None, ApiVersion::V2, Some(ts_provider.clone()));
-        std::thread::sleep(sleep_interval * 2);
+        suite.run(Task::RegisterMinTsEvent);
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(1500))
+            .unwrap()
+            .unwrap();
         let end_ts = ts_provider.get_ts().unwrap();
         assert!(end_ts.into_inner() >= start_ts.next().into_inner() + 100); // may trigger more than once.
     }

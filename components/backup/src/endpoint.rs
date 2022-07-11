@@ -966,8 +966,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             }
             return;
         }
-        // CausalTsProvider may cache tso. Flush the cached tso to avoid use them in future data.
-        // BR assume that all data with smaller ts is backup-ed.
+        // Flush causal timestamp to make sure that future writes will have larger timestamps.
+        // And help TiKV-BR acquire a backup-ts with intact data smaller than it.
+        // (Note that intactness is not fully ensured now, until the safe-ts of RawKV is implemented.
+        // TiKV-BR need a workaround by rewinding backup-ts to a small "safe interval").
         if request.is_raw_kv {
             if let Err(e) = self
                 .causal_ts_provider
