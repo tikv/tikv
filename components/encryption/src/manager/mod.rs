@@ -464,6 +464,23 @@ impl DataKeyManager {
         Ok(Some(Self::from_dicts(dicts, args.method, master_key)?))
     }
 
+    /// Will block file operation for a considerable amount of time. Only used for debugging purpose.
+    pub fn retain_encrypted_files(&self, f: impl Fn(&str) -> bool) {
+        let mut dict = self.dicts.file_dict.lock().unwrap();
+        let mut file_dict_file = self.dicts.file_dict_file.lock().unwrap();
+        dict.files.retain(|fname, info| {
+            if info.method != EncryptionMethod::Plaintext {
+                let retain = f(fname);
+                if !retain {
+                    file_dict_file.remove(fname).unwrap();
+                }
+                retain
+            } else {
+                false
+            }
+        });
+    }
+
     fn load_dicts(master_key: &dyn Backend, args: &DataKeyManagerArgs) -> Result<LoadDicts> {
         if args.method != EncryptionMethod::Plaintext && !master_key.is_secure() {
             return Err(box_err!(
