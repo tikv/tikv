@@ -825,10 +825,6 @@
 ## This option only affects newly written tables. When reading existing tables,
 ## the information about version is read from the footer.
 ##
-## 5 -- Can be read by TiKV's versions since 6.2. Full and partitioned filters
-## use a generally faster and more accurate Bloom filter implementation, with a
-## different schema.
-##
 # format-version = 2
 
 ## If enabled, prepopulate warm/hot blocks (data, uncompressed dict, index and

@@ -363,6 +363,10 @@ macro_rules! cf_config {
                     )
                     .into());
                 }
+                if self.format_version > 4 {
+                    // TODO: allow version 5 if we have another LTS capable of reading it?
+                    return Err("format-version larger than 4 is not allowed".into());
+                }
                 self.titan.validate()?;
                 Ok(())
             }
