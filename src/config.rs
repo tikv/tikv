@@ -1030,6 +1030,7 @@ pub struct DbConfig {
     // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of multi-batch-write
     // in RocksDB has been removed.
     #[online_config(skip)]
+    #[serde(skip_serializing)]
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
     pub enable_unordered_write: bool,
