@@ -3429,7 +3429,12 @@ impl TiKvConfig {
             }
         }
 
-        if last_cfg.format_version > 5 {
+        if last_cfg.raftdb.defaultcf.format_version > 5
+            || last_cfg.rocksdb.defaultcf.format_version > 5
+            || last_cfg.rocksdb.writecf.format_version > 5
+            || last_cfg.rocksdb.lockcf.format_version > 5
+            || last_cfg.rocksdb.raftcf.format_version > 5
+        {
             return Err("format_version larger than 5 is unsupported".into());
         }
 
