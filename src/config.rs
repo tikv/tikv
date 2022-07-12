@@ -2447,6 +2447,10 @@ pub struct BackupStreamConfig {
     pub temp_file_size_limit_per_task: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_pending_memory_quota: ReadableSize,
+    #[online_config(skip)]
+    pub initial_scan_rate_limit: ReadableSize,
+    #[online_config(skip)]
+    pub use_checkpoint_v3: bool,
 }
 
 impl BackupStreamConfig {
@@ -2479,6 +2483,8 @@ impl Default for BackupStreamConfig {
             temp_path: String::new(),
             temp_file_size_limit_per_task: ReadableSize::mb(128),
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
+            initial_scan_rate_limit: ReadableSize::mb(60),
+            use_checkpoint_v3: true,
         }
     }
 }
@@ -2510,6 +2516,11 @@ pub struct CdcConfig {
 
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
+
+    /// Threshold of raw regions' resolved_ts outlier detection. 60s by default.
+    #[online_config(skip)]
+    #[doc(hidden)]
+    pub raw_min_ts_outlier_threshold: ReadableDuration,
     // Deprecated! preserved for compatibility check.
     #[online_config(skip)]
     #[doc(hidden)]
@@ -2535,6 +2546,8 @@ impl Default for CdcConfig {
             sink_memory_quota: ReadableSize::mb(512),
             // 512MB memory for old value cache.
             old_value_cache_memory_quota: ReadableSize::mb(512),
+            // Trigger raw region outlier judgement if resolved_ts's lag is over 60s.
+            raw_min_ts_outlier_threshold: ReadableDuration::secs(60),
             // Deprecated! preserved for compatibility check.
             old_value_cache_size: 0,
         }
@@ -2575,6 +2588,14 @@ impl CdcConfig {
                 default_cfg.incremental_scan_ts_filter_ratio
             );
             self.incremental_scan_ts_filter_ratio = default_cfg.incremental_scan_ts_filter_ratio;
+        }
+        if self.raw_min_ts_outlier_threshold.is_zero() {
+            warn!(
+                "cdc.raw_min_ts_outlier_threshold should be larger than 0,
+                change it to {}",
+                default_cfg.raw_min_ts_outlier_threshold
+            );
+            self.raw_min_ts_outlier_threshold = default_cfg.raw_min_ts_outlier_threshold;
         }
         Ok(())
     }

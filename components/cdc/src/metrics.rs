@@ -108,6 +108,10 @@ lazy_static! {
         "The region which has minimal resolved ts"
     )
     .unwrap();
+    pub static ref CDC_MIN_RESOLVED_TS_LAG: IntGauge = register_int_gauge!(
+        "tikv_cdc_min_resolved_ts_lag",
+        "The lag between the minimal resolved ts and the current ts"
+    ).unwrap();
     pub static ref CDC_MIN_RESOLVED_TS: IntGauge = register_int_gauge!(
         "tikv_cdc_min_resolved_ts",
         "The minimal resolved ts for current regions"
@@ -198,6 +202,13 @@ lazy_static! {
         "tikv_cdc_rocksdb_perf",
         "Total number of RocksDB internal operations from PerfContext",
         &["metric"]
+    )
+    .unwrap();
+
+    pub static ref CDC_RAW_OUTLIER_RESOLVED_TS_GAP: Histogram = register_histogram!(
+        "tikv_cdc_raw_outlier_resolved_ts_gap_seconds",
+        "Bucketed histogram of the gap between cdc raw outlier resolver_ts and current tso",
+        exponential_buckets(1.0, 2.0, 15).unwrap() // outlier threshold is 60s by default.
     )
     .unwrap();
 
