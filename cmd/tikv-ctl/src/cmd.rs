@@ -541,17 +541,8 @@ pub enum Cmd {
         /// PD endpoints
         pd: String,
     },
-<<<<<<< HEAD
-=======
-    /// Reset data in a TiKV to a certain version
-    ResetToVersion {
-        #[structopt(short = "v")]
-        /// The version to reset TiKV to
-        version: u64,
-    },
     /// Control for Raft Engine
     RaftEngineCtl { args: Vec<String> },
->>>>>>> 126da2908... *: mitigations for Raft Engine encryption key issue (#12892)
     #[structopt(external_subcommand)]
     External(Vec<String>),
 }

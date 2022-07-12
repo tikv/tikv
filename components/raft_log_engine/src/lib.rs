@@ -21,12 +21,7 @@
 extern crate tikv_util;
 
 mod engine;
-<<<<<<< HEAD
-pub use engine::{RaftEngineConfig, RaftLogBatch, RaftLogEngine, ReadableSize, RecoveryMode};
-=======
-mod perf_context;
 
 pub use engine::{
     ManagedFileSystem, RaftEngineConfig, RaftLogBatch, RaftLogEngine, ReadableSize, RecoveryMode,
 };
->>>>>>> 126da2908... *: mitigations for Raft Engine encryption key issue (#12892)

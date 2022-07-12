@@ -9,14 +9,8 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-<<<<<<< HEAD
-    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineDebug, RaftEngineReadOnly,
-    RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
-=======
-    CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
-    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGCTask, Result,
->>>>>>> 126da2908... *: mitigations for Raft Engine encryption key issue (#12892)
+    CacheStats, EncryptionKeyManager, EncryptionMethod, RaftEngine, RaftEngineDebug,
+    RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::raft_serverpb::RaftLocalState;
