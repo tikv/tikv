@@ -4,7 +4,6 @@ use std::{fmt::Debug, marker::PhantomData, mem, ops::Sub, time::Duration};
 
 use derive_more::{Add, AddAssign, Sub, SubAssign};
 use engine_traits::{PerfContextKind, PerfLevel};
-use kvproto::kvrpcpb::ScanDetailV2;
 use lazy_static::lazy_static;
 use slog_derive::KV;
 use tikv_util::time::Instant;
@@ -136,18 +135,11 @@ pub struct ReadPerfContext {
 }
 
 impl ReadPerfContext {
-    pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
-        detail_v2.set_rocksdb_delete_skipped_count(self.internal_delete_skipped_count);
-        detail_v2.set_rocksdb_key_skipped_count(self.internal_key_skipped_count);
-        detail_v2.set_rocksdb_block_cache_hit_count(self.block_cache_hit_count);
-        detail_v2.set_rocksdb_block_read_count(self.block_read_count);
-        detail_v2.set_rocksdb_block_read_byte(self.block_read_byte);
-    }
-
     fn report_to_tracker(&self, tracker: &mut Tracker) {
         tracker.metrics.block_cache_hit_count += self.block_cache_hit_count;
         tracker.metrics.block_read_byte += self.block_read_byte;
         tracker.metrics.block_read_count += self.block_read_count;
+        tracker.metrics.block_read_nanos += self.block_read_time;
         tracker.metrics.deleted_key_skipped_count += self.internal_delete_skipped_count;
         tracker.metrics.internal_key_skipped_count += self.internal_key_skipped_count;
     }
@@ -216,9 +208,25 @@ impl PerfContextStatistics {
         match self.kind {
             PerfContextKind::RaftstoreApply => {
                 report_write_perf_context!(self, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
+                for token in trackers {
+                    GLOBAL_TRACKERS.with_tracker(*token, |t| {
+                        t.metrics.apply_mutex_lock_nanos = self.write.db_mutex_lock_nanos;
+                        t.metrics.apply_thread_wait_nanos = self.write.write_thread_wait;
+                        t.metrics.apply_write_wal_nanos = self.write.write_wal_time;
+                        t.metrics.apply_write_memtable_nanos = self.write.write_memtable_time;
+                    });
+                }
             }
             PerfContextKind::RaftstoreStore => {
                 report_write_perf_context!(self, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
+                for token in trackers {
+                    GLOBAL_TRACKERS.with_tracker(*token, |t| {
+                        t.metrics.store_mutex_lock_nanos = self.write.db_mutex_lock_nanos;
+                        t.metrics.store_thread_wait_nanos = self.write.write_thread_wait;
+                        t.metrics.store_write_wal_nanos = self.write.write_wal_time;
+                        t.metrics.store_write_memtable_nanos = self.write.write_memtable_time;
+                    });
+                }
             }
             PerfContextKind::Storage(_) | PerfContextKind::Coprocessor(_) => {
                 let perf_context = ReadPerfContext::capture();

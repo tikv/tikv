@@ -813,7 +813,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             + statistics.cf_statistics(CF_LOCK).flow_stats.read_bytes
             + statistics.cf_statistics(CF_WRITE).flow_stats.read_bytes;
         sample.add_read_bytes(read_bytes);
-        let quota_delay = quota_limiter.async_consume(sample).await;
+        let quota_delay = quota_limiter.consume_sample(sample, true).await;
         if !quota_delay.is_zero() {
             TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                 .get(tag)

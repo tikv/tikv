@@ -71,7 +71,6 @@ impl BackupStreamObserver {
             .scheduler
             .schedule(Task::ModifyObserve(ObserveOp::Start {
                 region: region.clone(),
-                needs_initial_scanning: true,
             }))
         {
             use crate::errors::Error;
@@ -137,7 +136,6 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::Start {
                     region: region.clone(),
-                    needs_initial_scanning: true,
                 })
             );
             if success {
@@ -174,7 +172,7 @@ impl RegionChangeObserver for BackupStreamObserver {
             RegionChangeEvent::Destroy => {
                 try_send!(
                     self.scheduler,
-                    Task::ModifyObserve(ObserveOp::CheckEpochAndStop {
+                    Task::ModifyObserve(ObserveOp::Destroy {
                         region: ctx.region().clone(),
                     })
                 );

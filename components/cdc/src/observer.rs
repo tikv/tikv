@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, RwLock};
 
+use causal_ts::{CausalTsProvider, Error as CausalTsError, RawTsTracker, Result as CausalTsResult};
 use collections::HashMap;
 use engine_traits::KvEngine;
 use fail::fail_point;
@@ -9,7 +10,8 @@ use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
 use tikv::storage::Statistics;
-use tikv_util::{error, warn, worker::Scheduler};
+use tikv_util::{box_err, error, warn, worker::Scheduler};
+use txn_types::TimeStamp;
 
 use crate::{
     endpoint::{Deregister, Task},
@@ -28,6 +30,8 @@ pub struct CdcObserver {
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
+
+    pub causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
 }
 
 impl CdcObserver {
@@ -39,7 +43,12 @@ impl CdcObserver {
         CdcObserver {
             sched,
             observe_regions: Arc::default(),
+            causal_ts_provider: None,
         }
+    }
+
+    pub fn set_causal_ts_provider(&mut self, provider: Arc<dyn CausalTsProvider>) {
+        self.causal_ts_provider = Some(provider);
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
@@ -88,6 +97,12 @@ impl CdcObserver {
             .unwrap()
             .get(&region_id)
             .cloned()
+    }
+
+    pub fn flush_causal_timestamp(&self) -> CausalTsResult<()> {
+        self.causal_ts_provider
+            .as_ref()
+            .map_or(Ok(()), |provider| provider.flush())
     }
 }
 
@@ -189,6 +204,24 @@ impl RegionChangeObserver for CdcObserver {
                 }
             }
         }
+    }
+}
+
+impl RawTsTracker for CdcObserver {
+    fn track_ts(&self, region_id: u64, ts: TimeStamp) -> CausalTsResult<()> {
+        if self.is_subscribed(region_id).is_some() {
+            self.sched
+                .schedule(Task::RawTrackTs { region_id, ts })
+                .map_err(|err| {
+                    CausalTsError::Other(box_err!(
+                        "sched raw track ts err: {:?}, region: {:?}, ts: {:?}",
+                        err,
+                        region_id,
+                        ts
+                    ))
+                })?;
+        }
+        Ok(())
     }
 }
 
@@ -317,6 +350,19 @@ mod tests {
         // No event if it changes to leader.
         observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Leader));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
+
+        // track for unregistered region id.
+        observer.track_ts(2, 10.into()).unwrap();
+        // no event for unregistered region id.
+        rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
+        observer.track_ts(1, 10.into()).unwrap();
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::RawTrackTs { region_id, ts } => {
+                assert_eq!(region_id, 1);
+                assert_eq!(ts, 10.into());
+            }
+            _ => panic!("unexpected task"),
+        };
 
         // unsubscribed fail if observer id is different.
         assert_eq!(observer.unsubscribe_region(1, ObserveID::new()), None);

@@ -233,7 +233,7 @@ impl ResetToVersionManager {
                 *worker.state.lock()
                         .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch_lock`")
                     = ResetToVersionState::Done;
-
+                info!("Reset to version done!");
                 tikv_alloc::remove_thread_memory_accessor();
             })
             .expect("failed to spawn reset_to_version thread"));

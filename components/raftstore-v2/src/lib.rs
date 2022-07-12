@@ -4,16 +4,21 @@
 //!
 //! The thread module of raftstore is batch-system, more check components/batch-system.
 //! All state machines are defined in [`fsm`] module. Everything that wrapping raft is
-//! implemented in [`raft`] module. And the commands are implemented in [`operation`] module.
-//! All state machines are expected to communicate with messages. They are defined in
-//! [`router`] module.
+//! implemented in [`raft`] module. And the commands, including split/merge/confchange/read/write,
+//! are implemented in [`operation`] module. All state machines are expected to communicate with
+//! messages. They are defined in [`router`] module.
 
 #![allow(unused)]
 
+mod batch;
+mod bootstrap;
 mod fsm;
 mod operation;
 mod raft;
 mod router;
 
+pub(crate) use batch::StoreContext;
+pub use batch::{create_store_batch_system, StoreSystem};
+pub use bootstrap::Bootstrap;
 pub use raftstore::{Error, Result};
 pub use router::{PeerMsg, PeerTick, StoreMsg, StoreTick};
