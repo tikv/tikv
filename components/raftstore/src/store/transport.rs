@@ -91,7 +91,7 @@ where
         {
             // TODO: panic here once we can detect system is shutting down reliably.
 
-            // Avoid printing error log if it's not a severe error.
+            // Avoid printing error log if it's not a severe problem failing to send it.
             if msg.is_send_failure_ignorable() {
                 warn!("failed to send significant msg"; "msg" => ?msg);
             } else {
