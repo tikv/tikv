@@ -38,6 +38,9 @@ impl RocksEngine {
         }
     }
 
+    // Notice: After obtaining RocksEngine through this method, please make sure
+    // it has been initialized with db, otherwise do not call its member methods,
+    // as it'll contain garbage members.
     pub fn from_ref(db: &Arc<DB>) -> &Self {
         unsafe { &*(db as *const Arc<DB> as *const RocksEngine) }
     }

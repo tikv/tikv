@@ -2179,9 +2179,11 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
             .collect();
-        let db = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
+        let db_opt = DBOptions::new();
+        db_opt.enable_multi_batch_write(true);
+        let db = Arc::new(new_engine_opt(path_str, db_opt, cfs_opts).unwrap());
         // Write initial KVs.
-        let mut wb = db.c().write_batch();
+        let mut wb = RocksEngine::from_db(db.clone()).write_batch();
         for &(cf, ref k, ref v, _) in &kv {
             wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
