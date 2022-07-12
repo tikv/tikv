@@ -1627,7 +1627,7 @@ where
                             .observe(dur.as_secs_f64());
                         for t in proposal.cb.get_trackers().iter().flat_map(|v| v.iter().flat_map(|t| t.as_tracker_token())) {
                             GLOBAL_TRACKERS.with_tracker(t, |trakcer| {
-                                if trakcer.metrics.propose_send_wait_nanos == 0{
+                                if trakcer.metrics.propose_send_wait_nanos == 0 {
                                     trakcer.metrics.propose_send_wait_nanos = dur.as_nanos() as u64;
                                 }
                             });
