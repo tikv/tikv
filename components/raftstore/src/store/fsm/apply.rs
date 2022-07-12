@@ -1218,20 +1218,6 @@ where
         exec_result
     }
 
-    fn need_pre_exec(&self, req: &RaftCmdRequest) -> bool {
-        if req.has_admin_request() {
-            let cmd_type = req.get_admin_request().get_cmd_type();
-            match cmd_type {
-                AdminCmdType::ComputeHash | AdminCmdType::VerifyHash | AdminCmdType::CompactLog => {
-                    true
-                }
-                _ => false,
-            }
-        } else {
-            false
-        }
-    }
-
     /// Applies raft command.
     ///
     /// An apply operation can fail in the following situations:
@@ -1257,8 +1243,7 @@ where
         // Remember if the raft cmd fails to be applied, it must have no side effects.
         // E.g. `RaftApplyState` must not be changed.
 
-        let (resp, exec_result) = if self.need_pre_exec(req) && ctx.host.pre_exec(&self.region, req)
-        {
+        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req) {
             // One of the observers want to filter execution of the command.
             let mut resp = RaftCmdResponse::default();
             if !req.get_header().get_uuid().is_empty() {
