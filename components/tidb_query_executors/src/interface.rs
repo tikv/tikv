@@ -61,6 +61,9 @@ pub trait BatchExecutor: Send {
             inner: self,
         }
     }
+
+    /// Track the executor memory usage.
+    fn alloc_trace(&mut self, len: usize);
 }
 
 impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
@@ -88,6 +91,10 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
 
     fn can_be_cached(&self) -> bool {
         (**self).can_be_cached()
+    }
+
+    fn alloc_trace(&mut self, len: usize) {
+        (**self).alloc_trace(len);
     }
 }
 
@@ -124,6 +131,10 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
 
     fn can_be_cached(&self) -> bool {
         self.inner.can_be_cached()
+    }
+
+    fn alloc_trace(&mut self, len: usize) {
+        self.inner.alloc_trace(len);
     }
 }
 

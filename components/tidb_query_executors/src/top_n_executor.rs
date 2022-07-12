@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::BinaryHeap, ptr::NonNull, sync::Arc};
+use std::{cmp::Ordering, collections::BinaryHeap, ptr::NonNull, sync::Arc, mem::size_of};
 
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
@@ -54,6 +54,9 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     context: EvalContext,
     src: Src,
     is_ended: bool,
+
+    /// Number of bytes allocated by the executor.
+    n_bytes : usize,
 }
 
 /// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the struct and
@@ -74,6 +77,12 @@ impl BatchTopNExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
             RpnExpressionBuilder::check_expr_tree_supported(item.get_expr())?;
         }
         Ok(())
+    }
+}
+
+impl<Src: BatchExecutor>  Drop for BatchTopNExecutor<Src> {
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR.top_n.sub(self.n_bytes as i64);
     }
 }
 
@@ -171,6 +180,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             context: EvalContext::new(config),
             src,
             is_ended: false,
+            n_bytes: 0,
         })
     }
 
@@ -208,6 +218,11 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             &logical_rows,
         )?;
 
+        // FIXME: Are we counting this multiple times?
+        if logical_rows.len() > 0 && self.n_bytes == 0 {
+            self.alloc_trace(logical_rows.len() * size_of::<usize>());
+        }
+
         // Pin data behind an Arc, so that they won't be dropped as long as this `pinned_data`
         // is kept somewhere.
         let pinned_source_data = Arc::new(HeapItemSourceData {
@@ -227,6 +242,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             )?;
         }
 
+        let mut n_bytes = 0;
+
         for logical_row_index in 0..pinned_source_data.logical_rows.len() {
             let row = HeapItemUnsafe {
                 order_is_desc_ptr: (*self.order_is_desc).into(),
@@ -236,29 +253,34 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                 eval_columns_offset: eval_offset,
                 logical_row_index,
             };
-            self.heap_add_row(row)?;
+
+            n_bytes += self.heap_add_row(row)?;
         }
+
+        self.alloc_trace(n_bytes);
 
         Ok(())
     }
 
-    fn heap_add_row(&mut self, row: HeapItemUnsafe) -> Result<()> {
+    fn heap_add_row(&mut self, row: HeapItemUnsafe) -> Result<usize> {
         if self.heap.len() < self.n {
             // HeapItemUnsafe must be checked valid to compare in advance, or else it may
             // panic inside BinaryHeap.
             row.cmp_sort_key(&row)?;
 
+            let row_len = row.len();
+
             // Push into heap when heap is not full.
             self.heap.push(row);
+            Ok(row_len)
         } else {
             // Swap the greatest row in the heap if this row is smaller than that row.
             let mut greatest_row = self.heap.peek_mut().unwrap();
             if row.cmp_sort_key(&greatest_row)? == Ordering::Less {
                 *greatest_row = row;
             }
+            Ok(0)
         }
-
-        Ok(())
     }
 
     #[allow(clippy::clone_on_copy)]
@@ -274,37 +296,38 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             .physical_columns
             .clone_empty(sorted_items.len());
 
-        for (column_index, result_column) in result.as_mut_slice().iter_mut().enumerate() {
-            match result_column {
-                LazyBatchColumn::Raw(dest_column) => {
-                    for item in &sorted_items {
+        for item in &sorted_items {
+            let logical_row = item.source_data.logical_rows[item.logical_row_index];
+
+            for (column_index, result_column) in result.as_mut_slice().iter_mut().enumerate() {
+                match result_column {
+                    LazyBatchColumn::Raw(dest_column) => {
                         let src = item.source_data.physical_columns[column_index].raw();
-                        dest_column
-                            .push(&src[item.source_data.logical_rows[item.logical_row_index]]);
+                        dest_column.push(&src[logical_row]);
                     }
-                }
-                LazyBatchColumn::Decoded(dest_vector_value) => {
-                    match_template::match_template! {
-                        TT = [
-                            Int,
-                            Real,
-                            Duration,
-                            Decimal,
-                            DateTime,
-                            Bytes => BytesRef,
-                            Json => JsonRef,
-                            Enum => EnumRef,
-                            Set => SetRef,
-                        ],
-                        match dest_vector_value {
-                            VectorValue::TT(dest_column) => {
-                                for item in &sorted_items {
+                    LazyBatchColumn::Decoded(dest_vector_value) => {
+                        match_template::match_template! {
+                            TT = [
+                                Int,
+                                Real,
+                                Duration,
+                                Decimal,
+                                DateTime,
+                                Bytes => BytesRef,
+                                Json => JsonRef,
+                                Enum => EnumRef,
+                                Set => SetRef,
+                            ],
+                            match dest_vector_value {
+                                VectorValue::TT(dest_column) => {
                                     let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
                                     let src_ref = TT::borrow_vector_value(src);
+
                                     // TODO: This clone is not necessary.
-                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.into_owned_value()));
-                                }
-                            },
+                                    dest_column.
+                                        push(src_ref.get_option_ref(logical_row).map(|x| x.into_owned_value()));
+                                },
+                            }
                         }
                     }
                 }
@@ -395,6 +418,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     fn can_be_cached(&self) -> bool {
         self.src.can_be_cached()
     }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.top_n.add(len as i64);
+    }
 }
 
 struct HeapItemSourceData {
@@ -475,6 +504,10 @@ impl HeapItemUnsafe {
         }
 
         Ok(Ordering::Equal)
+    }
+
+    fn len(&self) -> usize {
+        self.source_data.logical_rows.len() + self.source_data.physical_columns.rows_len()
     }
 }
 

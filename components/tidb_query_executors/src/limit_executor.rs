@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{storage::IntervalRange, Result, metrics::*};
 use tipb::FieldType;
 
 use crate::interface::*;
@@ -11,6 +11,8 @@ pub struct BatchLimitExecutor<Src: BatchExecutor> {
     src: Src,
     remaining_rows: usize,
     is_src_scan_executor: bool,
+    /// Track executor memory usage.
+    n_bytes: usize,
 }
 
 impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
@@ -19,7 +21,14 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
             src,
             remaining_rows: limit,
             is_src_scan_executor,
+            n_bytes: 0,
         })
+    }
+}
+
+impl<Src: BatchExecutor> Drop for BatchLimitExecutor<Src> {
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR.limit.sub(self.n_bytes as i64);
     }
 }
 
@@ -69,6 +78,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     #[inline]
     fn can_be_cached(&self) -> bool {
         self.src.can_be_cached()
+    }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.limit.add(len as i64);
     }
 }
 

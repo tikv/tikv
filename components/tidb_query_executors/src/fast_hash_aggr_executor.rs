@@ -1,10 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryFrom, hash::Hash, sync::Arc};
+use std::{convert::TryFrom, hash::Hash, sync::Arc, mem::size_of};
 
 use collections::HashMap;
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{storage::IntervalRange, Result, metrics::*};
 use tidb_query_datatype::{
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
@@ -69,6 +69,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     #[inline]
     fn can_be_cached(&self) -> bool {
         self.0.can_be_cached()
+    }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.0.alloc_trace(len);
     }
 }
 
@@ -183,6 +188,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
             group_by_exp,
             group_by_field_type,
             states_offset_each_logical_row: Vec::with_capacity(crate::runner::BATCH_MAX_SIZE),
+            n_bytes: 0,
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -237,6 +243,22 @@ pub struct FastHashAggregationImpl {
     group_by_exp: RpnExpression,
     group_by_field_type: FieldType,
     states_offset_each_logical_row: Vec<usize>,
+    /// Number of bytes allocated by the executor.
+    n_bytes: usize,
+}
+
+impl Drop for FastHashAggregationImpl {
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR.aggr_fast_hash.sub(self.n_bytes as i64);
+    }
+}
+
+impl MemoryTrace for FastHashAggregationImpl {
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_fast_hash.add(len as i64);
+    }
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImpl {
@@ -254,12 +276,20 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     ) -> Result<()> {
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_logical_row.clear();
+
+        let rows_len = input_logical_rows.len();
+ 
+        // FIXME: Are we counting this multiple times?
+        if rows_len > 0 && self.n_bytes == 0 {
+            self.alloc_trace(rows_len * size_of::<usize>());
+        }
+
         let group_by_result = self.group_by_exp.eval(
             &mut entities.context,
             entities.src.schema(),
             &mut input_physical_columns,
             input_logical_rows,
-            input_logical_rows.len(),
+            rows_len,
         )?;
 
         match group_by_result {
@@ -337,6 +367,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                 }
             }
         };
+
+        self.alloc_trace(self.states_offset_each_logical_row.len() * size_of::<usize>());
 
         // 2. Update states according to the group.
         HashAggregationHelper::update_each_row_states_by_offset(

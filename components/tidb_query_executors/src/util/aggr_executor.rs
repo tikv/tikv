@@ -339,6 +339,11 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     fn can_be_cached(&self) -> bool {
         self.entities.src.can_be_cached()
     }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.entities.src.alloc_trace(len);
+    }
 }
 
 /// Shared test facilities for different aggregation executors.

@@ -584,8 +584,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         warnings: &mut EvalWarnings,
         ctx: &mut EvalContext,
     ) -> Result<(bool, usize)> {
-        let mut record_len = 0;
-
         self.deadline.check()?;
 
         let mut result = self.out_most_executor.next_batch(batch_size);
@@ -597,43 +595,42 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 result.physical_columns.columns_len(),
                 self.out_most_executor.schema().len()
             );
-            {
-                let data = chunk.mut_rows_data();
-                // Although `schema()` can be deeply nested, it is ok since we process data in
-                // batch.
-                if is_streaming || self.encode_type == EncodeType::TypeDefault {
-                    data.reserve(
-                        result
-                            .physical_columns
-                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets),
-                    );
-                    result.physical_columns.encode(
-                        &result.logical_rows,
-                        &self.output_offsets,
-                        self.out_most_executor.schema(),
-                        data,
-                        ctx,
-                    )?;
-                } else {
-                    data.reserve(
-                        result
-                            .physical_columns
-                            .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets),
-                    );
-                    result.physical_columns.encode_chunk(
-                        &result.logical_rows,
-                        &self.output_offsets,
-                        self.out_most_executor.schema(),
-                        data,
-                        ctx,
-                    )?;
-                }
+            let data = chunk.mut_rows_data();
+            // Although `schema()` can be deeply nested, it is ok since we process data in
+            // batch.
+            if is_streaming || self.encode_type == EncodeType::TypeDefault {
+                data.reserve(
+                    result
+                        .physical_columns
+                        .maximum_encoded_size(&result.logical_rows, &self.output_offsets),
+                );
+                result.physical_columns.encode(
+                    &result.logical_rows,
+                    &self.output_offsets,
+                    self.out_most_executor.schema(),
+                    data,
+                    ctx,
+                )?;
+            } else {
+                data.reserve(
+                    result
+                        .physical_columns
+                        .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets),
+                );
+                result.physical_columns.encode_chunk(
+                    &result.logical_rows,
+                    &self.output_offsets,
+                    self.out_most_executor.schema(),
+                    data,
+                    ctx,
+                )?;
             }
-            record_len += result.logical_rows.len();
         }
 
+        self.out_most_executor.alloc_trace(result.logical_rows.len());
+
         warnings.merge(&mut result.warnings);
-        Ok((is_drained, record_len))
+        Ok((is_drained, result.logical_rows.len()))
     }
 
     fn make_stream_response(

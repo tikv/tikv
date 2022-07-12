@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{storage::IntervalRange, Result, metrics::*};
 use tidb_query_datatype::{
     codec::data_type::*,
     expr::{EvalConfig, EvalContext},
@@ -16,8 +16,8 @@ use crate::interface::*;
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: EvalContext,
     src: Src,
-
     conditions: Vec<RpnExpression>,
+    n_bytes: usize,
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
@@ -31,6 +31,12 @@ impl BatchSelectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
             RpnExpressionBuilder::check_expr_tree_supported(c)?;
         }
         Ok(())
+    }
+}
+
+impl<Src: BatchExecutor> Drop for BatchSelectionExecutor<Src> {
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR.selection.sub(self.n_bytes as i64);
     }
 }
 
@@ -59,6 +65,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             context: ctx,
             src,
             conditions,
+            n_bytes: 0,
         })
     }
 
@@ -206,6 +213,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     #[inline]
     fn can_be_cached(&self) -> bool {
         self.src.can_be_cached()
+    }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.selection.add(len as i64);
     }
 }
 

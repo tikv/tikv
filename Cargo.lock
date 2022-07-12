@@ -5922,6 +5922,7 @@ dependencies = [
  "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_expr",
+ "tikv_alloc",
  "tikv_util",
  "tipb",
  "tipb_helper",

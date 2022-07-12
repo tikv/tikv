@@ -8,6 +8,7 @@ use smallvec::SmallVec;
 use tidb_query_common::{
     storage::{IntervalRange, Storage},
     Result,
+    metrics::*,
 };
 use tidb_query_datatype::{
     codec::{
@@ -33,6 +34,20 @@ impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
         check_columns_info_supported(descriptor.get_columns())
+    }
+}
+
+impl  Drop for TableScanExecutorImpl{
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR.table_scan.sub(self.n_bytes as i64);
+    }
+}
+
+impl MemoryTrace for TableScanExecutorImpl {
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.table_scan.add(len as i64);
     }
 }
 
@@ -93,6 +108,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             handle_indices,
             primary_column_ids,
             is_column_filled,
+            n_bytes: 0,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
@@ -139,6 +155,11 @@ impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
     fn can_be_cached(&self) -> bool {
         self.0.can_be_cached()
     }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.0.alloc_trace(len);
+    }
 }
 
 struct TableScanExecutorImpl {
@@ -167,6 +188,9 @@ struct TableScanExecutorImpl {
     /// It is a struct level field in order to prevent repeated memory allocations since its length
     /// is fixed for each `next_batch` call.
     is_column_filled: Vec<bool>,
+
+    /// Track memory usage of the executor.
+    n_bytes: usize,
 }
 
 impl TableScanExecutorImpl {
