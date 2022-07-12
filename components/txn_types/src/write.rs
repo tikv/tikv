@@ -268,7 +268,7 @@ impl WriteRef<'_> {
             {
                 SHORT_VALUE_PREFIX => {
                     let len = b
-                        .read_var_u64()
+                        .read_u8()
                         .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
                     if b.len() < len as usize {
                         panic!(
@@ -307,7 +307,7 @@ impl WriteRef<'_> {
         b.encode_var_u64(self.start_ts.into_inner()).unwrap();
         if let Some(v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
-            b.encode_var_u64(v.len() as u64).unwrap();
+            b.push(v.len() as u8);
             b.extend_from_slice(v);
         }
         if self.has_overlapped_rollback {
