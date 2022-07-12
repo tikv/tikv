@@ -30127,10 +30127,10 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_write_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_write_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
               "hide": false,
               "interval": "",
-              "legendFormat": "999%",
+              "legendFormat": "Max",
               "refId": "D"
             }
           ],
@@ -30602,7 +30602,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "WAL Duration Breakdown (MAX)",
+          "title": "WAL Duration Breakdown (Max)",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -30840,7 +30840,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Other Durations (MAX)",
+          "title": "Other Durations (Max)",
           "tooltip": {
             "shared": true,
             "sort": 0,
