@@ -779,8 +779,9 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
                 self.pd_client.clone(),
                 self.config.causal_ts.renew_interval.0,
+                self.config.causal_ts.available_interval.0,
                 self.config.causal_ts.renew_batch_min_size,
-                self.config.causal_ts.batch_list_capacity,
+                self.config.causal_ts.renew_batch_max_size,
             ));
             if let Err(e) = tso {
                 panic!("Causal timestamp provider initialize failed: {:?}", e);

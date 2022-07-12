@@ -160,8 +160,16 @@ pub mod tests {
     fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>> {
         let pd_cli = Arc::new(TestPdClient::new(0, true));
         pd_cli.set_tso(100.into());
-        let causal_ts_provider =
-            Arc::new(block_on(BatchTsoProvider::new_opt(pd_cli, Duration::ZERO, 100, 50)).unwrap());
+        let causal_ts_provider = Arc::new(
+            block_on(BatchTsoProvider::new_opt(
+                pd_cli,
+                Duration::ZERO,
+                Duration::from_secs(3),
+                100,
+                8192,
+            ))
+            .unwrap(),
+        );
         CausalObserver::new(causal_ts_provider)
     }
 
