@@ -820,12 +820,12 @@
 ## This option only affects newly written tables. When reading existing tables,
 ## the information about version is read from the footer.
 ##
-## 4 -- Can be read by RocksDB's versions since 3.0. Changes the way we encode
-## the values in index blocks.
+## 4 -- Can be read by TiKV's versions since 3.0. Changes the way we encode the
+## values in index blocks.
 ## This option only affects newly written tables. When reading existing tables,
 ## the information about version is read from the footer.
 ##
-## 5 -- Can be read by TiKV's releases since 6.2. Full and partitioned filters
+## 5 -- Can be read by TiKV's versions since 6.2. Full and partitioned filters
 ## use a generally faster and more accurate Bloom filter implementation, with a
 ## different schema.
 ##
