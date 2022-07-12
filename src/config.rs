@@ -363,9 +363,9 @@ macro_rules! cf_config {
                     )
                     .into());
                 }
-                if self.format_version > 4 {
+                if self.format_version > 5 {
                     // TODO: allow version 5 if we have another LTS capable of reading it?
-                    return Err("format-version larger than 4 is not allowed".into());
+                    return Err("format-version larger than 5 is unsupported".into());
                 }
                 self.titan.validate()?;
                 Ok(())
@@ -3427,6 +3427,10 @@ impl TiKvConfig {
             } else if !last_cfg.storage.enable_ttl && self.storage.enable_ttl {
                 return Err("can't enable ttl on a non-ttl instance".to_owned());
             }
+        }
+
+        if last_cfg.format_version > 5 {
+            return Err("format_version larger than 5 is unsupported".into());
         }
 
         Ok(())
