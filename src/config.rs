@@ -3545,7 +3545,6 @@ pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
     Ok(())
 }
 
-
 // convert tikv config to a flatten array.
 pub fn to_flatten_config_info(cfg: &TiKvConfig) -> Vec<Value> {
     fn to_cfg_value(default_value: &Value, cfg_value: Option<&Value>, key: &str) -> Value {
@@ -4117,7 +4116,6 @@ mod tests {
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
-
 
     #[test]
     fn test_flatten_cfg() {
