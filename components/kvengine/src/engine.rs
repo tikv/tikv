@@ -328,7 +328,7 @@ impl EngineCore {
         // one to pass the ShardTaskManager's duplication check.
         let mem_data_sequence = mem_tbls
             .first()
-            .map_or(0, |t| t.get_version() - shard.base_version);
+            .map_or(0, |t| t.get_version().saturating_sub(shard.base_version));
         let data_sequence = max(shard.get_meta_sequence(), mem_data_sequence);
         self.flush_tx
             .send(FlushMsg::Task(FlushTask::new_initial(
