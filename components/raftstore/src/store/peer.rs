@@ -2804,7 +2804,10 @@ where
             if ctx.current_time.is_none() {
                 ctx.current_time = Some(monotonic_raw_now());
             }
-            let elapsed = (ctx.current_time.unwrap() - t).to_std().unwrap();
+            let elapsed = match (ctx.current_time.unwrap() - t).to_std() {
+                Ok(elapsed) => elapsed,
+                Err(_) => return,
+            };
             if elapsed >= Duration::from_secs(60 * self.long_uncomitted_check_count as u64 + 60) {
                 let mut buf = String::new();
                 let s = self.raft_group.status();
