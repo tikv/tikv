@@ -541,8 +541,6 @@ pub enum Cmd {
         /// PD endpoints
         pd: String,
     },
-    /// Control for Raft Engine
-    RaftEngineCtl { args: Vec<String> },
     #[structopt(external_subcommand)]
     External(Vec<String>),
 }

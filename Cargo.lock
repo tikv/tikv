@@ -4050,13 +4050,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-<<<<<<< HEAD
-version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine.git#0e066f8626b43b2a8a0a6bc9c7f0502b6fdc3d05"
-=======
-version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#7a436eae40a6b62371123c96941e058b7fe52b63"
->>>>>>> 126da2908... *: mitigations for Raft Engine encryption key issue (#12892)
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b14007813cf262c866a60f29cbe4e317ea402eb156a0076af544f5cf19daa190"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4086,13 +4082,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-<<<<<<< HEAD
-version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine.git#0e066f8626b43b2a8a0a6bc9c7f0502b6fdc3d05"
-=======
-version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#7a436eae40a6b62371123c96941e058b7fe52b63"
->>>>>>> 126da2908... *: mitigations for Raft Engine encryption key issue (#12892)
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a26142d71fd30e1871cd8b8e14633776f64a71ad64e22d1a0c0779409ece3117"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
