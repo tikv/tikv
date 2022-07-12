@@ -8,6 +8,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+#[cfg(feature = "failpoints")]
 use fail::fail_point;
 use kvproto::{
     kvrpcpb::KeyRange,

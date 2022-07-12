@@ -44,21 +44,17 @@ use crate::{
 
 // Renew on every 100ms, to adjust batch size rapidly enough.
 pub(crate) const DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS: u64 = 100;
-
 // Minimal batch size of TSO requests. This is an empirical value.
 pub(crate) const DEFAULT_TSO_BATCH_MIN_SIZE: u32 = 100;
-
 // Maximum batch size of TSO requests. As PD provides 262144 TSO per 50ms, conservatively set to 1/16
 // of 262144. Exceed this space will cause PD to sleep for 50ms, waiting for physical update interval.
 // The 50ms limitation can not be broken through now (see `tso-update-physical-interval`).
 pub(crate) const DEFAULT_TSO_BATCH_MAX_SIZE: u32 = 8192;
-
 // Maximum available interval of TSO cache.
 // It means the duration that TSO we cache would be available despite failure of PD. The longer of
 // the value can provide better "High-Availability" against PD failure, but more overhead of
 // `TsoBatchList` & pressure to TSO service.
 pub(crate) const DEFAULT_TSO_BATCH_AVAILABLE_INTERVAL_MS: u64 = 3000;
-
 // Just a limitation for safty, in case user specify a too big `available_interval`.
 const MAX_TSO_BATCH_LIST_CAPACITY: u32 = 1024;
 
@@ -324,7 +320,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
 
     #[allow(unused_mut)]
     fn calc_cache_multiplier(mut renew_interval: Duration, available_interval: Duration) -> u32 {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "testexport"))]
         if renew_interval.is_zero() {
             // Should happen in test only.
             renew_interval = Duration::from_millis(DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS);

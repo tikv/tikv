@@ -4,6 +4,9 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
+[features]
+testexport = []
+
 [dependencies]
 api_version = { path = "../api_version", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
