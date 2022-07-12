@@ -1236,13 +1236,10 @@ where
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
-        ctx.exec_log_index = index;
-        ctx.exec_log_term = term;
-        ctx.kv_wb_mut().set_save_point();
-        let mut origin_epoch = None;
         // Remember if the raft cmd fails to be applied, it must have no side effects.
         // E.g. `RaftApplyState` must not be changed.
 
+        let mut origin_epoch = None;
         let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req) {
             // One of the observers want to filter execution of the command.
             let mut resp = RaftCmdResponse::default();
@@ -1252,6 +1249,9 @@ where
             }
             (resp, ApplyResult::None)
         } else {
+            ctx.exec_log_index = index;
+            ctx.exec_log_term = term;
+            ctx.kv_wb_mut().set_save_point();
             let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
                 Ok(a) => {
                     ctx.kv_wb_mut().pop_save_point().unwrap();
