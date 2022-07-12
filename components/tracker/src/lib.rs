@@ -44,7 +44,9 @@ impl Tracker {
     pub fn write_write_detail(&self, detail: &mut pb::WriteDetail) {
         detail.set_store_batch_wait_nanos(self.metrics.wf_batch_wait_nanos);
         detail.set_propose_send_wait_nanos(
-            self.metrics.wf_send_proposal_nanos - self.metrics.wf_send_to_queue_nanos,
+            self.metrics
+                .wf_send_proposal_nanos
+                .saturating_sub(self.metrics.wf_send_to_queue_nanos),
         );
         detail.set_persist_log_nanos(
             self.metrics.wf_persist_log_nanos - self.metrics.wf_send_to_queue_nanos,
