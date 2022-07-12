@@ -589,6 +589,7 @@ pub struct AutoSplitController {
     max_grpc_thread_count: usize,
     max_unified_read_pool_thread_count: usize,
     unified_read_pool_scale_receiver: Option<Receiver<usize>>,
+    grpc_thread_usage_vec: Vec<f64>,
 }
 
 impl AutoSplitController {
@@ -605,6 +606,7 @@ impl AutoSplitController {
             max_grpc_thread_count,
             max_unified_read_pool_thread_count,
             unified_read_pool_scale_receiver,
+            grpc_thread_usage_vec: vec![],
         }
     }
 
@@ -612,19 +614,41 @@ impl AutoSplitController {
         AutoSplitController::new(SplitConfigManager::default(), 0, 0, None)
     }
 
+    fn update_grpc_thread_usage(&mut self, grpc_thread_usage: f64) {
+        self.grpc_thread_usage_vec.push(grpc_thread_usage);
+        let length = self.grpc_thread_usage_vec.len();
+        let detect_times = self.cfg.detect_times as usize;
+        // Only keep the last `self.cfg.detect_times` elements.
+        if length > detect_times {
+            self.grpc_thread_usage_vec.drain(..length - detect_times);
+        }
+    }
+
+    fn get_avg_grpc_thread_usage(&self) -> f64 {
+        let length = self.grpc_thread_usage_vec.len();
+        if length == 0 {
+            return 0.0;
+        }
+        let sum = self.grpc_thread_usage_vec.iter().sum::<f64>();
+        sum / length as f64
+    }
+
     fn should_check_region_cpu(&self) -> bool {
         self.cfg.region_cpu_overload_threshold_ratio > 0.0
     }
 
-    fn is_grpc_poll_busy(&self, grpc_thread_usage: f64) -> bool {
+    fn is_grpc_poll_busy(&self, avg_grpc_thread_usage: f64) -> bool {
         #[cfg(feature = "failpoints")]
         fail::fail_point!("mock_grpc_poll_is_not_busy", |_| { false });
         if self.max_grpc_thread_count == 0 {
             return false;
         }
+        if self.cfg.grpc_thread_cpu_overload_threshold_ratio <= 0.0 {
+            return true;
+        }
         let grpc_thread_cpu_overload_threshold =
             self.max_grpc_thread_count as f64 * self.cfg.grpc_thread_cpu_overload_threshold_ratio;
-        grpc_thread_usage > 0.0 && grpc_thread_usage >= grpc_thread_cpu_overload_threshold
+        avg_grpc_thread_usage > 0.0 && avg_grpc_thread_usage >= grpc_thread_cpu_overload_threshold
     }
 
     fn is_unified_read_pool_busy(&self, unified_read_pool_thread_usage: f64) -> bool {
@@ -756,13 +780,17 @@ impl AutoSplitController {
             Self::collect_thread_usage(thread_stats, "grpc-server"),
             Self::collect_thread_usage(thread_stats, "unified-read-po"),
         );
+        // Update first before calculating the latest average gRPC poll CPU usage.
+        self.update_grpc_thread_usage(grpc_thread_usage);
+        let avg_grpc_thread_usage = self.get_avg_grpc_thread_usage();
         let (is_grpc_poll_busy, is_unified_read_pool_busy) = (
-            self.is_grpc_poll_busy(grpc_thread_usage),
+            self.is_grpc_poll_busy(avg_grpc_thread_usage),
             self.is_unified_read_pool_busy(unified_read_pool_thread_usage),
         );
         debug!("flush to load base split";
             "max_grpc_thread_count" => self.max_grpc_thread_count,
             "grpc_thread_usage" => grpc_thread_usage,
+            "avg_grpc_thread_usage" => avg_grpc_thread_usage,
             "max_unified_read_pool_thread_count" => self.max_unified_read_pool_thread_count,
             "unified_read_pool_thread_usage" => unified_read_pool_thread_usage,
             "is_grpc_poll_busy" => is_grpc_poll_busy,
@@ -1797,6 +1825,70 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[test]
+    fn test_avg_grpc_thread_cpu_usage_calculation() {
+        let mut auto_split_controller = AutoSplitController::default();
+        let detect_times = auto_split_controller.cfg.detect_times as f64;
+        for grpc_thread_usage in 1..=5 {
+            auto_split_controller.update_grpc_thread_usage(grpc_thread_usage as f64);
+        }
+        assert_eq!(
+            auto_split_controller.get_avg_grpc_thread_usage(),
+            [1.0, 2.0, 3.0, 4.0, 5.0].iter().sum::<f64>() / 5.0,
+        );
+        for grpc_thread_usage in 6..=10 {
+            auto_split_controller.update_grpc_thread_usage(grpc_thread_usage as f64);
+        }
+        assert_eq!(
+            auto_split_controller.get_avg_grpc_thread_usage(),
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+                .iter()
+                .sum::<f64>()
+                / detect_times,
+        );
+        for grpc_thread_usage in 11..=15 {
+            auto_split_controller.update_grpc_thread_usage(grpc_thread_usage as f64);
+        }
+        assert_eq!(
+            auto_split_controller.get_avg_grpc_thread_usage(),
+            [6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
+                .iter()
+                .sum::<f64>()
+                / detect_times,
+        );
+        for grpc_thread_usage in 1..=10 {
+            auto_split_controller.update_grpc_thread_usage(grpc_thread_usage as f64);
+        }
+        assert_eq!(
+            auto_split_controller.get_avg_grpc_thread_usage(),
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+                .iter()
+                .sum::<f64>()
+                / detect_times,
+        );
+        // Change the `detect_times` to a smaller value.
+        auto_split_controller.cfg.detect_times = 5;
+        let detect_times = auto_split_controller.cfg.detect_times as f64;
+        auto_split_controller.update_grpc_thread_usage(11.0);
+        assert_eq!(
+            auto_split_controller.get_avg_grpc_thread_usage(),
+            [7.0, 8.0, 9.0, 10.0, 11.0].iter().sum::<f64>() / detect_times,
+        );
+        // Change the `detect_times` to a bigger value.
+        auto_split_controller.cfg.detect_times = 6;
+        let detect_times = auto_split_controller.cfg.detect_times as f64;
+        auto_split_controller.update_grpc_thread_usage(12.0);
+        assert_eq!(
+            auto_split_controller.get_avg_grpc_thread_usage(),
+            [7.0, 8.0, 9.0, 10.0, 11.0, 12.0].iter().sum::<f64>() / detect_times,
+        );
+        auto_split_controller.update_grpc_thread_usage(13.0);
+        assert_eq!(
+            auto_split_controller.get_avg_grpc_thread_usage(),
+            [8.0, 9.0, 10.0, 11.0, 12.0, 13.0].iter().sum::<f64>() / detect_times,
+        );
     }
 
     #[bench]
