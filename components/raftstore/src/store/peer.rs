@@ -5382,12 +5382,13 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn get_engine(&self) -> &EK {
-        &self.engines.kv
+    fn get_tablet(&self, region_id: u64) -> &EK {
+        unimplemented!()
     }
 
-    fn get_snapshot(&mut self, _: Option<ThreadReadId>) -> Arc<EK::Snapshot> {
-        Arc::new(self.engines.kv.snapshot())
+    fn get_snapshot(&mut self, _: Option<ThreadReadId>, region_id: u64) -> Arc<EK::Snapshot> {
+        unimplemented!()
+        // Arc::new(self.engines.kv.snapshot())
     }
 }
 

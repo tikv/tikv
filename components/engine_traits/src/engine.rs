@@ -154,7 +154,7 @@ impl Drop for TabletErrorCollector {
 ///
 // It should be named as `EngineFactory` for consistency, but we are about to rename
 // engine to tablet, so always use tablet for new traits/types.
-pub trait TabletFactory<EK>: TabletAccessor<EK> {
+pub trait TabletFactory<EK>: TabletAccessor<EK> + Send {
     /// Create an tablet by id and suffix. If the tablet exists, it will fail.
     /// The id is likely the region Id, the suffix could be the current raft log index.
     /// They together could specify a unique path for a region's tablet.

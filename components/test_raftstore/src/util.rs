@@ -632,6 +632,7 @@ pub fn create_test_engine(
     Option<Arc<DataKeyManager>>,
     TempDir,
     LazyWorker<String>,
+    Box<dyn TabletFactory<RocksEngine> + Send>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
@@ -663,7 +664,7 @@ pub fn create_test_engine(
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
     let engines = Engines::new(engine, raft_engine);
-    (engines, key_manager, dir, sst_worker)
+    (engines, key_manager, dir, sst_worker, TabletFactory::clone(&factory))
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

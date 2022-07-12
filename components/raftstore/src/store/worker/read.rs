@@ -12,7 +12,7 @@ use std::{
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{KvEngine, RaftEngine, Snapshot};
+use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory};
 use fail::fail_point;
 use kvproto::{
     errorpb,
@@ -43,15 +43,15 @@ use crate::{
 };
 
 pub trait ReadExecutor<E: KvEngine> {
-    fn get_engine(&self) -> &E;
-    fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
+    fn get_tablet(&self, region_id: u64) -> &E;
+    fn get_snapshot(&mut self, ts: Option<ThreadReadId>, region_id: u64) -> Arc<E::Snapshot>;
 
     fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, region)?;
 
-        let engine = self.get_engine();
+        let engine = self.get_tablet(region.id);
         let mut resp = Response::default();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
@@ -113,7 +113,7 @@ pub trait ReadExecutor<E: KvEngine> {
                 },
                 CmdType::Snap => {
                     let snapshot =
-                        RegionSnapshot::from_snapshot(self.get_snapshot(ts.take()), region.clone());
+                        RegionSnapshot::from_snapshot(self.get_snapshot(ts.take(), region.id), region.clone());
                     response.snapshot = Some(snapshot);
                     Response::default()
                 }
@@ -425,7 +425,7 @@ where
 {
     store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    kv_engine: E,
+    factory: Box<dyn TabletFactory<E> + Send>,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
@@ -441,25 +441,26 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
-    fn get_engine(&self) -> &E {
-        &self.kv_engine
+    fn get_tablet(&self, region_id: u64) -> &E {
+        unimplemented!()
     }
 
-    fn get_snapshot(&mut self, create_time: Option<ThreadReadId>) -> Arc<E::Snapshot> {
-        self.metrics.local_executed_requests += 1;
-        if let Some(ts) = create_time {
-            if ts == self.cache_read_id {
-                if let Some(snap) = self.snap_cache.as_ref() {
-                    self.metrics.local_executed_snapshot_cache_hit += 1;
-                    return snap.clone();
-                }
-            }
-            let snap = Arc::new(self.kv_engine.snapshot());
-            self.cache_read_id = ts;
-            self.snap_cache = Some(snap.clone());
-            return snap;
-        }
-        Arc::new(self.kv_engine.snapshot())
+    fn get_snapshot(&mut self, create_time: Option<ThreadReadId>, region_id: u64) -> Arc<E::Snapshot> {
+        unimplemented!()
+        // self.metrics.local_executed_requests += 1;
+        // if let Some(ts) = create_time {
+        //     if ts == self.cache_read_id {
+        //         if let Some(snap) = self.snap_cache.as_ref() {
+        //             self.metrics.local_executed_snapshot_cache_hit += 1;
+        //             return snap.clone();
+        //         }
+        //     }
+        //     let snap = Arc::new(self.kv_engine.snapshot());
+        //     self.cache_read_id = ts;
+        //     self.snap_cache = Some(snap.clone());
+        //     return snap;
+        // }
+        // Arc::new(self.kv_engine.snapshot())
     }
 }
 
@@ -468,11 +469,11 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
-    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
+    pub fn new(factory: Box<dyn TabletFactory<E> + Send>, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
-            kv_engine,
+            factory,
             router,
             snap_cache: None,
             cache_read_id,
@@ -734,7 +735,7 @@ where
     fn clone(&self) -> Self {
         LocalReader {
             store_meta: self.store_meta.clone(),
-            kv_engine: self.kv_engine.clone(),
+            factory: self.factory.clone(),
             router: self.router.clone(),
             store_id: self.store_id.clone(),
             metrics: Default::default(),

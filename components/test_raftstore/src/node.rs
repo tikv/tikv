@@ -10,7 +10,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, MiscExt, Peekable};
+use engine_traits::{Engines, MiscExt, Peekable, TabletFactory};
 use kvproto::{
     kvrpcpb::ApiVersion,
     metapb,
@@ -224,6 +224,7 @@ impl Simulator for NodeCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        _factory: Box<dyn TabletFactory<RocksEngine> + Send>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");

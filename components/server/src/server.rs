@@ -151,8 +151,8 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
     tikv.init_encryption();
     let fetcher = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
-    let (engines, engines_info) = tikv.init_raw_engines(listener);
-    tikv.init_engines(engines.clone());
+    let (engines, engines_info, factory) = tikv.init_raw_engines(listener);
+    tikv.init_engines(engines.clone(), factory);
     let server_config = tikv.init_servers::<F>();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
@@ -533,12 +533,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         engine_rocks::FlowListener::new(tx)
     }
 
-    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
+    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>, factory: Box<dyn TabletFactory<RocksEngine> + Send>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
                 self.router.clone(),
-                LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone()),
+                LocalReader::new(factory, store_meta.clone(), self.router.clone()),
             ),
             engines.kv.clone(),
         );
@@ -1610,7 +1610,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
+    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>, Box<dyn TabletFactory<RocksEngine> + Send>) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
             .config
@@ -1635,6 +1635,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             builder = builder.block_cache(cache);
         }
         let factory = builder.build();
+        let factory_clone = TabletFactory::clone(&factory);
         let kv_engine = factory
             .create_shared_db()
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
@@ -1657,7 +1658,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             &engines, 180, /*max_samples_to_preserve*/
         ));
 
-        (engines, engines_info)
+        (engines, engines_info, factory_clone)
     }
 }
 
