@@ -8,7 +8,7 @@ use std::{
 
 use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
+use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN, TabletFactory};
 use grpcio_health::HealthService;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
@@ -195,6 +195,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        factory: Box<dyn TabletFactory<EK> + Send>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -231,6 +232,7 @@ where
             auto_split_controller,
             concurrency_manager,
             collector_reg_handle,
+            factory,
         )?;
 
         Ok(())
@@ -469,6 +471,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        factory: Box<dyn TabletFactory<EK> + Send>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -501,6 +504,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             self.health_service.clone(),
+            factory,
         )?;
         Ok(())
     }

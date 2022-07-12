@@ -284,7 +284,7 @@ impl ServerCluster {
             }
         }
 
-        let local_reader = LocalReader::new(factory, store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(factory.clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
@@ -575,6 +575,7 @@ impl ServerCluster {
             auto_split_controller,
             concurrency_manager.clone(),
             collector_reg_handle,
+            factory,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

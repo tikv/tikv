@@ -274,7 +274,7 @@ impl<T: Simulator> Cluster<T> {
             self.create_engine(Some(router.clone()));
 
             let engines = self.dbs.last().unwrap().clone();
-            let factory = TabletFactory::clone(self.factories.last().unwrap());
+            let factory = self.factories[self.factories.len() - 1].clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
@@ -638,10 +638,10 @@ impl<T: Simulator> Cluster<T> {
     /// Must be called after `create_engines`.
     pub fn bootstrap_region(&mut self) -> Result<()> {
         for (i, engines) in self.dbs.iter().enumerate() {
-            let factory = &self.factories[i];
+            let factory = self.factories[i].clone();
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
-            self.factoriy_map.insert(id, TabletFactory::clone(factory));
+            self.factoriy_map.insert(id, factory);
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map

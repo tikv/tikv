@@ -112,8 +112,10 @@ pub trait ReadExecutor<E: KvEngine> {
                     }
                 },
                 CmdType::Snap => {
-                    let snapshot =
-                        RegionSnapshot::from_snapshot(self.get_snapshot(ts.take(), region.id), region.clone());
+                    let snapshot = RegionSnapshot::from_snapshot(
+                        self.get_snapshot(ts.take(), region.id),
+                        region.clone(),
+                    );
                     response.snapshot = Some(snapshot);
                     Response::default()
                 }
@@ -445,22 +447,29 @@ where
         unimplemented!()
     }
 
-    fn get_snapshot(&mut self, create_time: Option<ThreadReadId>, region_id: u64) -> Arc<E::Snapshot> {
-        unimplemented!()
-        // self.metrics.local_executed_requests += 1;
-        // if let Some(ts) = create_time {
-        //     if ts == self.cache_read_id {
-        //         if let Some(snap) = self.snap_cache.as_ref() {
-        //             self.metrics.local_executed_snapshot_cache_hit += 1;
-        //             return snap.clone();
-        //         }
-        //     }
-        //     let snap = Arc::new(self.kv_engine.snapshot());
-        //     self.cache_read_id = ts;
-        //     self.snap_cache = Some(snap.clone());
-        //     return snap;
-        // }
-        // Arc::new(self.kv_engine.snapshot())
+    fn get_snapshot(
+        &mut self,
+        create_time: Option<ThreadReadId>,
+        region_id: u64,
+    ) -> Arc<E::Snapshot> {
+        if let Some(tablet) = self.factory.open_tablet_cache_any(region_id) {
+            self.metrics.local_executed_requests += 1;
+            if let Some(ts) = create_time {
+                if ts == self.cache_read_id {
+                    if let Some(snap) = self.snap_cache.as_ref() {
+                        self.metrics.local_executed_snapshot_cache_hit += 1;
+                        return snap.clone();
+                    }
+                }
+                let snap = Arc::new(tablet.snapshot());
+                self.cache_read_id = ts;
+                self.snap_cache = Some(snap.clone());
+                return snap;
+            }
+            Arc::new(tablet.snapshot())
+        } else {
+            panic!("No relevant tablet")
+        }
     }
 }
 
@@ -469,7 +478,11 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
-    pub fn new(factory: Box<dyn TabletFactory<E> + Send>, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
+    pub fn new(
+        factory: Box<dyn TabletFactory<E> + Send>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        router: C,
+    ) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
