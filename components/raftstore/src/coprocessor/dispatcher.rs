@@ -416,6 +416,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    /// `post_exec` should be called immediately after we executed one raft command.
+    /// It notifies observers side effects of this command before execution of the next command,
+    /// including req/resp, apply state, modified region state, etc.
+    /// Return true observers think a persistence is necessary.
     pub fn post_exec(
         &self,
         region: &Region,
