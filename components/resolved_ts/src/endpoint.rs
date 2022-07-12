@@ -491,7 +491,7 @@ where
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let resolved_ts = observe_region.resolver.resolve(ts);
+                    let resolved_ts = observe_region.resolver.resolve(ts).min();
                     if resolved_ts < min_ts {
                         min_ts = resolved_ts;
                     }

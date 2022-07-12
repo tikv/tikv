@@ -120,7 +120,10 @@ where
 #[macro_export(crate)]
 macro_rules! annotate {
     ($inner: expr, $message: expr) => {
-        Error::Other(tikv_util::box_err!("{}: {}", $message, $inner))
+        {
+            use tikv_util::box_err;
+            $crate::errors::Error::Other(box_err!("{}: {}", $message, $inner))
+        }
     };
     ($inner: expr, $format: literal, $($args: expr),+) => {
         annotate!($inner, format_args!($format, $($args),+))

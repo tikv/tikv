@@ -1,9 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::RaftEngine;
-use kvproto::metapb;
-use raft::RawNode;
-use raftstore::store::Config;
+use std::sync::Arc;
+
+use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use kvproto::{metapb, raft_serverpb::RegionLocalState};
+use raft::{RawNode, INVALID_ID};
+use raftstore::store::{util::find_peer, Config};
 use slog::{o, Logger};
 use tikv_util::{box_err, config::ReadableSize};
 
@@ -11,37 +13,35 @@ use super::storage::Storage;
 use crate::Result;
 
 /// A peer that delegates commands between state machine and raft.
-pub struct Peer<ER: RaftEngine> {
-    region_id: u64,
-    peer: metapb::Peer,
+pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<ER>>,
+    tablet: Option<EK>,
     logger: Logger,
 }
 
-impl<ER: RaftEngine> Peer<ER> {
+impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    /// Creates a new peer.
+    ///
+    /// If peer is destroyed, None is returned.
     pub fn new(
         cfg: &Config,
+        region_id: u64,
         store_id: u64,
-        region: metapb::Region,
+        tablet_factory: &dyn TabletFactory<EK>,
         engine: ER,
-        logger: Logger,
-    ) -> Result<Self> {
-        let peer = region
-            .get_peers()
-            .iter()
-            .find(|p| p.get_store_id() == store_id && p.get_id() != raft::INVALID_ID);
-        let peer = match peer {
-            Some(p) => p,
-            None => return Err(box_err!("no valid peer found in {:?}", region.get_peers())),
+        logger: &Logger,
+    ) -> Result<Option<Self>> {
+        let s = match Storage::new(region_id, store_id, engine, logger)? {
+            Some(s) => s,
+            None => return Ok(None),
         };
-        let l = logger.new(o!("peer_id" => peer.id));
+        let logger = s.logger().clone();
 
-        let ps = Storage::new(engine, l.clone());
-
-        let applied_index = ps.applied_index();
+        let applied_index = s.apply_state().get_applied_index();
+        let peer_id = s.peer().get_id();
 
         let raft_cfg = raft::Config {
-            id: peer.get_id(),
+            id: peer_id,
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
             min_election_tick: cfg.raft_min_election_timeout_ticks,
@@ -56,14 +56,49 @@ impl<ER: RaftEngine> Peer<ER> {
             ..Default::default()
         };
 
-        Ok(Peer {
-            region_id: region.get_id(),
-            peer: peer.clone(),
-            raft_group: RawNode::new(&raft_cfg, ps, &logger)?,
-            logger: l,
-        })
+        let tablet_index = s.region_state().get_tablet_index();
+        let tablet = if tablet_index != 0 {
+            if !tablet_factory.exists(region_id, tablet_index) {
+                return Err(box_err!(
+                    "missing tablet {} for region {}",
+                    tablet_index,
+                    region_id
+                ));
+            }
+            // TODO: Perhaps we should stop create the tablet automatically.
+            Some(tablet_factory.open_tablet(region_id, tablet_index)?)
+        } else {
+            None
+        };
+
+        Ok(Some(Peer {
+            raft_group: RawNode::new(&raft_cfg, s, &logger)?,
+            tablet,
+            logger,
+        }))
     }
 
+    #[inline]
+    pub fn region_id(&self) -> u64 {
+        self.raft_group.store().region_state().get_region().get_id()
+    }
+
+    #[inline]
+    pub fn peer_id(&self) -> u64 {
+        self.raft_group.store().peer().get_id()
+    }
+
+    #[inline]
+    pub fn storage(&self) -> &Storage<ER> {
+        self.raft_group.store()
+    }
+
+    #[inline]
+    pub fn tablet(&self) -> &Option<EK> {
+        &self.tablet
+    }
+
+    #[inline]
     pub fn logger(&self) -> &Logger {
         &self.logger
     }

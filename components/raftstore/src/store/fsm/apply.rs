@@ -65,6 +65,7 @@ use tikv_util::{
     Either, MustConsumeVec,
 };
 use time::Timespec;
+use tracker::GLOBAL_TRACKERS;
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -3675,9 +3676,18 @@ where
 
             match msg {
                 Msg::Apply { start, mut apply } => {
-                    apply_ctx
-                        .apply_wait
-                        .observe(start.saturating_elapsed_secs());
+                    let apply_wait = start.saturating_elapsed();
+                    apply_ctx.apply_wait.observe(apply_wait.as_secs_f64());
+                    for tracker in apply
+                        .cbs
+                        .iter()
+                        .flat_map(|p| p.cb.get_trackers())
+                        .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
+                    {
+                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                            t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
+                        });
+                    }
 
                     if let Some(batch) = batch_apply.as_mut() {
                         if batch.try_batch(&mut apply) {

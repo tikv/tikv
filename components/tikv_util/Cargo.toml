@@ -22,7 +22,7 @@ crossbeam = "0.8"
 derive_more = "0.99.3"
 error_code = { path = "../error_code", default-features = false }
 fail = "0.5"
-futures = { version = "0.3", features = ["compat"] }
+futures = { version = "0.3", features = ["compat", "thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 http = "0.2.0"
