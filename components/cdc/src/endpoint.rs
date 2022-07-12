@@ -414,7 +414,7 @@ pub struct Endpoint<T, E> {
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
     region_read_progress: RegionReadProgressRegistry,
-    causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+    causal_ts_provider: Option<Arc<dyn CausalTsProvider + 'static>>,
 
     // Metrics and logging.
     current_ts: TimeStamp,
