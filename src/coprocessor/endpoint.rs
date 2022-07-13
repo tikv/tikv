@@ -1376,7 +1376,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_SMALL - COARSE_ERROR_MS
+                PAYLOAD_SMALL.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1405,7 +1405,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_LARGE - COARSE_ERROR_MS
+                PAYLOAD_LARGE.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1471,7 +1471,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_SMALL - COARSE_ERROR_MS
+                PAYLOAD_SMALL.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1493,7 +1493,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_LARGE - COARSE_ERROR_MS
+                PAYLOAD_LARGE.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1557,7 +1557,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_LARGE - COARSE_ERROR_MS
+                PAYLOAD_LARGE.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1588,7 +1588,7 @@ mod tests {
                     .get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_SMALL - COARSE_ERROR_MS
+                PAYLOAD_SMALL.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp[0]
@@ -1618,7 +1618,7 @@ mod tests {
                     .get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_LARGE - COARSE_ERROR_MS
+                PAYLOAD_LARGE.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp[1]

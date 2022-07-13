@@ -9,7 +9,8 @@ use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine_rocks::{
     config::{BlobRunMode, CompressionType, LogLevel},
     raw::{
-        CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
+        ChecksumType, CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode,
+        DBRecoveryMode, PrepopulateBlockCache,
     },
 };
 use engine_traits::PerfLevel;
@@ -252,7 +253,7 @@ fn test_serde_custom_tikv_config() {
         min_gc_batch_size: ReadableSize::kb(12),
         max_gc_batch_size: ReadableSize::mb(12),
         discardable_ratio: 0.00156,
-        sample_ratio: 0.982,
+        sample_ratio: None,
         merge_small_file_threshold: ReadableSize::kb(21),
         blob_run_mode: BlobRunMode::Fallback,
         level_merge: true,
@@ -349,6 +350,9 @@ fn test_serde_custom_tikv_config() {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 1024,
             bottommost_zstd_compression_sample_size: 1024,
+            prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
+            format_version: 5,
+            checksum: ChecksumType::XXH3,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -397,7 +401,7 @@ fn test_serde_custom_tikv_config() {
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
                 discardable_ratio: 0.5,
-                sample_ratio: 0.1,
+                sample_ratio: None,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly,
                 level_merge: false,
@@ -414,6 +418,9 @@ fn test_serde_custom_tikv_config() {
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
+            format_version: 5,
+            checksum: ChecksumType::XXH3,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -462,7 +469,7 @@ fn test_serde_custom_tikv_config() {
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
                 discardable_ratio: 0.5,
-                sample_ratio: 0.1,
+                sample_ratio: None,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
                 level_merge: false,
@@ -479,6 +486,9 @@ fn test_serde_custom_tikv_config() {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
+            format_version: 5,
+            checksum: ChecksumType::XXH3,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -527,7 +537,7 @@ fn test_serde_custom_tikv_config() {
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
                 discardable_ratio: 0.5,
-                sample_ratio: 0.1,
+                sample_ratio: None,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
                 level_merge: false,
@@ -544,6 +554,9 @@ fn test_serde_custom_tikv_config() {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
+            format_version: 5,
+            checksum: ChecksumType::XXH3,
         },
         titan: titan_db_config.clone(),
     };
@@ -624,6 +637,9 @@ fn test_serde_custom_tikv_config() {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
+            format_version: 5,
+            checksum: ChecksumType::XXH3,
         },
         titan: titan_db_config,
     };
