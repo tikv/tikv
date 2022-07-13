@@ -80,7 +80,7 @@ fn test_follower_slow_split() {
 
     // After the follower split success, it will response to the pending vote.
     fail::cfg("apply_before_split_1_3", "off").unwrap();
-    assert!(rx.recv_timeout(Duration::from_millis(100)).is_ok());
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn test_split_lost_request_vote() {
 
     // After the follower split success, it will response to the pending vote.
     fail::cfg("apply_after_split_1_3", "off").unwrap();
-    assert!(rx.recv_timeout(Duration::from_millis(100)).is_ok());
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
 }
 
 fn gen_split_region() -> (Region, Region, Region) {
@@ -947,14 +947,12 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
-        assert!(
-            locks
-                .insert(vec![
-                    (Key::from_raw(b"a"), lock_a),
-                    (Key::from_raw(b"c"), lock_c)
-                ])
-                .is_ok()
-        );
+        locks
+            .insert(vec![
+                (Key::from_raw(b"a"), lock_a),
+                (Key::from_raw(b"c"), lock_c),
+            ])
+            .unwrap();
     }
 
     let mut mutation = Mutation::default();

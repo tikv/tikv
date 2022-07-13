@@ -147,10 +147,10 @@ mod tests {
         let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
         let region = initial_region(1, 1, 1);
 
-        assert!(bootstrap_store(&engines, 1, 1).is_ok());
-        assert!(bootstrap_store(&engines, 1, 1).is_err());
+        bootstrap_store(&engines, 1, 1).unwrap();
+        bootstrap_store(&engines, 1, 1).unwrap_err();
 
-        assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
+        prepare_bootstrap_cluster(&engines, &region).unwrap();
         assert!(
             kv_engine
                 .get_value(keys::PREPARE_BOOTSTRAP_KEY)
@@ -171,8 +171,8 @@ mod tests {
         );
         assert!(raft_engine.get_raft_state(1).unwrap().is_some());
 
-        assert!(clear_prepare_bootstrap_key(&engines).is_ok());
-        assert!(clear_prepare_bootstrap_cluster(&engines, 1).is_ok());
+        clear_prepare_bootstrap_key(&engines).unwrap();
+        clear_prepare_bootstrap_cluster(&engines, 1).unwrap();
         assert!(
             is_range_empty(
                 &kv_engine,

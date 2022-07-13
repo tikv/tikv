@@ -230,22 +230,18 @@ mod test {
         });
 
         // no lock found
-        assert!(
-            lock_table
-                .check_range(
-                    Some(&Key::from_raw(b"m")),
-                    Some(&Key::from_raw(b"n")),
-                    |_, _| Err(())
-                )
-                .is_ok()
-        );
+        lock_table
+            .check_range(
+                Some(&Key::from_raw(b"m")),
+                Some(&Key::from_raw(b"n")),
+                |_, _| Err(()),
+            )
+            .unwrap();
 
         // lock passes check_fn
-        assert!(
-            lock_table
-                .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
-                .is_ok()
-        );
+        lock_table
+            .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
+            .unwrap();
 
         // first lock does not pass check_fn
         assert_eq!(

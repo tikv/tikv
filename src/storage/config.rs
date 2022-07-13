@@ -379,11 +379,11 @@ mod tests {
     #[test]
     fn test_validate_storage_config() {
         let mut cfg = Config::default();
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
 
         let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
         cfg.scheduler_worker_pool_size = max_pool_size;
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
 
         cfg.scheduler_worker_pool_size = 0;
         assert!(cfg.validate().is_err());

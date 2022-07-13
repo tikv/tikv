@@ -2022,7 +2022,7 @@ mod tests {
 
         remove_region_state(1);
         remove_region_state(2);
-        assert!(debugger.recreate_region(region.clone()).is_ok());
+        debugger.recreate_region(region.clone()).unwrap();
         assert_eq!(
             get_region_state(engine.as_inner(), 100).get_region(),
             &region

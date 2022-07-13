@@ -137,7 +137,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         lazy_worker.start(BatchRunner { ch: tx });
-        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
         worker.stop();
         drop(rx);

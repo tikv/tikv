@@ -965,7 +965,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
 
             // test with real path
             let ret = check_data_dir(&data_path, "/proc/mounts");
-            assert!(ret.is_ok());
+            ret.unwrap();
 
             // test with device mapper
             // get real_path's rotational info
@@ -985,8 +985,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let mnt_file = format!("{}/mnt.txt", tmp_dir.path().display());
             create_file(&mnt_file, mninfo.as_bytes());
             // check info
-            let res = check_data_dir(&data_path, &mnt_file);
-            assert!(res.is_ok());
+            check_data_dir(&data_path, &mnt_file).unwrap();
             // check rotational info
             let get = get_rotational_info(&tmp_device).unwrap();
             assert_eq!(expect, get);
@@ -1927,7 +1926,7 @@ mod tests {
     fn test_check_data_dir_empty() {
         // test invalid data_path
         let ret = check_data_dir_empty("/sys/invalid", "txt");
-        assert!(ret.is_ok());
+        ret.unwrap();
         // test empty data_path
         let tmp_path = Builder::new()
             .prefix("test-get-file-count")
@@ -1935,7 +1934,7 @@ mod tests {
             .unwrap()
             .into_path();
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_ok());
+        ret.unwrap();
         // test non-empty data_path
         let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
         create_file(&tmp_file, b"");
@@ -1944,7 +1943,7 @@ mod tests {
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
         assert!(ret.is_err());
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
-        assert!(ret.is_ok());
+        ret.unwrap();
     }
 
     #[test]

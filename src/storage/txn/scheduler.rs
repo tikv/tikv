@@ -1378,7 +1378,7 @@ mod tests {
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
-        assert!(block_on(f).unwrap().is_ok());
+        block_on(f).unwrap().unwrap();
     }
 
     #[test]
@@ -1436,7 +1436,7 @@ mod tests {
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
-        assert!(block_on(f).unwrap().is_ok());
+        block_on(f).unwrap().unwrap();
     }
 
     #[test]
@@ -1502,7 +1502,7 @@ mod tests {
         let cmd: TypedCommand<TxnStatus> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
-        assert!(block_on(f).unwrap().is_ok());
+        block_on(f).unwrap().unwrap();
     }
 
     #[test]
@@ -1559,7 +1559,7 @@ mod tests {
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
-        assert!(block_on(f).is_ok());
+        block_on(f).unwrap().unwrap();
     }
 
     #[test]

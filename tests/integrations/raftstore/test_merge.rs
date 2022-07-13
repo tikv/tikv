@@ -1283,13 +1283,11 @@ fn test_propose_in_memory_pessimistic_locks() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
     };
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(Key::from_raw(b"k1"), l1.clone())])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(Key::from_raw(b"k1"), l1.clone())])
+        .unwrap();
 
     // Insert lock l2 into the right region
     let snapshot = cluster.must_get_snapshot_of_region(right.id);
@@ -1301,13 +1299,11 @@ fn test_propose_in_memory_pessimistic_locks() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
     };
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(Key::from_raw(b"k3"), l2.clone())])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(Key::from_raw(b"k3"), l2.clone())])
+        .unwrap();
 
     // Merge left region into the right region
     pd_client.must_merge(left.id, right.id);
@@ -1374,7 +1370,7 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
     let res = cluster.async_put(b"k1", b"new_val").unwrap();
 
     cluster.clear_send_filters();
-    assert!(res.recv().is_ok());
+    res.recv().unwrap();
 
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"new_val");
 }
@@ -1409,13 +1405,11 @@ fn test_merge_pessimistic_locks_repeated_merge() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
     };
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(Key::from_raw(b"k1"), lock.clone())])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(Key::from_raw(b"k1"), lock.clone())])
+        .unwrap();
 
     // Filter MsgAppend, so the proposed PrepareMerge will not succeed
     cluster.add_send_filter(CloneFilterFactory(

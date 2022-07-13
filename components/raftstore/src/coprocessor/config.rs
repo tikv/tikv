@@ -208,34 +208,34 @@ mod tests {
         cfg = Config::default();
         cfg.region_max_size = Some(ReadableSize(10));
         cfg.region_split_size = ReadableSize(20);
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_size = None;
         cfg.region_split_size = ReadableSize(20);
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
         assert_eq!(cfg.region_max_size, Some(ReadableSize(30)));
 
         cfg = Config::default();
         cfg.region_max_keys = Some(10);
         cfg.region_split_keys = Some(20);
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_keys = None;
         cfg.region_split_keys = Some(20);
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
         assert_eq!(cfg.region_max_keys, Some(30));
 
         cfg = Config::default();
         cfg.enable_region_bucket = false;
         cfg.region_split_size = ReadableSize(20);
         cfg.region_bucket_size = ReadableSize(30);
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
 
         cfg = Config::default();
         cfg.region_split_size = ReadableSize::mb(20);
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
         assert_eq!(cfg.region_split_keys, Some(200000));
     }
 }

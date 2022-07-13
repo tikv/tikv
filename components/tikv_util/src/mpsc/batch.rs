@@ -388,7 +388,7 @@ mod tests {
         }
 
         // Send without notify, the receiver can't get batched messages.
-        assert!(tx.send(0).is_ok());
+        tx.send(0).unwrap();
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 0);
 
@@ -401,7 +401,7 @@ mod tests {
 
         // Auto notify with more sendings.
         for _ in 0..4 {
-            assert!(tx.send(0).is_ok());
+            tx.send(0).unwrap();
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 5);
@@ -439,7 +439,7 @@ mod tests {
         polled.recv().unwrap();
 
         // Send without notify, the receiver can't get batched messages.
-        assert!(tx.send(0).is_ok());
+        tx.send(0).unwrap();
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 0);
 
@@ -452,7 +452,7 @@ mod tests {
 
         // Auto notify with more sendings.
         for _ in 0..16 {
-            assert!(tx.send(0).is_ok());
+            tx.send(0).unwrap();
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 17);

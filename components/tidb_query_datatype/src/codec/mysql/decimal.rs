@@ -3721,11 +3721,9 @@ mod tests {
         )));
         let truncated_res = Res::Truncated(2333);
 
-        assert!(
-            truncated_res
-                .into_result_impl(&mut ctx, Some(Error::truncated()), None)
-                .is_ok()
-        );
+        truncated_res
+            .into_result_impl(&mut ctx, Some(Error::truncated()), None)
+            .unwrap();
 
         // Overflow cases
         let mut ctx = EvalContext::default();
@@ -3744,10 +3742,8 @@ mod tests {
             Flag::OVERFLOW_AS_WARNING,
         )));
         let error = Error::overflow("", "");
-        assert!(
-            overflow_res
-                .into_result_impl(&mut ctx, None, Some(error))
-                .is_ok()
-        );
+        overflow_res
+            .into_result_impl(&mut ctx, None, Some(error))
+            .unwrap();
     }
 }

@@ -2043,18 +2043,16 @@ mod tests {
 
         // Before starting gc_worker, fill the scheduler to full.
         for _ in 0..GC_MAX_PENDING_TASKS {
-            assert!(
-                gc_worker
-                    .scheduler()
-                    .schedule(GcTask::Gc {
-                        region_id: 0,
-                        start_key: vec![],
-                        end_key: vec![],
-                        safe_point: TimeStamp::from(100),
-                        callback: Box::new(|_res| {})
-                    })
-                    .is_ok()
-            );
+            gc_worker
+                .scheduler()
+                .schedule(GcTask::Gc {
+                    region_id: 0,
+                    start_key: vec![],
+                    end_key: vec![],
+                    safe_point: TimeStamp::from(100),
+                    callback: Box::new(|_res| {}),
+                })
+                .unwrap();
         }
         // Then, it will fail to schedule another gc command.
         let (tx, rx) = mpsc::channel();
@@ -2073,24 +2071,22 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         // When the gc_worker is full, scheduling an unsafe destroy range task should be
         // still allowed.
-        assert!(
-            gc_worker
-                .unsafe_destroy_range(
-                    Context::default(),
-                    Key::from_raw(b"a"),
-                    Key::from_raw(b"z"),
-                    Box::new(move |res| {
-                        tx.send(res).unwrap();
-                    })
-                )
-                .is_ok()
-        );
+        gc_worker
+            .unsafe_destroy_range(
+                Context::default(),
+                Key::from_raw(b"a"),
+                Key::from_raw(b"z"),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
 
         gc_worker.start().unwrap();
 
         // After the worker starts running, the destroy range task should run,
         // and the key in the range will be deleted.
-        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap().is_ok());
+        rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
         must_get_none(&engine, b"key", 30);
     }
 }

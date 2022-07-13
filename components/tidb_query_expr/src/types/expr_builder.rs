@@ -583,7 +583,7 @@ mod tests {
             .push_child(ExprDefBuilder::constant_real(3.0))
             .build();
         let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_ok());
+        exp.unwrap();
 
         // Incorrect return type
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsTime, FieldTypeTp::LongLong)
@@ -625,7 +625,7 @@ mod tests {
                 .push_child(ExprDefBuilder::constant_int(1))
                 .build();
         let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_ok());
+        exp.unwrap();
 
         let node =
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
@@ -633,7 +633,7 @@ mod tests {
                 .push_child(ExprDefBuilder::constant_int(5))
                 .build();
         let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_ok());
+        exp.unwrap();
 
         let node =
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
@@ -642,7 +642,7 @@ mod tests {
                 .push_child(ExprDefBuilder::constant_int(4))
                 .build();
         let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_ok());
+        exp.unwrap();
 
         // Incorrect return type
         let node =
@@ -694,7 +694,7 @@ mod tests {
             .push_child(ExprDefBuilder::constant_real(5.0))
             .build();
         let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_ok());
+        exp.unwrap();
 
         // Insufficient arguments
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsJson, FieldTypeTp::LongLong)
@@ -729,7 +729,7 @@ mod tests {
             .push_child(ExprDefBuilder::constant_int(5))
             .build();
         let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_ok());
+        exp.unwrap();
 
         // Insufficient arguments
         let node =
@@ -849,14 +849,8 @@ mod tests {
                 .is_err()
         );
         for i in 1..10 {
-            assert!(
-                RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
-                    node.clone(),
-                    fn_mapper,
-                    i
-                )
-                .is_ok()
-            );
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, i)
+                .unwrap();
         }
 
         // Col offset = 3. The minimum success max_columns is 4.
@@ -872,14 +866,8 @@ mod tests {
             );
         }
         for i in 4..10 {
-            assert!(
-                RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
-                    node.clone(),
-                    fn_mapper,
-                    i
-                )
-                .is_ok()
-            );
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, i)
+                .unwrap();
         }
 
         // Col offset = 1, 2, 5. The minimum success max_columns is 6.
@@ -901,14 +889,8 @@ mod tests {
             );
         }
         for i in 6..10 {
-            assert!(
-                RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
-                    node.clone(),
-                    fn_mapper,
-                    i
-                )
-                .is_ok()
-            );
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, i)
+                .unwrap();
         }
     }
 

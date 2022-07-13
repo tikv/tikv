@@ -42,25 +42,21 @@ fn test_turnoff_titan() {
 
     let size = 5;
     for i in 0..size {
-        assert!(
-            cluster
-                .put(
-                    format!("k{:02}0", i).as_bytes(),
-                    format!("v{}", i).as_bytes(),
-                )
-                .is_ok()
-        );
+        cluster
+            .put(
+                format!("k{:02}0", i).as_bytes(),
+                format!("v{}", i).as_bytes(),
+            )
+            .unwrap();
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in 0..size {
-        assert!(
-            cluster
-                .put(
-                    format!("k{:02}1", i).as_bytes(),
-                    format!("v{}", i).as_bytes(),
-                )
-                .is_ok()
-        );
+        cluster
+            .put(
+                format!("k{:02}1", i).as_bytes(),
+                format!("v{}", i).as_bytes(),
+            )
+            .unwrap();
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in cluster.get_node_ids().into_iter() {
@@ -98,7 +94,7 @@ fn test_turnoff_titan() {
         let db = cluster.get_engine(i);
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
         let opt = vec![("blob_run_mode", "kFallback")];
-        assert!(db.set_options_cf(handle, &opt).is_ok());
+        db.set_options_cf(handle, &opt).unwrap();
     }
     cluster.compact_data();
     let mut all_check_pass = true;

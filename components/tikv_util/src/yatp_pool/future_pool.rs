@@ -472,10 +472,10 @@ mod tests {
         // full
         assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
 
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
 
         // no more results
         assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());

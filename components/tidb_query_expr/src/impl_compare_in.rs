@@ -821,14 +821,15 @@ mod tests {
         let logical_rows: &[usize] = &(0..1024).collect::<Vec<usize>>();
         profiler::start("./bench_compare_in.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(logical_rows),
-                black_box(1024),
-            );
-            assert!(result.is_ok());
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(logical_rows),
+                    black_box(1024),
+                )
+                .unwrap();
         });
         profiler::stop();
     }
