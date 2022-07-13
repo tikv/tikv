@@ -140,6 +140,17 @@ pub mod kv {
         }
     }
 
+    // Extract tablet id and tablet suffix from the path.
+    fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
+        let (mut tablet_id, mut tablet_suffix) = (0, 1);
+        if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
+            let mut split = s.split('_');
+            tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+        }
+        (tablet_id, tablet_suffix)
+    }
+
     impl TabletFactory<KvTestEngine> for TestTabletFactory {
         fn create_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
             let mut reg = self.registry.lock().unwrap();
@@ -199,12 +210,7 @@ pub mod kv {
                     path.to_str().unwrap_or_default()
                 ));
             }
-            let (mut tablet_id, mut tablet_suffix) = (0, 1);
-            if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
-                let mut split = s.split('_');
-                tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-                tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
-            }
+            let (tablet_id, tablet_suffix) = get_id_and_suffix_from_path(path);
             self.create_tablet(tablet_id, tablet_suffix)
         }
 
@@ -265,7 +271,12 @@ pub mod kv {
 
             let db_path = self.tablet_path(id, suffix);
             std::fs::rename(path, &db_path)?;
-            self.open_tablet_raw(db_path.as_path(), false)
+            let new_engine = self.open_tablet_raw(db_path.as_path(), false);
+            if new_engine.is_ok() {
+                let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
+                self.registry.lock().unwrap().remove(&(old_id, old_suffix));
+            }
+            new_engine
         }
 
         fn clone(&self) -> Box<dyn TabletFactory<KvTestEngine> + Send> {
