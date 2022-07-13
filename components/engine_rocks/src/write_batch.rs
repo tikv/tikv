@@ -152,7 +152,6 @@ mod tests {
         let opt = RawDBOptions::default();
         opt.enable_unordered_write(false);
         opt.enable_pipelined_write(false);
-        opt.enable_pipelined_commit(true);
         let engine = new_engine_opt(
             path.path().join("db").to_str().unwrap(),
             RocksDBOptions::from_raw(opt),
