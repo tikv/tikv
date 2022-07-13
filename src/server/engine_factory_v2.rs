@@ -207,7 +207,7 @@ mod tests {
         let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
         let factory = builder.build();
         let shared_db = factory.create_shared_db().unwrap();
-        let tablet = TabletFactory::create_tablet(&factory, 1, 10);
+        let tablet = factory.create_tablet(1, 10);
         assert!(tablet.is_ok());
         let tablet = tablet.unwrap();
         let tablet2 = factory.open_tablet(1, 10).unwrap();
@@ -238,8 +238,8 @@ mod tests {
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
         let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        let inner_factory = builder.build();
-        let factory = KvEngineFactoryV2::new(inner_factory);
+        let builder = builder.set_multi_rocksdb();
+        let factory = builder.build();
         let tablet = factory.create_tablet(1, 10);
         assert!(tablet.is_ok());
         let tablet = tablet.unwrap();
@@ -276,8 +276,8 @@ mod tests {
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
         let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        let inner_factory = builder.build();
-        let factory = KvEngineFactoryV2::new(inner_factory);
+        let builder = builder.set_multi_rocksdb();
+        let factory = builder.build();
         factory.create_tablet(1, 10).unwrap();
         factory.create_tablet(2, 10).unwrap();
         let mut count = 0;
