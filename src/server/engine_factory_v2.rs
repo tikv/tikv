@@ -19,7 +19,6 @@ pub struct KvEngineFactoryV2 {
     registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
 }
 
-<<<<<<< HEAD
 // Extract tablet id and tablet suffix from the path.
 fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
     let (mut tablet_id, mut tablet_suffix) = (0, 1);
@@ -31,10 +30,7 @@ fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
     (tablet_id, tablet_suffix)
 }
 
-impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
-=======
 impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
->>>>>>> master
     fn create_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
         let mut reg = self.registry.lock().unwrap();
         if let Some(db) = reg.get(&(id, suffix)) {
