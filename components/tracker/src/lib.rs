@@ -43,7 +43,11 @@ impl Tracker {
 
     pub fn write_write_detail(&self, detail: &mut pb::WriteDetail) {
         detail.set_store_batch_wait_nanos(self.metrics.wf_batch_wait_nanos);
-        detail.set_propose_send_wait_nanos(self.metrics.propose_send_wait_nanos);
+        detail.set_propose_send_wait_nanos(
+            self.metrics
+                .wf_send_proposal_nanos
+                .saturating_sub(self.metrics.wf_send_to_queue_nanos),
+        );
         detail.set_persist_log_nanos(
             self.metrics.wf_persist_log_nanos - self.metrics.wf_send_to_queue_nanos,
         );
@@ -56,9 +60,7 @@ impl Tracker {
         // And note that the time before flushing the raft message to the RPC channel is
         // also counted in this value (to be improved in the future).
         detail.set_commit_log_nanos(
-            self.metrics.wf_commit_log_nanos
-                - self.metrics.wf_batch_wait_nanos
-                - self.metrics.propose_send_wait_nanos,
+            self.metrics.wf_commit_log_nanos - self.metrics.wf_batch_wait_nanos,
         );
         detail.set_apply_batch_wait_nanos(self.metrics.apply_wait_nanos);
         detail.set_apply_log_nanos(self.metrics.apply_time_nanos - self.metrics.apply_wait_nanos);
@@ -128,12 +130,12 @@ pub struct RequestMetrics {
     pub write_instant: Option<Instant>,
     pub wf_batch_wait_nanos: u64,
     pub wf_send_to_queue_nanos: u64,
+    pub wf_send_proposal_nanos: u64,
     pub wf_persist_log_nanos: u64,
     pub wf_before_write_nanos: u64,
     pub wf_write_end_nanos: u64,
     pub wf_kvdb_end_nanos: u64,
     pub wf_commit_log_nanos: u64,
-    pub propose_send_wait_nanos: u64,
     pub commit_not_persisted: bool,
     pub store_mutex_lock_nanos: u64, // should be 0 if using raft-engine
     pub store_thread_wait_nanos: u64,
