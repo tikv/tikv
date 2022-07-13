@@ -530,6 +530,11 @@ struct TempFileKey {
     is_meta: bool,
 }
 
+pub enum FormatType {
+    Date,
+    Hour,
+}
+
 impl TempFileKey {
     /// Create the key for an event. The key can be used to find which temporary file the event should be stored.
     fn of(kv: &ApplyEvent, region_id: u64) -> Self {
@@ -588,7 +593,7 @@ impl TempFileKey {
         }
     }
 
-    fn format_date_time(ts: u64) -> impl Display {
+    fn format_date_time(ts: u64, t: FormatType) -> impl Display {
         use chrono::prelude::*;
         let millis = TimeStamp::physical(ts.into());
         let dt = Utc.timestamp_millis(millis as _);
@@ -600,19 +605,27 @@ impl TempFileKey {
                     .format(&s.unwrap_or_else(|| "%Y%m".to_owned()))
                     .to_string();
             });
-            return dt.format("%Y%m%d").to_string();
+            let s = match t {
+                FormatType::Date => dt.format("%Y%m%d").to_string(),
+                FormatType::Hour => dt.format("%H").to_string(),
+            };
+            return s;
         }
         #[cfg(not(feature = "failpoints"))]
-        return dt.format("%Y%m%d");
+        match t {
+            FormatType::Date => dt.format("%Y%m%d"),
+            FormatType::Hour => dt.format("%H"),
+        }
     }
 
     /// path_to_log_file specifies the path of record log.
     /// eg. "v1/20220625/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
     fn path_to_log_file(&self, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/t{:08}/{:012}-{}.log",
+            "v1/{}/{}/t{:08}/{:012}-{}.log",
             // We may delete a range of files, so using the max_ts for preventing remove some records wrong.
-            Self::format_date_time(max_ts),
+            Self::format_date_time(max_ts, FormatType::Date),
+            Self::format_date_time(max_ts, FormatType::Hour),
             self.table_id,
             min_ts,
             uuid::Uuid::new_v4()
@@ -623,8 +636,9 @@ impl TempFileKey {
     /// eg. "v1/20220625/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
     fn path_to_schema_file(min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/schema-meta/{:012}-{}.log",
-            Self::format_date_time(max_ts),
+            "v1/{}/{}/schema-meta/{:012}-{}.log",
+            Self::format_date_time(max_ts, FormatType::Date),
+            Self::format_date_time(max_ts, FormatType::Hour),
             min_ts,
             uuid::Uuid::new_v4(),
         )
@@ -1765,9 +1779,12 @@ mod tests {
 
     #[test]
     fn test_format_datetime() {
-        let s = TempFileKey::format_date_time(431656320867237891);
+        let s = TempFileKey::format_date_time(431656320867237891, FormatType::Date);
         let s = s.to_string();
         assert_eq!(s, "20220307");
+
+        let s = TempFileKey::format_date_time(431656320867237891, FormatType::Hour);
+        assert_eq!(s.to_string(), "07");
     }
 
     #[test]
