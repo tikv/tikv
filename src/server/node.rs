@@ -338,9 +338,6 @@ where
 
     fn alloc_id(&self) -> Result<u64> {
         let id = self.pd_client.alloc_id()?;
-        if id == 0 {
-            return Err(box_err!("pd alloc weird id 0"));
-        }
         Ok(id)
     }
 

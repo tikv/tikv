@@ -391,7 +391,11 @@ impl PdClient for RpcClient {
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(resp.get_id())
+        let id = resp.get_id();
+        if id == 0 {
+            return Err(box_err!("pd alloc weird id 0"));
+        }
+        Ok()
     }
 
     fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
