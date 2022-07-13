@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use causal_ts::{CausalTsProvider, Error as CausalTsError, RawTsTracker, Result as CausalTsResult};
+use causal_ts::{Error as CausalTsError, RawTsTracker, Result as CausalTsResult};
 use collections::HashMap;
 use engine_traits::KvEngine;
 use fail::fail_point;
@@ -30,8 +30,6 @@ pub struct CdcObserver {
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
-
-    pub causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
 }
 
 impl CdcObserver {
@@ -43,12 +41,7 @@ impl CdcObserver {
         CdcObserver {
             sched,
             observe_regions: Arc::default(),
-            causal_ts_provider: None,
         }
-    }
-
-    pub fn set_causal_ts_provider(&mut self, provider: Arc<dyn CausalTsProvider>) {
-        self.causal_ts_provider = Some(provider);
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
@@ -97,12 +90,6 @@ impl CdcObserver {
             .unwrap()
             .get(&region_id)
             .cloned()
-    }
-
-    pub fn flush_causal_timestamp(&self) -> CausalTsResult<()> {
-        self.causal_ts_provider
-            .as_ref()
-            .map_or(Ok(()), |provider| provider.flush())
     }
 }
 

@@ -4,7 +4,7 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc},
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -44,7 +44,7 @@ use raft::eraftpb::ConfChangeType;
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::{
     store::{fsm::RaftRouter, *},
-    Result,
+    RaftRouterCompactedEventSender, Result,
 };
 use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
@@ -658,7 +658,9 @@ pub fn create_test_engine(
         builder = builder.block_cache(cache);
     }
     if let Some(router) = router {
-        builder = builder.compaction_filter_router(router);
+        builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
+            router: Mutex::new(router),
+        }));
     }
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
