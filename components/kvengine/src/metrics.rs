@@ -6,6 +6,8 @@ use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
 
+use crate::*;
+
 make_static_metric! {
     pub label_enum LogQueueKind {
         rewrite,
@@ -24,6 +26,8 @@ make_static_metric! {
         "type" => LogQueueKind,
     }
 }
+
+pub fn flush_engine_properties(_engine: &Engine, _name: &str) {}
 
 lazy_static! {
     pub static ref ENGINE_ARENA_GROW_DURATION_HISTOGRAM: Histogram = register_histogram!(

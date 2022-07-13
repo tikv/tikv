@@ -288,6 +288,7 @@ impl RaftBatchSystem {
 
 pub struct StoreInfo {
     pub kv_engine: kvengine::Engine,
+    pub rf_engine: rfengine::RfEngine,
     pub capacity: u64,
 }
 
@@ -606,6 +607,7 @@ impl<'a> StoreMsgHandler<'a> {
 
         let store_info = StoreInfo {
             kv_engine: self.ctx.global.engines.kv.clone(),
+            rf_engine: self.ctx.global.engines.raft.clone(),
             capacity: self.ctx.cfg.capacity.0,
         };
 

@@ -198,6 +198,9 @@ impl KvEngine for Engine {
     fn bad_downcast<T: 'static>(&self) -> &T {
         panic!()
     }
+    fn flush_metrics(&self, instance: &str) {
+        metrics::flush_engine_properties(&self, instance);
+    }
 }
 
 impl Peekable for Engine {

@@ -23,10 +23,11 @@ use api_version::{ApiV1, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, raw::DBCompressionType};
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE};
 use error_code::ErrorCodeExt;
 use file_system::{
-    BytesFetcher, IORateLimitMode, IORateLimiter, MetricsManager as IOMetricsManager,
+    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, IORateLimitMode, IORateLimiter,
+    MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
@@ -269,10 +270,11 @@ impl TiKVServer {
         self.init_fs();
         self.init_yatp();
         self.init_encryption();
-        // TODO(x) io limiter and metrics flusher
         self.init_engines();
         let server_config = self.init_servers::<ApiV1>();
         self.register_services();
+        let fetcher = self.init_io_utility();
+        self.init_metrics_flusher(fetcher);
         self.run_server(server_config);
         self.run_status_server();
     }
@@ -744,12 +746,28 @@ impl TiKVServer {
         backup_worker.start(backup_endpoint);
     }
 
-    #[allow(unused)]
+    fn init_io_utility(&mut self) -> BytesFetcher {
+        let stats_collector_enabled = file_system::init_io_stats_collector()
+            .map_err(|e| warn!("failed to init I/O stats collector: {}", e))
+            .is_ok();
+        let fetcher = if stats_collector_enabled {
+            BytesFetcher::FromIOStatsCollector()
+        } else {
+            let limiter = get_io_rate_limiter().unwrap();
+            BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
+        };
+        fetcher
+    }
+
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
         let mut io_metrics = IOMetricsManager::new(fetcher);
+        let kv = self.raw_engines.kv.clone();
+        let raft = self.raw_engines.raft.clone();
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
+                KvEngine::flush_metrics(&kv, "kv");
+                RaftEngine::flush_metrics(&raft, "raft");
                 io_metrics.flush(now);
             });
     }
@@ -891,6 +909,7 @@ impl TiKVServer {
         });
         let rate_limiter = Arc::new(IORateLimiter::new(IORateLimitMode::WriteOnly, true, false));
         rate_limiter.set_io_rate_limit(conf.storage.io_rate_limit.max_bytes_per_sec.0 as usize);
+        set_io_rate_limiter(Some(rate_limiter.clone()));
         let kv_engine = kvengine::Engine::open(
             dfs,
             opts,

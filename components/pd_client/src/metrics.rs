@@ -52,6 +52,12 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref STORE_ENGINE_SIZE_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_size_bytes",
+        "Sizes of each column families",
+        &["db", "type"]
+    )
+    .unwrap();
     pub static ref REGION_READ_BYTES_HISTOGRAM: Histogram = register_histogram!(
         "tikv_region_read_bytes",
         "Histogram of bytes written for regions",

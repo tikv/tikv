@@ -116,8 +116,8 @@ impl RaftEngine for RfEngine {
         panic!()
     }
 
-    fn flush_metrics(&self, _instance: &str) {
-        panic!()
+    fn flush_metrics(&self, instance: &str) {
+        flush_engine_properties(&self, instance);
     }
 
     fn reset_statistics(&self) {

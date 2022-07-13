@@ -10,7 +10,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::MiscExt;
+use engine_traits::{CFNamesExt, MiscExt};
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
@@ -484,8 +484,8 @@ impl PdRunner {
             store_info.capacity
         };
         stats.set_capacity(capacity);
-
-        let used_size = store_info.kv_engine.get_engine_used_size().expect("cf");
+        let used_size = store_info.kv_engine.get_engine_used_size().expect("cf")
+            + store_info.rf_engine.get_engine_stats().disk_size;
         stats.set_used_size(used_size);
 
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
@@ -537,6 +537,20 @@ impl PdRunner {
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["available"])
             .set(available as i64);
+        STORE_SIZE_GAUGE_VEC
+            .with_label_values(&["used"])
+            .set(used_size as i64);
+        let kv_all_shard_stats = store_info.kv_engine.get_all_shard_stats();
+        let kv_engine_stats = kvengine::Engine::get_engine_stats(kv_all_shard_stats);
+        for cf in 0..kv_engine_stats.cf_total_sizes.len() {
+            STORE_ENGINE_SIZE_GAUGE_VEC
+                .with_label_values(&["kv", store_info.kv_engine.cf_names()[cf]])
+                .set(kv_engine_stats.cf_total_sizes[cf] as i64);
+        }
+        let rf_engine_stats = store_info.rf_engine.get_engine_stats();
+        STORE_ENGINE_SIZE_GAUGE_VEC
+            .with_label_values(&["raft", "raft"])
+            .set(rf_engine_stats.disk_size as i64);
 
         // TODO(x): set slow score
 
