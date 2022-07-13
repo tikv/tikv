@@ -65,7 +65,6 @@ use tikv_util::{
     Either,
 };
 use time::Timespec;
-use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
 use uuid::Uuid;
 
@@ -1576,6 +1575,7 @@ where
         msgs: Vec<RaftMessage>,
     ) {
         let mut now = None;
+        let std_now = Instant::now();
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgSnapshot {
@@ -1619,17 +1619,10 @@ where
                     .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
                 {
                     let proposal = &self.proposals.queue[idx];
-                    if term == proposal.term
-                        && let Some(propose_time) = proposal.propose_time
-                        && let Ok(dur) = ((*now.get_or_insert(monotonic_raw_now())) - propose_time).to_std() {
-                        ctx.raft_metrics
-                            .proposal_send_wait
-                            .observe(dur.as_secs_f64());
-                        for t in proposal.cb.get_trackers().iter().flat_map(|v| v.iter().flat_map(|t| t.as_tracker_token())) {
-                            GLOBAL_TRACKERS.with_tracker(t, |trakcer| {
-                                if trakcer.metrics.propose_send_wait_nanos == 0 {
-                                    trakcer.metrics.propose_send_wait_nanos = dur.as_nanos() as u64;
-                                }
+                    if term == proposal.term {
+                        for tracker in proposal.cb.get_trackers().iter().flat_map(|v| v.iter()) {
+                            tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
+                                &mut t.metrics.wf_send_proposal_nanos
                             });
                         }
                     }

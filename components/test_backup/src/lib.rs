@@ -94,6 +94,7 @@ impl TestSuite {
                 },
                 sim.get_concurrency_manager(*id),
                 api_version,
+                None,
             );
             let mut worker = bg_worker.lazy_build(format!("backup-{}", id));
             worker.start(backup_endpoint);
