@@ -8,7 +8,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use fail::fail_point;
 use kvproto::{
     kvrpcpb::KeyRange,
     metapb::{self, Peer},
@@ -619,7 +618,7 @@ impl AutoSplitController {
 
     fn is_grpc_poll_busy(&self, grpc_thread_usage: f64) -> bool {
         #[cfg(feature = "failpoints")]
-        fail_point!("mock_grpc_poll_is_not_busy", |_| { false });
+        fail::fail_point!("mock_grpc_poll_is_not_busy", |_| { false });
         if self.max_grpc_thread_count == 0 {
             return false;
         }
@@ -630,7 +629,7 @@ impl AutoSplitController {
 
     fn is_unified_read_pool_busy(&self, unified_read_pool_thread_usage: f64) -> bool {
         #[cfg(feature = "failpoints")]
-        fail_point!("mock_unified_read_pool_is_busy", |_| { true });
+        fail::fail_point!("mock_unified_read_pool_is_busy", |_| { true });
         if self.max_unified_read_pool_thread_count == 0 {
             return false;
         }
@@ -645,7 +644,7 @@ impl AutoSplitController {
 
     fn is_region_busy(&self, unified_read_pool_thread_usage: f64, region_cpu_usage: f64) -> bool {
         #[cfg(feature = "failpoints")]
-        fail_point!("mock_region_is_busy", |_| { true });
+        fail::fail_point!("mock_region_is_busy", |_| { true });
         if unified_read_pool_thread_usage <= 0.0 || !self.should_check_region_cpu() {
             return false;
         }
@@ -798,9 +797,8 @@ impl AutoSplitController {
                 .with_label_values(&["read"])
                 .observe(qps as f64);
 
-            // 1. If the QPS and Byte do not meet the threshold, skip.
-            // 2. If the Unified Read Pool is not busy or
-            //    the Region is not hot enough (takes up 50% of the Unified Read Pool CPU times), skip.
+            // 1. If the QPS or the byte does not meet the threshold, skip.
+            // 2. If the Unified Read Pool or the region is not hot enough, skip.
             if qps < self.cfg.qps_threshold
                 && byte < self.cfg.byte_threshold
                 && (!is_unified_read_pool_busy || !is_region_busy)
