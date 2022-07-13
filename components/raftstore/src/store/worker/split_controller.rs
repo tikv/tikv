@@ -646,9 +646,8 @@ impl AutoSplitController {
         if self.cfg.grpc_thread_cpu_overload_threshold_ratio <= 0.0 {
             return true;
         }
-        let grpc_thread_cpu_overload_threshold =
-            self.max_grpc_thread_count as f64 * self.cfg.grpc_thread_cpu_overload_threshold_ratio;
-        avg_grpc_thread_usage > 0.0 && avg_grpc_thread_usage >= grpc_thread_cpu_overload_threshold
+        avg_grpc_thread_usage
+            >= self.max_grpc_thread_count as f64 * self.cfg.grpc_thread_cpu_overload_threshold_ratio
     }
 
     fn is_unified_read_pool_busy(&self, unified_read_pool_thread_usage: f64) -> bool {
