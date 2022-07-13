@@ -168,7 +168,7 @@ where
         if store_id == INVALID_ID {
             store_id = self.alloc_id()?;
             if store_id == 0 {
-                error!("alloc weird store id 0");
+                return Err(box_err!("alloc weird store id 0"));
             } else {
                 debug!("alloc store id"; "store_id" => store_id);
             }
