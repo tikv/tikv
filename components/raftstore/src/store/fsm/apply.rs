@@ -5662,6 +5662,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
         fetch_apply_res(&rx);
 
+        // Phase 1: we test if pre_exec will filter execution of commands correctly.
         index_id += 1;
         let compact_entry = EntryBuilder::new(index_id, 1)
             .compact_log(index_id - 1, 2)
@@ -5718,6 +5719,8 @@ mod tests {
         assert_eq!(apply_res.exec_res.len(), 0);
         obs.filter_consistency_check.store(false, Ordering::SeqCst);
 
+        // Phase 2: we test if post_exec will persist when need.
+        // We choose BatchSplit in order to make sure `modified_region` is filled.
         index_id += 1;
         let mut splits = BatchSplitRequest::default();
         splits.set_right_derive(true);
