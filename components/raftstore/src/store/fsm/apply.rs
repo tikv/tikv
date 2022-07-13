@@ -5633,7 +5633,7 @@ mod tests {
             region_scheduler,
             coprocessor_host: host,
             importer,
-            engine,
+            engine: engine.clone(),
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
@@ -5718,6 +5718,7 @@ mod tests {
         assert_eq!(apply_res.exec_res.len(), 0);
         obs.filter_consistency_check.store(false, Ordering::SeqCst);
 
+        index_id += 1;
         let mut splits = BatchSplitRequest::default();
         splits.set_right_derive(true);
         splits.mut_requests().push(new_split_req(b"k2", 8, vec![7]));
