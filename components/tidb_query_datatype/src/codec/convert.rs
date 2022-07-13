@@ -357,7 +357,7 @@ impl ToInt for &[u8] {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
         let s = s.trim();
-        let vs = get_valid_int_prefix(ctx, s)?;
+        let vs = get_valid_int_prefix(ctx, s, false)?;
         let val = vs.parse::<i64>();
         match val {
             Ok(val) => val.to_int(ctx, tp),
@@ -380,7 +380,7 @@ impl ToInt for &[u8] {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
         let s = s.trim();
-        let s = get_valid_int_prefix(ctx, s)?;
+        let s = get_valid_int_prefix(ctx, s, false)?;
         // in TiDB, it use strconv.ParseUint here,
         // strconv.ParseUint will return 0 and a err if the str is neg
         if s.starts_with('-') {
@@ -796,7 +796,7 @@ impl ConvertTo<f64> for &[u8] {
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
         let s = s.trim();
-        let vs = get_valid_float_prefix(ctx, s)?;
+        let vs = get_valid_float_prefix(ctx, s, false)?;
         let val = vs
             .parse::<f64>()
             .map_err(|err| -> Error { box_err!("Parse '{}' to float err: {:?}", vs, err) })?;
@@ -827,9 +827,9 @@ impl ConvertTo<f64> for Bytes {
     }
 }
 
-pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
-    if !ctx.cfg.flag.contains(Flag::IN_SELECT_STMT) {
-        let vs = get_valid_float_prefix(ctx, s)?;
+pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str, is_cast: bool) -> Result<Cow<'a, str>> {
+    if !is_cast {
+        let vs = get_valid_float_prefix(ctx, s, is_cast)?;
         Ok(float_str_to_int_string(ctx, vs))
     } else {
         let mut valid_len = 0;
@@ -854,7 +854,10 @@ pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow
     }
 }
 
-pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a str> {
+pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str, is_cast: bool) -> Result<&'a str> {
+    if is_cast && s.is_empty() {
+        return Ok("0");
+    }
     let mut saw_dot = false;
     let mut saw_digit = false;
     let mut valid_len = 0;
@@ -2004,7 +2007,7 @@ mod tests {
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (i, o) in cases {
-            assert_eq!(super::get_valid_float_prefix(&mut ctx, i).unwrap(), o);
+            assert_eq!(super::get_valid_float_prefix(&mut ctx, i, false).unwrap(), o);
         }
     }
 
@@ -2041,7 +2044,7 @@ mod tests {
 
         // Firstly, make sure no error returns, instead a valid float string is returned
         for i in cases {
-            let o = super::get_valid_int_prefix(&mut ctx, i);
+            let o = super::get_valid_int_prefix(&mut ctx, i, false);
             assert_eq!(o.unwrap(), i);
         }
 
@@ -2088,7 +2091,7 @@ mod tests {
         ];
 
         for (i, e) in cases {
-            let o = super::get_valid_int_prefix(&mut ctx, i);
+            let o = super::get_valid_int_prefix(&mut ctx, i, false);
             assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
         }
         assert_eq!(ctx.take_warnings().warnings.len(), 0);
@@ -2108,7 +2111,7 @@ mod tests {
         ];
 
         for (i, e) in cases {
-            let o = super::get_valid_int_prefix(&mut ctx, i);
+            let o = super::get_valid_int_prefix(&mut ctx, i, true);
             assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
         }
         assert_eq!(ctx.take_warnings().warnings.len(), 0);
