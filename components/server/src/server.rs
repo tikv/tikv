@@ -77,6 +77,7 @@ use raftstore::{
         AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
     },
+    RaftRouterCompactedEventSender,
 };
 use security::SecurityManager;
 use tikv::{
@@ -1639,7 +1640,9 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
 
         // Create kv engine.
         let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
-            .compaction_filter_router(self.router.clone())
+            .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
+                router: Mutex::new(self.router.clone()),
+            }))
             .region_info_accessor(self.region_info_accessor.clone())
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
