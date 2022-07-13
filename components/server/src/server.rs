@@ -31,6 +31,7 @@ use backup_stream::{
     metadata::{ConnectionConfig, LazyEtcdClient},
     observer::BackupStreamObserver,
 };
+use causal_ts::{BatchTsoProvider, CausalTsProvider};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -139,7 +140,7 @@ const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
-    let mut tikv = TiKvServer::<CER>::init(config);
+    let mut tikv = TiKvServer::<CER>::init::<F>(config);
 
     // Must be called after `TiKvServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
@@ -230,6 +231,7 @@ struct TiKvServer<ER: RaftEngine> {
     background_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
+    causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>, // used for rawkv apiv2
 }
 
 struct TiKvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -254,7 +256,7 @@ type LocalServer<EK, ER> =
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
 impl<ER: RaftEngine> TiKvServer<ER> {
-    fn init(mut config: TiKvConfig) -> TiKvServer<ER> {
+    fn init<F: KvFormat>(mut config: TiKvConfig) -> TiKvServer<ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -310,6 +312,20 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             config.quota.enable_auto_tune,
         ));
 
+        let mut causal_ts_provider = None;
+        if let ApiVersion::V2 = F::TAG {
+            let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
+                pd_client.clone(),
+                config.causal_ts.renew_interval.0,
+                config.causal_ts.renew_batch_min_size,
+            ));
+            if let Err(e) = tso {
+                fatal!("Causal timestamp provider initialize failed: {:?}", e);
+            }
+            causal_ts_provider = Some(Arc::new(tso.unwrap()));
+            info!("Causal timestamp provider startup.");
+        }
+
         TiKvServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -335,6 +351,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             flow_info_receiver: None,
             sst_worker: None,
             quota_limiter,
+            causal_ts_provider,
         }
     }
 
@@ -778,7 +795,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
 
         // Register cdc.
-        let mut cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
@@ -805,21 +822,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         };
 
         // Register causal observer for RawKV API V2
-        if let ApiVersion::V2 = F::TAG {
-            let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
-                self.pd_client.clone(),
-                self.config.causal_ts.renew_interval.0,
-                self.config.causal_ts.renew_batch_min_size,
-            ));
-            if let Err(e) = tso {
-                fatal!("Causal timestamp provider initialize failed: {:?}", e);
-            }
-            let causal_ts_provider = Arc::new(tso.unwrap());
-            info!("Causal timestamp provider startup.");
-            cdc_ob.set_causal_ts_provider(causal_ts_provider.clone());
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider, cdc_ob.clone());
+        if let Some(provider) = self.causal_ts_provider.clone() {
+            let causal_ob = causal_ts::CausalObserver::new(provider, cdc_ob.clone());
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        }
+        };
 
         let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
         let check_leader_scheduler = self
@@ -1044,6 +1050,9 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             server.env(),
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
+            self.causal_ts_provider
+                .clone()
+                .map(|provider| provider as Arc<dyn CausalTsProvider>),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
@@ -1177,6 +1186,9 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.config.backup.clone(),
             self.concurrency_manager.clone(),
             self.config.storage.api_version(),
+            self.causal_ts_provider
+                .clone()
+                .map(|provider| provider as Arc<dyn CausalTsProvider>),
         );
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,
