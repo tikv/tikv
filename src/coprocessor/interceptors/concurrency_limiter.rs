@@ -155,7 +155,8 @@ mod tests {
             limit_concurrency(work(2), &*smp2, Duration::from_millis(500)).await
         }))
         .await
-        .unwrap().unwrap();
+        .unwrap()
+        .unwrap();
 
         // Both t1 and t2 need a semaphore permit to finish. Although t2 is much shorter than t1,
         // it starts with t1
