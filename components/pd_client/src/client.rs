@@ -395,7 +395,7 @@ impl PdClient for RpcClient {
         if id == 0 {
             return Err(box_err!("pd alloc weird id 0"));
         }
-        Ok()
+        Ok(id)
     }
 
     fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
