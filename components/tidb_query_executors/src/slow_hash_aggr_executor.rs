@@ -3,14 +3,14 @@
 use std::{
     convert::TryFrom,
     hash::{Hash, Hasher},
+    mem::size_of,
     ptr::NonNull,
     sync::Arc,
-    mem::size_of,
 };
 
 use collections::{HashMap, HashMapEntry};
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result, metrics::*};
+use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
     expr::{EvalConfig, EvalContext},
@@ -249,9 +249,11 @@ pub struct SlowHashAggregationImpl {
     n_bytes: usize,
 }
 
-impl  Drop for SlowHashAggregationImpl {
+impl Drop for SlowHashAggregationImpl {
     fn drop(&mut self) {
-        MEMTRACE_QUERY_EXECUTOR.aggr_slow_hash.sub(self.n_bytes as i64);
+        MEMTRACE_QUERY_EXECUTOR
+            .aggr_slow_hash
+            .sub(self.n_bytes as i64);
     }
 }
 

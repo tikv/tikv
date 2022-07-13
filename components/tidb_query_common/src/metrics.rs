@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
-use lazy_static::lazy_static;
 
 make_auto_flush_static_metric! {
     pub label_enum ExecutorName {
@@ -57,14 +57,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-
     static ref COPR_EXECUTOR_COUNT: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_executor_count",
         "Total number of each executor",
         &["type"]
     )
     .unwrap();
-
     pub static ref EXECUTOR_COUNT_METRICS: LocalCoprExecutorCount =
         auto_flush_from!(COPR_EXECUTOR_COUNT, LocalCoprExecutorCount);
 }
@@ -72,4 +70,3 @@ lazy_static! {
 pub trait MemoryTrace {
     fn alloc_trace(&mut self, len: usize);
 }
-

@@ -1,5 +1,6 @@
 version = "Two"
 unstable_features = true
+edition = "2018"
 
 condense_wildcard_suffixes = true
 license_template_path = "etc/license.template"

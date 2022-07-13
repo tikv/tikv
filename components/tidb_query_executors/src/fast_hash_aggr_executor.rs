@@ -1,10 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryFrom, hash::Hash, sync::Arc, mem::size_of};
+use std::{convert::TryFrom, hash::Hash, mem::size_of, sync::Arc};
 
 use collections::HashMap;
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result, metrics::*};
+use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
@@ -249,7 +249,9 @@ pub struct FastHashAggregationImpl {
 
 impl Drop for FastHashAggregationImpl {
     fn drop(&mut self) {
-        MEMTRACE_QUERY_EXECUTOR.aggr_fast_hash.sub(self.n_bytes as i64);
+        MEMTRACE_QUERY_EXECUTOR
+            .aggr_fast_hash
+            .sub(self.n_bytes as i64);
     }
 }
 
@@ -278,7 +280,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         self.states_offset_each_logical_row.clear();
 
         let rows_len = input_logical_rows.len();
- 
+
         // FIXME: Are we counting this multiple times?
         if rows_len > 0 && self.n_bytes == 0 {
             self.alloc_trace(rows_len * size_of::<usize>());

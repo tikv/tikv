@@ -627,7 +627,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             }
         }
 
-        self.out_most_executor.alloc_trace(result.logical_rows.len());
+        self.out_most_executor
+            .alloc_trace(result.logical_rows.len());
 
         warnings.merge(&mut result.warnings);
         Ok((is_drained, result.logical_rows.len()))

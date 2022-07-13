@@ -6,9 +6,9 @@ use codec::{number::NumberCodec, prelude::NumberDecoder};
 use itertools::izip;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
+    metrics::*,
     storage::{IntervalRange, Storage},
     Result,
-    metrics::*,
 };
 use tidb_query_datatype::{
     codec::{
@@ -229,7 +229,7 @@ struct IndexScanExecutorImpl {
     n_bytes: usize,
 }
 
-impl  Drop for IndexScanExecutorImpl {
+impl Drop for IndexScanExecutorImpl {
     fn drop(&mut self) {
         MEMTRACE_QUERY_EXECUTOR.index_scan.sub(self.n_bytes as i64);
     }

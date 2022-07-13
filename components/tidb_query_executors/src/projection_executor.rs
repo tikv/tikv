@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tidb_query_common::{storage::IntervalRange, Result, metrics::*};
+use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},
     expr::{EvalConfig, EvalContext},

@@ -2,12 +2,12 @@
 
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
+    metrics::*,
     storage::{
         scanner::{RangesScanner, RangesScannerOptions},
         IntervalRange, Range, Storage,
     },
     Result,
-    metrics::*,
 };
 use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext};
 use tipb::{ColumnInfo, FieldType};

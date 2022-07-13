@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::BinaryHeap, ptr::NonNull, sync::Arc, mem::size_of};
+use std::{cmp::Ordering, collections::BinaryHeap, mem::size_of, ptr::NonNull, sync::Arc};
 
 use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
@@ -56,7 +56,7 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     is_ended: bool,
 
     /// Number of bytes allocated by the executor.
-    n_bytes : usize,
+    n_bytes: usize,
 }
 
 /// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the struct and
@@ -80,7 +80,7 @@ impl BatchTopNExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     }
 }
 
-impl<Src: BatchExecutor>  Drop for BatchTopNExecutor<Src> {
+impl<Src: BatchExecutor> Drop for BatchTopNExecutor<Src> {
     fn drop(&mut self) {
         MEMTRACE_QUERY_EXECUTOR.top_n.sub(self.n_bytes as i64);
     }

@@ -3,11 +3,10 @@
 //! Simple aggregation is an aggregation that do not have `GROUP BY`s. It is more even more simpler
 //! than stream aggregation.
 
-use std::sync::Arc;
-use std::mem::size_of;
+use std::{mem::size_of, sync::Arc};
 
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result, metrics::*};
+use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},

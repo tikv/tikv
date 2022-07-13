@@ -6,9 +6,9 @@ use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
 use smallvec::SmallVec;
 use tidb_query_common::{
+    metrics::*,
     storage::{IntervalRange, Storage},
     Result,
-    metrics::*,
 };
 use tidb_query_datatype::{
     codec::{
@@ -37,7 +37,7 @@ impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
     }
 }
 
-impl  Drop for TableScanExecutorImpl{
+impl Drop for TableScanExecutorImpl {
     fn drop(&mut self) {
         MEMTRACE_QUERY_EXECUTOR.table_scan.sub(self.n_bytes as i64);
     }
