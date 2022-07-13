@@ -655,7 +655,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             .as_ref()
                             .map_or(0, |v| v.len());
                     sample.add_read_bytes(read_bytes);
-                    let quota_delay = quota_limiter.async_consume(sample).await;
+                    let quota_delay = quota_limiter.consume_sample(sample, true).await;
                     if !quota_delay.is_zero() {
                         TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                             .get(CMD)
@@ -737,8 +737,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 for ((mut req, id), tracker) in requests.into_iter().zip(ids).zip(trackers) {
                     set_tls_tracker_token(tracker);
                     let mut ctx = req.take_context();
+                    let source = ctx.take_request_source();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
+
                     let key = Key::from_raw(req.get_key());
                     tls_collect_query(
                         region_id,
@@ -775,7 +777,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant);
+                            consumer.consume(id, Err(e), begin_instant, source);
                             continue;
                         }
                     };
@@ -791,6 +793,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         access_locks,
                         region_id,
                         id,
+                        source,
                         tracker,
                     ));
                 }
@@ -806,6 +809,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         access_locks,
                         region_id,
                         id,
+                        source,
                         tracker,
                     ) = req_snap;
                     let snap_res = snap.await;
@@ -836,6 +840,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         v.map_err(|e| Error::from(txn::Error::from(e)))
                                             .map(|v| (v, stat)),
                                         begin_instant,
+                                        source,
                                     );
                                 }
                                 Err(e) => {
@@ -843,12 +848,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         id,
                                         Err(Error::from(txn::Error::from(e))),
                                         begin_instant,
+                                        source,
                                     );
                                 }
                             }
                         }),
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant);
+                            consumer.consume(id, Err(e), begin_instant, source);
                         }
                     }
                 }
@@ -996,7 +1002,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         + stats.cf_statistics(CF_LOCK).flow_stats.read_bytes
                         + stats.cf_statistics(CF_WRITE).flow_stats.read_bytes;
                     sample.add_read_bytes(read_bytes);
-                    let quota_delay = quota_limiter.async_consume(sample).await;
+                    let quota_delay = quota_limiter.consume_sample(sample, true).await;
                     if !quota_delay.is_zero() {
                         TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                             .get(CMD)
@@ -1606,7 +1612,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
                 let begin_instant = Instant::now();
-                for (id, key, ctx, mut req, snap) in snaps {
+                for (id, key, mut ctx, mut req, snap) in snaps {
                     let cf = req.take_cf();
                     match snap.await {
                         Ok(snapshot) => {
@@ -1621,6 +1627,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                             .raw_get_key_value(cf, &key, &mut stats)
                                             .map_err(Error::from),
                                         begin_instant,
+                                        ctx.take_request_source(),
                                     );
                                     tls_collect_read_flow(
                                         ctx.get_region_id(),
@@ -1631,12 +1638,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     );
                                 }
                                 Err(e) => {
-                                    consumer.consume(id, Err(e), begin_instant);
+                                    consumer.consume(
+                                        id,
+                                        Err(e),
+                                        begin_instant,
+                                        ctx.take_request_source(),
+                                    );
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant);
+                            consumer.consume(id, Err(e), begin_instant, ctx.take_request_source());
                         }
                     }
                 }
@@ -2428,9 +2440,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         &self,
         ctx: Context,
         algorithm: ChecksumAlgorithm,
-        ranges: Vec<KeyRange>,
+        mut ranges: Vec<KeyRange>,
     ) -> impl Future<Output = Result<(u64, u64, u64)>> {
-        // TODO: Modify this method in another PR for backup & restore feature of Api V2.
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -2462,6 +2473,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .iter()
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
+                for range in ranges.iter_mut() {
+                    let start_key = F::encode_raw_key_owned(range.take_start_key(), None);
+                    let end_key = F::encode_raw_key_owned(range.take_end_key(), None);
+                    range.set_start_key(start_key.into_encoded());
+                    range.set_end_key(end_key.into_encoded());
+                }
 
                 let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
@@ -2849,7 +2866,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
 }
 
 pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
-    fn consume(&self, id: u64, res: Result<ConsumeResponse>, begin: Instant);
+    fn consume(
+        &self,
+        id: u64,
+        res: Result<ConsumeResponse>,
+        begin: Instant,
+        request_source: String,
+    );
 }
 
 pub mod test_util {
@@ -3033,6 +3056,7 @@ pub mod test_util {
             id: u64,
             res: Result<(Option<Vec<u8>>, Statistics)>,
             _: tikv_util::time::Instant,
+            _source: String,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -3042,7 +3066,13 @@ pub mod test_util {
     }
 
     impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: tikv_util::time::Instant) {
+        fn consume(
+            &self,
+            id: u64,
+            res: Result<Option<Vec<u8>>>,
+            _: tikv_util::time::Instant,
+            _source: String,
+        ) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
@@ -4539,6 +4569,7 @@ mod tests {
         let mut checksum: u64 = 0;
         let mut total_kvs: u64 = 0;
         let mut total_bytes: u64 = 0;
+        let mut is_first = true;
         // Write key-value pairs one by one
         for &(ref key, ref value) in &test_data {
             storage
@@ -4551,13 +4582,18 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
-            total_kvs += 1;
-            total_bytes += (key.len() + value.len()) as u64;
-            checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
+            // start key is set to b"r\0a\0", if raw_checksum does not encode the key,
+            // first key will be included in checksum. This is for testing issue #12950.
+            if !is_first {
+                total_kvs += 1;
+                total_bytes += (key.len() + value.len()) as u64;
+                checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
+            }
+            is_first = false;
             rx.recv().unwrap();
         }
         let mut range = KeyRange::default();
-        range.set_start_key(b"r\0a".to_vec());
+        range.set_start_key(b"r\0a\0".to_vec());
         range.set_end_key(b"r\0z".to_vec());
         assert_eq!(
             (checksum, total_kvs, total_bytes),

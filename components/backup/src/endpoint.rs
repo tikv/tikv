@@ -575,8 +575,7 @@ pub struct ConfigManager(Arc<RwLock<BackupConfig>>);
 
 impl online_config::ConfigManager for ConfigManager {
     fn dispatch(&mut self, change: online_config::ConfigChange) -> online_config::Result<()> {
-        self.0.write().unwrap().update(change);
-        Ok(())
+        self.0.write().unwrap().update(change)
     }
 }
 

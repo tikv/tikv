@@ -241,11 +241,11 @@ pub fn enc_end_key(region: &Region) -> Vec<u8> {
 }
 
 #[inline]
-pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
-    if region_end_key.is_empty() {
+pub fn data_end_key(key: &[u8]) -> Vec<u8> {
+    if key.is_empty() {
         DATA_MAX_KEY.to_vec()
     } else {
-        data_key(region_end_key)
+        data_key(key)
     }
 }
 

@@ -94,6 +94,11 @@ pub trait AdminObserver: Coprocessor {
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminResponse) {}
 
+    /// Hook before exec admin request, returns whether we should skip this admin.
+    fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, _: &AdminRequest) -> bool {
+        false
+    }
+
     /// Hook to call immediately after exec command
     /// Will be a special persistence after this exec if a observer returns true.
     fn post_exec_admin(
@@ -124,6 +129,11 @@ pub trait QueryObserver: Coprocessor {
     /// Hook to call after applying write request.
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
+
+    /// Hook before exec write request, returns whether we should skip this write.
+    fn pre_exec_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) -> bool {
+        false
+    }
 
     /// Hook to call immediately after exec command.
     /// Will be a special persistence after this exec if a observer returns true.

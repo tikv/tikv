@@ -26,6 +26,8 @@ const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
+const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
+const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 
 // Number of rows in each chunk.
 const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
@@ -97,6 +99,10 @@ pub struct Config {
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     #[online_config(skip)]
     pub grpc_compression_type: GrpcCompressionType,
+    #[online_config(skip)]
+    pub grpc_gzip_compression_level: usize,
+    #[online_config(skip)]
+    pub grpc_min_message_size_to_compress: usize,
     #[online_config(skip)]
     pub grpc_concurrency: usize,
     #[online_config(skip)]
@@ -213,6 +219,8 @@ impl Default for Config {
             raft_client_queue_size: 8192,
             raft_msg_max_batch_size: 128,
             grpc_compression_type: GrpcCompressionType::None,
+            grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,
+            grpc_min_message_size_to_compress: DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
@@ -421,7 +429,7 @@ impl ConfigManager for ServerConfigManager {
     fn dispatch(&mut self, c: ConfigChange) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = c.clone();
-            self.config.update(move |cfg| cfg.update(change));
+            self.config.update(move |cfg| cfg.update(change))?;
             if let Some(value) = c.get("grpc_memory_pool_quota") {
                 let mem_quota: ReadableSize = value.clone().into();
                 // the resize is done inplace indeed, but grpc-rs's api need self, so we just
