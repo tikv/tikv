@@ -30,6 +30,8 @@ fn bench_writebatch_impl(b: &mut Bencher, batch_keys: usize) {
         .unwrap();
     let mut opts = DBOptions::new();
     opts.create_if_missing(true);
+    opts.enable_unordered_write(false);
+    opts.enable_pipelined_write(false);
     opts.enable_multi_batch_write(true);
     let db = Arc::new(DB::open(opts, path.path().to_str().unwrap()).unwrap());
     let key_count = 1 << 13;
@@ -112,6 +114,8 @@ fn bench_writebatch_without_capacity(b: &mut Bencher) {
         .unwrap();
     let mut opts = DBOptions::new();
     opts.create_if_missing(true);
+    opts.enable_unordered_write(false);
+    opts.enable_pipelined_write(false);
     opts.enable_multi_batch_write(true);
     let db = Arc::new(DB::open(opts, path.path().to_str().unwrap()).unwrap());
     let engine = RocksEngine::from_db(db);
@@ -129,6 +133,8 @@ fn bench_writebatch_with_capacity(b: &mut Bencher) {
         .unwrap();
     let mut opts = DBOptions::new();
     opts.create_if_missing(true);
+    opts.enable_unordered_write(false);
+    opts.enable_pipelined_write(false);
     opts.enable_multi_batch_write(true);
     let db = Arc::new(DB::open(opts, path.path().to_str().unwrap()).unwrap());
     let engine = RocksEngine::from_db(db);

@@ -81,6 +81,7 @@ impl RocksWriteBatchVec {
 
     /// `check_switch_batch` will split a large WriteBatch into many smaller ones. This is to avoid
     /// a large WriteBatch blocking write_thread too long.
+    #[inline(always)]
     fn check_switch_batch(&mut self) {
         if self.support_write_batch_vec
             && self.batch_size_limit > 0
