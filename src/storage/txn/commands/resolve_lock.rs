@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 // #[PerformanceCriticalPath]
 use collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
@@ -70,8 +71,18 @@ impl CommandExt for ResolveLock {
     gen_lock!(key_locks: multiple(|(key, _)| key));
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+#[async_trait]
+impl<S: Snapshot, L: LockManager + std::marker::Send + std::marker::Sync> WriteCommand<S, L>
+    for ResolveLock
+{
+    async fn process_write(
+        mut self,
+        snapshot: S,
+        context: WriteContext<'_, L>,
+    ) -> Result<WriteResult>
+    where
+        S: 'async_trait,
+    {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
 
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);

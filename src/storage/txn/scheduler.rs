@@ -37,6 +37,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::compat::Future01CompatExt;
+use futures_executor::block_on;
 use kvproto::{
     kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp},
     pdpb::QueryKind,
@@ -794,8 +795,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             let begin_instant = Instant::now();
             let res = unsafe {
                 with_perf_context::<E, _, _>(tag, || {
-                    task.cmd
-                        .process_write(snapshot, context)
+                    // FIXME: block_on
+                    block_on(task.cmd.process_write(snapshot, context))
                         .map_err(StorageError::from)
                 })
             };

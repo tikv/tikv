@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::{ExtraOp, LockInfo};
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
@@ -76,8 +77,15 @@ fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
     }
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+#[async_trait]
+impl<S: Snapshot, L: LockManager + std::marker::Send + std::marker::Sync> WriteCommand<S, L>
+    for AcquirePessimisticLock
+{
+    async fn process_write(
+        mut self,
+        snapshot: S,
+        context: WriteContext<'_, L>,
+    ) -> Result<WriteResult> where S: 'async_trait{
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(

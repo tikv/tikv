@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, Lock, WriteType};
 
@@ -54,8 +55,9 @@ enum SecondaryLockStatus {
     RolledBack,
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+#[async_trait]
+impl<S: Snapshot, L: LockManager + std::marker::Send + std::marker::Sync> WriteCommand<S, L> for CheckSecondaryLocks {
+    async fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> where S: 'async_trait {
         // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
         // to prevent this case from happening.
         context.concurrency_manager.update_max_ts(self.start_ts);

@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 // #[PerformanceCriticalPath]
 use engine_traits::CfName;
 
@@ -38,8 +39,14 @@ impl CommandExt for RawAtomicStore {
     }
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
-    fn process_write(self, _: S, _: WriteContext<'_, L>) -> Result<WriteResult> {
+#[async_trait]
+impl<S: Snapshot, L: LockManager + std::marker::Send + std::marker::Sync> WriteCommand<S, L>
+    for RawAtomicStore
+{
+    async fn process_write(self, _: S, _: WriteContext<'_, L>) -> Result<WriteResult>
+    where
+        S: 'async_trait,
+    {
         let rows = self.mutations.len();
         let (mutations, ctx) = (self.mutations, self.ctx);
         let mut to_be_write = WriteData::from_modifies(mutations);

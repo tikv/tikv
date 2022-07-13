@@ -62,7 +62,7 @@ impl From<u64> for WaitTimeout {
 
 /// `LockManager` manages transactions waiting for locks held by other transactions.
 /// It has responsibility to handle deadlocks between transactions.
-pub trait LockManager: Clone + Send + 'static {
+pub trait LockManager: Clone + Send + Sync + 'static {
     /// Transaction with `start_ts` waits for `lock` released.
     ///
     /// If the lock is released or waiting times out or deadlock occurs, the transaction

@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use api_version::{match_template_api_version, KvFormat, RawValue};
+use async_trait::async_trait;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName};
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
@@ -50,8 +51,14 @@ impl CommandExt for RawCompareAndSwap {
     }
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
-    fn process_write(self, snapshot: S, _: WriteContext<'_, L>) -> Result<WriteResult> {
+#[async_trait]
+impl<S: Snapshot, L: LockManager + std::marker::Send + std::marker::Sync> WriteCommand<S, L>
+    for RawCompareAndSwap
+{
+    async fn process_write(self, snapshot: S, _: WriteContext<'_, L>) -> Result<WriteResult>
+    where
+        S: 'async_trait,
+    {
         let (cf, key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
         let mut data = vec![];
@@ -181,7 +188,7 @@ mod tests {
             statistics: &mut statistic,
             async_apply_prewrite: false,
         };
-        let ret = cmd.cmd.process_write(snap, context)?;
+        let ret = cmd.cmd.process_write(snap, context).await?;
         match ret.pr {
             ProcessResult::RawCompareAndSwapRes {
                 previous_value,

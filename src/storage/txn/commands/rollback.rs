@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp};
 
@@ -41,8 +42,9 @@ impl CommandExt for Rollback {
     gen_lock!(keys: multiple);
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+#[async_trait]
+impl<S: Snapshot, L: LockManager + std::marker::Send + std::marker::Sync> WriteCommand<S, L> for Rollback {
+    async fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> where S: 'async_trait {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
             SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),

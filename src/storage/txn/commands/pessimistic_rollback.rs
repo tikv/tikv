@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::mem;
 
+use async_trait::async_trait;
 use txn_types::{Key, LockType, TimeStamp};
 
 use crate::storage::{
@@ -44,9 +45,19 @@ impl CommandExt for PessimisticRollback {
     gen_lock!(keys: multiple);
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
+#[async_trait]
+impl<S: Snapshot, L: LockManager + std::marker::Send + std::marker::Sync> WriteCommand<S, L>
+    for PessimisticRollback
+{
     /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    async fn process_write(
+        mut self,
+        snapshot: S,
+        context: WriteContext<'_, L>,
+    ) -> Result<WriteResult>
+    where
+        S: 'async_trait,
+    {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
             SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),

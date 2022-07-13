@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{thread, time::Duration};
 
+use async_trait::async_trait;
 use txn_types::Key;
 
 use crate::storage::{
@@ -40,8 +41,14 @@ impl CommandExt for Pause {
     gen_lock!(keys: multiple);
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Pause {
-    fn process_write(self, _snapshot: S, _context: WriteContext<'_, L>) -> Result<WriteResult> {
+#[async_trait]
+impl<S: Snapshot, L: LockManager + std::marker::Send + std::marker::Sync> WriteCommand<S, L>
+    for Pause
+{
+    async fn process_write(self, _snapshot: S, _context: WriteContext<'_, L>) -> Result<WriteResult>
+    where
+        S: 'async_trait,
+    {
         thread::sleep(Duration::from_millis(self.duration));
         Ok(WriteResult {
             ctx: self.ctx,
