@@ -138,7 +138,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
     #[inline]
     fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<RocksEngine> {
         {
-            let mut reg = self.registry.lock().unwrap();
+            let reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Err(box_err!(
                     "region {} {} already exists",
@@ -146,13 +146,16 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
                     db.as_inner().path()
                 ));
             }
-            let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
-            reg.remove(&(old_id, old_suffix));
         }
 
         let db_path = self.tablet_path(id, suffix);
         std::fs::rename(path, &db_path)?;
-        self.open_tablet_raw(db_path.as_path(), false)
+        let new_engine = self.open_tablet_raw(db_path.as_path(), false);
+        if new_engine.is_ok() {
+            let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
+            self.registry.lock().unwrap().remove(&(old_id, old_suffix));
+        }
+        new_engine
     }
 
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
@@ -272,6 +275,7 @@ mod tests {
         // After we load it as with the new id or suffix, we should be unable to get it with
         // the old id and suffix in the cache.
         assert!(factory.open_tablet_cache(1, 10).is_none());
+        assert!(factory.open_tablet_cache(1, 20).is_some());
 
         factory.mark_tombstone(1, 20);
         assert!(factory.is_tombstoned(1, 20));
