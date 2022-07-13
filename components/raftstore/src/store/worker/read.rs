@@ -43,7 +43,7 @@ use crate::{
 };
 
 pub trait ReadExecutor<E: KvEngine> {
-    fn get_tablet(&self, region_id: u64) -> &E;
+    fn get_tablet(&self, region_id: u64) -> E;
     fn get_snapshot(&mut self, ts: Option<ThreadReadId>, region_id: u64) -> Arc<E::Snapshot>;
 
     fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
@@ -443,7 +443,7 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
-    fn get_tablet(&self, region_id: u64) -> &E {
+    fn get_tablet(&self, region_id: u64) -> E {
         unimplemented!()
     }
 

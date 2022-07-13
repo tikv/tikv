@@ -1781,6 +1781,10 @@ impl<T: Simulator> Cluster<T> {
         .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
+
+    pub fn get_tablet_factory(&self, node_id: u64) -> Option<&Box<dyn TabletFactory<RocksEngine> + Send>> {
+        self.factoriy_map.get(&node_id)
+    }
 }
 
 impl<T: Simulator> Drop for Cluster<T> {

@@ -5382,12 +5382,11 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn get_tablet(&self, region_id: u64) -> &EK {
-        unimplemented!()
+    fn get_tablet(&self, region_id: u64) -> EK {
+        self.factory.open_tablet_cache_any(region_id).unwrap()
     }
 
     fn get_snapshot(&mut self, _: Option<ThreadReadId>, region_id: u64) -> Arc<EK::Snapshot> {
-        // unimplemented!()
         if let Some(tablet) = self.factory.open_tablet_cache_any(region_id) {
             Arc::new(tablet.snapshot())
         } else {

@@ -4,6 +4,7 @@ use std::{
     thread, time,
 };
 
+use engine_rocks::raw::Writable;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, KeyRange};
@@ -43,6 +44,37 @@ fn test_raftkv() {
     empty_write(&ctx, &storage);
     wrong_context(&ctx, &storage);
     // TODO: test multiple node
+}
+
+#[test]
+fn test_get_snapshot_from_different_tablet() {
+    let count = 1;
+    let mut cluster = new_server_cluster(1, count);
+    cluster.run();
+
+    // assert_eq!(cluster.must_get(b"k1"), None);
+
+    let factory = cluster.get_tablet_factory(1).unwrap();
+
+    let tablet = factory.open_tablet(1, 0).unwrap();
+    let db = tablet.get_sync_db();
+    db.put(b"za", b"val_a").unwrap();
+    db.put(b"zb", b"val_b").unwrap();
+
+    let val = db.get(b"za");
+    println!("{:?}", val.unwrap());
+
+    let tablet = factory.open_tablet(2, 0).unwrap();
+    let db = tablet.get_sync_db();
+    let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
+    db.put_cf(default_cf, b"zc", b"val_c").unwrap();
+    db.put_cf(default_cf, b"zd", b"val_d").unwrap();
+
+    let region_snap = cluster.must_get_snapshot_of_region(1);
+    assert_eq!(region_snap.get(&Key::from_encoded(b"a".to_vec())).unwrap().unwrap(), b"val_a");
+    assert_eq!(region_snap.get(&Key::from_encoded(b"b".to_vec())).unwrap().unwrap(), b"val_b");
+    assert!(region_snap.get(&Key::from_encoded(b"c".to_vec())).unwrap().is_none());
+    assert!(region_snap.get(&Key::from_encoded(b"d".to_vec())).unwrap().is_none());
 }
 
 #[test]
