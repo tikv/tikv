@@ -160,19 +160,14 @@ fn test_raft_log_gc() {
                     .collect::<Vec<_>>();
                 if curr_shard_stats
                     .iter()
-                    .zip(prev_shard_stats.iter())
-                    .all(|(curr, prev)| {
-                        curr.mem_table_size == 0
-                            && curr.mem_table_count == 1
-                            && curr.write_sequence > prev.write_sequence
-                    })
+                    .all(|curr| curr.mem_table_size == 0 && curr.mem_table_count == 1)
                 {
                     break;
                 }
                 if i == 29 {
                     panic!("wait for memtable flush timeouts");
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(200));
             }
             curr_shard_stats
         };

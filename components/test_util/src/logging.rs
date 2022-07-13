@@ -100,7 +100,7 @@ pub fn init_log_for_test() {
     START.call_once(|| {
         let output = env::var("LOG_FILE").ok();
         let level = tikv_util::logger::get_level_by_string(
-            &env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()),
+            &env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_owned()),
         )
         .unwrap();
         let append_instead_truncate = env::var("LOG_APPEND").is_ok();
@@ -142,7 +142,7 @@ pub fn init_log_for_test() {
             false, // disable async drainer
             true,  // init std log
             disabled_targets,
-            0,
+            100,
         )
         .unwrap();
     });

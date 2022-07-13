@@ -2,7 +2,6 @@
 
 use std::time::Duration;
 
-use pd_client::PdClient;
 use test_cloud_server::ServerCluster;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
@@ -81,31 +80,9 @@ fn test_remove_peer() {
         }
         sleep();
     }
-    let stores = pd.get_stores().unwrap();
-    for _ in 0..100 {
-        let region_1 = pd.get_region(&[]).unwrap();
-        let region_2 = pd.get_region(&i_to_key(5)).unwrap();
-        if region_1.get_peers().len() == 3 && region_2.get_peers().len() == 3 {
-            let store_1_peer = raftstore::store::util::find_peer(&region_1, stores[0].id).unwrap();
-            let store_2_peer = raftstore::store::util::find_peer(&region_2, stores[1].id).unwrap();
-            pd.remove_peer(region_1.id, store_1_peer.clone());
-            pd.remove_peer(region_2.id, store_2_peer.clone());
-            break;
-        }
-        sleep();
-    }
-    let mut removed = false;
-    for _ in 0..100 {
-        let region_1 = pd.get_region(&[]).unwrap();
-        let region_2 = pd.get_region(&i_to_key(5)).unwrap();
-        if region_1.get_peers().len() == 2 && region_2.get_peers().len() == 2 {
-            removed = true;
-            break;
-        }
-        sleep();
-    }
-    assert!(removed);
-    // After two store has removed peer, the cluster is still available.
+    pd.disable_default_operator();
+    cluster.remove_node_peers(*node_ids.first().unwrap());
+    // After one store has removed peer, the cluster is still available.
     cluster.put_kv(0..10, i_to_key, i_to_key);
     cluster.stop();
 }

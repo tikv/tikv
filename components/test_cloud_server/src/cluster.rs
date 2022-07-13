@@ -5,6 +5,7 @@ use std::{collections::HashMap, ops::Range, path::Path, sync::Arc, time::Duratio
 use cloud_server::TiKVServer;
 use futures::executor::block_on;
 use grpcio::{Channel, ChannelBuilder, EnvBuilder, Environment};
+use kvengine::dfs::InMemFS;
 use kvproto::{
     kvrpcpb::{CommitRequest, Context, Mutation, Op, PrewriteRequest, SplitRegionRequest},
     raft_cmdpb::RaftCmdRequest,
@@ -14,9 +15,13 @@ use pd_client::PdClient;
 use rfstore::{store::Callback, RaftStoreRouter};
 use security::SecurityManager;
 use tempfile::TempDir;
-use test_raftstore::TestPdClient;
+use test_raftstore::{find_peer, TestPdClient};
 use tikv::{config::TiKvConfig, import::SstImporter, storage::mvcc::TimeStamp};
-use tikv_util::{thread_group::GroupProperties, time::Instant};
+use tikv_util::{
+    config::{ReadableDuration, ReadableSize},
+    thread_group::GroupProperties,
+    time::Instant,
+};
 
 // Retry if encounter error
 macro_rules! retry_req {
@@ -44,6 +49,8 @@ pub struct ServerCluster {
     tmp_dir: TempDir,
     env: Arc<Environment>,
     pd_client: Arc<TestPdClient>,
+    security_mgr: Arc<SecurityManager>,
+    dfs: Arc<InMemFS>,
     channels: HashMap<u64, Channel>,
 }
 
@@ -54,39 +61,41 @@ impl ServerCluster {
     where
         F: Fn(u16, &mut TiKvConfig),
     {
-        let tmp_dir = TempDir::new().unwrap();
-        let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
-        let env = Arc::new(EnvBuilder::new().cq_count(2).build());
-        let pd_client = Arc::new(TestPdClient::new(1, false));
-        // Always shares the same in-memory DFS for test cluster.
-        let dfs = Arc::new(kvengine::dfs::InMemFS::new());
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
-        let mut servers = HashMap::new();
-        let mut channels = HashMap::new();
+        let mut cluster = Self {
+            servers: HashMap::new(),
+            tmp_dir: TempDir::new().unwrap(),
+            env: Arc::new(EnvBuilder::new().cq_count(2).build()),
+            pd_client: Arc::new(TestPdClient::new(1, false)),
+            security_mgr: Arc::new(SecurityManager::new(&Default::default()).unwrap()),
+            dfs: Arc::new(InMemFS::new()),
+            channels: HashMap::new(),
+        };
         for node_id in nodes {
-            let mut config = new_test_config(tmp_dir.path(), node_id);
-            update_conf(node_id, &mut config);
-            let mut server = TiKVServer::setup(
-                config,
-                security_mgr.clone(),
-                env.clone(),
-                pd_client.clone(),
-                dfs.clone(),
-            );
-            server.run();
-            let store_id = server.get_store_id();
-            let addr = node_addr(node_id);
-            let channel = ChannelBuilder::new(env.clone()).connect(&addr);
-            channels.insert(store_id, channel);
-            servers.insert(node_id, server);
+            cluster.start_node(node_id, &update_conf);
         }
-        Self {
-            servers,
-            tmp_dir,
-            env,
-            pd_client,
-            channels,
-        }
+        cluster
+    }
+
+    pub fn start_node<F>(&mut self, node_id: u16, update_conf: F)
+    where
+        F: Fn(u16, &mut TiKvConfig),
+    {
+        let mut config = new_test_config(self.tmp_dir.path(), node_id);
+        update_conf(node_id, &mut config);
+        let mut server = TiKVServer::setup(
+            config,
+            self.security_mgr.clone(),
+            self.env.clone(),
+            self.pd_client.clone(),
+            self.dfs.clone(),
+        );
+        server.run();
+        let store_id = server.get_store_id();
+        let addr = node_addr(node_id);
+        let channel = ChannelBuilder::new(self.env.clone()).connect(&addr);
+        self.channels.insert(store_id, channel);
+        self.servers.insert(node_id, server);
     }
 
     pub fn get_stores(&self) -> Vec<u64> {
@@ -114,13 +123,20 @@ impl ServerCluster {
         ctx
     }
 
+    pub fn get_nodes(&self) -> Vec<u16> {
+        self.servers.keys().copied().collect()
+    }
+
     pub fn stop(&mut self) {
-        for (_, server) in self.servers.drain() {
-            server.stop();
+        let nodes = self.get_nodes();
+        for node_id in nodes {
+            self.stop_node(node_id);
         }
     }
     pub fn stop_node(&mut self, node_id: u16) {
         if let Some(node) = self.servers.remove(&node_id) {
+            let store_id = node.get_store_id();
+            self.channels.remove(&store_id);
             node.stop();
         }
     }
@@ -229,13 +245,19 @@ impl ServerCluster {
     }
 
     pub fn split(&self, key: &[u8]) {
-        let ctx = self.new_rpc_context(key);
-        let client = self.get_kv_client(ctx.get_peer().get_store_id());
-        let mut split_req = SplitRegionRequest::default();
-        split_req.set_context(ctx);
-        split_req.set_split_key(key.to_vec());
-        let resp = client.split_region(&split_req).unwrap();
-        assert!(!resp.has_region_error());
+        for _ in 0..10 {
+            let ctx = self.new_rpc_context(key);
+            let client = self.get_kv_client(ctx.get_peer().get_store_id());
+            let mut split_req = SplitRegionRequest::default();
+            split_req.set_context(ctx);
+            split_req.set_split_key(key.to_vec());
+            let resp = client.split_region(&split_req).unwrap();
+            if !resp.has_region_error() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("failed to split key {:?}", key);
     }
 
     pub fn get_region_id(&self, key: &[u8]) -> u64 {
@@ -251,12 +273,63 @@ impl ServerCluster {
     pub fn wait_region_replicated(&self, key: &[u8], replica_cnt: usize) {
         for _ in 0..10 {
             let region_info = self.pd_client.get_region_info(key).unwrap();
+            let region_id = region_info.id;
+            let region_ver = region_info.get_region_epoch().version;
             if region_info.region.get_peers().len() >= replica_cnt {
-                return;
+                let all_applied_snapshot = region_info.get_peers().iter().all(|peer| {
+                    let node_id = self.get_server_node_id(peer.store_id);
+                    let kv = self.get_kvengine(node_id);
+                    kv.get_shard_with_ver(region_id, region_ver).is_ok()
+                });
+                if all_applied_snapshot {
+                    return;
+                }
             }
             std::thread::sleep(Duration::from_millis(300));
         }
         panic!("region is not replicated");
+    }
+
+    pub fn remove_node_peers(&mut self, node_id: u16) {
+        let server = self.servers.get(&node_id).unwrap();
+        let store_id = server.get_store_id();
+        let all_id_vers = server.get_kv_engine().get_all_shard_id_vers();
+        for id_ver in &all_id_vers {
+            let (region, leader) = block_on(self.pd_client.get_region_leader_by_id(id_ver.id))
+                .unwrap()
+                .unwrap();
+            if leader.store_id == store_id {
+                let target = region
+                    .get_peers()
+                    .iter()
+                    .find(|x| x.store_id != store_id)
+                    .unwrap();
+                self.pd_client
+                    .transfer_leader(region.id, target.clone(), vec![]);
+                self.pd_client
+                    .region_leader_must_be(region.id, target.clone());
+            }
+            if let Some(peer) = find_peer(&region, store_id) {
+                self.pd_client.must_remove_peer(region.id, peer.clone());
+            }
+        }
+        let server = self.servers.get(&node_id).unwrap();
+        for _ in 0..30 {
+            if server.get_kv_engine().get_all_shard_id_vers().is_empty() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("kvengine is not empty");
+    }
+
+    fn get_server_node_id(&self, store_id: u64) -> u16 {
+        for (node_id, server) in &self.servers {
+            if server.get_store_id() == store_id {
+                return *node_id;
+            }
+        }
+        panic!("server not found");
     }
 }
 
@@ -268,6 +341,15 @@ pub fn new_test_config(base_dir: &Path, node_id: u16) -> TiKvConfig {
     config.server.addr = node_addr(node_id);
     config.server.status_addr = node_status_addr(node_id);
     config.dfs.s3_endpoint = "memory".to_string();
+    config.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    config.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(20);
+    config.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    config.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
+    config.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    config.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(100);
+    config.rocksdb.writecf.write_buffer_size = ReadableSize::kb(16);
+    config.rocksdb.writecf.block_size = ReadableSize::kb(4);
+    config.rocksdb.writecf.target_file_size_base = ReadableSize::kb(32);
     config
 }
 

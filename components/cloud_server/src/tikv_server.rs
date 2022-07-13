@@ -26,8 +26,7 @@ use engine_rocks::{from_rocks_compression_type, raw::DBCompressionType};
 use engine_traits::{KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE};
 use error_code::ErrorCodeExt;
 use file_system::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, IORateLimitMode, IORateLimiter,
-    MetricsManager as IOMetricsManager,
+    BytesFetcher, IORateLimitMode, IORateLimiter, MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
@@ -111,6 +110,7 @@ pub struct TiKVServer {
     env: Arc<Environment>,
     background_worker: Worker,
     quota_limiter: Arc<QuotaLimiter>,
+    io_rate_limiter: Arc<IORateLimiter>,
 }
 
 struct TiKVEngines {
@@ -205,8 +205,11 @@ impl TiKVServer {
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
         let config = cfg_controller.get_current();
-
-        let raw_engines = Self::init_raw_engines(pd_client.clone(), &config, dfs);
+        let io_rate_limiter = Arc::new(IORateLimiter::new(IORateLimitMode::WriteOnly, true, true));
+        io_rate_limiter
+            .set_io_rate_limit(config.storage.io_rate_limit.max_bytes_per_sec.0 as usize);
+        let raw_engines =
+            Self::init_raw_engines(pd_client.clone(), &config, dfs, io_rate_limiter.clone());
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
@@ -258,6 +261,7 @@ impl TiKVServer {
             env,
             background_worker,
             quota_limiter,
+            io_rate_limiter,
         }
     }
 
@@ -753,8 +757,7 @@ impl TiKVServer {
         let fetcher = if stats_collector_enabled {
             BytesFetcher::FromIOStatsCollector()
         } else {
-            let limiter = get_io_rate_limiter().unwrap();
-            BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
+            BytesFetcher::FromRateLimiter(self.io_rate_limiter.statistics().unwrap())
         };
         fetcher
     }
@@ -854,6 +857,7 @@ impl TiKVServer {
         pd: Arc<dyn pd_client::PdClient>,
         conf: &TiKvConfig,
         dfs: Arc<dyn DFS>,
+        rate_limiter: Arc<IORateLimiter>,
     ) -> Engines {
         // Create raft engine.
         let raft_db_path = Path::new(&conf.raft_store.raftdb_path);
@@ -907,9 +911,6 @@ impl TiKVServer {
         let meta_change_listener = Box::new(MetaChangeListener {
             sender: sender.clone(),
         });
-        let rate_limiter = Arc::new(IORateLimiter::new(IORateLimitMode::WriteOnly, true, false));
-        rate_limiter.set_io_rate_limit(conf.storage.io_rate_limit.max_bytes_per_sec.0 as usize);
-        set_io_rate_limiter(Some(rate_limiter.clone()));
         let kv_engine = kvengine::Engine::open(
             dfs,
             opts,
