@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use collections::HashMap;
 use engine_rocks::{
     raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine,
@@ -17,6 +18,7 @@ use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
+use super::engine_factory_v2::KvEngineFactoryV2;
 use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
 struct FactoryInner {
@@ -34,6 +36,7 @@ struct FactoryInner {
 pub struct KvEngineFactoryBuilder {
     inner: FactoryInner,
     compact_event_sender: Option<Arc<dyn CompactedEventSender + Send + Sync>>,
+    multi_rocksdb: bool,
 }
 
 impl KvEngineFactoryBuilder {
@@ -51,7 +54,13 @@ impl KvEngineFactoryBuilder {
                 root_db: Mutex::default(),
             },
             compact_event_sender: None,
+            multi_rocksdb: false,
         }
+    }
+
+    pub fn set_multi_rocksdb(mut self) -> Self {
+        self.multi_rocksdb = true;
+        self
     }
 
     pub fn region_info_accessor(mut self, accessor: RegionInfoAccessor) -> Self {
@@ -82,10 +91,19 @@ impl KvEngineFactoryBuilder {
         self
     }
 
-    pub fn build(self) -> KvEngineFactory {
-        KvEngineFactory {
+    pub fn build(self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
+        let factory = KvEngineFactory {
             inner: Arc::new(self.inner),
             compact_event_sender: self.compact_event_sender.clone(),
+        };
+        if self.multi_rocksdb {
+            let factory = KvEngineFactoryV2 {
+                inner: factory,
+                registry: Arc::new(Mutex::new(HashMap::default())),
+            };
+            TabletFactory::clone(&factory)
+        } else {
+            TabletFactory::clone(&factory)
         }
     }
 }

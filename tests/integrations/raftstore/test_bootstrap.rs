@@ -127,7 +127,7 @@ fn test_node_bootstrap_with_prepared_data() {
         AutoSplitController::default(),
         ConcurrencyManager::new(1.into()),
         CollectorRegHandle::new_for_test(),
-        TabletFactory::clone(&factory),
+        factory,
     )
     .unwrap();
     assert!(

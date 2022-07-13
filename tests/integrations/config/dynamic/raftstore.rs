@@ -72,7 +72,7 @@ fn create_tmp_engine(
     );
     (
         Engines::new(engine, RocksEngine::from_db(raft_db)),
-        TabletFactory::clone(&factory),
+        factory,
     )
 }
 

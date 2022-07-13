@@ -15,8 +15,8 @@ const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
 
 #[derive(Clone)]
 pub struct KvEngineFactoryV2 {
-    inner: KvEngineFactory,
-    registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
+    pub inner: KvEngineFactory,
+    pub registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
 }
 
 impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {

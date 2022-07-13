@@ -42,7 +42,7 @@ use engine_rocks::{
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
-    RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE, TabletAccessor,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -1639,21 +1639,21 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             builder = builder.block_cache(cache);
         }
         let factory = builder.build();
-        let factory_clone = TabletFactory::clone(&factory);
+        let factory_clone = factory.clone();
         let kv_engine = factory
             .create_shared_db()
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
         let engines = Engines::new(kv_engine, raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(
-                Arc::new(factory),
-                DBType::Kv,
-                self.config.storage.block_cache.shared,
-            )),
-        );
+        // cfg_controller.register(
+        //     tikv::config::Module::Rocksdb,
+        //     Box::new(DBConfigManger::new(
+        //         Arc::new((factory as Box<dyn TabletAccessor<RocksEngine>>).into()),
+        //         DBType::Kv,
+        //         self.config.storage.block_cache.shared,
+        //     )),
+        // );
         engines
             .raft
             .register_config(cfg_controller, self.config.storage.block_cache.shared);

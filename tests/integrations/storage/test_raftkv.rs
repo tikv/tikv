@@ -50,31 +50,40 @@ fn test_raftkv() {
 fn test_get_snapshot_from_different_tablet() {
     let count = 1;
     let mut cluster = new_server_cluster(1, count);
+    cluster.set_multi_rocks();
     cluster.run();
 
-    // assert_eq!(cluster.must_get(b"k1"), None);
+    let region = cluster.get_region(b"a");
+    cluster.must_split(&region, b"h");
+
+    let region = cluster.get_region(b"a");
+    let region_1 = region.get_id();
+    let region = cluster.get_region(b"i");
+    let region_2 = region.get_id();
+    println!("{} {}", region_1, region_2);
 
     let factory = cluster.get_tablet_factory(1).unwrap();
 
-    let tablet = factory.open_tablet(1, 0).unwrap();
+    let tablet = factory.create_tablet(region_1, 0).unwrap();
     let db = tablet.get_sync_db();
     db.put(b"za", b"val_a").unwrap();
     db.put(b"zb", b"val_b").unwrap();
 
-    let val = db.get(b"za");
-    println!("{:?}", val.unwrap());
-
-    let tablet = factory.open_tablet(2, 0).unwrap();
+    let tablet = factory.create_tablet(region_2, 0).unwrap();
     let db = tablet.get_sync_db();
     let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
-    db.put_cf(default_cf, b"zc", b"val_c").unwrap();
-    db.put_cf(default_cf, b"zd", b"val_d").unwrap();
+    db.put_cf(default_cf, b"zb", b"val_bbb").unwrap();
+    db.put_cf(default_cf, b"zi", b"val_i").unwrap();
 
-    let region_snap = cluster.must_get_snapshot_of_region(1);
+    let region_snap = cluster.must_get_snapshot_of_region(region_1);
     assert_eq!(region_snap.get(&Key::from_encoded(b"a".to_vec())).unwrap().unwrap(), b"val_a");
+    // Read "zi" leads to region error
+    assert!(region_snap.get(&Key::from_encoded(b"i".to_vec())).is_err());
+    // Region 1 cannot read the modifications that the region 2 made
     assert_eq!(region_snap.get(&Key::from_encoded(b"b".to_vec())).unwrap().unwrap(), b"val_b");
-    assert!(region_snap.get(&Key::from_encoded(b"c".to_vec())).unwrap().is_none());
-    assert!(region_snap.get(&Key::from_encoded(b"d".to_vec())).unwrap().is_none());
+
+    let region_snap = cluster.must_get_snapshot_of_region(region_2);
+    assert_eq!(region_snap.get(&Key::from_encoded(b"i".to_vec())).unwrap().unwrap(), b"val_i");
 }
 
 #[test]

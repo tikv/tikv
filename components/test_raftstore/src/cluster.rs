@@ -172,6 +172,8 @@ pub struct Cluster<T: Simulator> {
     pub sst_workers_map: HashMap<u64, usize>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
+
+    pub multi_rocks: bool,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -206,7 +208,12 @@ impl<T: Simulator> Cluster<T> {
             pd_client,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
+            multi_rocks: false,
         }
+    }
+
+    pub fn set_multi_rocks(&mut self) {
+        self.multi_rocks = true;
     }
 
     // To destroy temp dir later.
@@ -241,7 +248,7 @@ impl<T: Simulator> Cluster<T> {
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
         let (engines, key_manager, dir, sst_worker, factory) =
-            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
+            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg, self.multi_rocks);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);

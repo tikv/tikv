@@ -49,7 +49,11 @@ use raftstore::{
 use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
+use tikv::{
+    config::*,
+    server::{KvEngineFactoryBuilder},
+    storage::point_key_range,
+};
 use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
 use txn_types::Key;
 
@@ -627,6 +631,7 @@ pub fn create_test_engine(
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IORateLimiter>>,
     cfg: &Config,
+    is_multi_rocks: bool,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
@@ -663,10 +668,20 @@ pub fn create_test_engine(
             router: Mutex::new(router),
         }));
     }
+    if is_multi_rocks {
+        builder = builder.set_multi_rocksdb();
+    }
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
+
     let engines = Engines::new(engine, raft_engine);
-    (engines, key_manager, dir, sst_worker, TabletFactory::clone(&factory))
+    (
+        engines,
+        key_manager,
+        dir,
+        sst_worker,
+        factory,
+    )
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

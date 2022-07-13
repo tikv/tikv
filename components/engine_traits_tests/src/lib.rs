@@ -38,6 +38,8 @@
 
 #![cfg(test)]
 
+use engine_test::kv::TestTabletFactory;
+
 mod basic_read_write;
 mod cf_names;
 mod ctor;
@@ -69,6 +71,17 @@ fn default_engine() -> TempDirEnginePair {
         engine,
         tempdir: dir,
     }
+}
+
+// Create an engine with multi rocksdb
+fn default_engineV2() -> TempDirEnginePair {
+    use engine_test::{ctor::KvEngineConstructorExt, kv::KvTestEngine};
+    use engine_traits::CF_DEFAULT;
+
+    let dir = tempdir();
+    let path = dir.path().to_str().unwrap();
+    let factory = TestTabletFactory::new(path, None, &vec![], None);
+    
 }
 
 /// Create an engine with the specified column families
