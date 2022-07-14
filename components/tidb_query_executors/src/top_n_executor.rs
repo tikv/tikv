@@ -108,10 +108,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
             n,
-
             context: EvalContext::default(),
             src,
             is_ended: false,
+            n_bytes: 0,
         }
     }
 
@@ -137,10 +137,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
             n,
-
             context: EvalContext::new(config),
             src,
             is_ended: false,
+            n_bytes: 0,
         }
     }
 

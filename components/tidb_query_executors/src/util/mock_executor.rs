@@ -55,6 +55,10 @@ impl BatchExecutor for MockExecutor {
     fn can_be_cached(&self) -> bool {
         false
     }
+
+    fn alloc_trace(&mut self, _len: usize) {
+        // Do nothing
+    }
 }
 
 pub struct MockScanExecutor {
@@ -116,5 +120,9 @@ impl BatchExecutor for MockScanExecutor {
 
     fn can_be_cached(&self) -> bool {
         false
+    }
+
+    fn alloc_trace(&mut self, _len: usize) {
+        // Do nothing
     }
 }

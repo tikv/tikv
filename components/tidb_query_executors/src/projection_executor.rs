@@ -52,6 +52,7 @@ impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
             src,
             schema,
             exprs,
+            n_bytes: 0,
         }
     }
 

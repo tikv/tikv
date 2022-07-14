@@ -47,6 +47,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             context: EvalContext::default(),
             src,
             conditions,
+            n_bytes: 0,
         }
     }
 
