@@ -1104,6 +1104,9 @@ pub fn backup_file_name(
         .expect("Time went backwards");
     match key {
         Some(k) => {
+            // See https://github.com/pingcap/tidb/issues/30087
+            // To avoid 503 Slow Down error, if the backup storage is s3,
+            // organize the backup files by store_id (use slash (/) as delimiter).
             if storage_name == S3Storage::name() {
                 format!(
                     "{}/{}_{}_{}_{}",
@@ -2004,5 +2007,29 @@ pub mod tests {
         pool.adjust_with(2);
         drop(pool);
         std::thread::sleep(Duration::from_millis(150));
+    }
+
+    #[test]
+    fn test_backup_file_name() {
+        let region = metapb::Region::default();
+        let store_id = 1;
+        let test_cases = vec!["s3", "gcs", "azure", "local", "hdfs"];
+        let test_target = vec![
+            "1/0_0_000",
+            "1_0_0_000",
+            "1_0_0_000",
+            "1_0_0_000",
+            "1_0_0_000",
+        ];
+
+        for (storage_name, target) in test_cases.iter().zip(test_target.iter()) {
+            let key = Some(String::from("000"));
+            let filename = backup_file_name(store_id, &region, key, storage_name);
+
+            let mut prefix_arr: Vec<&str> = filename.split("_").collect();
+            prefix_arr.remove(prefix_arr.len() - 1);
+
+            assert_eq!(target.to_string(), prefix_arr.join("_"));
+        }
     }
 }
