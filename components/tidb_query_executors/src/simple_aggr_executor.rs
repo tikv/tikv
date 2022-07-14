@@ -203,7 +203,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
 
     #[inline]
     fn groups_len(&self) -> usize {
-        if self.has_input_rows { 1 } else { 0 }
+        if self.has_input_rows {
+            1
+        } else {
+            0
+        }
     }
 
     #[inline]
