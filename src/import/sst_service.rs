@@ -1017,7 +1017,9 @@ fn write_needs_restore(write: &[u8]) -> bool {
         Ok(w)
             if matches!(
                 w.write_type,
-                WriteType::Put | WriteType::Delete | WriteType::Rollback
+                // We only keep the last put / delete write CF,
+                // other write type may shadow the real data and cause data loss.
+                WriteType::Put | WriteType::Delete
             ) =>
         {
             true

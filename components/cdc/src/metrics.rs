@@ -205,6 +205,13 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref CDC_RAW_OUTLIER_RESOLVED_TS_GAP: Histogram = register_histogram!(
+        "tikv_cdc_raw_outlier_resolved_ts_gap_seconds",
+        "Bucketed histogram of the gap between cdc raw outlier resolver_ts and current tso",
+        exponential_buckets(1.0, 2.0, 15).unwrap() // outlier threshold is 60s by default.
+    )
+    .unwrap();
+
     pub static ref CDC_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
         auto_flush_from!(CDC_ROCKSDB_PERF_COUNTER, PerfCounter);
 }
