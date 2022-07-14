@@ -1049,7 +1049,7 @@ where
         let term = entry.get_term();
         let data = entry.get_data();
 
-        let peer = util::find_peer(&self.region, self.id).unwrap();
+        let peer = util::find_peer_by_id(&self.region, self.id).unwrap();
         let skip = peer.is_witness
             && ProposalContext::from_bytes(entry.get_context()).contains(ProposalContext::NO_ADMIN);
         if !data.is_empty() && !skip {
@@ -1858,7 +1858,6 @@ where
                     );
                 }
             }
-            // TODO: check
             match (util::find_peer_mut(&mut region, store_id), change_type) {
                 (None, ConfChangeType::AddNode) => {
                     let mut peer = peer.clone();

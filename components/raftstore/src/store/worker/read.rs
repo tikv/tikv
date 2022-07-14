@@ -587,7 +587,7 @@ where
         }
 
         // Check witness
-        if util::find_peer(&delegate.region, delegate.peer_id)
+        if util::find_peer_by_id(&delegate.region, delegate.peer_id)
             .unwrap()
             .is_witness
         {

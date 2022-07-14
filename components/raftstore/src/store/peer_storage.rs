@@ -1252,7 +1252,7 @@ where
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no unavailable
     /// snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
-        let peer = util::find_peer(&self.region, self.peer_id).unwrap();
+        let peer = util::find_peer_by_id(&self.region, self.peer_id).unwrap();
         if peer.is_witness {
             return Err(raft::Error::Store(
                 raft::StorageError::SnapshotTemporarilyUnavailable,
@@ -1315,7 +1315,7 @@ where
             )));
         }
 
-        let is_witness = util::find_peer(&self.region, to).unwrap().is_witness;
+        let is_witness = util::find_peer_by_id(&self.region, to).unwrap().is_witness;
         info!(
             "requesting snapshot";
             "region_id" => self.region.get_id(),

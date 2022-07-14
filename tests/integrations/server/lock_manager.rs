@@ -100,7 +100,7 @@ fn deadlock_detector_leader_must_be(cluster: &mut Cluster<ServerCluster>, store_
             .get_store_id(),
         store_id
     );
-    let leader_peer = find_peer_of_store(&leader_region, store_id);
+    let leader_peer = util::find_peer(&leader_region, store_id).unwrap().clone();
     cluster
         .pd_client
         .region_leader_must_be(leader_region.get_id(), leader_peer);
@@ -108,7 +108,7 @@ fn deadlock_detector_leader_must_be(cluster: &mut Cluster<ServerCluster>, store_
 
 fn must_transfer_leader(cluster: &mut Cluster<ServerCluster>, region_key: &[u8], store_id: u64) {
     let region = cluster.get_region(region_key);
-    let target_peer = find_peer_of_store(&region, store_id);
+    let target_peer = util::find_peer(&region, store_id).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), target_peer.clone());
     cluster
         .pd_client
@@ -133,7 +133,7 @@ fn must_transfer_region(
         .pd_client
         .must_add_peer(region.get_id(), target_peer);
     must_transfer_leader(cluster, region_key, target_store_id);
-    let source_peer = find_peer_of_store(&region, source_store_id);
+    let source_peer = util::find_peer(&region, source_store_id).unwrap().clone();
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), source_peer);
@@ -157,15 +157,6 @@ fn must_merge_region(
     );
     cluster.pd_client.must_merge(source_id, target_id);
     cluster.must_put(target_region_key, b"v");
-}
-
-fn find_peer_of_store(region: &Region, store_id: u64) -> Peer {
-    region
-        .get_peers()
-        .iter()
-        .find(|p| p.get_store_id() == store_id)
-        .unwrap()
-        .clone()
 }
 
 /// Creates a cluster with only one region and store(1) is the leader of the region.
