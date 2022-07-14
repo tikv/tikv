@@ -827,7 +827,11 @@ impl ConvertTo<f64> for Bytes {
     }
 }
 
-pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str, is_cast: bool) -> Result<Cow<'a, str>> {
+pub fn get_valid_int_prefix<'a>(
+    ctx: &mut EvalContext,
+    s: &'a str,
+    is_cast: bool,
+) -> Result<Cow<'a, str>> {
     if !is_cast {
         let vs = get_valid_float_prefix(ctx, s, is_cast)?;
         Ok(float_str_to_int_string(ctx, vs))
@@ -854,7 +858,11 @@ pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str, is_cast: bool
     }
 }
 
-pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str, is_cast: bool) -> Result<&'a str> {
+pub fn get_valid_float_prefix<'a>(
+    ctx: &mut EvalContext,
+    s: &'a str,
+    is_cast: bool,
+) -> Result<&'a str> {
     if is_cast && s.is_empty() {
         return Ok("0");
     }
@@ -2007,7 +2015,10 @@ mod tests {
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (i, o) in cases {
-            assert_eq!(super::get_valid_float_prefix(&mut ctx, i, false).unwrap(), o);
+            assert_eq!(
+                super::get_valid_float_prefix(&mut ctx, i, false).unwrap(),
+                o
+            );
         }
     }
 
