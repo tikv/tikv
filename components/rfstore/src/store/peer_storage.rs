@@ -228,7 +228,19 @@ impl PeerStorage {
     }
 
     pub(crate) fn clear_meta(&self, rwb: &mut rfengine::WriteBatch) {
-        clear_meta(&self.engines.raft, rwb, &self.region);
+        let region_id = self.region.get_id();
+        self.engines
+            .raft
+            .iterate_region_states(region_id, false, |k, _| {
+                rwb.set_state(region_id, k, &[]);
+                Ok(())
+            })
+            .unwrap();
+        rwb.truncate_raft_log(
+            region_id,
+            rfengine::TRUNCATE_ALL_INDEX,
+            self.raft_state.term,
+        );
     }
 
     pub(crate) fn get_region_id(&self) -> u64 {
@@ -551,27 +563,6 @@ fn init_last_term(
         region.get_id(),
         last_index
     ));
-}
-
-/// Delete all meta belong to the region. Results are stored in `wb`.
-pub fn clear_meta(
-    raft: &rfengine::RfEngine,
-    raft_wb: &mut rfengine::WriteBatch,
-    region: &metapb::Region,
-) {
-    let region_id = region.get_id();
-    raft.iterate_region_states(region_id, false, |k, _| {
-        raft_wb.set_state(region_id, k, &[]);
-        Ok(())
-    })
-    .unwrap();
-    if let Some(last_idx) = raft.get_last_index(region_id) {
-        raft_wb.truncate_raft_log(
-            region_id,
-            last_idx,
-            raft.get_term(region_id, last_idx).unwrap(),
-        );
-    }
 }
 
 // When we bootstrap the region we must call this to initialize region local state first.

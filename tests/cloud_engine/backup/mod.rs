@@ -70,9 +70,7 @@ fn test_backup_and_import() {
     test_util::init_log_for_test();
     let node_id = alloc_node_id();
     let update_conf = |_, conf: &mut TiKvConfig| {
-        conf.backup.sst_max_size = ReadableSize::kb(64);
-        conf.raft_store.raft_base_tick_interval = ReadableDuration::millis(100);
-        conf.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(50);
+        conf.backup.sst_max_size = ReadableSize::kb(32);
         conf.raft_store.local_file_gc_timeout = ReadableDuration::millis(500);
         conf.raft_store.local_file_gc_tick_interval = ReadableDuration::millis(200);
     };
@@ -92,7 +90,7 @@ fn test_backup_and_import() {
     assert!(resps0[0].get_files().is_empty(), "{:?}", resps0);
 
     // 3 version for each key.
-    let key_count = 3000;
+    let key_count = 2000;
     must_kv_put(&cluster1, key_count, 3);
 
     // Push down backup request.

@@ -24,7 +24,7 @@ use kvproto::{
         AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType, CustomRequest,
         RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
     },
-    raft_serverpb::RaftMessage,
+    raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
     *,
 };
 use protobuf::Message;
@@ -574,7 +574,18 @@ impl Peer {
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
         );
+        raft_wb.clear_region(self.region_id);
         self.mut_store().clear_meta(raft_wb);
+        let mut tomb_stone = RegionLocalState::new();
+        tomb_stone.set_state(PeerState::Tombstone);
+        tomb_stone.set_region(region.clone());
+        let epoch = region.get_region_epoch();
+        raft_wb.set_state(
+            self.region_id,
+            &region_state_key(epoch.version, epoch.conf_ver),
+            &tomb_stone.write_to_bytes().unwrap(),
+        );
+
         self.pending_reads.clear_all(Some(region.get_id()));
 
         for Proposal { cb, .. } in self.proposals.queue.drain(..) {
@@ -1138,6 +1149,9 @@ impl Peer {
         ctx: &mut RaftContext,
         mut store_meta: Option<&mut StoreMeta>,
     ) {
+        if self.pending_remove {
+            return;
+        }
         if self.get_store().is_applying_snapshot() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead

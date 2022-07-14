@@ -290,6 +290,16 @@ impl ServerCluster {
         panic!("region is not replicated");
     }
 
+    pub fn wait_pd_region_count(&self, count: usize) {
+        for _ in 0..10 {
+            if self.pd_client.get_regions_number() == count {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("pd region count not match");
+    }
+
     pub fn remove_node_peers(&mut self, node_id: u16) {
         let server = self.servers.get(&node_id).unwrap();
         let store_id = server.get_store_id();

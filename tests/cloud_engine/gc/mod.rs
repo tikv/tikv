@@ -16,8 +16,6 @@ fn test_local_file_gc() {
     test_util::init_log_for_test();
     let node_id = alloc_node_id();
     let mut cluster = ServerCluster::new(vec![node_id], |_, cfg| {
-        cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(100);
-        cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(50);
         cfg.raft_store.local_file_gc_timeout = ReadableDuration::secs(1);
         cfg.raft_store.local_file_gc_tick_interval = ReadableDuration::millis(300);
     });
@@ -27,6 +25,7 @@ fn test_local_file_gc() {
     fs::write(&new_file_path, "abc").unwrap();
     let new_tmp_file_path = kv.opts.local_dir.join(new_tmp_filename(new_file_id, 1));
     fs::write(&new_tmp_file_path, "def").unwrap();
+    cluster.wait_pd_region_count(1);
     cluster.put_kv(0..1000, gen_key, gen_val);
     cluster.split(&gen_key(500));
     let shard_ids = kv.get_all_shard_id_vers();

@@ -22,6 +22,8 @@ use crate::{
     *,
 };
 
+pub const TRUNCATE_ALL_INDEX: u64 = u64::MAX;
+
 /// `RfEngine` is a persistent storage engine for multi-raft logs.
 /// It stores part of raft logs and states(key/value pair) in memory and persists them to disk.
 ///
@@ -413,12 +415,19 @@ impl RegionData {
     pub(crate) fn apply(&mut self, batch: &RegionBatch) -> Vec<RaftLogBlock> {
         debug_assert_eq!(self.region_id, batch.region_id);
         let mut truncated_blocks = vec![];
-        if self.truncated_idx < batch.truncated_idx {
-            self.truncated_idx = batch.truncated_idx;
-            self.truncated_term = batch.truncated_term;
-        }
-        if self.need_truncate() {
-            truncated_blocks = self.raft_logs.truncate(self.truncated_idx);
+        if batch.truncated_idx == TRUNCATE_ALL_INDEX {
+            // Reset truncated_idx when apply truncate all command.
+            truncated_blocks = self.raft_logs.truncate(TRUNCATE_ALL_INDEX);
+            self.truncated_idx = 0;
+            self.truncated_term = 0;
+        } else {
+            if self.truncated_idx < batch.truncated_idx {
+                self.truncated_idx = batch.truncated_idx;
+                self.truncated_term = batch.truncated_term;
+            }
+            if self.need_truncate() {
+                truncated_blocks = self.raft_logs.truncate(self.truncated_idx);
+            }
         }
         for (key, val) in &batch.states {
             if val.is_empty() {

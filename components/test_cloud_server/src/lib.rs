@@ -5,6 +5,8 @@ pub use cluster::*;
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::ServerCluster;
 
     #[test]
@@ -20,8 +22,12 @@ mod tests {
         for split_key in &split_keys {
             cluster.split(split_key);
         }
+        cluster.wait_pd_region_count(4);
         cluster.get_pd_client().disable_default_operator();
         cluster.remove_node_peers(1);
+        cluster.stop_node(1);
+        std::thread::sleep(Duration::from_millis(100));
+        cluster.start_node(1, |_, _| {});
         cluster.get_pd_client().enable_default_operator();
         cluster.wait_region_replicated(&[], 3);
         for split_key in &split_keys {

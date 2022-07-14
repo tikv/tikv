@@ -668,7 +668,7 @@ impl TiKVServer {
             importer.clone(),
             self.concurrency_manager.clone(),
         )
-        .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
+        .unwrap_or_else(|e| panic!("failed to start node: {:?}", e));
 
         initial_metric(&self.config.metric);
 

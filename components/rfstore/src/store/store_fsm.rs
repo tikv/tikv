@@ -260,7 +260,9 @@ impl RaftBatchSystem {
                 last_region_id = region_id;
                 let mut local_state = RegionLocalState::default();
                 local_state.merge_from_bytes(val).unwrap();
-                regions.push(local_state.get_region().clone());
+                if local_state.state != PeerState::Tombstone {
+                    regions.push(local_state.get_region().clone());
+                }
                 true
             });
         let mut peers = vec![];
@@ -919,6 +921,17 @@ impl<'a> StoreMsgHandler<'a> {
         msg: &RaftMessage,
         _is_local_first: bool,
     ) -> Result<bool> {
+        if self.ctx.store_meta.regions.contains_key(&region_id) {
+            return Ok(true);
+        }
+        if self
+            .ctx
+            .store_meta
+            .pending_new_regions
+            .contains_key(&region_id)
+        {
+            return Ok(false);
+        }
         let target = msg.get_to_peer();
         // New created peers should know it's learner or not.
         let peer = PeerFsm::replicate(
@@ -928,18 +941,7 @@ impl<'a> StoreMsgHandler<'a> {
             region_id,
             target.clone(),
         )?;
-        if self.ctx.store_meta.regions.contains_key(&region_id) {
-            return Ok(true);
-        }
         fail_point!("after_acquire_store_meta_on_maybe_create_peer_internal");
-        if self
-            .ctx
-            .store_meta
-            .pending_new_regions
-            .contains_key(&region_id)
-        {
-            return Ok(false);
-        }
 
         // TODO(x) handle overlap exisitng region.
 

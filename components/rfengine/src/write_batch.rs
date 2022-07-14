@@ -40,6 +40,10 @@ impl WriteBatch {
         self.get_region(region_id).set_state(key, val);
     }
 
+    pub fn clear_region(&mut self, region_id: u64) {
+        self.get_region(region_id).clear();
+    }
+
     pub fn reset(&mut self) {
         self.regions.clear()
     }
@@ -115,6 +119,11 @@ impl RegionBatch {
             self.truncated_idx = other.truncated_idx;
             self.truncated_term = other.truncated_term;
         }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.states.clear();
+        self.raft_logs.clear();
     }
 
     pub(crate) fn encoded_len(&self) -> usize {
