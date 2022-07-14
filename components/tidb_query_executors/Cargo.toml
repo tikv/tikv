@@ -22,10 +22,10 @@ tidb_query_aggr = { path = "../tidb_query_aggr", default-features = false }
 tidb_query_common = { path = "../tidb_query_common", default-features = false }
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tidb_query_expr = { path = "../tidb_query_expr", default-features = false }
+tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-tikv_alloc = { path = "../tikv_alloc" }
 
 [dev-dependencies]
 anyhow = "1.0"
