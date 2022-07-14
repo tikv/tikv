@@ -66,6 +66,7 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// CHECKPOINT_SAFEPOINT_TTL_IF_ERROR specifies the safe point TTL(24 hour) if task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 
+/// CHECKPOINT_ADVANCE_USE_V3 use only the v3 checkpoint advance currenly.
 const CHECKPOINT_ADVANCE_USE_V3: bool = true;
 
 pub struct Endpoint<S, R, E, RT, PDC> {
