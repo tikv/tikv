@@ -848,7 +848,6 @@ mod test {
 
     #[test]
     fn initial_scan_failure() {
-        test_util::init_log_for_test();
         defer! {{
             fail::remove("scan_and_async_send");
         }}
