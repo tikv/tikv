@@ -452,20 +452,24 @@ where
         create_time: Option<ThreadReadId>,
         region_id: u64,
     ) -> Arc<E::Snapshot> {
+        println!("Acquring snapshot ---- ");
         if let Some(tablet) = self.factory.open_tablet_cache_any(region_id) {
             self.metrics.local_executed_requests += 1;
             if let Some(ts) = create_time {
                 if ts == self.cache_read_id {
                     if let Some(snap) = self.snap_cache.as_ref() {
+                        println!("Cache hit");
                         self.metrics.local_executed_snapshot_cache_hit += 1;
                         return snap.clone();
                     }
                 }
+                println!("Cache miss");
                 let snap = Arc::new(tablet.snapshot());
                 self.cache_read_id = ts;
                 self.snap_cache = Some(snap.clone());
                 return snap;
             }
+            println!("Cache miss");
             Arc::new(tablet.snapshot())
         } else {
             panic!("No relevant tablet")

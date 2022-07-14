@@ -238,7 +238,7 @@ mod tests {
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
         let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        let factory = builder.buildV2();
+        let factory = builder.buildv2();
         let tablet = factory.create_tablet(1, 10);
         assert!(tablet.is_ok());
         let tablet = tablet.unwrap();
@@ -275,7 +275,7 @@ mod tests {
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
         let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        let factory = builder.buildV2();
+        let factory = builder.buildv2();
         factory.create_tablet(1, 10).unwrap();
         factory.create_tablet(2, 10).unwrap();
         let mut count = 0;

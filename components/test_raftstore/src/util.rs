@@ -670,7 +670,7 @@ pub fn create_test_engine(
     }
     let factory;
     if is_multi_rocks {
-        factory = builder.buildV2().clone();
+        factory = builder.buildv2().clone();
     } else {
         factory = builder.build().clone();
     }

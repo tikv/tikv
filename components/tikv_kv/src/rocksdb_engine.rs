@@ -23,6 +23,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, Value};
+use engine_test::kv::TestTabletFactory;
 
 use super::{
     write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
@@ -56,7 +57,10 @@ impl Runnable for Runner {
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => cb(write_modifies(&self.0.kv, modifies)),
-            Task::Snapshot(cb) => cb(Ok(Arc::new(self.0.kv.snapshot()))),
+            Task::Snapshot(cb) => {
+                println!("Acquiring snapshot");
+                cb(Ok(Arc::new(self.0.kv.snapshot())))
+            },
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -115,6 +119,7 @@ impl RocksEngine {
             cfs,
             cfs_opts,
         )?);
+
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
         let mut kv_engine = BaseRocksEngine::from_db(db.clone());

@@ -295,7 +295,7 @@ opt-level = 1
 
 [profile.dev.package.tests]
 debug = 1
-opt-level = 1
+opt-level = 0
 
 [profile.dev]
 opt-level = 0

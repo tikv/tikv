@@ -1132,6 +1132,48 @@ fn test_batch_commands() {
 }
 
 #[test]
+fn test_batch_get_commands() {
+    let mut cluster = new_server_cluster(0, 1);
+    // cluster.set_multi_rocks();
+    cluster.run();
+    for i in 1..100 {
+        cluster.put(&format!("k{}", i).into_bytes(), b"val").unwrap();
+    }
+
+    let (client, ctx) = build_client(&cluster);
+    let (mut sender, receiver) = client.batch_commands().unwrap();
+    for i in 0..10 {
+        let mut batch_req = BatchCommandsRequest::default();
+        for j in 1..10 {
+            let idx = i * 10 + j;
+            let mut get = GetRequest::default();
+            get.set_key(format!("k{}", idx).into_bytes());
+            get.set_context(ctx.clone());
+            let mut req = batch_commands_request::Request::default();
+            req.cmd = Some(batch_commands_request::request::Cmd::Get(get));
+            batch_req.mut_requests().push(req);
+            batch_req.mut_request_ids().push(i);
+        }
+        block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
+    }
+    block_on(sender.close()).unwrap();
+
+    let resps = block_on(
+        receiver
+            .map(move |b| futures::stream::iter(b.unwrap().take_responses().into_vec()))
+            .flatten()
+            .collect::<Vec<_>>(),
+    );
+    for resp in resps {
+        let resp = match resp.cmd {
+            Some(batch_commands_response::response::Cmd::Get(g)) => g,
+            _ => panic!("unexpected response {:?}", resp),
+        };
+        // println!("{:?}", resp.get_value());
+    }
+}
+
+#[test]
 fn test_empty_commands() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
