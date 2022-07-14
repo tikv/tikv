@@ -967,10 +967,11 @@ where
             let expect_index = self.apply_state.get_applied_index() + 1;
             if expect_index != entry.get_index() {
                 panic!(
-                    "{} expect index {}, but got {}",
+                    "{} expect index {}, but got {}, ctx {}",
                     self.tag,
                     expect_index,
-                    entry.get_index()
+                    entry.get_index(),
+                    apply_ctx.tag,
                 );
             }
 
@@ -1070,7 +1071,10 @@ where
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
-        // TOOD(cdc): should we observe empty cmd, aka leader change?
+
+        // we should observe empty cmd, aka leader change,
+        // read index during confchange, or other situations.
+        apply_ctx.host.on_empty_cmd(&self.region, index, term);
 
         {
             // hacked by solotzg.

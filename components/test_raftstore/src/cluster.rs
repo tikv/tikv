@@ -38,6 +38,7 @@ use mock_engine_store::EngineStoreServerWrap;
 use pd_client::{BucketStat, PdClient};
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
+    engine_store_ffi::TiFlashEngine,
     store::{
         fsm::{
             create_raft_batch_system,
@@ -317,6 +318,8 @@ impl<T: Simulator> Cluster<T> {
         key_mgr: &Option<Arc<DataKeyManager>>,
         router: &RaftRouter<RocksEngine, RaftTestEngine>,
     ) -> (FFIHelperSet, Config) {
+        // This TiFlash engine is a dummy TiFlash engine.
+        let engine = TiFlashEngine::from_rocks(engines.kv.clone());
         let proxy = Box::new(raftstore::engine_store_ffi::RaftStoreProxy::new(
             AtomicU8::new(raftstore::engine_store_ffi::RaftProxyStatus::Idle as u8),
             key_mgr.clone(),
@@ -324,7 +327,7 @@ impl<T: Simulator> Cluster<T> {
                 router.clone(),
                 SysQuota::cpu_cores_quota() as usize * 2,
             ))),
-            std::sync::RwLock::new(Some(engines.kv.clone())),
+            std::sync::RwLock::new(Some(engine)),
         ));
 
         let mut proxy_helper = Box::new(raftstore::engine_store_ffi::RaftStoreProxyFFIHelper::new(
@@ -343,6 +346,7 @@ impl<T: Simulator> Cluster<T> {
                 std::pin::Pin::new(&*engine_store_server_wrap),
             ));
 
+        // TODO(tiflash) Used by RegionRunner, to remove.
         let mut node_cfg = self.cfg.clone();
         let helper_sz = &*engine_store_server_helper as *const _ as isize;
         node_cfg.raft_store.engine_store_server_helper = helper_sz;

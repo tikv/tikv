@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(proc_macro_hygiene)]
 use std::{
@@ -11,7 +11,12 @@ use std::{
 use clap::{App, Arg};
 use tikv::config::TiKvConfig;
 
-use crate::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
+use crate::{
+    fatal,
+    setup::{
+        ensure_no_unrecognized_config, overwrite_config_with_cmd_args, validate_and_persist_config,
+    },
+};
 
 pub unsafe fn run_proxy(
     argc: c_int,
@@ -30,6 +35,7 @@ pub unsafe fn run_proxy(
         args.push(raw.to_str().unwrap());
     }
 
+    // If FFI magic number or version compat.
     engine_store_server_helper.check();
 
     let matches = App::new("RaftStore Proxy")
@@ -239,21 +245,55 @@ pub unsafe fn run_proxy(
         });
 
     check_engine_label(&matches);
-    crate::setup::overwrite_config_with_cmd_args(&mut config, &matches);
+    overwrite_config_with_cmd_args(&mut config, &matches);
     config.logger_compatible_adjust();
 
+    let mut proxy_unrecognized_keys = Vec::new();
+    // Double read the same file for proxy-specific arguments.
+    let proxy_config =
+        matches
+            .value_of_os("config")
+            .map_or_else(crate::config::ProxyConfig::default, |path| {
+                let path = Path::new(path);
+                crate::config::ProxyConfig::from_file(
+                    path,
+                    if is_config_check {
+                        Some(&mut proxy_unrecognized_keys)
+                    } else {
+                        None
+                    },
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "invalid auto generated configuration file {}, err {}",
+                        path.display(),
+                        e
+                    );
+                })
+            });
+
+    // TODO(tiflash) We should later use ProxyConfig for proxy's own settings like `snap_handle_pool_size`
     if is_config_check {
         validate_and_persist_config(&mut config, false);
-        ensure_no_unrecognized_config(&unrecognized_keys);
+        match crate::config::ensure_no_common_unrecognized_keys(
+            &proxy_unrecognized_keys,
+            &unrecognized_keys,
+        ) {
+            Ok(_) => (),
+            Err(e) => {
+                fatal!("unknown configuration options: {}", e);
+            }
+        }
         println!("config check successful");
         process::exit(0)
     }
 
+    // Used in pre-handle snapshot.
     config.raft_store.engine_store_server_helper = engine_store_server_helper as *const _ as isize;
     if matches.is_present("only-decryption") {
-        crate::server::run_tikv_only_decryption(config, engine_store_server_helper);
+        crate::run::run_tikv_only_decryption(config, proxy_config, engine_store_server_helper);
     } else {
-        crate::server::run_tikv(config, engine_store_server_helper);
+        crate::run::run_tikv_proxy(config, proxy_config, engine_store_server_helper);
     }
 }
 

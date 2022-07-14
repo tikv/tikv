@@ -1491,6 +1491,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_tiflash"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "case_macros",
+ "collections",
+ "derive_more",
+ "encryption",
+ "engine_rocks",
+ "engine_traits",
+ "fail",
+ "file_system",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "libc 0.2.125",
+ "log_wrappers",
+ "num_cpus",
+ "online_config",
+ "prometheus",
+ "prometheus-static-metric",
+ "protobuf",
+ "raft",
+ "rand 0.8.3",
+ "regex",
+ "rocksdb",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "slog_derive",
+ "tempfile",
+ "tikv_alloc",
+ "tikv_util",
+ "time",
+ "toml",
+ "txn_types",
+ "yatp",
+]
+
+[[package]]
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
@@ -3023,6 +3064,7 @@ dependencies = [
  "keys",
  "kvproto",
  "protobuf",
+ "proxy_server",
  "raftstore",
  "server",
  "slog",
@@ -3098,6 +3140,43 @@ dependencies = [
  "cfg-if 0.1.10",
  "libc 0.2.125",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "new-mock-engine-store"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_test",
+ "engine_tiflash",
+ "engine_traits",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "pd_client",
+ "protobuf",
+ "proxy_server",
+ "raft",
+ "raftstore",
+ "rand 0.8.3",
+ "resource_metering",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_raftstore",
+ "test_util",
+ "tikv",
+ "tikv_util",
 ]
 
 [[package]]
@@ -4020,6 +4099,68 @@ dependencies = [
 ]
 
 [[package]]
+name = "proxy_server"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "backup",
+ "backup-stream",
+ "causal_ts",
+ "cdc",
+ "chrono",
+ "clap",
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_rocks_helper",
+ "engine_traits",
+ "error_code",
+ "file_system",
+ "fs2",
+ "futures 0.3.15",
+ "grpcio",
+ "grpcio-health",
+ "hex 0.4.2",
+ "itertools 0.10.0",
+ "keys",
+ "kvproto",
+ "libc 0.2.125",
+ "log",
+ "log_wrappers",
+ "nix 0.23.0",
+ "online_config",
+ "pd_client",
+ "prometheus",
+ "protobuf",
+ "raft",
+ "raft_log_engine",
+ "raftstore",
+ "rand 0.8.3",
+ "resolved_ts",
+ "resource_metering",
+ "security",
+ "serde",
+ "serde_derive",
+ "serde_ignored",
+ "serde_json",
+ "server",
+ "signal",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "tokio",
+ "toml",
+ "txn_types",
+ "yatp",
+]
+
+[[package]]
 name = "quick-xml"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4132,6 +4273,7 @@ dependencies = [
  "engine_panic",
  "engine_rocks",
  "engine_test",
+ "engine_tiflash",
  "engine_traits",
  "error_code",
  "fail",
@@ -4186,7 +4328,7 @@ dependencies = [
 name = "raftstore-proxy"
 version = "0.0.1"
 dependencies = [
- "server",
+ "proxy_server",
 ]
 
 [[package]]
@@ -4991,12 +5133,14 @@ dependencies = [
  "grpcio",
  "grpcio-health",
  "hex 0.4.2",
+ "itertools 0.10.0",
  "keys",
  "kvproto",
  "libc 0.2.125",
  "log",
  "log_wrappers",
  "nix 0.23.0",
+ "online_config",
  "pd_client",
  "prometheus",
  "protobuf",
@@ -5007,6 +5151,9 @@ dependencies = [
  "resolved_ts",
  "resource_metering",
  "security",
+ "serde",
+ "serde_derive",
+ "serde_ignored",
  "serde_json",
  "signal",
  "slog",
@@ -5645,6 +5792,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_rocks_helper",
+ "engine_tiflash",
  "engine_traits",
  "error_code",
  "external_storage_export",
@@ -5660,6 +5808,7 @@ dependencies = [
  "log_wrappers",
  "mock-engine-store",
  "more-asserts",
+ "new-mock-engine-store",
  "online_config",
  "panic_hook",
  "paste",
@@ -5668,6 +5817,7 @@ dependencies = [
  "procinfo",
  "profiler",
  "protobuf",
+ "proxy_server",
  "raft",
  "raft_log_engine",
  "raftstore",
@@ -5676,6 +5826,7 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
+ "server",
  "slog",
  "slog-global",
  "sst_importer",
@@ -5925,6 +6076,7 @@ dependencies = [
  "engine_panic",
  "engine_rocks",
  "engine_test",
+ "engine_tiflash",
  "engine_traits",
  "engine_traits_tests",
  "error_code",

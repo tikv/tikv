@@ -1,10 +1,11 @@
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     future::Future,
     time::{Duration, Instant},
 };
 
-use engine_rocks::RocksEngine;
-use engine_traits::RaftEngine;
+use engine_traits::{KvEngine, RaftEngine};
 use futures::executor::block_on;
 use futures_util::{compat::Future01CompatExt, future::BoxFuture};
 use kvproto::{
@@ -34,12 +35,12 @@ pub trait ReadIndex: Sync + Send {
     ) -> Option<ReadIndexResponse>;
 }
 
-pub struct ReadIndexClient<ER: RaftEngine> {
-    pub routers: Vec<std::sync::Mutex<RaftRouter<RocksEngine, ER>>>,
+pub struct ReadIndexClient<ER: RaftEngine, EK: KvEngine> {
+    pub routers: Vec<std::sync::Mutex<RaftRouter<EK, ER>>>,
 }
 
-impl<ER: RaftEngine> ReadIndexClient<ER> {
-    pub fn new(router: RaftRouter<RocksEngine, ER>, cnt: usize) -> Self {
+impl<ER: RaftEngine, EK: KvEngine> ReadIndexClient<ER, EK> {
+    pub fn new(router: RaftRouter<EK, ER>, cnt: usize) -> Self {
         let mut routers = Vec::with_capacity(cnt);
         for _ in 0..cnt {
             routers.push(std::sync::Mutex::new(router.clone()));
@@ -105,7 +106,7 @@ fn gen_read_index_raft_cmd_req(req: &mut ReadIndexRequest) -> RaftCmdRequest {
     cmd
 }
 
-impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
+impl<ER: RaftEngine, EK: KvEngine> ReadIndex for ReadIndexClient<ER, EK> {
     fn batch_read_index(
         &self,
         req_vec: Vec<ReadIndexRequest>,
@@ -122,11 +123,12 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
 
             let (cb, f) = paired_future_callback();
 
-            if let Err(_) = self.routers[region_id as usize % self.routers.len()]
+            if let Err(e) = self.routers[region_id as usize % self.routers.len()]
                 .lock()
                 .unwrap()
                 .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default())
             {
+                tikv_util::info!("make_read_index_task send command error"; "e" => ?e);
                 router_cbs.push_back((None, region_id));
             } else {
                 router_cbs.push_back((Some(f), region_id));

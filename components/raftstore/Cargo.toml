@@ -44,6 +44,7 @@ engine_rocks = { path = "../engine_rocks", default-features = false }
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915
 engine_test = { path = "../engine_test", default-features = false }
+engine_tiflash = { path = "../../engine_tiflash", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.5"

@@ -1,0 +1,68 @@
+[package]
+name = "engine_tiflash"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[features]
+jemalloc = ["rocksdb/jemalloc"]
+portable = ["rocksdb/portable"]
+sse = ["rocksdb/sse"]
+failpoints = ["fail/failpoints"]
+compat_new_proxy = []
+
+# Disables runtime checks of invariants required by RocksDB that are redundant
+# with assertions inside RocksDB itself. This makes it possible to test those
+# invariants in Rust tests, resulting an a panic instead of an abort, at the
+# expense of an extra branch. This feature exists to mark those extra branches.
+# The checks _can_ be disabled by enabling this feature, though it may not
+# result in any real performance improvement to do so, and it will break
+# the test suite.
+#
+# Probably these checks should be in the rust-rocksdb crate itself, in order
+# to ensure the bindings are safe, but until that is done, they are here.
+nortcheck = []
+
+[dependencies]
+api_version = { path = "../components/api_version", default-features = false }
+case_macros = { path = "../components/case_macros" }
+collections = { path = "../components/collections", default-features = false }
+
+derive_more = "0.99.3"
+encryption = { path = "../components/encryption", default-features = false }
+engine_rocks = { path = "../components/engine_rocks", default-features = false }
+engine_traits = { path = "../components/engine_traits", default-features = false }
+fail = "0.5"
+file_system = { path = "../components/file_system", default-features = false }
+keys = { path = "../components/keys", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+lazy_static = "1.4.0"
+libc = "0.2"
+log_wrappers = { path = "../components/log_wrappers" }
+num_cpus = "1"
+online_config = { path = "../components/online_config" }
+prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
+protobuf = "2"
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+regex = "1"
+serde = "1.0"
+serde_derive = "1.0"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog_derive = "0.2"
+tempfile = "3.0"
+tikv_alloc = { path = "../components/tikv_alloc" }
+tikv_util = { path = "../components/tikv_util", default-features = false }
+time = "0.1"
+txn_types = { path = "../components/txn_types", default-features = false }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+
+[dependencies.rocksdb]
+git = "https://github.com/tikv/rust-rocksdb.git"
+package = "rocksdb"
+features = ["encryption"]
+
+[dev-dependencies]
+rand = "0.8"
+toml = "0.5"

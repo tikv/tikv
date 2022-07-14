@@ -1,3 +1,5 @@
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
 #![feature(slice_take)]
 
 use std::{
@@ -540,6 +542,8 @@ pub fn gen_engine_store_server_helper(
         fn_gen_cpp_string: Some(ffi_gen_cpp_string),
         fn_handle_write_raft_cmd: Some(ffi_handle_write_raft_cmd),
         fn_handle_admin_raft_cmd: Some(ffi_handle_admin_raft_cmd),
+        fn_need_flush_data: Some(ffi_need_flush_data),
+        fn_try_flush_data: Some(ffi_try_flush_data),
         fn_atomic_update_proxy: Some(ffi_atomic_update_proxy),
         fn_handle_destroy: Some(ffi_handle_destroy),
         fn_handle_ingest_sst: Some(ffi_handle_ingest_sst),
@@ -613,6 +617,23 @@ impl Into<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
             RawCppPtrTypeImpl::WakerNotifier => 3,
         }
     }
+}
+
+extern "C" fn ffi_need_flush_data(
+    _arg1: *mut ffi_interfaces::EngineStoreServerWrap,
+    _region_id: u64,
+) -> u8 {
+    fail::fail_point!("need_flush_data", |e| e.unwrap().parse::<u8>().unwrap());
+    true as u8
+}
+
+extern "C" fn ffi_try_flush_data(
+    _arg1: *mut ffi_interfaces::EngineStoreServerWrap,
+    _region_id: u64,
+    _try_until_succeed: u8,
+) -> u8 {
+    fail::fail_point!("try_flush_data", |e| e.unwrap().parse::<u8>().unwrap());
+    true as u8
 }
 
 extern "C" fn ffi_gen_cpp_string(s: ffi_interfaces::BaseBuffView) -> ffi_interfaces::RawCppPtr {

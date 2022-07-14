@@ -1,3 +1,5 @@
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::time;
 
 use futures_util::{compat::Future01CompatExt, future::BoxFuture, FutureExt};

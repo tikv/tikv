@@ -14,6 +14,11 @@ name = "integrations"
 path = "integrations/mod.rs"
 required-features = ["testexport"]
 
+[[test]]
+name = "proxy"
+path = "proxy/mod.rs"
+required-features = ["failpoints", "testexport"]
+
 [features]
 default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure", "test-raftstore-proxy"]
 test-raftstore-proxy = ["raftstore/test-raftstore-proxy"]
@@ -43,6 +48,7 @@ snmalloc = ["tikv/snmalloc"]
 mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
+compat_new_proxy = ["engine_tiflash/compat_new_proxy"]
 
 [dependencies]
 api_version = { path = "../components/api_version", default-features = false }
@@ -53,6 +59,7 @@ crc64fast = "0.1"
 crossbeam = "0.8"
 encryption = { path = "../components/encryption", default-features = false }
 engine_rocks_helper = { path = "../components/engine_rocks_helper" }
+engine_tiflash = { path = "../engine_tiflash", default-features = false }
 error_code = { path = "../components/error_code", default-features = false }
 fail = "0.5"
 file_system = { path = "../components/file_system" }
@@ -64,14 +71,17 @@ libc = "0.2"
 log_wrappers = { path = "../components/log_wrappers" }
 mock-engine-store = { path = "../mock-engine-store", default-features = false }
 more-asserts = "0.2"
+new-mock-engine-store = { path = "../new-mock-engine-store", default-features = false }
 online_config = { path = "../components/online_config", default-features = false }
 paste = "1.0"
 pd_client = { path = "../components/pd_client", default-features = false }
 protobuf = { version = "2.8", features = ["bytes"] }
+proxy_server = { path = "../components/proxy_server", default-features = false }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../components/raft_log_engine", default-features = false }
 raftstore = { path = "../components/raftstore", default-features = false }
 rand = "0.8.3"
+server = { path = "../components/server", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"

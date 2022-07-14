@@ -21,7 +21,16 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, AdminRequest},
     raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent},
 };
+use new_mock_engine_store::{
+    mock_cluster::FFIHelperSet,
+    node::NodeCluster,
+    transport_simulate::{
+        CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
+    },
+    Cluster, ProxyConfig, Simulator, TestPdClient,
+};
 use pd_client::PdClient;
+use proxy_server::config::ensure_no_common_unrecognized_keys;
 use raft::eraftpb::MessageType;
 use raftstore::{
     coprocessor::{ConsistencyCheckMethod, Coprocessor},
@@ -29,11 +38,9 @@ use raftstore::{
     engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI},
     store::util::find_peer,
 };
+use server::setup::validate_and_persist_config;
 use sst_importer::SstImporter;
-use test_raftstore::{
-    must_get_equal, must_get_none, new_node_cluster, new_peer, Cluster, FFIHelperSet, NodeCluster,
-    Simulator, TestPdClient,
-};
+pub use test_raftstore::{must_get_equal, must_get_none, new_peer};
 use tikv::config::TiKvConfig;
 use tikv_util::{
     config::{LogFormat, ReadableDuration, ReadableSize},
@@ -85,8 +92,8 @@ struct States {
     ident: StoreIdent,
 }
 
-fn iter_ffi_helpers_mut(
-    cluster: &mut Cluster<NodeCluster>,
+fn iter_ffi_helpers(
+    cluster: &Cluster<NodeCluster>,
     store_ids: Option<Vec<u64>>,
     f: &mut dyn FnMut(u64, &engine_rocks::RocksEngine, &mut FFIHelperSet) -> (),
 ) {
@@ -97,31 +104,15 @@ fn iter_ffi_helpers_mut(
     for id in ids {
         let db = cluster.get_engine(id);
         let engine = engine_rocks::RocksEngine::from_db(db);
-        let ffiset = cluster.ffi_helper_set.get_mut(&id).unwrap();
-        f(id, &engine, ffiset);
-    }
-}
-
-fn iter_ffi_helpers(
-    cluster: &Cluster<NodeCluster>,
-    store_ids: Option<Vec<u64>>,
-    f: &dyn Fn(u64, &engine_rocks::RocksEngine, &FFIHelperSet) -> (),
-) {
-    let ids = match store_ids {
-        Some(ids) => ids,
-        None => cluster.engines.keys().map(|e| *e).collect::<Vec<_>>(),
-    };
-    for id in ids {
-        let db = cluster.get_engine(id);
-        let engine = engine_rocks::RocksEngine::from_db(db);
-        let ffiset = cluster.ffi_helper_set.get(&id).unwrap();
+        let mut lock = cluster.ffi_helper_set.lock().unwrap();
+        let ffiset = lock.get_mut(&id).unwrap();
         f(id, &engine, ffiset);
     }
 }
 
 fn collect_all_states(cluster: &mut Cluster<NodeCluster>, region_id: u64) -> HashMap<u64, States> {
     let mut prev_state: HashMap<u64, States> = HashMap::default();
-    iter_ffi_helpers_mut(
+    iter_ffi_helpers(
         cluster,
         None,
         &mut |id: u64, engine: &engine_rocks::RocksEngine, ffi: &mut FFIHelperSet| {
@@ -146,8 +137,16 @@ fn collect_all_states(cluster: &mut Cluster<NodeCluster>, region_id: u64) -> Has
     prev_state
 }
 
+pub fn new_mock_cluster(id: u64, count: usize) -> (Cluster<NodeCluster>, Arc<TestPdClient>) {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let cluster = Cluster::new(id, count, sim, pd_client.clone(), ProxyConfig::default());
+
+    (cluster, pd_client)
+}
+
 pub fn must_get_mem(
-    engine_store_server: &Box<mock_engine_store::EngineStoreServer>,
+    engine_store_server: &Box<new_mock_engine_store::EngineStoreServer>,
     region_id: u64,
     key: &[u8],
     value: Option<&[u8]>,
@@ -156,7 +155,7 @@ pub fn must_get_mem(
     for _ in 1..300 {
         let res = engine_store_server.get_mem(
             region_id,
-            mock_engine_store::ffi_interfaces::ColumnFamilyType::Default,
+            new_mock_engine_store::ffi_interfaces::ColumnFamilyType::Default,
             &key.to_vec(),
         );
 
@@ -208,7 +207,8 @@ pub fn check_key(
         };
         match in_mem {
             Some(b) => {
-                let server = &cluster.ffi_helper_set.get(&id).unwrap().engine_store_server;
+                let mut lock = cluster.ffi_helper_set.lock().unwrap();
+                let server = &lock.get(&id).unwrap().engine_store_server;
                 if b {
                     must_get_mem(server, region_id, k, Some(v));
                 } else {
@@ -235,8 +235,8 @@ fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
 
 #[test]
 fn test_kv_write() {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.proxy_compat = true;
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+    cluster.cfg.proxy_compat = true;
 
     // No persist will be triggered by CompactLog
     fail::cfg("no_persist_compact_log", "return").unwrap();
@@ -274,6 +274,7 @@ fn test_kv_write() {
         );
     }
 
+    debug!("now CompactLog can persist");
     fail::remove("no_persist_compact_log");
 
     let prev_states = collect_all_states(&mut cluster, r1);
