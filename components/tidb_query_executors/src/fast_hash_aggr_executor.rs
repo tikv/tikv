@@ -281,7 +281,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
 
         let rows_len = input_logical_rows.len();
 
-        if rows_len> 0 && self.n_bytes == 0 {
+        if rows_len > 0 && self.n_bytes == 0 {
             self.alloc_trace(rows_len * size_of::<usize>());
         }
 
