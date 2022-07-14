@@ -647,6 +647,7 @@ mod test {
         let p = TempDir::new("test_db").unwrap();
         let mut opt = DBOptions::default();
         opt.create_if_missing(true);
+        opt.enable_multi_write_batch(true);
         let db = DB::open(opt.clone(), p.path().as_os_str().to_str().unwrap()).unwrap();
         let engine = RocksEngine::from_db(Arc::new(db));
         let mut wb = engine.write_batch();
