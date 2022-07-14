@@ -894,49 +894,52 @@ impl AutoSplitController {
 
         // Check if the top CPU usage region could be split.
         // TODO: avoid unnecessary split by introducing the feedback mechanism from PD.
-        if !top_cpu_usage.is_empty() && !is_grpc_poll_busy {
-            // Calculate by using the latest CPU usage.
-            top_cpu_usage.sort_unstable_by(|a, b| {
-                let cpu_usage_a = self.recorders.get(a).unwrap().cpu_usage;
-                let cpu_usage_b = self.recorders.get(b).unwrap().cpu_usage;
-                cpu_usage_b.partial_cmp(&cpu_usage_a).unwrap()
-            });
-            let region_id = top_cpu_usage[0];
-            let recorder = self.recorders.get_mut(&region_id).unwrap();
-            if recorder.hottest_key_range.is_some() {
-                split_infos.push(SplitInfo::with_start_end_key(
-                    region_id,
-                    recorder.peer.clone(),
-                    recorder
-                        .hottest_key_range
-                        .as_ref()
-                        .unwrap()
-                        .start_key
-                        .clone(),
-                    recorder.hottest_key_range.as_ref().unwrap().end_key.clone(),
-                ));
-                LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[READY_TO_SPLIT_CPU_TOP])
-                    .inc();
-                info!("load base split region";
-                    "region_id" => region_id,
-                    "start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
-                    "end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),
-                    "cpu_usage" => recorder.cpu_usage,
-                );
+        if !top_cpu_usage.is_empty() {
+            // Only split the top CPU region when the gRPC poll is not busy.
+            if !is_grpc_poll_busy {
+                // Calculate by using the latest CPU usage.
+                top_cpu_usage.sort_unstable_by(|a, b| {
+                    let cpu_usage_a = self.recorders.get(a).unwrap().cpu_usage;
+                    let cpu_usage_b = self.recorders.get(b).unwrap().cpu_usage;
+                    cpu_usage_b.partial_cmp(&cpu_usage_a).unwrap()
+                });
+                let region_id = top_cpu_usage[0];
+                let recorder = self.recorders.get_mut(&region_id).unwrap();
+                if recorder.hottest_key_range.is_some() {
+                    split_infos.push(SplitInfo::with_start_end_key(
+                        region_id,
+                        recorder.peer.clone(),
+                        recorder
+                            .hottest_key_range
+                            .as_ref()
+                            .unwrap()
+                            .start_key
+                            .clone(),
+                        recorder.hottest_key_range.as_ref().unwrap().end_key.clone(),
+                    ));
+                    LOAD_BASE_SPLIT_EVENT
+                        .with_label_values(&[READY_TO_SPLIT_CPU_TOP])
+                        .inc();
+                    info!("load base split region";
+                        "region_id" => region_id,
+                        "start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
+                        "end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),
+                        "cpu_usage" => recorder.cpu_usage,
+                    );
+                } else {
+                    LOAD_BASE_SPLIT_EVENT
+                        .with_label_values(&[EMPTY_HOTTEST_KEY_RANGE])
+                        .inc();
+                }
             } else {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[EMPTY_HOTTEST_KEY_RANGE])
+                    .with_label_values(&[UNABLE_TO_SPLIT_CPU_TOP])
                     .inc();
             }
-        } else {
-            LOAD_BASE_SPLIT_EVENT
-                .with_label_values(&[UNABLE_TO_SPLIT_CPU_TOP])
-                .inc();
-        }
-        // Clean up the rest top CPU usage recorders.
-        for region_id in top_cpu_usage {
-            self.recorders.remove(&region_id);
+            // Clean up the rest top CPU usage recorders.
+            for region_id in top_cpu_usage {
+                self.recorders.remove(&region_id);
+            }
         }
 
         (top_qps.into_vec(), split_infos)
