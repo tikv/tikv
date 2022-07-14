@@ -1299,7 +1299,6 @@ struct TaskRange {
 mod tests {
     use std::{ffi::OsStr, time::Duration};
 
-    use crossbeam_channel::SelectedOperation;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use tikv_util::{
         codec::number::NumberEncoder,
@@ -1828,7 +1827,7 @@ mod tests {
         assert!(
             messages.iter().any(|task| {
                 if let Task::FatalError(name, _err) = task {
-                    return name.reference() == TaskSelectorRef::ByName("flush_failure");
+                    return matches!(name.reference(), TaskSelectorRef::ByName("flush_failure"));
                 }
                 false
             }),
