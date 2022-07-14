@@ -2022,14 +2022,15 @@ pub mod tests {
             "1_0_0_000",
         ];
 
+        let delimiter = "_";
         for (storage_name, target) in test_cases.iter().zip(test_target.iter()) {
             let key = Some(String::from("000"));
             let filename = backup_file_name(store_id, &region, key, storage_name);
 
-            let mut prefix_arr: Vec<&str> = filename.split("_").collect();
+            let mut prefix_arr: Vec<&str> = filename.split(delimiter).collect();
             prefix_arr.remove(prefix_arr.len() - 1);
 
-            assert_eq!(target.to_string(), prefix_arr.join("_"));
+            assert_eq!(target.to_string(), prefix_arr.join(delimiter));
         }
     }
 }
