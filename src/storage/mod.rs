@@ -2975,10 +2975,6 @@ pub mod test_util {
                 (PessimisticLockKeyResult::Waiting(_), PessimisticLockKeyResult::Waiting(_)) => {
                     true
                 }
-                (
-                    PessimisticLockKeyResult::PrimaryWaiting(index1),
-                    PessimisticLockKeyResult::PrimaryWaiting(index2),
-                ) if index1 == index2 => true,
                 (PessimisticLockKeyResult::Failed(_), PessimisticLockKeyResult::Failed(_)) => true,
                 _ => false,
             }

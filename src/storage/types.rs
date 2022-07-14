@@ -132,7 +132,7 @@ pub enum PessimisticLockKeyResult {
         conflict_ts: TimeStamp,
     },
     Waiting(Option<WriteResultLockInfo>),
-    PrimaryWaiting(usize),
+    // PrimaryWaiting(usize),
     Failed(Arc<Error>),
 }
 
@@ -148,9 +148,9 @@ impl Clone for PessimisticLockKeyResult {
                     conflict_ts: *conflict_ts,
                 }
             }
-            PessimisticLockKeyResult::Waiting(_) => PessimisticLockKeyResult::Waiting(None),
-            PessimisticLockKeyResult::PrimaryWaiting(i) => {
-                PessimisticLockKeyResult::PrimaryWaiting(*i)
+            PessimisticLockKeyResult::Waiting(lock_info) => {
+                assert!(lock_info.is_none());
+                PessimisticLockKeyResult::Waiting(None)
             }
             PessimisticLockKeyResult::Failed(e) => PessimisticLockKeyResult::Failed(e.clone()),
         }
@@ -272,7 +272,6 @@ impl PessimisticLockResults {
                         res_pb.set_locked_with_conflict_ts(conflict_ts.into_inner());
                     }
                     PessimisticLockKeyResult::Waiting(_) => unreachable!(),
-                    PessimisticLockKeyResult::PrimaryWaiting(_) => unreachable!(),
                     PessimisticLockKeyResult::Failed(e) => {
                         if error.is_none() {
                             error = Some(e)

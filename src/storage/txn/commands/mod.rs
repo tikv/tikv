@@ -402,14 +402,6 @@ pub struct WriteResultLockInfo {
     // pub locks: Vec<(usize, LockInfo, lock_manager::LockDigest, Option<Callback<PessimisticLockKeyResult>>)>,
     pub term: Option<NonZeroU64>,
     pub parameters: PessimisticLockParameters,
-    pub secondaries: Option<
-        Vec<(
-            Key,
-            bool,
-            PessimisticLockKeyContext,
-            Option<PessimisticLockKeyCallback>,
-        )>,
-    >,
     pub req_states: Option<Arc<PartialPessimisticLockRequestSharedState>>,
 }
 
@@ -441,7 +433,6 @@ impl WriteResultLockInfo {
             key_cb,
             term,
             parameters,
-            secondaries: None,
             req_states: None,
         }
     }

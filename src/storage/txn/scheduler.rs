@@ -583,76 +583,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .map(|i| i.key_cb.take().unwrap())
             .collect();
 
-        let mut latches_set = None;
-        let mut awakened_keys_set = None;
-        let initial_len = awakened_locks_info.len();
-
-        let mut additional_secondaries = vec![];
-        let mut next_batch_secondaries = vec![];
-
-        for index in 0..initial_len {
-            if let Some(secondaries) = awakened_locks_info[index].secondaries.take() {
-                let lock_info = &awakened_locks_info[index];
-
-                // Initialize the sets if not yet
-                if latches_set.is_none() {
-                    latches_set = Some(latches.iter().copied().collect::<HashSet<_>>());
-                }
-                if awakened_keys_set.is_none() {
-                    awakened_keys_set = Some(
-                        awakened_locks_info
-                            .iter()
-                            .map(|l| l.key.clone())
-                            .collect::<HashSet<_>>(),
-                    );
-                }
-                let latches_set = latches_set.as_mut().unwrap();
-                let awakened_keys_set = awakened_keys_set.as_mut().unwrap();
-
-                for (key, should_not_exist, lock_key_ctx, cb) in secondaries {
-                    let hash = lock_key_ctx.hash_for_latch;
-                    let resumed_lock_item = ResumedPessimisticLockItem {
-                        key,
-                        should_not_exist,
-                        params: lock_info.parameters.clone(),
-                        lock_key_ctx,
-                        awakened_with_primary_index: Some(index),
-                        req_states: lock_info.req_states.clone().unwrap(),
-                    };
-
-                    // We cannot handle duplicated keys in a single command.
-                    let can_be_batched = !awakened_keys_set.contains(&resumed_lock_item.key);
-
-                    if can_be_batched && self.inner.latches.try_acquire(hash, cid) {
-                        awakened_keys_set.insert(resumed_lock_item.key.clone());
-                        latches_set.insert(hash);
-
-                        additional_secondaries.push(resumed_lock_item);
-                        key_callbacks.push(cb.unwrap());
-                    } else {
-                        next_batch_secondaries.push((resumed_lock_item, cb.unwrap()));
-                    }
-                }
-            }
-        }
-
-        assert_eq!(
-            key_callbacks.len(),
-            awakened_locks_info.len() + additional_secondaries.len()
-        );
-        let latches = if let Some(latches_set) = latches_set {
-            let mut l: Vec<_> = latches_set.into_iter().collect();
-            l.sort_unstable();
-            Lock::new_already_acquired(l)
-        } else {
-            Lock::new_already_acquired(latches)
-        };
-
-        let cmd = commands::AcquirePessimisticLock::new_resumed_from_lock_info(
-            awakened_locks_info,
-            additional_secondaries,
-            next_batch_secondaries,
-        );
+        let latches = Lock::new_already_acquired(latches);
+        let cmd = commands::AcquirePessimisticLock::new_resumed_from_lock_info(awakened_locks_info);
 
         // TODO: Make flow control take effect on this thing.
         self.schedule_command(
@@ -664,61 +596,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
             .schedule
-            .observe(start_time.saturating_elapsed_secs());
-    }
-
-    pub fn schedule_awakened_pessimistic_locks_suspended_secondaries(
-        &self,
-        mut secondaries: Vec<(ResumedPessimisticLockItem, PessimisticLockKeyCallback)>,
-    ) {
-        let start_time = Instant::now();
-        // TODO: Consider priority.
-        secondaries
-            .sort_unstable_by_key(|x| (x.0.lock_key_ctx.hash_for_latch, x.0.params.start_ts));
-
-        let mut current_command_items = Vec::with_capacity(secondaries.len());
-        let mut current_command_callbacks = Vec::with_capacity(secondaries.len());
-        let mut lock_waits = VecDeque::new();
-
-        let mut last_hash = None;
-        for (item, cb) in secondaries {
-            if last_hash == Some(item.lock_key_ctx.hash_for_latch) {
-                lock_waits.push_back(WriteResultLockInfo::new(
-                    item.lock_key_ctx.index_in_request,
-                    item.key,
-                    item.should_not_exist,
-                    kvrpcpb::LockInfo::default(),
-                    NonZeroU64::new(item.params.pb_ctx.get_term()), // Assuming the `term` field in ctx should have been set here.
-                    item.params,
-                    item.lock_key_ctx.lock_hash,
-                    item.lock_key_ctx.hash_for_latch,
-                    Some(cb),
-                ));
-                continue;
-            }
-
-            last_hash = Some(item.lock_key_ctx.hash_for_latch);
-            current_command_items.push(item);
-            current_command_callbacks.push(cb);
-        }
-
-        let required_hashes = current_command_items
-            .iter()
-            .map(|i| i.lock_key_ctx.hash_for_latch)
-            .collect();
-        let prepared_latches = Lock::new_with_additional_lock_waits(required_hashes, lock_waits);
-        let cmd =
-            commands::AcquirePessimisticLock::new_resumed(current_command_items, vec![], vec![]);
-
-        // TODO: Make flow control take effect on this thing.
-        self.schedule_command(
-            None,
-            cmd.into(),
-            SchedulerTaskCallback::LockKeyCallbacks(current_command_callbacks),
-            Some(prepared_latches),
-        );
-        STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
-            .schedule_secondaries
             .observe(start_time.saturating_elapsed_secs());
     }
 
@@ -838,9 +715,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock_guards: Vec<KeyHandleGuard>,
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         mut released_locks: Option<ReleasedLocks>,
-        pessimistic_lock_next_batch_secondaries: Option<
-            Vec<(ResumedPessimisticLockItem, PessimisticLockKeyCallback)>,
-        >,
         pipelined: bool,
         async_apply_prewrite: bool,
         tag: metrics::CommandKind,
@@ -892,10 +766,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             assert!((pipelined && wait_for_locks.is_none()) || async_apply_prewrite);
         }
         self.release_latches(&tctx.lock, cid, wait_for_locks, released_locks, tag);
-
-        if let Some(secondaries) = pessimistic_lock_next_batch_secondaries {
-            self.schedule_awakened_pessimistic_locks_suspended_secondaries(secondaries);
-        }
     }
 
     /// Event handler for the request of waiting for lock
@@ -1039,7 +909,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tag = task.cmd.tag();
         let cid = task.cid;
         let priority = task.cmd.priority();
-        // let ts = task.cmd.ts();
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample();
@@ -1049,14 +918,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
 
         // Keep some information to use after the command being consumed.
-        let (pessimistic_lock_single_request_meta, mut pessimistic_lock_next_batch_secondaries) =
+        let pessimistic_lock_single_request_meta =
             if let Command::AcquirePessimisticLock(cmd) = &mut task.cmd {
-                (
-                    cmd.get_single_request_meta(),
-                    cmd.take_next_batch_secondaries(),
-                )
+                cmd.get_single_request_meta()
             } else {
-                (None, None)
+                None
             };
 
         let deadline = task.cmd.deadline();
@@ -1124,10 +990,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             if let Some(cmd_meta) = pessimistic_lock_single_request_meta {
                 let conversion_start = Instant::now();
 
-                assert!(pessimistic_lock_next_batch_secondaries.is_none());
-
                 let mut lock_info_list =
                     Self::take_lock_info_from_pessimistic_lock_pr(pr.as_mut().unwrap());
+                // We currently do not allow multi-waiting in a single request.
+                assert!(lock_info_list.is_none() || lock_info_list.as_ref().unwrap().len() == 1);
                 if let Some(l) = lock_info_list.as_mut() {
                     // Enter key-wise waiting state.
                     let diag_ctx = DiagnosticContext {
@@ -1136,13 +1002,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     };
                     let wait_token = scheduler.inner.lock_mgr.allocate_token();
 
-                    let first_batch_size = if l.first().unwrap().secondaries.is_some() {
-                        // When the primary lock in a single request meets lock, all the keys in the
-                        // request should wait together.
-                        0
-                    } else {
-                        cmd_meta.keys_count - l.len()
-                    };
+                    let first_batch_size = cmd_meta.keys_count - l.len();
+                    assert_eq!(first_batch_size, 0);
 
                     let lock_req_ctx = scheduler.convert_to_keywise_callbacks(
                         cid,
@@ -1164,7 +1025,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         l[0].parameters.wait_timeout,
                         diag_ctx,
                     );
-                    // It's possible that the request is cancelled immediately due to no timeout.
+                    // It's possible that the request is cancelled immediately due to no timeout (non-blocking waiting).
                     if lock_req_ctx.shared_states.finished.load(Ordering::Acquire) {
                         lock_info_list = None;
                     } else {
@@ -1179,19 +1040,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             ));
                             lock_info.req_states = Some(lock_req_ctx.get_shared_states());
                             key_callback_count += 1;
-                            if let Some(secondaries) = &mut lock_info.secondaries {
-                                assert_eq!(lock_info_len, 1);
-                                for secondary in secondaries {
-                                    assert!(secondary.3.is_none());
-                                    secondary.3 =
-                                        Some(Box::new(lock_req_ctx.get_callback_for_blocked_key(
-                                            secondary.2.index_in_request,
-                                        )));
-                                    key_callback_count += 1;
-                                }
-                            }
                         }
-                        assert_eq!(key_callback_count, cmd_meta.keys_count - first_batch_size);
+                        assert_eq!(key_callback_count, 1);
                     }
                 }
 
@@ -1203,11 +1053,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 // It's already in key-wise mode.
                 let start_time = Instant::now();
                 scheduler.update_wait_for_lock();
-                scheduler.tidy_up_pessimistic_lock_result(
-                    cid,
-                    pr.as_mut().unwrap(),
-                    pessimistic_lock_next_batch_secondaries.as_mut(),
-                );
+                scheduler.tidy_up_pessimistic_lock_result(cid, pr.as_mut().unwrap());
                 let lock_info_list =
                     Self::take_lock_info_from_pessimistic_lock_pr(pr.as_mut().unwrap());
 
@@ -1228,7 +1074,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 lock_guards,
                 lock_info,
                 released_locks,
-                pessimistic_lock_next_batch_secondaries,
                 false,
                 false,
                 tag,
@@ -1260,7 +1105,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 lock_guards,
                 lock_info,
                 released_locks,
-                pessimistic_lock_next_batch_secondaries,
                 false,
                 false,
                 tag,
@@ -1445,7 +1289,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         lock_guards,
                         lock_info,
                         released_locks,
-                        pessimistic_lock_next_batch_secondaries,
                         pipelined,
                         is_async_apply_prewrite,
                         tag,
@@ -1581,14 +1424,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         ctx
     }
 
-    fn tidy_up_pessimistic_lock_result(
-        &self,
-        cid: u64,
-        pr: &mut ProcessResult,
-        next_batch_secondaries: Option<
-            &mut Vec<(ResumedPessimisticLockItem, PessimisticLockKeyCallback)>,
-        >,
-    ) {
+    fn tidy_up_pessimistic_lock_result(&self, cid: u64, pr: &mut ProcessResult) {
         let results = match pr {
             ProcessResult::PessimisticLockRes {
                 res: Ok(PessimisticLockResults(res)),
@@ -1604,41 +1440,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         assert_eq!(results.len(), cbs.len());
 
-        if let Some(next_batch_secondaries) = next_batch_secondaries {
-            let mut i = 0;
-            while i < next_batch_secondaries.len() {
-                let (item, _): &mut (ResumedPessimisticLockItem, _) =
-                    &mut next_batch_secondaries[i];
-                let primary_index = item.awakened_with_primary_index.unwrap();
-                let primary_result = &mut results[primary_index];
-                match primary_result {
-                    PessimisticLockKeyResult::Waiting(lock_info) => {
-                        let (item, cb) = next_batch_secondaries.swap_remove(i);
-                        lock_info
-                            .as_mut()
-                            .unwrap()
-                            .secondaries
-                            .get_or_insert_with(|| vec![])
-                            .push((item.key, item.should_not_exist, item.lock_key_ctx, Some(cb)));
-                        continue;
-                    }
-                    PessimisticLockKeyResult::Failed(_) => {
-                        // Drop it since the request will be cancelled by the error no matter
-                        // whether all callbacks are invoked.
-                        let (_, callback) = next_batch_secondaries.swap_remove(i);
-                        drop(callback);
-                        continue;
-                    }
-                    PessimisticLockKeyResult::PrimaryWaiting(_) => unreachable!(),
-                    _ => (),
-                }
-
-                i += 1;
-            }
-        }
-
         let mut finished_cbs = Vec::with_capacity(results.len());
-        let mut secondary_key_cb_set_index = vec![];
         (0..results.len())
             .into_iter()
             .zip(std::mem::take(cbs))
@@ -1646,27 +1448,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 let result = &mut results[res_index];
                 if let PessimisticLockKeyResult::Waiting(lock_info) = result {
                     lock_info.as_mut().unwrap().key_cb = Some(cb);
-                } else if let PessimisticLockKeyResult::PrimaryWaiting(primary_index) = result {
-                    let primary_index = *primary_index;
-                    if secondary_key_cb_set_index.is_empty() {
-                        secondary_key_cb_set_index.resize(results.len(), 0);
-                    }
-                    let i = &mut secondary_key_cb_set_index[primary_index];
-                    let cb_field = if let PessimisticLockKeyResult::Waiting(lock_info) =
-                        &mut results[primary_index]
-                    {
-                        &mut lock_info
-                            .as_mut()
-                            .unwrap()
-                            .secondaries
-                            .get_or_insert_with(|| vec![])[*i]
-                            .3
-                    } else {
-                        unreachable!()
-                    };
-                    assert!(cb_field.is_none());
-                    *cb_field = Some(cb);
-                    *i += 1;
                 } else {
                     finished_cbs.push(cb);
                 }
@@ -1674,8 +1455,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         *results = results
             .drain(..)
             .filter(|r| match r {
-                PessimisticLockKeyResult::Waiting(_)
-                | PessimisticLockKeyResult::PrimaryWaiting(_) => false,
+                PessimisticLockKeyResult::Waiting(_) => false,
                 _ => true,
             })
             .collect();
@@ -1842,7 +1622,6 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
             assert!(matches!(
                 results[index],
                 PessimisticLockKeyResult::Waiting(None)
-                    | PessimisticLockKeyResult::PrimaryWaiting(_)
             ));
             match msg {
                 Ok(lock_key_res) => results[index] = lock_key_res,
@@ -1853,13 +1632,7 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
         if let Some(e) = external_error {
             let e = Arc::new(e);
             for r in results {
-                if fail_all_on_error
-                    || matches!(
-                        r,
-                        PessimisticLockKeyResult::Waiting(_)
-                            | PessimisticLockKeyResult::PrimaryWaiting(_)
-                    )
-                {
+                if fail_all_on_error || matches!(r, PessimisticLockKeyResult::Waiting(_)) {
                     *r = PessimisticLockKeyResult::Failed(e.clone());
                 }
             }
