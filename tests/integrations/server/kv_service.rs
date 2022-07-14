@@ -958,7 +958,7 @@ fn test_debug_scan_mvcc() {
     assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
 }
 
-#[test]
+// #[test]
 // fn test_double_run_node() {
 //     let count = 1;
 //     let mut cluster = new_node_cluster(0, count);
