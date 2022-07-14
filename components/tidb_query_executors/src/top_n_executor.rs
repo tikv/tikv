@@ -218,8 +218,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             &logical_rows,
         )?;
 
-        // FIXME: Are we counting this multiple times?
-        if logical_rows.len() > 0 && self.n_bytes == 0 {
+        if !logical_rows.is_empty() && self.n_bytes == 0 {
             self.alloc_trace(logical_rows.len() * size_of::<usize>());
         }
 
