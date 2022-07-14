@@ -90,7 +90,9 @@ pub mod kv {
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
         RocksSnapshot as KvTestSnapshot, RocksWriteBatch as KvTestWriteBatch,
     };
-    use engine_traits::{CFOptionsExt, Result, TabletAccessor, TabletFactory, CF_DEFAULT, ColumnFamilyOptions};
+    use engine_traits::{
+        CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+    };
     use tikv_util::box_err;
 
     use crate::ctor::{CFOptions, DBOptions, KvEngineConstructorExt};
