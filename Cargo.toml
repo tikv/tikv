@@ -132,7 +132,7 @@ prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
-raftstore = { path = "components/raftstore", default-features = false }
+raftstore = { path = "components/raftstore", default-features = false, features = ["engine_rocks"] }
 rand = "0.7.3"
 regex = "1.3"
 resource_metering = { path = "components/resource_metering" }

@@ -140,4 +140,8 @@ impl MetaStore for LazyEtcdClient {
     async fn txn(&self, txn: super::Transaction) -> Result<()> {
         self.0.get_cli().await?.txn(txn).await
     }
+
+    async fn txn_cond(&self, txn: super::CondTransaction) -> Result<()> {
+        self.0.get_cli().await?.txn_cond(txn).await
+    }
 }

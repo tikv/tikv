@@ -13,19 +13,19 @@ use tikv_util::{
 };
 
 #[derive(Clone)]
-pub struct FlushListener<N> {
-    notifier: Arc<Mutex<N>>,
+pub struct FlushListener {
+    notifier: Arc<Mutex<dyn Notifier>>,
 }
 
-impl<N: Notifier> FlushListener<N> {
-    pub fn new(notifier: N) -> Self {
+impl FlushListener {
+    pub fn new<N: Notifier + 'static>(notifier: N) -> Self {
         FlushListener {
             notifier: Arc::new(Mutex::new(notifier)),
         }
     }
 }
 
-impl<N: Notifier> EventListener for FlushListener<N> {
+impl EventListener for FlushListener {
     fn on_flush_begin(&self, info: &FlushJobInfo) {
         let flush_seqno = info.largest_seqno();
         let mut spin_wait = SpinWait::new();

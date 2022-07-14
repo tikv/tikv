@@ -529,6 +529,8 @@ pub enum Cmd {
         #[structopt(subcommand)]
         cmd: EncryptionMetaCmd,
     },
+    /// Delete encryption keys that are no longer associated with physical files.
+    CleanupEncryptionMeta {},
     /// Print bad ssts related infos
     BadSsts {
         #[structopt(long)]
@@ -545,6 +547,8 @@ pub enum Cmd {
         /// The version to reset TiKV to
         version: u64,
     },
+    /// Control for Raft Engine
+    RaftEngineCtl { args: Vec<String> },
     #[structopt(external_subcommand)]
     External(Vec<String>),
 }

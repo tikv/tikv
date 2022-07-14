@@ -7,22 +7,19 @@ use std::{
 
 use engine_rocks::{
     raw::{Cache, Env},
-    CompactionListener, FlowListener, FlushListener, RocksCompactedEvent, RocksCompactionJobInfo,
+    CompactedEventSender, CompactionListener, FlowListener, FlushListener, RocksCompactionJobInfo,
     RocksEngine, RocksEventListener,
 };
 use engine_traits::{
-    CompactionJobInfo, RaftEngine, Result, TabletAccessor, TabletFactory, CF_DEFAULT, CF_WRITE,
+    CompactionJobInfo, Result, TabletAccessor, TabletFactory, CF_DEFAULT, CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
-use raftstore::{
-    store::{RaftRouter, StoreMsg},
-    RegionInfoAccessor,
-};
+use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
 use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
-struct FactoryInner<ER: RaftEngine> {
+struct FactoryInner {
     env: Arc<Env>,
     region_info_accessor: Option<RegionInfoAccessor>,
     block_cache: Option<Cache>,
@@ -32,15 +29,15 @@ struct FactoryInner<ER: RaftEngine> {
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
     root_db: Mutex<Option<RocksEngine>>,
-    flush_listener: Option<FlushListener<RaftRouter<RocksEngine, ER>>>,
+    flush_listener: Option<FlushListener>,
 }
 
-pub struct KvEngineFactoryBuilder<ER: RaftEngine> {
-    inner: FactoryInner<ER>,
-    router: Option<RaftRouter<RocksEngine, ER>>,
+pub struct KvEngineFactoryBuilder {
+    inner: FactoryInner,
+    compact_event_sender: Option<Arc<dyn CompactedEventSender + Send + Sync>>,
 }
 
-impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
+impl KvEngineFactoryBuilder {
     pub fn new(env: Arc<Env>, config: &TiKvConfig, store_path: impl Into<PathBuf>) -> Self {
         Self {
             inner: FactoryInner {
@@ -55,7 +52,7 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
                 root_db: Mutex::default(),
                 flush_listener: None,
             },
-            router: None,
+            compact_event_sender: None,
         }
     }
 
@@ -74,7 +71,7 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
         self
     }
 
-    pub fn flush_listener(mut self, listener: FlushListener<RaftRouter<RocksEngine, ER>>) -> Self {
+    pub fn flush_listener(mut self, listener: FlushListener) -> Self {
         self.inner.flush_listener = Some(listener);
         self
     }
@@ -84,40 +81,31 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
         self
     }
 
-    pub fn compaction_filter_router(mut self, router: RaftRouter<RocksEngine, ER>) -> Self {
-        self.router = Some(router);
+    pub fn compaction_event_sender(
+        mut self,
+        sender: Arc<dyn CompactedEventSender + Send + Sync>,
+    ) -> Self {
+        self.compact_event_sender = Some(sender);
         self
     }
 
-    pub fn build(self) -> KvEngineFactory<ER> {
+    pub fn build(self) -> KvEngineFactory {
         KvEngineFactory {
             inner: Arc::new(self.inner),
-            router: Mutex::new(self.router),
+            compact_event_sender: self.compact_event_sender.clone(),
         }
     }
 }
 
-pub struct KvEngineFactory<ER: RaftEngine> {
-    inner: Arc<FactoryInner<ER>>,
-    router: Mutex<Option<RaftRouter<RocksEngine, ER>>>,
+#[derive(Clone)]
+pub struct KvEngineFactory {
+    inner: Arc<FactoryInner>,
+    compact_event_sender: Option<Arc<dyn CompactedEventSender + Send + Sync>>,
 }
 
-impl<ER: RaftEngine> Clone for KvEngineFactory<ER> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            router: Mutex::new(self.router.lock().unwrap().clone()),
-        }
-    }
-}
-
-impl<ER: RaftEngine> KvEngineFactory<ER> {
+impl KvEngineFactory {
     pub fn create_raftstore_compaction_listener(&self) -> Option<CompactionListener> {
-        let router = self.router.lock().unwrap();
-        let ch = match &*router {
-            Some(r) => Mutex::new(r.clone()),
-            None => return None,
-        };
+        self.compact_event_sender.as_ref()?;
         fn size_change_filter(info: &RocksCompactionJobInfo<'_>) -> bool {
             // When calculating region size, we only consider write and default
             // column families.
@@ -132,16 +120,8 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
 
             true
         }
-
-        let compacted_handler = Box::new(move |compacted_event: RocksCompactedEvent| {
-            let ch = ch.lock().unwrap();
-            let event = StoreMsg::CompactedEvent(compacted_event);
-            if let Err(e) = ch.send_control(event) {
-                error_unknown!(?e; "send compaction finished event to raftstore failed");
-            }
-        });
         Some(CompactionListener::new(
-            compacted_handler,
+            self.compact_event_sender.as_ref().unwrap().clone(),
             Some(size_change_filter),
         ))
     }
@@ -239,7 +219,7 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
     }
 }
 
-impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
+impl TabletFactory<RocksEngine> for KvEngineFactory {
     #[inline]
     fn create_shared_db(&self) -> Result<RocksEngine> {
         let root_path = self.kv_engine_path();
@@ -280,7 +260,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     }
 }
 
-impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactory<ER> {
+impl TabletAccessor<RocksEngine> for KvEngineFactory {
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
         if let Ok(db) = self.inner.root_db.lock() {
             let db = db.as_ref().unwrap();

@@ -118,11 +118,11 @@ mod encryption_method_serde {
         S: Serializer,
     {
         match method {
-            EncryptionMethod::Unknown => serializer.serialize_str(UNKNOWN),
             EncryptionMethod::Plaintext => serializer.serialize_str(PLAINTEXT),
             EncryptionMethod::Aes128Ctr => serializer.serialize_str(AES128_CTR),
             EncryptionMethod::Aes192Ctr => serializer.serialize_str(AES192_CTR),
             EncryptionMethod::Aes256Ctr => serializer.serialize_str(AES256_CTR),
+            _ => serializer.serialize_str(UNKNOWN),
         }
     }
 

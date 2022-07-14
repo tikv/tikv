@@ -371,12 +371,12 @@ pub fn create_aes_ctr_crypter(
         _ => return Err(box_err!("mismatched IV type")),
     }
     let cipher = match method {
-        EncryptionMethod::Unknown | EncryptionMethod::Plaintext => {
-            return Err(box_err!("init crypter while encryption is not enabled"));
-        }
         EncryptionMethod::Aes128Ctr => OCipher::aes_128_ctr(),
         EncryptionMethod::Aes192Ctr => OCipher::aes_192_ctr(),
         EncryptionMethod::Aes256Ctr => OCipher::aes_256_ctr(),
+        _ => {
+            return Err(box_err!("init crypter while encryption is not enabled"));
+        }
     };
     let crypter = OCrypter::new(cipher, mode, key, Some(iv.as_slice()))?;
     Ok((cipher, crypter))

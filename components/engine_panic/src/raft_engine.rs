@@ -159,6 +159,14 @@ impl RaftEngine for PanicEngine {
     fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
         panic!()
     }
+
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<Error>,
+    {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {

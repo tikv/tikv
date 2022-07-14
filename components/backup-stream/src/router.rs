@@ -42,7 +42,7 @@ use tokio::{
     sync::{Mutex, RwLock},
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
-use txn_types::{Key, Lock, TimeStamp};
+use txn_types::{Key, Lock, TimeStamp, WriteRef};
 
 use super::errors::Result;
 use crate::{
@@ -56,8 +56,12 @@ use crate::{
     utils::{self, SegmentMap, Slot, SlotMap, StopWatch},
 };
 
-pub const FLUSH_STORAGE_INTERVAL: u64 = 300;
-pub const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 16;
+const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
+
+/// FLUSH_LOG_CONCURRENT_BATCH_COUNT specifies the concurrent count to write to storage.
+/// 'Log backup' will produce a large mount of small files during flush interval,
+/// and storage could take mistaken if writing all of these files to storage concurrently.
+const FLUSH_LOG_CONCURRENT_BATCH_COUNT: usize = 128;
 
 #[derive(Debug)]
 pub struct ApplyEvent {
@@ -476,7 +480,6 @@ impl RouterInner {
                 let result = task_info.do_flush(store_id, resolve_to).await;
                 // set false to flushing whether success or fail
                 task_info.set_flushing_status(false);
-                task_info.update_flush_time();
 
                 if let Err(e) = result {
                     e.report("failed to flush task.");
@@ -490,6 +493,8 @@ impl RouterInner {
                     }
                     return None;
                 }
+                // if succeed in flushing, update flush_time. Or retry do_flush immediately.
+                task_info.update_flush_time();
                 result.ok().flatten()
             }
             _ => None,
@@ -523,6 +528,11 @@ struct TempFileKey {
     cf: CfName,
     cmd_type: CmdType,
     is_meta: bool,
+}
+
+pub enum FormatType {
+    Date,
+    Hour,
 }
 
 impl TempFileKey {
@@ -583,7 +593,7 @@ impl TempFileKey {
         }
     }
 
-    fn format_date_time(ts: u64) -> impl Display {
+    fn format_date_time(ts: u64, t: FormatType) -> impl Display {
         use chrono::prelude::*;
         let millis = TimeStamp::physical(ts.into());
         let dt = Utc.timestamp_millis(millis as _);
@@ -595,27 +605,39 @@ impl TempFileKey {
                     .format(&s.unwrap_or_else(|| "%Y%m".to_owned()))
                     .to_string();
             });
-            return dt.format("%Y%m%d").to_string();
+            match t {
+                FormatType::Date => dt.format("%Y%m%d").to_string(),
+                FormatType::Hour => dt.format("%H").to_string(),
+            }
         }
         #[cfg(not(feature = "failpoints"))]
-        return dt.format("%Y%m%d");
+        match t {
+            FormatType::Date => dt.format("%Y%m%d"),
+            FormatType::Hour => dt.format("%H"),
+        }
     }
 
+    /// path_to_log_file specifies the path of record log.
+    /// eg. "v1/20220625/03/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
     fn path_to_log_file(&self, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/t{:08}/{}-{:012}-{}.log",
-            self.table_id,
+            "v1/{}/{}/t{:08}/{:012}-{}.log",
             // We may delete a range of files, so using the max_ts for preventing remove some records wrong.
-            Self::format_date_time(max_ts),
+            Self::format_date_time(max_ts, FormatType::Date),
+            Self::format_date_time(max_ts, FormatType::Hour),
+            self.table_id,
             min_ts,
             uuid::Uuid::new_v4()
         )
     }
 
+    /// path_to_schema_file specifies the path of schema log.
+    /// eg. "v1/20220625/03/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
     fn path_to_schema_file(min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/schema-meta/{}-{:012}-{}.log",
-            Self::format_date_time(max_ts),
+            "v1/{}/{}/schema-meta/{:012}-{}.log",
+            Self::format_date_time(max_ts, FormatType::Date),
+            Self::format_date_time(max_ts, FormatType::Hour),
             min_ts,
             uuid::Uuid::new_v4(),
         )
@@ -656,6 +678,20 @@ pub struct StreamTaskInfo {
     flushing: AtomicBool,
     /// This counts how many times this task has failed to flush.
     flush_fail_count: AtomicUsize,
+}
+
+impl Drop for StreamTaskInfo {
+    fn drop(&mut self) {
+        let (success, failed): (Vec<_>, Vec<_>) = self
+            .flushing_files
+            .get_mut()
+            .drain(..)
+            .chain(self.files.get_mut().drain())
+            .map(|(_, f)| f.into_inner().local_path)
+            .map(std::fs::remove_file)
+            .partition(|r| r.is_ok());
+        info!("stream task info dropped, removing temp files"; "success" => %success.len(), "failure" => %failed.len())
+    }
 }
 
 impl std::fmt::Debug for StreamTaskInfo {
@@ -803,6 +839,11 @@ impl StreamTaskInfo {
 
     /// move need-flushing files to flushing_files.
     pub async fn move_to_flushing_files(&self) -> &Self {
+        // if flushing_files is not empty, which represents this flush is a retry operation.
+        if !self.flushing_files.read().await.is_empty() {
+            return self;
+        }
+
         let mut w = self.files.write().await;
         let mut fw = self.flushing_files.write().await;
         for (k, v) in w.drain() {
@@ -863,10 +904,14 @@ impl StreamTaskInfo {
         // if failed to write storage, we should retry write flushing_files.
         let storage = self.storage.clone();
         let files = self.flushing_files.write().await;
-        let futs = files
-            .iter()
-            .map(|(_, v)| Self::flush_log_file_to(storage.clone(), v));
-        futures::future::try_join_all(futs).await?;
+
+        for batch_files in files.chunks(FLUSH_LOG_CONCURRENT_BATCH_COUNT) {
+            let futs = batch_files
+                .iter()
+                .map(|(_, v)| Self::flush_log_file_to(storage.clone(), v));
+            futures::future::try_join_all(futs).await?;
+        }
+
         Ok(())
     }
 
@@ -967,6 +1012,7 @@ struct DataFile {
     min_ts: TimeStamp,
     max_ts: TimeStamp,
     resolved_ts: TimeStamp,
+    min_begin_ts: Option<TimeStamp>,
     sha256: Hasher,
     inner: BufWriter<File>,
     start_key: Vec<u8>,
@@ -981,6 +1027,8 @@ struct DataFile {
 pub struct MetadataInfo {
     pub files: Vec<DataFileInfo>,
     pub min_resolved_ts: Option<u64>,
+    pub min_ts: Option<u64>,
+    pub max_ts: Option<u64>,
     pub store_id: u64,
 }
 
@@ -989,6 +1037,8 @@ impl MetadataInfo {
         Self {
             files: Vec::with_capacity(cap),
             min_resolved_ts: None,
+            min_ts: None,
+            max_ts: None,
             store_id: 0,
         }
     }
@@ -1000,6 +1050,12 @@ impl MetadataInfo {
     fn push(&mut self, file: DataFileInfo) {
         let rts = file.resolved_ts;
         self.min_resolved_ts = self.min_resolved_ts.map_or(Some(rts), |r| Some(r.min(rts)));
+        self.min_ts = self
+            .min_ts
+            .map_or(Some(file.min_ts), |ts| Some(ts.min(file.min_ts)));
+        self.max_ts = self
+            .max_ts
+            .map_or(Some(file.max_ts), |ts| Some(ts.max(file.max_ts)));
         self.files.push(file);
     }
 
@@ -1007,7 +1063,9 @@ impl MetadataInfo {
         let mut metadata = Metadata::new();
         metadata.set_files(self.files.into());
         metadata.set_store_id(self.store_id as _);
-        metadata.set_resolved_ts(self.min_resolved_ts.unwrap_or_default() as _);
+        metadata.set_resolved_ts(self.min_resolved_ts.unwrap_or_default());
+        metadata.set_min_ts(self.min_ts.unwrap_or(0));
+        metadata.set_max_ts(self.max_ts.unwrap_or(0));
 
         metadata
             .write_to_bytes()
@@ -1033,6 +1091,7 @@ impl DataFile {
             min_ts: TimeStamp::max(),
             max_ts: TimeStamp::zero(),
             resolved_ts: TimeStamp::zero(),
+            min_begin_ts: None,
             inner: BufWriter::with_capacity(128 * 1024, File::create(local_path.as_ref()).await?),
             sha256,
             number_of_entries: 0,
@@ -1048,10 +1107,23 @@ impl DataFile {
         remove_file(&self.local_path).await
     }
 
+    fn decode_begin_ts(value: Vec<u8>) -> Result<TimeStamp> {
+        WriteRef::parse(&value).map_or_else(
+            |e| {
+                Err(Error::Other(box_err!(
+                    "failed to parse write cf value: {}",
+                    e
+                )))
+            },
+            |w| Ok(w.start_ts),
+        )
+    }
+
     /// Add a new KV pair to the file, returning its size.
     async fn on_events(&mut self, events: ApplyEvents) -> Result<usize> {
         let now = Instant::now_coarse();
         let mut total_size = 0;
+
         for mut event in events.events {
             let encoded = EventEncoder::encode_event(&event.key, &event.value);
             let mut size = 0;
@@ -1069,6 +1141,13 @@ impl DataFile {
             self.min_ts = self.min_ts.min(ts);
             self.max_ts = self.max_ts.max(ts);
             self.resolved_ts = self.resolved_ts.max(events.region_resolved_ts.into());
+
+            // decode_begin_ts is used to maintain the txn when restore log.
+            // if value is empty, no need to decode begin_ts.
+            if event.cf == CF_WRITE && !event.value.is_empty() {
+                let begin_ts = Self::decode_begin_ts(event.value)?;
+                self.min_begin_ts = Some(self.min_begin_ts.map_or(begin_ts, |ts| ts.min(begin_ts)));
+            }
             self.number_of_entries += 1;
             self.file_size += size;
             self.update_key_bound(key.into_encoded());
@@ -1117,6 +1196,10 @@ impl DataFile {
         meta.set_max_ts(self.max_ts.into_inner() as _);
         meta.set_min_ts(self.min_ts.into_inner() as _);
         meta.set_resolved_ts(self.resolved_ts.into_inner() as _);
+        meta.set_min_begin_ts_in_default_cf(
+            self.min_begin_ts
+                .map_or(self.min_ts.into_inner(), |ts| ts.into_inner()),
+        );
         meta.set_start_key(std::mem::take(&mut self.start_key));
         meta.set_end_key(std::mem::take(&mut self.end_key));
         meta.set_length(self.file_size as _);
@@ -1161,6 +1244,7 @@ mod tests {
         codec::number::NumberEncoder,
         worker::{dummy_scheduler, ReceiverWrapper},
     };
+    use txn_types::{Write, WriteType};
 
     use super::*;
     use crate::utils;
@@ -1179,6 +1263,12 @@ mod tests {
             .unwrap();
         Write::write_all(&mut table_key, key).unwrap();
         table_key
+    }
+
+    fn make_value(t: WriteType, value: &[u8], start_ts: u64) -> Vec<u8> {
+        let start_ts = TimeStamp::new(start_ts);
+        let w = Write::new(t, start_ts, Some(value.to_vec()));
+        w.as_ref().to_bytes()
     }
 
     impl KvEventsBuilder {
@@ -1219,9 +1309,14 @@ mod tests {
             })
         }
 
-        fn put_table(&mut self, cf: &'static str, table: i64, key: &[u8], value: &[u8]) {
+        fn put_table(&mut self, cf: CfName, table: i64, key: &[u8], value: &[u8]) {
             let table_key = make_table_key(table, key);
-            self.put_event(cf, table_key, value.to_vec());
+            let value = if cf == CF_WRITE {
+                make_value(WriteType::Put, value, 12345)
+            } else {
+                value.to_vec()
+            };
+            self.put_event(cf, table_key, value);
         }
 
         fn delete_table(&mut self, cf: &'static str, table: i64, key: &[u8]) {
@@ -1229,7 +1324,7 @@ mod tests {
             self.delete_event(cf, table_key);
         }
 
-        fn flush_events(&mut self) -> ApplyEvents {
+        fn finish(&mut self) -> ApplyEvents {
             let region_id = self.events.region_id;
             let region_resolved_ts = self.events.region_resolved_ts;
             std::mem::replace(
@@ -1326,15 +1421,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_basic_file() -> Result<()> {
-        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&tmp).await?;
-        let (tx, rx) = dummy_scheduler();
-        let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
-        let (stream_task, storage_path) = task("dummy".to_owned()).await?;
-        must_register_table(&router, stream_task, 1).await;
-
+    async fn write_simple_data(router: &RouterInner) -> u64 {
         let now = TimeStamp::physical_now();
         let mut region1 = KvEventsBuilder::new(1, now);
         let start_ts = TimeStamp::physical_now();
@@ -1345,8 +1432,21 @@ mod tests {
         region1.put_table(CF_WRITE, 2, b"hello", b"this isn't a write record :3");
         region1.put_table(CF_WRITE, 1, b"hello", b"still isn't a write record :3");
         region1.delete_table(CF_DEFAULT, 1, b"hello");
-        let events = region1.flush_events();
+        let events = region1.finish();
         check_on_events_result(&router.on_events(events).await);
+        start_ts
+    }
+
+    #[tokio::test]
+    async fn test_basic_file() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&tmp).await?;
+        let (tx, rx) = dummy_scheduler();
+        let router = RouterInner::new(tmp.clone(), tx, 32, Duration::from_secs(300));
+        let (stream_task, storage_path) = task("dummy".to_owned()).await?;
+        must_register_table(&router, stream_task, 1).await;
+
+        let start_ts = write_simple_data(&router).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let end_ts = TimeStamp::physical_now();
@@ -1403,6 +1503,58 @@ mod tests {
         assert_eq!(meta_count, 1);
         assert_eq!(log_count, 3);
         Ok(())
+    }
+
+    fn mock_build_kv_events(table_id: i64, region_id: u64, resolved_ts: u64) -> ApplyEvents {
+        let mut events_builder = KvEventsBuilder::new(region_id, resolved_ts);
+        events_builder.put_table("default", table_id, b"hello", b"world");
+        events_builder.finish()
+    }
+
+    #[tokio::test]
+    async fn test_do_flush() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let backend = external_storage_export::make_local_backend(tmp_dir.path());
+        let mut task_info = StreamBackupTaskInfo::default();
+        task_info.set_storage(backend);
+        let stream_task = StreamTask {
+            info: task_info,
+            is_paused: false,
+        };
+        let task = StreamTaskInfo::new(
+            tmp_dir.path().to_path_buf(),
+            stream_task,
+            Duration::from_secs(300),
+        )
+        .await
+        .unwrap();
+
+        // on_event
+        let region_count = FLUSH_LOG_CONCURRENT_BATCH_COUNT + 5;
+        for i in 1..=region_count {
+            let kv_events = mock_build_kv_events(i as _, i as _, i as _);
+            task.on_events(kv_events).await.unwrap();
+        }
+        // do_flush
+        task.set_flushing_status(true);
+        task.do_flush(1, TimeStamp::new(1)).await.unwrap();
+        assert_eq!(task.flush_failure_count(), 0);
+        assert_eq!(task.files.read().await.is_empty(), true);
+        assert_eq!(task.flushing_files.read().await.is_empty(), true);
+
+        // assert backup log files
+        let mut meta_count = 0;
+        let mut log_count = 0;
+        for entry in walkdir::WalkDir::new(tmp_dir.path()) {
+            let entry = entry.unwrap();
+            if entry.path().extension() == Some(OsStr::new("meta")) {
+                meta_count += 1;
+            } else if entry.path().extension() == Some(OsStr::new("log")) {
+                log_count += 1;
+            }
+        }
+        assert_eq!(meta_count, 1);
+        assert_eq!(log_count, region_count);
     }
 
     struct ErrorStorage<Inner> {
@@ -1507,8 +1659,12 @@ mod tests {
                 .is_none()
         );
         check_on_events_result(&router.on_events(build_kv_event(10, 10)).await);
-        let _ = router.do_flush("error_prone", 42, TimeStamp::max()).await;
         let t = router.get_task_info("error_prone").await.unwrap();
+        let _ = router.do_flush("error_prone", 42, TimeStamp::max()).await;
+        assert_eq!(t.total_size() > 0, true);
+
+        t.set_flushing_status(true);
+        let _ = router.do_flush("error_prone", 42, TimeStamp::max()).await;
         assert_eq!(t.total_size(), 0);
         Ok(())
     }
@@ -1540,6 +1696,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_cleanup_when_stop() -> Result<()> {
+        let (tx, _rx) = dummy_scheduler();
+        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        let router = Arc::new(RouterInner::new(
+            tmp.clone(),
+            tx,
+            1,
+            Duration::from_secs(300),
+        ));
+        let (task, _path) = task("cleanup_test".to_owned()).await?;
+        must_register_table(&router, task, 1).await;
+        write_simple_data(&router).await;
+        router
+            .get_task_info("cleanup_test")
+            .await?
+            .move_to_flushing_files()
+            .await;
+        write_simple_data(&router).await;
+        let mut w = walkdir::WalkDir::new(&tmp).into_iter();
+        assert!(w.next().is_some(), "the temp files doesn't created");
+        drop(router);
+        let w = walkdir::WalkDir::new(&tmp)
+            .into_iter()
+            .filter_map(|entry| {
+                let e = entry.unwrap();
+                e.path()
+                    .extension()
+                    .filter(|x| x.to_string_lossy() == "log")
+                    .map(|_| e.clone())
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            w.is_empty(),
+            "the temp files should be removed, but it is {:?}",
+            w
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_flush_with_pausing_self() -> Result<()> {
         let (tx, rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
@@ -1556,8 +1753,8 @@ mod tests {
                 i.storage = Arc::new(ErrorStorage::with_always_error(i.storage.clone()))
             })
             .await;
-        for i in 0..=16 {
-            check_on_events_result(&router.on_events(build_kv_event(i * 10, 10)).await);
+        for i in 0..=FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
+            check_on_events_result(&router.on_events(build_kv_event((i * 10) as _, 10)).await);
             assert_eq!(
                 router
                     .do_flush("flush_failure", 42, TimeStamp::zero())
@@ -1581,8 +1778,21 @@ mod tests {
 
     #[test]
     fn test_format_datetime() {
-        let s = TempFileKey::format_date_time(431656320867237891);
+        let s = TempFileKey::format_date_time(431656320867237891, FormatType::Date);
         let s = s.to_string();
         assert_eq!(s, "20220307");
+
+        let s = TempFileKey::format_date_time(431656320867237891, FormatType::Hour);
+        assert_eq!(s.to_string(), "07");
+    }
+
+    #[test]
+    fn test_decode_begin_ts() {
+        let start_ts = TimeStamp::new(12345678);
+        let w = Write::new(WriteType::Put, start_ts, Some(b"short_value".to_vec()));
+        let value = w.as_ref().to_bytes();
+
+        let begin_ts = DataFile::decode_begin_ts(value).unwrap();
+        assert_eq!(begin_ts, start_ts);
     }
 }

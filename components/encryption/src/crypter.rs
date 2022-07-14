@@ -16,7 +16,7 @@ pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DB
         EncryptionMethod::Aes128Ctr => DBEncryptionMethod::Aes128Ctr,
         EncryptionMethod::Aes192Ctr => DBEncryptionMethod::Aes192Ctr,
         EncryptionMethod::Aes256Ctr => DBEncryptionMethod::Aes256Ctr,
-        EncryptionMethod::Unknown => DBEncryptionMethod::Unknown,
+        _ => DBEncryptionMethod::Unknown,
     }
 }
 
@@ -26,7 +26,7 @@ pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -
         DBEncryptionMethod::Aes128Ctr => EncryptionMethod::Aes128Ctr,
         DBEncryptionMethod::Aes192Ctr => EncryptionMethod::Aes192Ctr,
         DBEncryptionMethod::Aes256Ctr => EncryptionMethod::Aes256Ctr,
-        DBEncryptionMethod::Unknown => EncryptionMethod::Unknown,
+        _ => EncryptionMethod::Unknown,
     }
 }
 

@@ -10,6 +10,7 @@
 extern crate test;
 
 use std::{
+    cmp,
     collections::{
         hash_map::Entry,
         vec_deque::{Iter, VecDeque},
@@ -585,6 +586,15 @@ pub fn empty_shared_slice<T>() -> Arc<[T]> {
 /// A useful hook to check if master branch is being built.
 pub fn build_on_master_branch() -> bool {
     option_env!("TIKV_BUILD_GIT_BRANCH").map_or(false, |b| "master" == b)
+}
+
+/// Set the capacity of a vector to the given capacity.
+pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
+    match cap.cmp(&v.capacity()) {
+        cmp::Ordering::Less => v.shrink_to(cap),
+        cmp::Ordering::Greater => v.reserve_exact(cap - v.len()),
+        cmp::Ordering::Equal => {}
+    }
 }
 
 #[cfg(test)]
