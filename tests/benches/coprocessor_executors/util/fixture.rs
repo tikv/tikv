@@ -325,6 +325,11 @@ impl BatchExecutor for BatchFixtureExecutor {
     fn can_be_cached(&self) -> bool {
         unreachable!()
     }
+
+    #[inline]
+    fn alloc_trace(&mut self, _len: usize) {
+        unreachable!()
+    }
 }
 
 /// Benches the performance of the batch fixture executor itself. When using it as the source
