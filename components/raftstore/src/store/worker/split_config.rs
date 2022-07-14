@@ -21,7 +21,7 @@ const DEFAULT_SPLIT_CONTAINED_SCORE: f64 = 0.5;
 
 // If the `split_balance_score` and `split_contained_score` above could not be satisfied, we will try to split the region according to its CPU load,
 // then these parameters below will start to work.
-// When the gRPC poll thread CPU usage is higher than gRPC poll thread count * `DEFAULT_GRPC_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO`,
+// When the gRPC poll thread CPU usage (over the past `detect_times` seconds by default) is higher than gRPC poll thread count * `DEFAULT_GRPC_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO`,
 // the CPU-based split won't be triggered no matter if the `DEFAULT_UNIFIED_READ_POOL_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO` and `REGION_CPU_OVERLOAD_THRESHOLD_RATIO` are exceeded
 // to prevent from increasing the gRPC poll CPU usage.
 const DEFAULT_GRPC_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO: f64 = 0.5;

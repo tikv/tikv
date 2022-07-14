@@ -324,6 +324,12 @@ lazy_static! {
             "Bucketed histogram of proposals' send to write queue duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    pub static ref STORE_WF_SEND_PROPOSAL_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_wf_send_proposal_duration_seconds",
+            "Bucketed histogram of proposals' waterfall send duration",
+            exponential_buckets(1e-6, 2.0, 26).unwrap()
+        ).unwrap();
     pub static ref STORE_WF_BEFORE_WRITE_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_wf_before_write_duration_seconds",
@@ -359,12 +365,6 @@ lazy_static! {
             "tikv_raftstore_store_wf_commit_not_persist_log_duration_seconds",
             "Bucketed histogram of proposals' commit but not persist duration",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref PROPOSAL_SEND_WAIT_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_send_wait_duration_seconds",
-            "Bucketed histogram of proposals' send wait duration",
-            exponential_buckets(1e-6, 2.0, 26).unwrap()
         ).unwrap();
 
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
