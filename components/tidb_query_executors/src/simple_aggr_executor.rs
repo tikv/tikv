@@ -104,7 +104,10 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
     ) -> Result<Self> {
         // Empty states is fine because it will be re-initialized later according to the content
         // in entities.
-        let aggr_impl = SimpleAggregationImpl { states: Vec::new() };
+        let aggr_impl = SimpleAggregationImpl {
+            states: Vec::new(),
+            has_input_rows: false,
+        };
 
         Ok(Self(AggregationExecutor::new(
             aggr_impl,
@@ -118,6 +121,13 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
 
 pub struct SimpleAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
+    // To fix https://github.com/pingcap/tidb/issues/30923
+    // for aggregation without group by, it should return at least 1 row even if
+    // there is no input row, however, the aggregation executed in TiKV is always
+    // the first stage agg, so it is safe to not return any thing if no input.
+    // todo should add variable like agg_stage, and if there is no input rows,
+    //  only return 1 row if the aggregation is in the final stage
+    has_input_rows: bool,
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl {
@@ -128,6 +138,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
             .map(|f| f.create_state())
             .collect();
         self.states = states;
+        self.has_input_rows = false
     }
 
     #[inline]
@@ -138,6 +149,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         input_logical_rows: &[usize],
     ) -> Result<()> {
         let rows_len = input_logical_rows.len();
+        self.has_input_rows |= rows_len > 0;
 
         assert_eq!(self.states.len(), entities.each_aggr_exprs.len());
 
@@ -191,7 +203,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
 
     #[inline]
     fn groups_len(&self) -> usize {
-        1
+        if self.has_input_rows {
+            1
+        } else {
+            0
+        }
     }
 
     #[inline]
@@ -202,7 +218,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
         assert!(src_is_drained);
-        iteratee(entities, &self.states)?;
+        if self.has_input_rows {
+            iteratee(entities, &self.states)?;
+        }
         Ok(Vec::new())
     }
 
@@ -646,14 +664,12 @@ mod tests {
 
         let r = exec.next_batch(1);
         assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(&r.logical_rows, &[0]);
-        assert_eq!(r.physical_columns.rows_len(), 1);
-        assert_eq!(r.physical_columns.columns_len(), 1);
-        assert!(r.physical_columns[0].is_decoded());
-        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(42)]);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(r.is_drained.unwrap());
     }
 }
