@@ -1204,7 +1204,8 @@ where
         apply_ctx.sync_log_hint |= should_sync_log(&cmd);
 
         apply_ctx.host.pre_apply(&self.region, &cmd);
-        let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, &cmd);
+        let (mut resp, exec_result, should_write) =
+            self.apply_raft_cmd(apply_ctx, index, term, &cmd);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
         }
@@ -1224,6 +1225,10 @@ where
         apply_ctx
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
+        if should_write {
+            debug!("persist data and apply state"; "region_id" => self.region_id(), "peer_id" => self.id(), "state" => ?self.apply_state);
+            apply_ctx.commit(self);
+        }
         exec_result
     }
 
@@ -1241,7 +1246,7 @@ where
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> (RaftCmdResponse, ApplyResult<EK::Snapshot>) {
+    ) -> (RaftCmdResponse, ApplyResult<EK::Snapshot>, bool) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -1291,7 +1296,7 @@ where
             (resp, exec_result)
         };
         if let ApplyResult::WaitMergeSource(_) = exec_result {
-            return (resp, exec_result);
+            return (resp, exec_result, false);
         }
 
         self.apply_state.set_applied_index(index);
@@ -1368,11 +1373,7 @@ where
             }
         }
 
-        if should_write {
-            debug!("persist data and apply state"; "region_id" => self.region_id(), "peer_id" => self.id(), "state" => ?self.apply_state);
-            ctx.commit(self);
-        }
-        (resp, exec_result)
+        (resp, exec_result, should_write)
     }
 
     fn destroy(&mut self, apply_ctx: &mut ApplyContext<EK>) {
