@@ -7,7 +7,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::Peekable;
+use engine_traits::{Peekable, WriteBatch};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};
@@ -321,7 +321,7 @@ fn test_error_in_compaction_filter() {
     gc_runner.gc(&raw_engine);
 
     match gc_runner.gc_receiver.recv().unwrap() {
-        GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.as_inner().count(), 2),
+        GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.count(), 2),
         GcTask::GcKeys { .. } => {}
         _ => unreachable!(),
     }

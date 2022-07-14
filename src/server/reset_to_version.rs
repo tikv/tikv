@@ -6,7 +6,7 @@ use std::{
     thread::JoinHandle,
 };
 
-use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatch};
+use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatchVec};
 use engine_traits::{
     IterOptions, Iterable, Iterator, Mutable, SeekKey, WriteBatch, WriteBatchExt, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
@@ -121,7 +121,7 @@ impl ResetToVersionWorker {
     pub fn process_next_batch(
         &mut self,
         batch_size: usize,
-        wb: &mut RocksWriteBatch,
+        wb: &mut RocksWriteBatchVec,
     ) -> Result<bool> {
         let Batch { writes, has_more } = self.scan_next_batch(batch_size)?;
         for (key, write) in writes {
@@ -140,7 +140,7 @@ impl ResetToVersionWorker {
     pub fn process_next_batch_lock(
         &mut self,
         batch_size: usize,
-        wb: &mut RocksWriteBatch,
+        wb: &mut RocksWriteBatchVec,
     ) -> Result<bool> {
         let mut has_more = true;
         for _ in 0..batch_size {

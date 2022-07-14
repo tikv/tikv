@@ -18,7 +18,7 @@ use engine_rocks::{
         CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
         DBCompactionFilter,
     },
-    RocksEngine, RocksMvccProperties, RocksWriteBatch,
+    RocksEngine, RocksMvccProperties, RocksWriteBatchVec,
 };
 use engine_traits::{
     KvEngine, MiscExt, Mutable, MvccProperties, WriteBatch, WriteBatchExt, WriteOptions,
@@ -267,7 +267,7 @@ struct WriteCompactionFilter {
     is_bottommost_level: bool,
     encountered_errors: bool,
 
-    write_batch: RocksWriteBatch,
+    write_batch: RocksWriteBatchVec,
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     // A key batch which is going to be sent to the GC worker.
     mvcc_deletions: Vec<Key>,
@@ -461,7 +461,7 @@ impl WriteCompactionFilter {
         }
 
         fn do_flush(
-            wb: &RocksWriteBatch,
+            wb: &RocksWriteBatchVec,
             wopts: &WriteOptions,
         ) -> Result<(), engine_traits::Error> {
             let _io_type_guard = WithIOType::new(IOType::Gc);
