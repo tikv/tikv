@@ -976,10 +976,11 @@ where
             let expect_index = self.apply_state.get_applied_index() + 1;
             if expect_index != entry.get_index() {
                 panic!(
-                    "{} expect index {}, but got {}",
+                    "{} expect index {}, but got {}, ctx {}",
                     self.tag,
                     expect_index,
-                    entry.get_index()
+                    entry.get_index(),
+                    apply_ctx.tag,
                 );
             }
 
