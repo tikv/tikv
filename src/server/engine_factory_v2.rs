@@ -147,6 +147,10 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         self.open_tablet_raw(db_path.as_path(), false)
     }
 
+    fn get_factory_version(&self) -> engine_traits::TabletFactoryVersion {
+        engine_traits::TabletFactoryVersion::V2
+    }
+
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
         Box::new(std::clone::Clone::clone(self))
     }

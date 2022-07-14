@@ -23,7 +23,6 @@ use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, Value};
-use engine_test::kv::TestTabletFactory;
 
 use super::{
     write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,

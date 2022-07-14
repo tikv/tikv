@@ -8,11 +8,11 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::Duration,
+    time::Duration, collections::HashMap,
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory};
+use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory, TabletFactoryVersion};
 use fail::fail_point;
 use kvproto::{
     errorpb,
@@ -432,7 +432,7 @@ where
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     delegates: LruCache<u64, Arc<ReadDelegate>>,
-    snap_cache: Option<Arc<E::Snapshot>>,
+    snap_cache: HashMap<u64, Arc<E::Snapshot>>,
     cache_read_id: ThreadReadId,
     // A channel to raftstore.
     router: C,
@@ -444,29 +444,33 @@ where
     E: KvEngine,
 {
     fn get_tablet(&self, region_id: u64) -> E {
-        unimplemented!()
+        self.factory.open_tablet_cache_any(region_id).unwrap()
     }
 
     fn get_snapshot(
         &mut self,
         create_time: Option<ThreadReadId>,
-        region_id: u64,
+        mut region_id: u64,
     ) -> Arc<E::Snapshot> {
         println!("Acquring snapshot ---- ");
         if let Some(tablet) = self.factory.open_tablet_cache_any(region_id) {
             self.metrics.local_executed_requests += 1;
             if let Some(ts) = create_time {
+                if self.factory.get_factory_version() == TabletFactoryVersion::V1 {
+                    region_id = 0;
+                }
                 if ts == self.cache_read_id {
-                    if let Some(snap) = self.snap_cache.as_ref() {
+                    if let Some(snap) = self.snap_cache.get(&region_id) {
                         println!("Cache hit");
                         self.metrics.local_executed_snapshot_cache_hit += 1;
                         return snap.clone();
                     }
                 }
+
                 println!("Cache miss");
                 let snap = Arc::new(tablet.snapshot());
                 self.cache_read_id = ts;
-                self.snap_cache = Some(snap.clone());
+                self.snap_cache.insert(region_id, snap.clone());
                 return snap;
             }
             println!("Cache miss");
@@ -492,7 +496,7 @@ where
             store_meta,
             factory,
             router,
-            snap_cache: None,
+            snap_cache: HashMap::new(),
             cache_read_id,
             store_id: Cell::new(None),
             metrics: Default::default(),
@@ -740,7 +744,7 @@ where
     }
 
     pub fn release_snapshot_cache(&mut self) {
-        self.snap_cache.take();
+        self.snap_cache.clear();
     }
 }
 
@@ -757,7 +761,7 @@ where
             store_id: self.store_id.clone(),
             metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
-            snap_cache: self.snap_cache.clone(),
+            snap_cache: HashMap::new(),
             cache_read_id: self.cache_read_id.clone(),
         }
     }

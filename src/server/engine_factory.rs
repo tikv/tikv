@@ -276,8 +276,13 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
         Ok(())
     }
+    
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
         Box::new(std::clone::Clone::clone(self))
+    }
+
+    fn get_factory_version(&self) -> engine_traits::TabletFactoryVersion {
+        engine_traits::TabletFactoryVersion::V1
     }
 }
 

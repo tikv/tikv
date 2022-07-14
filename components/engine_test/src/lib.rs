@@ -271,6 +271,10 @@ pub mod kv {
         fn clone(&self) -> Box<dyn TabletFactory<KvTestEngine> + Send> {
             Box::new(std::clone::Clone::clone(self))
         }
+
+        fn get_factory_version(&self) -> engine_traits::TabletFactoryVersion {
+            engine_traits::TabletFactoryVersion::Test
+        }
     }
 
     impl TabletAccessor<KvTestEngine> for TestTabletFactory {
