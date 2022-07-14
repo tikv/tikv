@@ -128,7 +128,7 @@ impl SuiteBuilder {
         let Self {
             name: case,
             nodes: n,
-            use_v3,
+            use_v3: _,
             metastore_error,
         } = self;
 
@@ -156,7 +156,7 @@ impl SuiteBuilder {
         }
         suite.cluster.run();
         for id in 1..=(n as u64) {
-            suite.start_endpoint(id, use_v3);
+            suite.start_endpoint(id);
         }
         // TODO: The current mock metastore (slash_etc) doesn't supports multi-version.
         //       We must wait until the endpoints get ready to watching the metastore, or some modifies may be lost.
@@ -247,7 +247,7 @@ impl Suite {
         worker
     }
 
-    fn start_endpoint(&mut self, id: u64, use_v3: bool) {
+    fn start_endpoint(&mut self, id: u64) {
         let cluster = &mut self.cluster;
         let worker = self.endpoints.get_mut(&id).unwrap();
         let sim = cluster.sim.wl();
