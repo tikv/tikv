@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use causal_ts::CausalTsProvider;
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
@@ -413,6 +414,7 @@ pub struct Endpoint<T, E> {
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
     region_read_progress: RegionReadProgressRegistry,
+    causal_ts_provider: Option<Arc<dyn CausalTsProvider + 'static>>,
 
     // Metrics and logging.
     current_ts: TimeStamp,
@@ -438,6 +440,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: MemoryQuota,
+        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
     ) -> Endpoint<T, E> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
@@ -508,6 +511,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             // Log the first resolved ts warning.
             warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
             current_ts: TimeStamp::zero(),
+            causal_ts_provider,
         };
         ep.register_min_ts_event();
         ep
@@ -1111,7 +1115,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let tikv_clients = self.tikv_clients.clone();
         let hibernate_regions_compatible = self.config.hibernate_regions_compatible;
         let region_read_progress = self.region_read_progress.clone();
-        let observer = self.observer.clone();
+        let causal_ts_provider = self.causal_ts_provider.clone();
 
         let fut = async move {
             let _ = timeout.compat().await;
@@ -1141,7 +1145,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
             // If flush_causal_timestamp fails, cannot schedule MinTS task
             // as new coming raw data may use timestamp smaller than min_ts
-            if let Err(e) = observer.flush_causal_timestamp() {
+            if let Err(e) = causal_ts_provider.map_or(Ok(()), |provider| provider.flush()) {
                 error!("cdc flush causal timestamp failed"; "err" => ?e);
                 return;
             }
@@ -1474,6 +1478,15 @@ mod tests {
         engine: Option<RocksEngine>,
         api_version: ApiVersion,
     ) -> TestEndpointSuite {
+        mock_endpoint_with_ts_provider(cfg, engine, api_version, None)
+    }
+
+    fn mock_endpoint_with_ts_provider(
+        cfg: &CdcConfig,
+        engine: Option<RocksEngine>,
+        api_version: ApiVersion,
+        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+    ) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let ep = Endpoint::new(
@@ -1495,6 +1508,7 @@ mod tests {
             Arc::new(Environment::new(1)),
             Arc::new(SecurityManager::default()),
             MemoryQuota::new(usize::MAX),
+            causal_ts_provider,
         );
 
         TestEndpointSuite {
@@ -2224,6 +2238,27 @@ mod tests {
                 .is_none(),
             true
         );
+    }
+
+    #[test]
+    fn test_raw_causal_ts_flush() {
+        let sleep_interval = Duration::from_secs(1);
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(sleep_interval),
+            ..Default::default()
+        };
+        let ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+        let start_ts = ts_provider.get_ts().unwrap();
+        let mut suite =
+            mock_endpoint_with_ts_provider(&cfg, None, ApiVersion::V2, Some(ts_provider.clone()));
+        suite.run(Task::RegisterMinTsEvent);
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(1500))
+            .unwrap()
+            .unwrap();
+        let end_ts = ts_provider.get_ts().unwrap();
+        assert!(end_ts.into_inner() >= start_ts.next().into_inner() + 100); // may trigger more than once.
     }
 
     #[test]
