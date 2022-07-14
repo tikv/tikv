@@ -633,7 +633,7 @@ impl TempFileKey {
     }
 
     /// path_to_schema_file specifies the path of schema log.
-    /// eg. "v1/20220625/03/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
+    /// eg. "v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
     fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
             "v1/{}/{}/{}/schema-meta/{:012}-{}.log",
