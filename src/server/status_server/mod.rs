@@ -949,7 +949,7 @@ mod tests {
     use tikv_util::logger::get_log_level;
 
     use crate::{
-        config::{ConfigController, LogLevel, TiKvConfig},
+        config::{ConfigController, TiKvConfig},
         server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
     };
 

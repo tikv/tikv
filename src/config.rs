@@ -4674,14 +4674,14 @@ mod tests {
 
     #[test]
     fn test_change_logconfig() {
-        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
 
         cfg_controller.register(Module::Log, Box::new(LogConfigManager));
 
         cfg_controller.update_config("log.level", "warn").unwrap();
-        assert!(get_log_level().unwrap(), Level::Warning);
-        assert!(
+        assert_eq!(get_log_level().unwrap(), Level::Warning);
+        assert_eq!(
             cfg_controller.get_current().log.level,
             LogLevel(Level::Warning)
         );
@@ -4691,7 +4691,7 @@ mod tests {
                 .update_config("log.level", "invalid")
                 .is_err()
         );
-        assert!(
+        assert_eq!(
             cfg_controller.get_current().log.level,
             LogLevel(Level::Warning)
         );
