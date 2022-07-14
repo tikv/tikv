@@ -600,8 +600,8 @@ mod test {
     use std::time::Duration;
 
     use backup_stream::{
-        errors::Error, metadata::MetadataClient, GetCheckpointResult, RegionCheckpointOperation,
-        RegionSet, Task,
+        errors::Error, metadata::MetadataClient, router::TaskSelector, GetCheckpointResult,
+        RegionCheckpointOperation, RegionSet, Task,
     };
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use txn_types::TimeStamp;
@@ -718,7 +718,7 @@ mod test {
         endpoint
             .scheduler()
             .schedule(Task::FatalError(
-                "test_fatal_error".to_owned(),
+                TaskSelector::ByName("test_fatal_error".to_owned()),
                 Box::new(Error::Other(box_err!("everything is alright"))),
             ))
             .unwrap();
@@ -839,6 +839,32 @@ mod test {
         suite.must_shuffle_leader(1);
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("region_failure");
+        suite.wait_for_flush();
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            keys.union(&keys2).map(|s| s.as_slice()),
+        );
+    }
+
+    #[test]
+    fn initial_scan_failure() {
+        test_util::init_log_for_test();
+        defer! {{
+            fail::remove("scan_and_async_send");
+        }}
+
+        let mut suite = SuiteBuilder::new_named("initial_scan_failure")
+            .nodes(1)
+            .build();
+        let keys = run_async_test(suite.write_records(0, 128, 1));
+        fail::cfg(
+            "scan_and_async_send",
+            "1*return(dive into the temporary dream, where the SLA never bothers)",
+        )
+        .unwrap();
+        suite.must_register_task(1, "initial_scan_failure");
+        let keys2 = run_async_test(suite.write_records(256, 128, 1));
+        suite.force_flush_files("initial_scan_failure");
         suite.wait_for_flush();
         suite.check_for_write_records(
             suite.flushed_files.path(),

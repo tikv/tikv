@@ -34,6 +34,7 @@ use txn_types::{Key, Lock, LockType};
 use crate::{
     errors::{Error, Result},
     metadata::store::BoxFuture,
+    router::TaskSelector,
     Task,
 };
 
@@ -397,7 +398,7 @@ pub fn handle_on_event_result(doom_messenger: &Scheduler<Task>, result: Vec<(Str
             try_send!(
                 doom_messenger,
                 Task::FatalError(
-                    task,
+                    TaskSelector::ByName(task),
                     Box::new(err.context("failed to record event to local temporary files"))
                 )
             );
@@ -534,6 +535,30 @@ pub fn with_record_read_throughput<T>(f: impl FnOnce() -> T) -> (T, u64) {
     let recorder = ReadThroughputRecorder::start();
     let r = f();
     (r, recorder.end())
+}
+
+/// test whether a key is in the range.
+/// end key is exclusive.
+/// empty end key means infinity.
+pub fn is_in_range(key: &[u8], range: (&[u8], &[u8])) -> bool {
+    match range {
+        (start, b"") => key >= start,
+        (start, end) => key >= start && key < end,
+    }
+}
+
+/// test whether two ranges overlapping.
+/// end key is exclusive.
+/// empty end key means infinity.
+pub fn is_overlapping(range: (&[u8], &[u8]), range2: (&[u8], &[u8])) -> bool {
+    let (x1, y1) = range;
+    let (x2, y2) = range2;
+    match (x1, y1, x2, y2) {
+        (_, b"", _, b"") => true,
+        (x1, b"", _, y2) => x1 < y2,
+        (_, x2, y1, b"") => y1 < x2,
+        (x1, x2, y1, y2) => y1 < x2 && x1 < y2,
+    }
 }
 
 #[cfg(test)]

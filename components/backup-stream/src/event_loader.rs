@@ -23,10 +23,12 @@ use tikv::storage::{
 use tikv_util::{
     box_err,
     time::{Instant, Limiter},
-    warn,
     worker::Scheduler,
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::{
+    runtime::Handle,
+    sync::{OwnedSemaphorePermit, Semaphore},
+};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -64,7 +66,7 @@ impl PendingMemoryQuota {
 
     pub fn pending(&self, size: usize) -> PendingMemory {
         PendingMemory(
-            tokio::runtime::Handle::current()
+            Handle::current()
                 .block_on(self.0.clone().acquire_many_owned(size as _))
                 .expect("BUG: the semaphore is closed unexpectedly."),
         )
@@ -186,7 +188,7 @@ pub struct InitialDataLoader<E, R, RT> {
     pub(crate) tracing: SubscriptionTracer,
     pub(crate) scheduler: Scheduler<Task>,
     pub(crate) quota: PendingMemoryQuota,
-    pub(crate) handle: tokio::runtime::Handle,
+    pub(crate) handle: Handle,
     pub(crate) limit: Limiter,
 
     _engine: PhantomData<E>,
@@ -205,7 +207,7 @@ where
         tracing: SubscriptionTracer,
         sched: Scheduler<Task>,
         quota: PendingMemoryQuota,
-        handle: tokio::runtime::Handle,
+        handle: Handle,
         limiter: Limiter,
     ) -> Self {
         Self {
@@ -252,8 +254,8 @@ where
                     last_err = match last_err {
                         None => Some(e),
                         Some(err) => Some(Error::Contextual {
-                            context: format!("and error {}", e),
-                            inner_error: Box::new(err),
+                            context: format!("and error {}", err),
+                            inner_error: Box::new(e),
                         }),
                     };
 
@@ -374,6 +376,10 @@ where
         let mut stats = StatisticsSummary::default();
         let start = Instant::now();
         loop {
+            #[cfg(feature = "failpoints")]
+            fail::fail_point!("scan_and_async_send", |msg| Err(Error::Other(box_err!(
+                "{:?}", msg
+            ))));
             let mut events = ApplyEvents::with_capacity(1024, region.id);
             let stat = event_loader.fill_entries()?;
             let disk_read = self.with_resolver(region, |r| {
@@ -411,39 +417,31 @@ where
         region: &Region,
         start_ts: TimeStamp,
         snap: impl Snapshot,
-        on_finish: impl FnOnce() + Send + 'static,
     ) -> Result<Statistics> {
         let _guard = self.handle.enter();
-        // It is ok to sink more data than needed. So scan to +inf TS for convenance.
-        let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
         let tr = self.tracing.clone();
         let region_id = region.get_id();
 
         let mut join_handles = Vec::with_capacity(8);
-        let stats = self.scan_and_async_send(region, event_loader, &mut join_handles);
 
-        // we should mark phase one as finished whether scan successed.
-        // TODO: use an `WaitGroup` with asynchronous support.
-        let r = region.clone();
-        tokio::spawn(async move {
-            for h in join_handles {
-                if let Err(err) = h.await {
-                    warn!("failed to join task."; "err" => %err);
-                }
-            }
-            let result = Self::with_resolver_by(&tr, &r, |r| {
-                r.phase_one_done();
-                Ok(())
-            });
-            if let Err(err) = result {
-                err.report(format_args!(
-                    "failed to finish phase 1 for region {:?}",
-                    region_id
-                ));
-            }
-            on_finish()
-        });
-        stats
+        // It is ok to sink more data than needed. So scan to +inf TS for convenance.
+        let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
+        let stats = self.scan_and_async_send(region, event_loader, &mut join_handles)?;
+
+        Handle::current()
+            .block_on(futures::future::try_join_all(join_handles))
+            .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
+
+        Self::with_resolver_by(&tr, region, |r| {
+            r.phase_one_done();
+            Ok(())
+        })
+        .context(format_args!(
+            "failed to finish phase 1 for region {:?}",
+            region_id
+        ))?;
+
+        Ok(stats)
     }
 
     /// initialize a range: it simply scan the regions with leader role and send them to [`initialize_region`].

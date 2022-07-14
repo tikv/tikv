@@ -63,6 +63,50 @@ const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
 /// and storage could take mistaken if writing all of these files to storage concurrently.
 const FLUSH_LOG_CONCURRENT_BATCH_COUNT: usize = 128;
 
+#[derive(Clone, Debug)]
+pub enum TaskSelector {
+    ByName(String),
+    ByKey(Vec<u8>),
+    ByRange(Vec<u8>, Vec<u8>),
+    All,
+}
+
+impl TaskSelector {
+    pub fn reference(&self) -> TaskSelectorRef<'_> {
+        match self {
+            TaskSelector::ByName(s) => TaskSelectorRef::ByName(&s),
+            TaskSelector::ByKey(k) => TaskSelectorRef::ByKey(&*k),
+            TaskSelector::ByRange(s, e) => TaskSelectorRef::ByRange(&*s, &*e),
+            TaskSelector::All => TaskSelectorRef::All,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TaskSelectorRef<'a> {
+    ByName(&'a str),
+    ByKey(&'a [u8]),
+    ByRange(&'a [u8], &'a [u8]),
+    All,
+}
+
+impl<'a> TaskSelectorRef<'a> {
+    fn matches(self, t: &StreamTaskInfo) -> bool {
+        match self {
+            TaskSelectorRef::ByName(name) => t.task.info.get_name() == name,
+            TaskSelectorRef::ByKey(k) => t
+                .ranges
+                .iter()
+                .any(|(s, e)| utils::is_in_range(k, (&*s, &*e))),
+            TaskSelectorRef::ByRange(x1, y1) => t
+                .ranges
+                .iter()
+                .any(|(x2, y2)| utils::is_overlapping((x1, y1), (&*x2, &*y2))),
+            TaskSelectorRef::All => true,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ApplyEvent {
     pub key: Vec<u8>,
@@ -376,7 +420,8 @@ impl RouterInner {
 
         // register task info
         let prefix_path = self.prefix.join(&task_name);
-        let stream_task = StreamTaskInfo::new(prefix_path, task, self.max_flush_interval).await?;
+        let stream_task =
+            StreamTaskInfo::new(prefix_path, task, self.max_flush_interval, ranges.clone()).await?;
         self.tasks
             .lock()
             .await
@@ -403,6 +448,14 @@ impl RouterInner {
     pub fn get_task_by_key(&self, key: &[u8]) -> Option<String> {
         let r = self.ranges.read().unwrap();
         r.get_value_by_point(key).cloned()
+    }
+
+    pub async fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
+        let s = self.tasks.lock().await;
+        s.iter()
+            .filter(|(_, info)| selector.matches(&*info))
+            .map(|(name, _)| name.to_owned())
+            .collect()
     }
 
     #[cfg(test)]
@@ -488,7 +541,10 @@ impl RouterInner {
                         // NOTE: Maybe we'd better record all errors and send them to the client?
                         try_send!(
                             self.scheduler,
-                            Task::FatalError(task_name.to_owned(), Box::new(e))
+                            Task::FatalError(
+                                TaskSelector::ByName(task_name.to_owned()),
+                                Box::new(e)
+                            )
                         );
                     }
                     return None;
@@ -656,6 +712,8 @@ pub struct StreamTaskInfo {
     pub(crate) task: StreamTask,
     /// support external storage. eg local/s3.
     pub(crate) storage: Arc<dyn ExternalStorage>,
+    /// The listening range of the task.
+    ranges: Vec<(Vec<u8>, Vec<u8>)>,
     /// The parent directory of temporary files.
     temp_dir: PathBuf,
     /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
@@ -712,6 +770,7 @@ impl StreamTaskInfo {
         temp_dir: PathBuf,
         task: StreamTask,
         flush_interval: Duration,
+        ranges: Vec<(Vec<u8>, Vec<u8>)>,
     ) -> Result<Self> {
         tokio::fs::create_dir_all(&temp_dir).await?;
         let storage = Arc::from(create_storage(
@@ -722,6 +781,7 @@ impl StreamTaskInfo {
             task,
             storage,
             temp_dir,
+            ranges,
             min_resolved_ts: TimeStamp::max(),
             files: SlotMap::default(),
             flushing_files: RwLock::default(),
@@ -1525,6 +1585,7 @@ mod tests {
             tmp_dir.path().to_path_buf(),
             stream_task,
             Duration::from_secs(300),
+            vec![(vec![], vec![])],
         )
         .await
         .unwrap();
