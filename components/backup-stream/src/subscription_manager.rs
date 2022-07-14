@@ -410,33 +410,36 @@ where
             let canceled = self.subs.deregister_region_if(region, |_, _| true);
             let handle = ObserveHandle::new();
             if canceled {
-                let for_task = self.find_task_by_region(region).unwrap_or_else(|| {
-                    panic!(
+                let for_task = self.find_task_by_region(region);
+                match for_task {
+                    Some(for_task) => {
+                        metrics::INITIAL_SCAN_REASON
+                            .with_label_values(&["region-changed"])
+                            .inc();
+                        let r = async {
+                            self.observe_over_with_initial_data_from_checkpoint(
+                                region,
+                                self.get_last_checkpoint_of(&for_task, region).await?,
+                                handle.clone(),
+                            );
+                            Result::Ok(())
+                        }
+                        .await;
+                        if let Err(e) = r {
+                            try_send!(
+                                self.scheduler,
+                                Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
+                                    region: region.clone(),
+                                    handle,
+                                    err: Box::new(e)
+                                })
+                            );
+                        }
+                    }
+                    None => warn!(
                         "BUG: the region {:?} is register to no task but being observed",
-                        region
-                    )
-                });
-                metrics::INITIAL_SCAN_REASON
-                    .with_label_values(&["region-changed"])
-                    .inc();
-                let r = async {
-                    self.observe_over_with_initial_data_from_checkpoint(
-                        region,
-                        self.get_last_checkpoint_of(&for_task, region).await?,
-                        handle.clone(),
-                    );
-                    Result::Ok(())
-                }
-                .await;
-                if let Err(e) = r {
-                    try_send!(
-                        self.scheduler,
-                        Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
-                            region: region.clone(),
-                            handle,
-                            err: Box::new(e)
-                        })
-                    );
+                        &region
+                    ),
                 }
             }
         }
