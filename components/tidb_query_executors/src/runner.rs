@@ -590,20 +590,24 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let is_drained = result.is_drained?;
 
+        let data_len: usize;
+
         if !result.logical_rows.is_empty() {
             assert_eq!(
                 result.physical_columns.columns_len(),
                 self.out_most_executor.schema().len()
             );
             let data = chunk.mut_rows_data();
+
             // Although `schema()` can be deeply nested, it is ok since we process data in
             // batch.
             if is_streaming || self.encode_type == EncodeType::TypeDefault {
-                data.reserve(
-                    result
+                data_len = result
                         .physical_columns
-                        .maximum_encoded_size(&result.logical_rows, &self.output_offsets),
-                );
+                        .maximum_encoded_size(&result.logical_rows, &self.output_offsets);
+
+                data.reserve(data_len);
+
                 result.physical_columns.encode(
                     &result.logical_rows,
                     &self.output_offsets,
@@ -612,11 +616,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     ctx,
                 )?;
             } else {
-                data.reserve(
-                    result
+                data_len = result
                         .physical_columns
-                        .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets),
-                );
+                        .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets);
+
+                data.reserve(data_len);
+
                 result.physical_columns.encode_chunk(
                     &result.logical_rows,
                     &self.output_offsets,
@@ -625,10 +630,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     ctx,
                 )?;
             }
+        } else {
+            data_len = 0;
         }
 
-        self.out_most_executor
-            .alloc_trace(result.logical_rows.len());
+        // The data_len is from tipb::Chunk. We track it here, this means that
+        // the the metrics will not track it for the lifetime of tipb::Chunk
+        // but the lifetime of self.outmost_executor.
+        self.out_most_executor.alloc_trace(result.logical_rows.len() + data_len);
 
         warnings.merge(&mut result.warnings);
         Ok((is_drained, result.logical_rows.len()))
