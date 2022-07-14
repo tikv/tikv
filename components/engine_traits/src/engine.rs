@@ -204,10 +204,6 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     /// Tablets root path
     fn tablets_path(&self) -> PathBuf;
 
-    /// Clone the tablet factory instance
-    /// Here we don't use Clone traint because it will break the trait's object safty
-    fn clone(&self) -> Box<dyn TabletFactory<EK> + Send>;
-
     /// Load the tablet from path for id and suffix--for scenarios such as applying snapshot
     fn load_tablet(&self, _path: &Path, _id: u64, _suffix: u64) -> Result<EK> {
         unimplemented!();
@@ -258,19 +254,6 @@ where
     }
     fn tablets_path(&self) -> PathBuf {
         PathBuf::from(&self.root_path)
-    }
-
-    fn clone(&self) -> Box<dyn TabletFactory<EK> + Send> {
-        if self.engine.is_none() {
-            return Box::<DummyFactory<EK>>::new(DummyFactory {
-                engine: None,
-                root_path: self.root_path.clone(),
-            });
-        }
-        Box::<DummyFactory<EK>>::new(DummyFactory {
-            engine: Some(self.engine.as_ref().unwrap().clone()),
-            root_path: self.root_path.clone(),
-        })
     }
 
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {

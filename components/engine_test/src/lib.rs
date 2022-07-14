@@ -281,10 +281,6 @@ pub mod kv {
             new_engine
         }
 
-        fn clone(&self) -> Box<dyn TabletFactory<KvTestEngine> + Send> {
-            Box::new(std::clone::Clone::clone(self))
-        }
-
         fn set_shared_block_cache_capacity(
             &self,
             capacity: u64,

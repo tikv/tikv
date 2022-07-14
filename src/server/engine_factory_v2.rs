@@ -8,8 +8,7 @@ use std::{
 use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory,
-    CF_DEFAULT,
+    CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
 };
 
 use crate::server::engine_factory::KvEngineFactory;
@@ -159,10 +158,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
             self.registry.lock().unwrap().remove(&(old_id, old_suffix));
         }
         new_engine
-    }
-
-    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
-        Box::new(std::clone::Clone::clone(self))
     }
 
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {

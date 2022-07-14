@@ -246,9 +246,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
         Ok(())
     }
-    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
-        Box::new(std::clone::Clone::clone(self))
-    }
 
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
         if let Ok(db) = self.inner.root_db.lock() {

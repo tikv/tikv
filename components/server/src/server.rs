@@ -1661,7 +1661,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
-                std::clone::Clone::clone(&factory),
+                factory.clone(),
                 DBType::Kv,
                 self.config.storage.block_cache.shared,
             )),
