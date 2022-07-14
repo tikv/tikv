@@ -36,7 +36,6 @@ struct FactoryInner {
 pub struct KvEngineFactoryBuilder {
     inner: FactoryInner,
     compact_event_sender: Option<Arc<dyn CompactedEventSender + Send + Sync>>,
-    multi_rocksdb: bool,
 }
 
 impl KvEngineFactoryBuilder {
@@ -54,15 +53,9 @@ impl KvEngineFactoryBuilder {
                 root_db: Mutex::default(),
             },
             compact_event_sender: None,
-            multi_rocksdb: false,
         }
     }
-
-    pub fn set_multi_rocksdb(mut self) -> Self {
-        self.multi_rocksdb = true;
-        self
-    }
-
+    
     pub fn region_info_accessor(mut self, accessor: RegionInfoAccessor) -> Self {
         self.inner.region_info_accessor = Some(accessor);
         self
@@ -91,21 +84,41 @@ impl KvEngineFactoryBuilder {
         self
     }
 
-    pub fn build(self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
+    pub fn build(self) -> impl TabletFactory<RocksEngine> {
         let factory = KvEngineFactory {
             inner: Arc::new(self.inner),
             compact_event_sender: self.compact_event_sender.clone(),
         };
-        if self.multi_rocksdb {
-            let factory = KvEngineFactoryV2 {
-                inner: factory,
-                registry: Arc::new(Mutex::new(HashMap::default())),
-            };
-            TabletFactory::clone(&factory)
-        } else {
-            TabletFactory::clone(&factory)
-        }
+        factory
     }
+
+    pub fn buildV2(self) -> impl TabletFactory<RocksEngine> {
+        let factory = KvEngineFactory {
+            inner: Arc::new(self.inner),
+            compact_event_sender: self.compact_event_sender.clone(),
+        };
+        let factory = KvEngineFactoryV2 {
+            inner: factory,
+            registry: Arc::new(Mutex::new(HashMap::default())),
+        };
+        factory
+    }
+
+    // pub fn build(self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
+    //     let factory = KvEngineFactory {
+    //         inner: Arc::new(self.inner),
+    //         compact_event_sender: self.compact_event_sender.clone(),
+    //     };
+    //     if self.multi_rocksdb {
+    //         let factory = KvEngineFactoryV2 {
+    //             inner: factory,
+    //             registry: Arc::new(Mutex::new(HashMap::default())),
+    //         };
+    //         TabletFactory::clone(&factory)
+    //     } else {
+    //         TabletFactory::clone(&factory)
+    //     }
+    // }
 }
 
 #[derive(Clone)]

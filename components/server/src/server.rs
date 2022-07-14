@@ -1646,14 +1646,14 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         let engines = Engines::new(kv_engine, raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        // cfg_controller.register(
-        //     tikv::config::Module::Rocksdb,
-        //     Box::new(DBConfigManger::new(
-        //         Arc::new((factory as Box<dyn TabletAccessor<RocksEngine>>).into()),
-        //         DBType::Kv,
-        //         self.config.storage.block_cache.shared,
-        //     )),
-        // );
+        cfg_controller.register(
+            tikv::config::Module::Rocksdb,
+            Box::new(DBConfigManger::new(
+                Arc::new(factory),
+                DBType::Kv,
+                self.config.storage.block_cache.shared,
+            )),
+        );
         engines
             .raft
             .register_config(cfg_controller, self.config.storage.block_cache.shared);

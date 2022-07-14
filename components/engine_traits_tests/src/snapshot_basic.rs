@@ -65,8 +65,3 @@ fn snapshot_get_value_cf_after_put() {
     let value = value.unwrap();
     assert_eq!(value, b"aa");
 }
-
-#[test]
-fn test_get_snapshot_from_different_tablet() {
-    
-}

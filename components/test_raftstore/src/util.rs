@@ -668,10 +668,12 @@ pub fn create_test_engine(
             router: Mutex::new(router),
         }));
     }
+    let factory;
     if is_multi_rocks {
-        builder = builder.set_multi_rocksdb();
+        factory = builder.buildV2().clone();
+    } else {
+        factory = builder.build().clone();
     }
-    let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
 
     let engines = Engines::new(engine, raft_engine);
@@ -680,7 +682,7 @@ pub fn create_test_engine(
         key_manager,
         dir,
         sst_worker,
-        factory,
+        factory.clone(),
     )
 }
 
