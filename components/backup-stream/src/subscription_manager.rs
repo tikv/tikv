@@ -160,7 +160,7 @@ impl ScanCmd {
             ..
         } = self;
         let begin = Instant::now_coarse();
-        let stat = initial_scan.do_initial_scan(&region, *last_checkpoint, handle.clone())?;
+        let stat = initial_scan.do_initial_scan(region, *last_checkpoint, handle.clone())?;
         info!("initial scanning of leader transforming finished!"; "takes" => ?begin.saturating_elapsed(), "region" => %region.get_id(), "from_ts" => %last_checkpoint);
         utils::record_cf_stat("lock", &stat.lock);
         utils::record_cf_stat("write", &stat.write);
@@ -663,6 +663,10 @@ mod test {
             _handle: raftstore::coprocessor::ObserveHandle,
         ) -> crate::errors::Result<tikv::storage::Statistics> {
             Ok(Statistics::default())
+        }
+
+        fn handle_fatal_error(&self, region: &Region, err: crate::errors::Error) {
+            panic!("fatal {:?} {}", region, err)
         }
     }
 

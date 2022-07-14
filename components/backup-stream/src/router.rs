@@ -74,7 +74,7 @@ pub enum TaskSelector {
 impl TaskSelector {
     pub fn reference(&self) -> TaskSelectorRef<'_> {
         match self {
-            TaskSelector::ByName(s) => TaskSelectorRef::ByName(&s),
+            TaskSelector::ByName(s) => TaskSelectorRef::ByName(s),
             TaskSelector::ByKey(k) => TaskSelectorRef::ByKey(&*k),
             TaskSelector::ByRange(s, e) => TaskSelectorRef::ByRange(&*s, &*e),
             TaskSelector::All => TaskSelectorRef::All,
@@ -453,7 +453,7 @@ impl RouterInner {
     pub async fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
         let s = self.tasks.lock().await;
         s.iter()
-            .filter(|(_, info)| selector.matches(&*info))
+            .filter(|(_, info)| selector.matches(*info))
             .map(|(name, _)| name.to_owned())
             .collect()
     }
@@ -1299,6 +1299,7 @@ struct TaskRange {
 mod tests {
     use std::{ffi::OsStr, time::Duration};
 
+    use crossbeam_channel::SelectedOperation;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use tikv_util::{
         codec::number::NumberEncoder,
@@ -1827,7 +1828,7 @@ mod tests {
         assert!(
             messages.iter().any(|task| {
                 if let Task::FatalError(name, _err) = task {
-                    return name == "flush_failure";
+                    return name.reference() == TaskSelectorRef::ByName("flush_failure");
                 }
                 false
             }),
