@@ -408,7 +408,7 @@ impl PdCluster {
         Ok(self.base_id.fetch_add(1, Ordering::Relaxed) as u64)
     }
 
-    fn put_store(&mut self, store: metapb::Store) -> Result<()> {
+    pub fn put_store(&mut self, store: metapb::Store) -> Result<()> {
         let store_id = store.get_id();
         // There is a race between put_store and handle_region_heartbeat_response. If store id is
         // 0, it means it's a placeholder created by latter, we just need to update the meta.
@@ -459,7 +459,7 @@ impl PdCluster {
             .map(|(_, region)| region.clone())
     }
 
-    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
+    pub fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
         Ok(self
             .region_id_keys
             .get(&region_id)

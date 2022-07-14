@@ -423,7 +423,10 @@ impl EngineStoreServerWrap {
                 // Currently in tests, we don't handle commands like BatchSplit,
                 // and sometimes we don't bootstrap region 1,
                 // so it is normal if we find no region.
-                warn!("region {} not found, create for {}", region_id, node_id);
+                warn!(
+                    "region {} not found when admin, create for {}",
+                    region_id, node_id
+                );
                 let new_region = v.insert(Default::default());
                 assert!((*self.engine_store_server).kvstore.contains_key(&region_id));
                 do_handle_admin_raft_cmd(new_region, &mut (*self.engine_store_server))
@@ -504,7 +507,7 @@ impl EngineStoreServerWrap {
                 do_handle_write_raft_cmd(o.get_mut())
             }
             std::collections::hash_map::Entry::Vacant(v) => {
-                warn!("region {} not found", region_id);
+                warn!("region {} not found when write", region_id);
                 do_handle_write_raft_cmd(v.insert(Default::default()))
             }
         }
@@ -928,12 +931,27 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
     header: ffi_interfaces::RaftCmdHeader,
 ) -> ffi_interfaces::EngineStoreApplyRes {
     let store = into_engine_store_server_wrap(arg1);
+    let node_id = (*store.engine_store_server).id;
     let proxy_helper = &mut *(store.maybe_proxy_helper.unwrap());
     debug!("ingest sst with len {}", snaps.len);
 
     let region_id = header.region_id;
     let kvstore = &mut (*store.engine_store_server).kvstore;
     let kv = &mut (*store.engine_store_server).engines.as_mut().unwrap().kv;
+
+    match kvstore.entry(region_id) {
+        std::collections::hash_map::Entry::Occupied(mut o) => {}
+        std::collections::hash_map::Entry::Vacant(v) => {
+            // When we remove hacked code in handle_raft_entry_normal during migration,
+            // some tests in handle_raft_entry_normal may fail, since it can observe a empty cmd,
+            // thus creating region.
+            warn!(
+                "region {} not found when ingest, create for {}",
+                region_id, node_id
+            );
+            let new_region = v.insert(Default::default());
+        }
+    }
     let region = kvstore.get_mut(&region_id).unwrap();
 
     let index = header.index;

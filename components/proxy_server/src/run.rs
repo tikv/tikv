@@ -1185,14 +1185,13 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
         let importer = Arc::new(importer);
 
-        // TODO(tiflash) Register TiFlash observer
-        // let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
-        //     node.id(),
-        //     self.engines.as_ref().unwrap().engines.kv.clone(),
-        //     importer.clone(),
-        //     self.proxy_config.snap_handle_pool_size,
-        // );
-        // tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
+            node.id(),
+            self.engines.as_ref().unwrap().engines.kv.clone(),
+            importer.clone(),
+            self.proxy_config.snap_handle_pool_size,
+        );
+        tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),

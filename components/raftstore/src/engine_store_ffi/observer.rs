@@ -110,9 +110,10 @@ impl TiFlashObserver {
     ) -> Self {
         let engine_store_server_helper =
             gen_engine_store_server_helper(engine.engine_store_server_helper);
-        let snap_pool = Builder::new(tikv_util::thd_name!("region-task"))
-            .max_thread_count(snap_handle_pool_size)
-            .build_future_pool();
+        // TODO(tiflash) start thread pool
+        // let snap_pool = Builder::new(tikv_util::thd_name!("region-task"))
+        //     .max_thread_count(snap_handle_pool_size)
+        //     .build_future_pool();
         TiFlashObserver {
             peer_id,
             engine_store_server_helper,
@@ -120,7 +121,8 @@ impl TiFlashObserver {
             sst_importer,
             pre_handle_snapshot_ctx: Arc::new(Mutex::new(PrehandleContext::default())),
             snap_handle_pool_size,
-            apply_snap_pool: Some(Arc::new(snap_pool)),
+            // apply_snap_pool: Some(Arc::new(snap_pool)),
+            apply_snap_pool: None,
         }
     }
 
@@ -129,10 +131,10 @@ impl TiFlashObserver {
         &self,
         coprocessor_host: &mut CoprocessorHost<E>,
     ) {
-        // coprocessor_host.registry.register_query_observer(
-        //     TIFLASH_OBSERVER_PRIORITY,
-        //     BoxQueryObserver::new(self.clone()),
-        // );
+        coprocessor_host.registry.register_query_observer(
+            TIFLASH_OBSERVER_PRIORITY,
+            BoxQueryObserver::new(self.clone()),
+        );
         // coprocessor_host.registry.register_admin_observer(
         //     TIFLASH_OBSERVER_PRIORITY,
         //     BoxAdminObserver::new(self.clone()),
@@ -154,6 +156,24 @@ impl TiFlashObserver {
 
 impl Coprocessor for TiFlashObserver {
     fn stop(&self) {
-        self.apply_snap_pool.as_ref().unwrap().shutdown();
+        // TODO(tiflash)
+        // self.apply_snap_pool.as_ref().unwrap().shutdown();
+    }
+}
+
+impl QueryObserver for TiFlashObserver {
+    fn on_empty_cmd(&self, ob_ctx: &mut ObserverContext<'_>, index: u64, term: u64) {
+        fail::fail_point!("on_empty_cmd_normal", |_| {});
+        debug!("encounter empty cmd, maybe due to leadership change";
+            "region" => ?ob_ctx.region(),
+            "index" => index,
+            "term" => term,
+        );
+        // We still need to pass a dummy cmd, to forward updates.
+        let cmd_dummy = WriteCmds::new();
+        self.engine_store_server_helper.handle_write_raft_cmd(
+            &cmd_dummy,
+            RaftCmdHeader::new(ob_ctx.region().get_id(), index, term),
+        );
     }
 }

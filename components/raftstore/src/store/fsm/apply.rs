@@ -1076,15 +1076,6 @@ where
         // read index during confchange, or other situations.
         apply_ctx.host.on_empty_cmd(&self.region, index, term);
 
-        {
-            // hacked by solotzg.
-            let cmds = WriteCmds::new();
-            apply_ctx.engine_store_server_helper.handle_write_raft_cmd(
-                &cmds,
-                RaftCmdHeader::new(self.region.get_id(), index, term),
-            );
-        }
-
         self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
         assert!(term > 0);

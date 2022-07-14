@@ -938,12 +938,27 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
     header: ffi_interfaces::RaftCmdHeader,
 ) -> ffi_interfaces::EngineStoreApplyRes {
     let store = into_engine_store_server_wrap(arg1);
+    let node_id = (*store.engine_store_server).id;
     let proxy_helper = &mut *(store.maybe_proxy_helper.unwrap());
     debug!("ingest sst with len {}", snaps.len);
 
     let region_id = header.region_id;
     let kvstore = &mut (*store.engine_store_server).kvstore;
     let kv = &mut (*store.engine_store_server).engines.as_mut().unwrap().kv;
+
+    match kvstore.entry(region_id) {
+        std::collections::hash_map::Entry::Occupied(mut o) => {}
+        std::collections::hash_map::Entry::Vacant(v) => {
+            // When we remove hacked code in handle_raft_entry_normal during migration,
+            // some tests in handle_raft_entry_normal may fail, since it can observe a empty cmd,
+            // thus creating region.
+            warn!(
+                "region {} not found when ingest, create for {}",
+                region_id, node_id
+            );
+            let new_region = v.insert(Default::default());
+        }
+    }
     let region = kvstore.get_mut(&region_id).unwrap();
 
     let index = header.index;

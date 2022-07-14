@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
     collections::HashMap,
@@ -49,7 +49,10 @@ use tikv_util::{
 };
 
 // TODO Need refactor if moved to raft-engine
-fn get_region_local_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RegionLocalState {
+pub fn get_region_local_state(
+    engine: &engine_rocks::RocksEngine,
+    region_id: u64,
+) -> RegionLocalState {
     let region_state_key = keys::region_state_key(region_id);
     let region_state = match engine.get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key) {
         Ok(Some(s)) => s,
@@ -59,7 +62,7 @@ fn get_region_local_state(engine: &engine_rocks::RocksEngine, region_id: u64) ->
 }
 
 // TODO Need refactor if moved to raft-engine
-fn get_apply_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RaftApplyState {
+pub fn get_apply_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> RaftApplyState {
     let apply_state_key = keys::apply_state_key(region_id);
     let apply_state = match engine.get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key) {
         Ok(Some(s)) => s,
@@ -84,15 +87,15 @@ pub fn new_verify_hash_request(hash: Vec<u8>, index: u64) -> AdminRequest {
     req
 }
 
-struct States {
-    in_memory_apply_state: RaftApplyState,
-    in_memory_applied_term: u64,
-    in_disk_apply_state: RaftApplyState,
-    in_disk_region_state: RegionLocalState,
-    ident: StoreIdent,
+pub struct States {
+    pub in_memory_apply_state: RaftApplyState,
+    pub in_memory_applied_term: u64,
+    pub in_disk_apply_state: RaftApplyState,
+    pub in_disk_region_state: RegionLocalState,
+    pub ident: StoreIdent,
 }
 
-fn iter_ffi_helpers(
+pub fn iter_ffi_helpers(
     cluster: &Cluster<NodeCluster>,
     store_ids: Option<Vec<u64>>,
     f: &mut dyn FnMut(u64, &engine_rocks::RocksEngine, &mut FFIHelperSet) -> (),
@@ -110,7 +113,7 @@ fn iter_ffi_helpers(
     }
 }
 
-fn collect_all_states(cluster: &mut Cluster<NodeCluster>, region_id: u64) -> HashMap<u64, States> {
+pub fn collect_all_states(cluster: &Cluster<NodeCluster>, region_id: u64) -> HashMap<u64, States> {
     let mut prev_state: HashMap<u64, States> = HashMap::default();
     iter_ffi_helpers(
         cluster,
@@ -220,7 +223,7 @@ pub fn check_key(
     }
 }
 
-fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
+pub fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
     states
         .iter()
         .map(|(_, s)| {
