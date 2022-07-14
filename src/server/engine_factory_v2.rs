@@ -291,6 +291,11 @@ mod tests {
         let tablet_path = factory.tablet_path(1, 10);
         let result = factory.open_tablet_raw(&tablet_path, false);
         assert!(result.is_err());
+        factory
+            .set_shared_block_cache_capacity(1024 * 1024)
+            .unwrap();
+        let opt = tablet.get_options_cf(CF_WRITE).unwrap();
+        assert_eq!(opt.get_block_cache_capacity(), 1024 * 1024);
 
         assert!(factory.exists(1, 10));
         assert!(!factory.exists(1, 11));
@@ -311,12 +316,6 @@ mod tests {
         let result = factory.open_tablet(1, 20);
         assert!(result.is_err());
         assert!(!factory.is_single_engine());
-
-        factory
-            .set_shared_block_cache_capacity(1024 * 1024)
-            .unwrap();
-        let opt = tablet.get_options_cf(CF_WRITE).unwrap();
-        assert_eq!(opt.get_block_cache_capacity(), 1024 * 1024);
     }
 
     #[test]

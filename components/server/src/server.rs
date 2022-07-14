@@ -1651,8 +1651,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);
         }
-        let factory = builder.build();
-        let factory = Arc::new(factory);
+        let factory = Arc::new(builder.build());
         let kv_engine = factory
             .create_shared_db()
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
