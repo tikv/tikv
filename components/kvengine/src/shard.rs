@@ -319,6 +319,10 @@ impl Shard {
     pub fn data_all_persisted(&self) -> bool {
         self.data.read().unwrap().all_presisted()
     }
+
+    pub(crate) fn ready_to_compact(&self) -> bool {
+        self.is_active() && self.get_initial_flushed() && self.get_compaction_priority().is_some()
+    }
 }
 
 #[derive(Clone)]

@@ -84,11 +84,13 @@ impl Engine {
         let cache: SegmentedCache<BlockCacheKey, Bytes> =
             SegmentedCache::new(max_capacity as u64, 256);
         let (flush_tx, flush_rx) = mpsc::unbounded();
+        let (compact_tx, compact_rx) = mpsc::unbounded();
         let (free_tx, free_rx) = mpsc::unbounded();
         let core = EngineCore {
             shards: DashMap::new(),
             opts: opts.clone(),
             flush_tx,
+            compact_tx,
             fs: fs.clone(),
             cache,
             comp_client: CompactionClient::new(fs.clone(), opts.remote_compactor_addr.clone()),
@@ -116,7 +118,7 @@ impl Engine {
         thread::Builder::new()
             .name("compaction".to_string())
             .spawn(move || {
-                compact_en.run_compaction();
+                compact_en.run_compaction(compact_rx);
             })
             .unwrap();
         thread::Builder::new()
@@ -171,6 +173,7 @@ pub struct EngineCore {
     pub(crate) shards: DashMap<u64, Arc<Shard>>,
     pub opts: Arc<Options>,
     pub(crate) flush_tx: mpsc::Sender<FlushMsg>,
+    pub(crate) compact_tx: mpsc::Sender<CompactMsg>,
     pub(crate) fs: Arc<dyn dfs::DFS>,
     pub(crate) cache: SegmentedCache<BlockCacheKey, Bytes>,
     pub(crate) comp_client: CompactionClient,
@@ -218,7 +221,7 @@ impl EngineCore {
         );
         shard.set_data(data);
         store_bool(&shard.initial_flushed, true);
-        shard.refresh_states();
+        self.refresh_shard_states(&shard);
         match self.shards.entry(shard.id) {
             Entry::Occupied(entry) => {
                 let old = entry.get();
@@ -465,10 +468,24 @@ impl EngineCore {
             info!("shard {}:{} set active {}", shard_id, shard.ver, active);
             shard.set_active(active);
             if active {
+                self.refresh_shard_states(&shard);
                 self.trigger_flush(&shard);
             } else {
+                store_bool(&shard.compacting, false);
                 self.flush_tx.send(FlushMsg::Clear(shard_id)).unwrap();
+                self.compact_tx
+                    .send(CompactMsg::Clear(IDVer::new(shard.id, shard.ver)))
+                    .unwrap();
             }
+        }
+    }
+
+    pub(crate) fn refresh_shard_states(&self, shard: &Shard) {
+        shard.refresh_states();
+        if shard.ready_to_compact() {
+            self.compact_tx
+                .send(CompactMsg::Compact(IDVer::new(shard.id, shard.ver)))
+                .unwrap();
         }
     }
 }

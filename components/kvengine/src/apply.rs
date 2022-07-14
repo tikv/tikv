@@ -92,12 +92,15 @@ impl EngineCore {
         } else if cs.has_compaction() {
             self.apply_compaction(&shard, &cs);
             store_bool(&shard.compacting, false);
+            self.compact_tx
+                .send(CompactMsg::Applied(IDVer::new(shard.id, shard.ver)))
+                .unwrap();
         } else if cs.has_initial_flush() {
             self.apply_initial_flush(&shard, &cs);
         } else if cs.has_ingest_files() {
             self.apply_ingest_files(&shard, &cs)?;
         }
-        shard.refresh_states();
+        self.refresh_shard_states(&shard);
         Ok(())
     }
 

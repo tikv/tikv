@@ -1,11 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::Ordering as CmpOrdering,
+    collections::{HashMap, HashSet},
     iter::Iterator as StdIterator,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -14,6 +13,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use kvenginepb as pb;
 use protobuf::{Message, RepeatedField};
 use slog_global::error;
+use tikv_util::mpsc;
 
 use crate::{
     dfs,
@@ -53,13 +53,28 @@ impl CompactionClient {
             let client = self.clone();
             let (tx, rx) = tikv_util::mpsc::bounded(1);
             self.dfs.get_runtime().spawn(async move {
-                tx.send(client.remote_compact(req).await).unwrap();
+                let mut retry_cnt = 0;
+                let result = loop {
+                    match client.remote_compact(&req).await {
+                        result @ Ok(_) => break result,
+                        Err(e) => {
+                            retry_cnt += 1;
+                            if retry_cnt >= 5 {
+                                break Err(e);
+                            }
+                            error!("shard {}:{} cf: {} level: {} remote compaction failed {:?}, retrying {} ",
+                                   req.shard_id, req.shard_ver, req.cf, req.level, e, retry_cnt);
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                    }
+                };
+                tx.send(result).unwrap();
             });
             rx.recv().unwrap()
         }
     }
 
-    async fn remote_compact(&self, comp_req: CompactionRequest) -> Result<pb::Compaction> {
+    async fn remote_compact(&self, comp_req: &CompactionRequest) -> Result<pb::Compaction> {
         let body_str = serde_json::to_string(&comp_req).unwrap();
         let req = hyper::Request::builder()
             .method(hyper::Method::POST)
@@ -283,68 +298,24 @@ impl Engine {
         }
     }
 
-    pub(crate) fn run_compaction(&self) {
-        let mut results = Vec::new();
-        let running_counter = Arc::new(AtomicU64::new(0));
-        loop {
-            self.get_compaction_priorities(&mut results);
-            let num_running = running_counter.load(std::sync::atomic::Ordering::SeqCst);
-            let num_runnable = self.opts.num_compactors - num_running as usize;
-            let num_jobs = results.len().min(num_runnable);
-            for i in 0..num_jobs {
-                let pri = results[i].clone();
-                if let Ok(shard) = self.get_shard_with_ver(pri.shard_id, pri.shard_ver) {
-                    store_bool(&shard.compacting, true);
-                } else {
-                    continue;
-                }
-                let engine = self.clone();
-                let counter = running_counter.clone();
-                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                std::thread::spawn(move || {
-                    if let Err(err) = engine.compact(&pri) {
-                        error!("compact failed, {:?}", err);
-                    }
-                    counter.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                });
-            }
-            if num_jobs == 0 {
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        }
+    pub(crate) fn run_compaction(&self, compact_rx: mpsc::Receiver<CompactMsg>) {
+        let mut runner = CompactRunner::new(self.clone(), compact_rx);
+        runner.run();
     }
 
-    fn get_compaction_priorities(&self, results: &mut Vec<CompactionPriority>) {
-        results.truncate(0);
-        for entry in self.shards.iter() {
-            let shard = entry.value().clone();
-            if shard.is_active() && !load_bool(&shard.compacting) && shard.get_initial_flushed() {
-                if let Some(pri) = shard.get_compaction_priority() {
-                    results.push(pri);
-                }
-            }
+    fn build_compact_request(
+        &self,
+        shard: &Shard,
+    ) -> Option<(CompactionRequest, Option<CompactDef>)> {
+        if !shard.ready_to_compact() {
+            info!("avoid shard {}:{} compaction", shard.id, shard.ver);
+            return None;
         }
-        results.sort_by(|i, j| i.score.partial_cmp(&j.score).unwrap().reverse());
-    }
-
-    pub(crate) fn compact(&self, pri: &CompactionPriority) -> Result<()> {
-        let shard = self.get_shard_with_ver(pri.shard_id, pri.shard_ver)?;
-        if !shard.is_active() {
-            info!("avoid passive shard compaction");
-            store_bool(&shard.compacting, false);
-            return Ok(());
-        }
+        let pri = shard.get_compaction_priority()?;
         if pri.cf == -1 {
-            info!(
-                "start compact L0 for {}:{} score:{}",
-                shard.id, shard.ver, pri.score
-            );
-            if let Some(req) = self.build_compact_l0_request(&shard)? {
-                let comp = self.comp_client.compact(req)?;
-                self.handle_compact_response(comp, &shard);
-            }
-            return Ok(());
+            return self.build_compact_l0_request(&shard).map(|req| (req, None));
         }
+
         let data = shard.get_data();
         let scf = data.get_cf(pri.cf as usize);
         let this_level = &scf.levels[pri.level - 1];
@@ -352,58 +323,61 @@ impl Engine {
         let mut cd = CompactDef::new(pri.cf as usize, pri.level);
         let filled = cd.fill_table(this_level, next_level);
         if !filled {
-            return Ok(());
+            return None;
         }
         scf.set_has_overlapping(&mut cd);
-        let req = self.build_compact_ln_request(&shard, &cd)?;
-        if req.bottoms.is_empty() && req.cf as usize == WRITE_CF {
-            info!(
-                "move down L{} CF{} for {}:{}, score:{}",
-                pri.level, pri.cf, shard.id, shard.ver, pri.score
-            );
-            // Move down. only write CF benefits from this optimization.
-            let mut comp = pb::Compaction::new();
-            comp.set_cf(req.cf as i32);
-            comp.set_level(req.level as u32);
-            comp.set_top_deletes(req.tops.clone());
-            let mut tbl_creates = vec![];
-            for top_tbl in &cd.top {
-                let mut tbl_create = pb::TableCreate::new();
-                tbl_create.set_id(top_tbl.id());
-                tbl_create.set_cf(req.cf as i32);
-                tbl_create.set_level(req.level as u32 + 1);
-                tbl_create.set_smallest(top_tbl.smallest().to_vec());
-                tbl_create.set_biggest(top_tbl.biggest().to_vec());
-                tbl_creates.push(tbl_create);
-            }
-            comp.set_table_creates(RepeatedField::from_vec(tbl_creates));
-            self.handle_compact_response(comp, &shard);
-            return Ok(());
-        }
-        info!(
-            "start compact L{} CF{} for {}:{}, score:{}, num_ids: {}, input_size: {}",
-            pri.level,
-            pri.cf,
-            shard.id,
-            shard.ver,
-            pri.score,
-            req.file_ids.len(),
-            cd.top_size + cd.bot_size,
-        );
-        let comp = self.comp_client.compact(req)?;
-        self.handle_compact_response(comp, &shard);
-        Ok(())
+        Some((self.build_compact_ln_request(&shard, &cd), Some(cd)))
     }
 
-    pub(crate) fn build_compact_l0_request(
-        &self,
-        shard: &Shard,
-    ) -> Result<Option<CompactionRequest>> {
+    pub(crate) fn compact(&self, id_ver: IDVer) -> Option<Result<pb::Compaction>> {
+        let shard = self.get_shard_with_ver(id_ver.id, id_ver.ver).ok()?;
+        let (req, cd) = self.build_compact_request(&shard)?;
+        store_bool(&shard.compacting, true);
+        if req.level == 0 {
+            info!("start compact L0 for {}:{}", req.shard_id, req.shard_ver);
+        } else {
+            let cd = cd.unwrap();
+            info!(
+                "start compact L{} CF{} for {}:{}, num_ids: {}, input_size: {}",
+                req.level,
+                req.cf,
+                req.shard_id,
+                req.shard_ver,
+                req.file_ids.len(),
+                cd.top_size + cd.bot_size,
+            );
+            if req.bottoms.is_empty() && req.cf as usize == WRITE_CF {
+                info!(
+                    "move down L{} CF{} for {}:{}",
+                    req.level, req.cf, id_ver.id, id_ver.ver,
+                );
+                // Move down. only write CF benefits from this optimization.
+                let mut comp = pb::Compaction::new();
+                comp.set_cf(req.cf as i32);
+                comp.set_level(req.level as u32);
+                comp.set_top_deletes(req.tops.clone());
+                let mut tbl_creates = vec![];
+                for top_tbl in &cd.top {
+                    let mut tbl_create = pb::TableCreate::new();
+                    tbl_create.set_id(top_tbl.id());
+                    tbl_create.set_cf(req.cf as i32);
+                    tbl_create.set_level(req.level as u32 + 1);
+                    tbl_create.set_smallest(top_tbl.smallest().to_vec());
+                    tbl_create.set_biggest(top_tbl.biggest().to_vec());
+                    tbl_creates.push(tbl_create);
+                }
+                comp.set_table_creates(tbl_creates.into());
+                return Some(Ok(comp));
+            }
+        }
+        Some(self.comp_client.compact(req))
+    }
+
+    pub(crate) fn build_compact_l0_request(&self, shard: &Shard) -> Option<CompactionRequest> {
         let data = shard.get_data();
         if data.l0_tbls.is_empty() {
-            store_bool(&shard.compacting, false);
             info!("zero L0 tables");
-            return Ok(None);
+            return None;
         }
         let mut req = self.new_compact_request(shard, -1, 0);
         let mut total_size = 0;
@@ -439,20 +413,15 @@ impl Engine {
             }
             req.multi_cf_bottoms.push(bottoms);
         }
-        self.set_alloc_ids_for_request(&mut req, total_size)?;
-        Ok(Some(req))
+        self.set_alloc_ids_for_request(&mut req, total_size);
+        Some(req)
     }
 
-    pub(crate) fn set_alloc_ids_for_request(
-        &self,
-        req: &mut CompactionRequest,
-        total_size: u64,
-    ) -> Result<()> {
+    pub(crate) fn set_alloc_ids_for_request(&self, req: &mut CompactionRequest, total_size: u64) {
         let id_cnt = total_size as usize / req.max_table_size + 8; // Add 8 here just in case we run out of ID.
         info!("alloc id count {} for total size {}", id_cnt, total_size);
         let ids = self.id_allocator.alloc_id(id_cnt);
         req.file_ids = ids;
-        Ok(())
     }
 
     pub(crate) fn new_compact_request(
@@ -486,7 +455,7 @@ impl Engine {
         &self,
         shard: &Shard,
         cd: &CompactDef,
-    ) -> Result<CompactionRequest> {
+    ) -> CompactionRequest {
         let mut req = self.new_compact_request(shard, cd.cf as isize, cd.level);
         req.overlap = cd.has_overlap;
         for top in &cd.top {
@@ -495,12 +464,12 @@ impl Engine {
         for bot in &cd.bot {
             req.bottoms.push(bot.id());
         }
-        self.set_alloc_ids_for_request(&mut req, cd.top_size + cd.bot_size)?;
-        Ok(req)
+        self.set_alloc_ids_for_request(&mut req, cd.top_size + cd.bot_size);
+        req
     }
 
-    pub(crate) fn handle_compact_response(&self, comp: pb::Compaction, shard: &Shard) {
-        let mut cs = new_change_set(shard.id, shard.ver);
+    pub(crate) fn handle_compact_response(&self, comp: pb::Compaction, id_ver: IDVer) {
+        let mut cs = new_change_set(id_ver.id, id_ver.ver);
         cs.set_compaction(comp);
         self.meta_change_listener.on_change_set(cs);
     }
@@ -514,6 +483,28 @@ pub(crate) struct CompactionPriority {
     pub shard_id: u64,
     pub shard_ver: u64,
 }
+
+impl Ord for CompactionPriority {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        self.score
+            .partial_cmp(&other.score)
+            .unwrap_or(CmpOrdering::Equal)
+    }
+}
+
+impl PartialOrd for CompactionPriority {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        self.score.partial_cmp(&other.score)
+    }
+}
+
+impl PartialEq for CompactionPriority {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == CmpOrdering::Equal
+    }
+}
+
+impl Eq for CompactionPriority {}
 
 #[derive(Clone, Default)]
 pub(crate) struct KeyRange {
@@ -1005,4 +996,181 @@ fn local_compact(dfs: Arc<dyn dfs::DFS>, req: CompactionRequest) -> Result<pb::C
         req.level, req.cf, req.shard_id, req.shard_ver
     );
     Ok(comp)
+}
+
+pub(crate) enum CompactMsg {
+    /// The shard is ready to be compacted.
+    Compact(IDVer),
+
+    /// Compaction finished.
+    Finish {
+        task_id: u64,
+        id_ver: IDVer,
+        result: Option<Result<pb::Compaction>>,
+    },
+
+    /// The compaction change set is applied to the engine, so the shard is ready
+    /// for next compaction.
+    Applied(IDVer),
+
+    /// Clear message is sent when a shard changed its version or set to inactive.
+    /// Then all the previous tasks will be discarded.
+    /// This simplifies the logic, avoid race condition.
+    Clear(IDVer),
+}
+
+pub(crate) struct CompactRunner {
+    engine: Engine,
+    rx: mpsc::Receiver<CompactMsg>,
+    /// task_id is the identity of each compaction job.
+    ///
+    /// When a shard is set to inactive, all the compaction jobs of this shard should be discarded, then when
+    /// it is set to active again, old result may arrive and conflict with the new tasks.
+    /// So we use task_id to detect and discard obsolete tasks.
+    task_id: u64,
+    /// `running` contains shards' running compaction `task_id`s.
+    running: HashMap<IDVer, u64 /* task_id */>,
+    /// `notified` contains shards that have finished a compaction job and been notified to apply it.
+    notified: HashSet<IDVer>,
+    /// `pending` contains shards that want to do compaction but the job queue is full now.
+    pending: HashSet<IDVer>,
+}
+
+impl CompactRunner {
+    pub(crate) fn new(engine: Engine, rx: mpsc::Receiver<CompactMsg>) -> Self {
+        Self {
+            engine,
+            rx,
+            task_id: 0,
+            running: Default::default(),
+            notified: Default::default(),
+            pending: Default::default(),
+        }
+    }
+
+    fn run(&mut self) {
+        while let Ok(msg) = self.rx.recv() {
+            match msg {
+                CompactMsg::Compact(id_ver) => self.compact(id_ver),
+
+                CompactMsg::Finish {
+                    task_id,
+                    id_ver,
+                    result,
+                } => self.compaction_finished(id_ver, task_id, result),
+
+                CompactMsg::Applied(id_ver) => self.compaction_applied(id_ver),
+
+                CompactMsg::Clear(id_ver) => self.clear(id_ver),
+            }
+        }
+    }
+
+    fn compact(&mut self, id_ver: IDVer) {
+        // The shard is compacting, and following compaction will be trigger after apply.
+        if self.is_compacting(id_ver) {
+            return;
+        }
+        if self.is_full() {
+            self.pending.insert(id_ver);
+            return;
+        }
+        self.task_id += 1;
+        let task_id = self.task_id;
+        self.running.insert(id_ver, task_id);
+        let engine = self.engine.clone();
+        std::thread::spawn(move || {
+            let result = engine.compact(id_ver);
+            engine
+                .compact_tx
+                .send(CompactMsg::Finish {
+                    task_id,
+                    id_ver,
+                    result,
+                })
+                .unwrap();
+        });
+    }
+
+    fn compaction_finished(
+        &mut self,
+        id_ver: IDVer,
+        task_id: u64,
+        result: Option<Result<pb::Compaction>>,
+    ) {
+        if self
+            .running
+            .get(&id_ver)
+            .map(|id| *id != task_id)
+            .unwrap_or(true)
+        {
+            info!(
+                "shard {} discard old term compaction result {} {:?}",
+                id_ver.id, id_ver, result
+            );
+            return;
+        }
+        self.running.remove(&id_ver);
+        match result {
+            Some(Ok(resp)) => {
+                self.engine.handle_compact_response(resp, id_ver);
+                self.notified.insert(id_ver);
+                self.schedule_pending_compaction();
+            }
+            Some(Err(e)) => {
+                error!("shard {} compaction failed {}, retrying", id_ver, e);
+                self.compact(id_ver);
+            }
+            None => {
+                self.schedule_pending_compaction();
+            }
+        }
+    }
+
+    fn compaction_applied(&mut self, id_ver: IDVer) {
+        // It's possible the shard is not being pending applied, because it may apply a compaction
+        // from the former leader, so we use both `running` and `notified` to detect whether
+        // it's compacting. It can avoid spawning more compaction jobs, e.g., a new leader spawns
+        // one but not yet finished, and it applies the compaction from the former leader, then the
+        // new leader spawns another one. However, it's possible the new compaction is finished and
+        // not yet applied, it can result in duplicated compaction but no exceeding compaction
+        // jobs.
+        self.notified.remove(&id_ver);
+    }
+
+    fn clear(&mut self, id_ver: IDVer) {
+        self.running.remove(&id_ver);
+        self.notified.remove(&id_ver);
+        self.pending.remove(&id_ver);
+        self.schedule_pending_compaction()
+    }
+
+    fn schedule_pending_compaction(&mut self) {
+        while let Some(id_ver) = self.pick_highest_pri_pending_shard() {
+            if self.is_full() {
+                break;
+            }
+            self.compact(id_ver);
+        }
+    }
+
+    fn pick_highest_pri_pending_shard(&self) -> Option<IDVer> {
+        self.pending
+            .iter()
+            .max_by_key(|&&id_ver| {
+                self.engine
+                    .get_shard_with_ver(id_ver.id, id_ver.ver)
+                    .ok()
+                    .and_then(|shard| shard.get_compaction_priority())
+            })
+            .map(|id_ver| *id_ver)
+    }
+
+    fn is_full(&self) -> bool {
+        self.running.len() >= self.engine.opts.num_compactors
+    }
+
+    fn is_compacting(&self, id_ver: IDVer) -> bool {
+        self.running.contains_key(&id_ver) || self.notified.contains(&id_ver)
+    }
 }
