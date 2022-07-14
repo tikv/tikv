@@ -603,8 +603,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             // batch.
             if is_streaming || self.encode_type == EncodeType::TypeDefault {
                 data_len = result
-                        .physical_columns
-                        .maximum_encoded_size(&result.logical_rows, &self.output_offsets);
+                    .physical_columns
+                    .maximum_encoded_size(&result.logical_rows, &self.output_offsets);
 
                 data.reserve(data_len);
 
@@ -617,8 +617,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 )?;
             } else {
                 data_len = result
-                        .physical_columns
-                        .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets);
+                    .physical_columns
+                    .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets);
 
                 data.reserve(data_len);
 
@@ -637,7 +637,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         // The data_len is from tipb::Chunk. We track it here, this means that
         // the the metrics will not track it for the lifetime of tipb::Chunk
         // but the lifetime of self.outmost_executor.
-        self.out_most_executor.alloc_trace(result.logical_rows.len() + data_len);
+        self.out_most_executor
+            .alloc_trace(result.logical_rows.len() + data_len);
 
         warnings.merge(&mut result.warnings);
         Ok((is_drained, result.logical_rows.len()))
