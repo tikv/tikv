@@ -168,7 +168,7 @@ pub struct Cluster<T: Simulator> {
     pub labels: HashMap<u64, HashMap<String, String>>,
     group_props: HashMap<u64, GroupProperties>,
     pub sst_workers: Vec<LazyWorker<String>>,
-    pub factories: Vec<Box<dyn TabletFactory<RocksEngine> + Send>>,
+    factories: Vec<Box<dyn TabletFactory<RocksEngine> + Send>>,
     pub sst_workers_map: HashMap<u64, usize>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,

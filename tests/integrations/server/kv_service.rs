@@ -1132,25 +1132,71 @@ fn test_batch_commands() {
 }
 
 #[test]
-fn test_batch_get_commands() {
+fn test_batch_get_commands_in_multi_rocksdb() {
     let mut cluster = new_server_cluster(0, 1);
-    // cluster.set_multi_rocks();
+    cluster.set_multi_rocks();
     cluster.run();
-    for i in 1..100 {
-        cluster.put(&format!("k{}", i).into_bytes(), b"val").unwrap();
+
+    // Split region into three regions: [[], [k30]], [[k30], [k60]], [[k60], []]
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k30");
+    let region = cluster.get_region(b"k31");
+    cluster.must_split(&region, b"k60");
+
+    let region_1 = cluster.get_region(b"k1");
+    let region_2 = cluster.get_region(b"k31");
+    let region_3 = cluster.get_region(b"k61");
+
+    // Generate the relevant tablets
+    let factory = cluster.factoriy_map.get(&1).unwrap();
+    let tablet_1 = factory.create_tablet(region_1.get_id(), 0).unwrap();
+    let tablet_2 = factory.create_tablet(region_2.get_id(), 0).unwrap();
+    let tablet_3 = factory.create_tablet(region_3.get_id(), 0).unwrap();
+
+    let db = tablet_1.get_sync_db();
+    for i in 0..30 {
+        let key = format!("zk{:02}", i).into_bytes();
+        db.put(&key, b"val").unwrap();
+    }
+    let db = tablet_2.get_sync_db();
+    for i in 30..60 {
+        let key = format!("zk{:02}", i).into_bytes();
+        db.put(&key, b"val").unwrap();
+    }
+    let db = tablet_3.get_sync_db();
+    for i in 60..90 {
+        let key = format!("zk{:02}", i).into_bytes();
+        db.put(&key, b"val").unwrap();
     }
 
-    let (client, ctx) = build_client(&cluster);
+    let peer_1 = cluster.leader_of_region(region_1.get_id()).unwrap();
+    let peer_2 = cluster.leader_of_region(region_2.get_id()).unwrap();
+    let peer_3 = cluster.leader_of_region(region_3.get_id()).unwrap();
+    let (client, mut ctx) = build_client(&cluster);
+    ctx.set_region_id(region_1.get_id());
+    ctx.set_region_epoch(region_1.get_region_epoch().clone());
+    ctx.set_peer(peer_1);
+
     let (mut sender, receiver) = client.batch_commands().unwrap();
-    for i in 0..10 {
+    for i in 0..9 {
         let mut batch_req = BatchCommandsRequest::default();
-        for j in 1..10 {
+        for j in 0..10 {
             let idx = i * 10 + j;
-            let mut get = GetRequest::default();
-            get.set_key(format!("k{}", idx).into_bytes());
+            if idx == 30 {
+                ctx.set_region_id(region_2.get_id());
+                ctx.set_region_epoch(region_2.get_region_epoch().clone());
+                ctx.set_peer(peer_2.clone());
+            }
+            if idx == 60 {
+                ctx.set_region_id(region_3.get_id());
+                ctx.set_region_epoch(region_3.get_region_epoch().clone());
+                ctx.set_peer(peer_3.clone());
+            }
+            let mut get = RawGetRequest::default();
+            get.set_key(format!("k{:02}", idx).into_bytes());
             get.set_context(ctx.clone());
             let mut req = batch_commands_request::Request::default();
-            req.cmd = Some(batch_commands_request::request::Cmd::Get(get));
+            req.cmd = Some(batch_commands_request::request::Cmd::RawGet(get));
             batch_req.mut_requests().push(req);
             batch_req.mut_request_ids().push(i);
         }
@@ -1166,10 +1212,10 @@ fn test_batch_get_commands() {
     );
     for resp in resps {
         let resp = match resp.cmd {
-            Some(batch_commands_response::response::Cmd::Get(g)) => g,
+            Some(batch_commands_response::response::Cmd::RawGet(g)) => g,
             _ => panic!("unexpected response {:?}", resp),
         };
-        // println!("{:?}", resp.get_value());
+        assert_eq!(resp.get_value(), b"val");
     }
 }
 

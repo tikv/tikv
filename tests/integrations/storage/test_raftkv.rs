@@ -48,6 +48,10 @@ fn test_raftkv() {
 
 #[test]
 fn test_get_snapshot_from_different_tablet() {
+    // todo(SpadeA): When the test is writing, the master version does not support multi-rocksdb completely.
+    // So, when region is split, the kv rocksdb will not be splitted. To work around it, we create
+    // relevant tablets(rocksdb) manually.
+
     let count = 1;
     let mut cluster = new_server_cluster(1, count);
     cluster.set_multi_rocks();
@@ -76,14 +80,32 @@ fn test_get_snapshot_from_different_tablet() {
     db.put_cf(default_cf, b"zi", b"val_i").unwrap();
 
     let region_snap = cluster.must_get_snapshot_of_region(region_1);
-    assert_eq!(region_snap.get(&Key::from_encoded(b"a".to_vec())).unwrap().unwrap(), b"val_a");
+    assert_eq!(
+        region_snap
+            .get(&Key::from_encoded(b"a".to_vec()))
+            .unwrap()
+            .unwrap(),
+        b"val_a"
+    );
     // Read "zi" leads to region error
     assert!(region_snap.get(&Key::from_encoded(b"i".to_vec())).is_err());
     // Region 1 cannot read the modifications that the region 2 made
-    assert_eq!(region_snap.get(&Key::from_encoded(b"b".to_vec())).unwrap().unwrap(), b"val_b");
+    assert_eq!(
+        region_snap
+            .get(&Key::from_encoded(b"b".to_vec()))
+            .unwrap()
+            .unwrap(),
+        b"val_b"
+    );
 
     let region_snap = cluster.must_get_snapshot_of_region(region_2);
-    assert_eq!(region_snap.get(&Key::from_encoded(b"i".to_vec())).unwrap().unwrap(), b"val_i");
+    assert_eq!(
+        region_snap
+            .get(&Key::from_encoded(b"i".to_vec()))
+            .unwrap()
+            .unwrap(),
+        b"val_i"
+    );
 }
 
 #[test]
