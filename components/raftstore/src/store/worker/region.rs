@@ -35,7 +35,7 @@ use yatp::{
 
 use super::metrics::*;
 use crate::{
-    coprocessor::ApplySnapshotObserver,
+    coprocessor::CoprocessorHost,
     store::{
         self, check_abort,
         peer_storage::{
@@ -891,7 +891,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        coprocessor::{BoxApplySnapshotObserver, Coprocessor, CoprocessorHost, ObserverContext},
+        coprocessor::{
+            ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost,
+            ObserverContext,
+        },
         store::{
             peer_storage::JOB_STATUS_PENDING, snap::tests::get_test_db_for_regions,
             worker::RegionRunner, CasualMessage, SnapKey, SnapManager,
