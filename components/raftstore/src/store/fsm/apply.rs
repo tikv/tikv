@@ -1052,6 +1052,9 @@ where
         let peer = util::find_peer_by_id(&self.region, self.id).unwrap();
         let skip = peer.is_witness
             && ProposalContext::from_bytes(entry.get_context()).contains(ProposalContext::NO_ADMIN);
+        if skip {
+            PEER_WRITE_CMD_COUNTER.skip.inc(); 
+        }
         if !data.is_empty() && !skip {
             let cmd = util::parse_data_at(data, index, &self.tag);
 

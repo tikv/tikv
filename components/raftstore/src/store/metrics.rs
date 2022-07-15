@@ -32,6 +32,7 @@ make_auto_flush_static_metric! {
         delete,
         delete_range,
         ingest_sst,
+        skip,
     }
 
     pub label_enum AdminCmdType {
