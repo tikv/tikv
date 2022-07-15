@@ -1866,9 +1866,11 @@ mod tests {
 
     #[test]
     fn test_selector() {
+        type DummyTask<'a> = &'a [(&'a str, &'a [(&'a [u8], &'a [u8])])];
+
         #[derive(Debug, Clone, Copy)]
         struct Case<'a /* 'static */> {
-            tasks: &'a [(&'a str, &'a [(&'a [u8], &'a [u8])])],
+            tasks: &'a [DummyTask<'a>],
             selector: TaskSelectorRef<'a>,
             selected: &'a [&'a str],
         }
@@ -1913,7 +1915,7 @@ mod tests {
             assert!(
                 c.tasks
                     .iter()
-                    .filter(|(name, range)| c.selector.matches(name, range.iter().map(|t| *t)))
+                    .filter(|(name, range)| c.selector.matches(name, range.iter().copied()))
                     .map(|(name, _)| name)
                     .collect::<Vec<_>>()
                     == c.selected.iter().collect::<Vec<_>>(),
