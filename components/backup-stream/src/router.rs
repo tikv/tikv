@@ -91,17 +91,17 @@ pub enum TaskSelectorRef<'a> {
 }
 
 impl<'a> TaskSelectorRef<'a> {
-    fn matches(self, t: &StreamTaskInfo) -> bool {
+    fn matches<'c, 'd>(
+        self,
+        task_name: &str,
+        mut task_range: impl Iterator<Item = (&'c [u8], &'d [u8])>,
+    ) -> bool {
         match self {
-            TaskSelectorRef::ByName(name) => t.task.info.get_name() == name,
-            TaskSelectorRef::ByKey(k) => t
-                .ranges
-                .iter()
-                .any(|(s, e)| utils::is_in_range(k, (&*s, &*e))),
-            TaskSelectorRef::ByRange(x1, y1) => t
-                .ranges
-                .iter()
-                .any(|(x2, y2)| utils::is_overlapping((x1, y1), (&*x2, &*y2))),
+            TaskSelectorRef::ByName(name) => task_name == name,
+            TaskSelectorRef::ByKey(k) => task_range.any(|(s, e)| utils::is_in_range(k, (&*s, &*e))),
+            TaskSelectorRef::ByRange(x1, y1) => {
+                task_range.any(|(x2, y2)| utils::is_overlapping((x1, y1), (&*x2, &*y2)))
+            }
             TaskSelectorRef::All => true,
         }
     }
@@ -453,7 +453,14 @@ impl RouterInner {
     pub async fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
         let s = self.tasks.lock().await;
         s.iter()
-            .filter(|(_, info)| selector.matches(*info))
+            .filter(|(name, info)| {
+                selector.matches(
+                    name.as_str(),
+                    info.ranges
+                        .iter()
+                        .map(|(s, e)| (s.as_slice(), e.as_slice())),
+                )
+            })
             .map(|(name, _)| name.to_owned())
             .collect()
     }
@@ -1855,5 +1862,68 @@ mod tests {
 
         let begin_ts = DataFile::decode_begin_ts(value).unwrap();
         assert_eq!(begin_ts, start_ts);
+    }
+
+    #[test]
+    fn test_selector() {
+        #[derive(Debug, Clone, Copy)]
+        struct Case<'a /* 'static */> {
+            tasks: &'a [(&'a str, &'a [(&'a [u8], &'a [u8])])],
+            selector: TaskSelectorRef<'a>,
+            selected: &'a [&'a str],
+        }
+
+        let cases = [
+            Case {
+                tasks: &[("Zhao", &[(b"", b"")]), ("Qian", &[(b"", b"")])],
+                selector: TaskSelectorRef::ByName("Zhao"),
+                selected: &["Zhao"],
+            },
+            Case {
+                tasks: &[
+                    ("Zhao", &[(b"0001", b"1000"), (b"2000", b"")]),
+                    ("Qian", &[(b"0002", b"1000")]),
+                ],
+                selector: TaskSelectorRef::ByKey(b"0001"),
+                selected: &["Zhao"],
+            },
+            Case {
+                tasks: &[
+                    ("Zhao", &[(b"0001", b"1000"), (b"2000", b"")]),
+                    ("Qian", &[(b"0002", b"1000")]),
+                    ("Sun", &[(b"0004", b"1024")]),
+                    ("Li", &[(b"1001", b"2048")]),
+                ],
+                selector: TaskSelectorRef::ByRange(b"1001", b"2000"),
+                selected: &["Sun", "Li"],
+            },
+            Case {
+                tasks: &[
+                    ("Zhao", &[(b"0001", b"1000"), (b"2000", b"")]),
+                    ("Qian", &[(b"0002", b"1000")]),
+                    ("Sun", &[(b"0004", b"1024")]),
+                    ("Li", &[(b"1001", b"2048")]),
+                ],
+                selector: TaskSelectorRef::All,
+                selected: &["Zhao", "Qian", "Sun", "Li"],
+            },
+        ];
+
+        fn run(c: Case<'static>) {
+            assert!(
+                c.tasks
+                    .iter()
+                    .filter(|(name, range)| c.selector.matches(name, range.iter().map(|t| *t)))
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>()
+                    == c.selected.iter().collect::<Vec<_>>(),
+                "case = {:?}",
+                c
+            )
+        }
+
+        for case in cases {
+            run(case)
+        }
     }
 }

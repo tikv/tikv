@@ -573,7 +573,58 @@ mod test {
 
     use futures::executor::block_on;
 
-    use crate::utils::{CallbackWaitGroup, SegmentMap};
+    use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
+
+    #[test]
+    fn test_range_functions() {
+        #[derive(Debug)]
+        struct InRangeCase<'a> {
+            key: &'a [u8],
+            range: (&'a [u8], &'a [u8]),
+            expected: bool,
+        }
+
+        let cases = [
+            InRangeCase {
+                key: b"0001",
+                range: (b"0000", b"0002"),
+                expected: true,
+            },
+            InRangeCase {
+                key: b"0003",
+                range: (b"0000", b"0002"),
+                expected: false,
+            },
+            InRangeCase {
+                key: b"0002",
+                range: (b"0000", b"0002"),
+                expected: false,
+            },
+            InRangeCase {
+                key: b"0000",
+                range: (b"0000", b"0002"),
+                expected: true,
+            },
+            InRangeCase {
+                key: b"0018",
+                range: (b"0000", b""),
+                expected: true,
+            },
+            InRangeCase {
+                key: b"0018",
+                range: (b"0019", b""),
+                expected: false,
+            },
+        ];
+
+        for case in cases {
+            assert!(
+                is_in_range(case.key, case.range) == case.expected,
+                "case = {:?}",
+                case
+            );
+        }
+    }
 
     #[test]
     fn test_segment_tree() {

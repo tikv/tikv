@@ -199,10 +199,11 @@ where
 
     fn on_fatal_error(&self, select: TaskSelector, err: Box<Error>) {
         err.report_fatal();
-        for task in self
+        let tasks = self
             .pool
-            .block_on(self.range_router.select_task(select.reference()))
-        {
+            .block_on(self.range_router.select_task(select.reference()));
+        warn!("fatal error reporting"; "selector" => ?select, "selected" => ?tasks, "err" => %err);
+        for task in tasks {
             // Let's pause the task first.
             self.unload_task(&task);
             metrics::update_task_status(TaskStatus::Error, &task);
