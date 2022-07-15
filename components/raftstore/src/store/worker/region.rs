@@ -818,7 +818,7 @@ where
                 if let Err(e) = self.ctx.pre_apply_snapshot(&task) {
                     info!(
                         "pre apply snapshot failed";
-                        ?e;
+                        "e" => ?e,
                     );
                 }
                 // to makes sure applying snapshots in order.
