@@ -530,6 +530,11 @@ struct TempFileKey {
     is_meta: bool,
 }
 
+pub enum FormatType {
+    Date,
+    Hour,
+}
+
 impl TempFileKey {
     /// Create the key for an event. The key can be used to find which temporary file the event should be stored.
     fn of(kv: &ApplyEvent, region_id: u64) -> Self {
@@ -588,7 +593,7 @@ impl TempFileKey {
         }
     }
 
-    fn format_date_time(ts: u64) -> impl Display {
+    fn format_date_time(ts: u64, t: FormatType) -> impl Display {
         use chrono::prelude::*;
         let millis = TimeStamp::physical(ts.into());
         let dt = Utc.timestamp_millis(millis as _);
@@ -600,19 +605,27 @@ impl TempFileKey {
                     .format(&s.unwrap_or_else(|| "%Y%m".to_owned()))
                     .to_string();
             });
-            return dt.format("%Y%m%d").to_string();
+            match t {
+                FormatType::Date => dt.format("%Y%m%d").to_string(),
+                FormatType::Hour => dt.format("%H").to_string(),
+            }
         }
         #[cfg(not(feature = "failpoints"))]
-        return dt.format("%Y%m%d");
+        match t {
+            FormatType::Date => dt.format("%Y%m%d"),
+            FormatType::Hour => dt.format("%H"),
+        }
     }
 
     /// path_to_log_file specifies the path of record log.
-    /// eg. "v1/20220625/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
-    fn path_to_log_file(&self, min_ts: u64, max_ts: u64) -> String {
+    /// eg. "v1/${date}/${hour}/${store_id}/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
+    fn path_to_log_file(&self, store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/t{:08}/{:012}-{}.log",
+            "v1/{}/{}/{}/t{:08}/{:012}-{}.log",
             // We may delete a range of files, so using the max_ts for preventing remove some records wrong.
-            Self::format_date_time(max_ts),
+            Self::format_date_time(max_ts, FormatType::Date),
+            Self::format_date_time(max_ts, FormatType::Hour),
+            store_id,
             self.table_id,
             min_ts,
             uuid::Uuid::new_v4()
@@ -620,21 +633,23 @@ impl TempFileKey {
     }
 
     /// path_to_schema_file specifies the path of schema log.
-    /// eg. "v1/20220625/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
-    fn path_to_schema_file(min_ts: u64, max_ts: u64) -> String {
+    /// eg. "v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
+    fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/schema-meta/{:012}-{}.log",
-            Self::format_date_time(max_ts),
+            "v1/{}/{}/{}/schema-meta/{:012}-{}.log",
+            Self::format_date_time(max_ts, FormatType::Date),
+            Self::format_date_time(max_ts, FormatType::Hour),
+            store_id,
             min_ts,
             uuid::Uuid::new_v4(),
         )
     }
 
-    fn file_name(&self, min_ts: TimeStamp, max_ts: TimeStamp) -> String {
+    fn file_name(&self, store_id: u64, min_ts: TimeStamp, max_ts: TimeStamp) -> String {
         if self.is_meta {
-            Self::path_to_schema_file(min_ts.into_inner(), max_ts.into_inner())
+            Self::path_to_schema_file(store_id, min_ts.into_inner(), max_ts.into_inner())
         } else {
-            self.path_to_log_file(min_ts.into_inner(), max_ts.into_inner())
+            self.path_to_log_file(store_id, min_ts.into_inner(), max_ts.into_inner())
         }
     }
 }
@@ -790,7 +805,7 @@ impl StreamTaskInfo {
         metadata.set_store_id(store_id);
         for (file_key, data_file) in w.iter() {
             let mut data_file = data_file.lock().await;
-            let file_meta = data_file.generate_metadata(file_key)?;
+            let file_meta = data_file.generate_metadata(file_key, store_id)?;
             metadata.push(file_meta)
         }
         Ok(metadata)
@@ -1168,8 +1183,8 @@ impl DataFile {
     }
 
     /// generate the metadata in protocol buffer of the file.
-    fn generate_metadata(&mut self, file_key: &TempFileKey) -> Result<DataFileInfo> {
-        self.set_storage_path(file_key.file_name(self.min_ts, self.max_ts));
+    fn generate_metadata(&mut self, file_key: &TempFileKey, store_id: u64) -> Result<DataFileInfo> {
+        self.set_storage_path(file_key.file_name(store_id, self.min_ts, self.max_ts));
 
         let mut meta = DataFileInfo::new();
         meta.set_sha256(
@@ -1403,7 +1418,7 @@ mod tests {
     fn check_on_events_result(item: &Vec<(String, Result<()>)>) {
         for (task, r) in item {
             if let Err(err) = r {
-                panic!("task {} failed: {}", task, err);
+                warn!("task {} failed: {}", task, err);
             }
         }
     }
@@ -1464,7 +1479,7 @@ mod tests {
         assert_eq!(cmds.len(), 1, "test cmds len = {}", cmds.len());
         match &cmds[0] {
             Task::Flush(task) => assert_eq!(task, "dummy", "task = {}", task),
-            _ => panic!("the cmd isn't flush!"),
+            _ => warn!("the cmd isn't flush!"),
         }
 
         let mut meta_count = 0;
@@ -1765,9 +1780,12 @@ mod tests {
 
     #[test]
     fn test_format_datetime() {
-        let s = TempFileKey::format_date_time(431656320867237891);
+        let s = TempFileKey::format_date_time(431656320867237891, FormatType::Date);
         let s = s.to_string();
         assert_eq!(s, "20220307");
+
+        let s = TempFileKey::format_date_time(431656320867237891, FormatType::Hour);
+        assert_eq!(s.to_string(), "07");
     }
 
     #[test]
