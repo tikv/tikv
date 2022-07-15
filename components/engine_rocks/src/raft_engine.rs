@@ -14,7 +14,7 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
 
-use crate::{util, RocksEngine, RocksWriteBatch};
+use crate::{util, RocksEngine, RocksWriteBatchVec};
 
 impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -176,7 +176,7 @@ impl RocksEngine {
         raft_group_id: u64,
         mut from: u64,
         to: u64,
-        raft_wb: &mut RocksWriteBatch,
+        raft_wb: &mut RocksWriteBatchVec,
     ) -> Result<usize> {
         if from == 0 {
             let start_key = keys::raft_log_key(raft_group_id, 0);
@@ -207,10 +207,10 @@ impl RocksEngine {
 // for all KvEngines, but is currently implemented separately for
 // every engine.
 impl RaftEngine for RocksEngine {
-    type LogBatch = RocksWriteBatch;
+    type LogBatch = RocksWriteBatchVec;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
-        RocksWriteBatch::with_capacity(self, capacity)
+        RocksWriteBatchVec::with_unit_capacity(self, capacity)
     }
 
     fn sync(&self) -> Result<()> {
@@ -368,7 +368,7 @@ impl RaftEngine for RocksEngine {
     }
 }
 
-impl RaftLogBatch for RocksWriteBatch {
+impl RaftLogBatch for RocksWriteBatchVec {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
         if let Some(max_size) = entries.iter().map(|e| e.compute_size()).max() {
             let ser_buf = Vec::with_capacity(max_size as usize);
@@ -421,7 +421,7 @@ impl RaftLogBatch for RocksWriteBatch {
     }
 }
 
-impl RocksWriteBatch {
+impl RocksWriteBatchVec {
     fn append_impl(
         &mut self,
         raft_group_id: u64,
