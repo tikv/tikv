@@ -7,7 +7,7 @@
 
 use std::{
     cmp,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     error::Error,
     fs, i32,
     io::{Error as IoError, ErrorKind, Write},
@@ -53,6 +53,7 @@ use raftstore::{
 };
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
+use serde_json::{to_value, Map, Value};
 use tikv_util::{
     config::{
         self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
@@ -1059,6 +1060,7 @@ pub struct DbConfig {
     // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of multi-batch-write
     // in RocksDB has been removed.
     #[online_config(skip)]
+    #[serde(skip_serializing)]
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
     pub enable_unordered_write: bool,
@@ -3607,6 +3609,71 @@ pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
     Ok(())
 }
 
+// convert tikv config to a flatten array.
+pub fn to_flatten_config_info(cfg: &TiKvConfig) -> Vec<Value> {
+    fn to_cfg_value(default_value: &Value, cfg_value: Option<&Value>, key: &str) -> Value {
+        let mut res = Map::with_capacity(2);
+        res.insert("Name".into(), Value::String(key.into()));
+        res.insert("DefaultValue".into(), default_value.clone());
+        if let Some(cfg_val) = cfg_value {
+            if default_value != cfg_val {
+                res.insert("ValueInFile".into(), cfg_val.clone());
+            }
+        }
+
+        Value::Object(res)
+    }
+
+    // configs that should not be flatten because the config type is HashMap instead of submodule.
+    lazy_static! {
+        static ref NO_FLATTEN_CFGS: HashSet<&'static str> = {
+            let mut set = HashSet::new();
+            set.insert("server.labels");
+            set
+        };
+    }
+
+    fn flatten_value(
+        default_obj: &Map<String, Value>,
+        value_obj: &Map<String, Value>,
+        key_buf: &mut String,
+        res: &mut Vec<Value>,
+    ) {
+        for (k, v) in default_obj.iter() {
+            let cfg_val = value_obj.get(k);
+            let prev_len = key_buf.len();
+            if !key_buf.is_empty() {
+                key_buf.push('.');
+            }
+            key_buf.push_str(k);
+            if v.is_object() && !NO_FLATTEN_CFGS.contains(key_buf.as_str()) {
+                flatten_value(
+                    v.as_object().unwrap(),
+                    cfg_val.unwrap().as_object().unwrap(),
+                    key_buf,
+                    res,
+                );
+            } else {
+                res.push(to_cfg_value(v, cfg_val, key_buf));
+            }
+            key_buf.truncate(prev_len);
+        }
+    }
+
+    let cfg_value = to_value(cfg).unwrap();
+    let default_value = to_value(TiKvConfig::default()).unwrap();
+
+    let mut key_buf = String::new();
+    let mut res = Vec::new();
+    flatten_value(
+        default_value.as_object().unwrap(),
+        cfg_value.as_object().unwrap(),
+        &mut key_buf,
+        &mut res,
+    );
+    res
+}
+
 lazy_static! {
     pub static ref TIKVCONFIG_TYPED: ConfigChange = TiKvConfig::default().typed();
 }
@@ -4112,6 +4179,33 @@ mod tests {
         });
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
+    }
+
+    #[test]
+    fn test_flatten_cfg() {
+        let mut cfg = TiKvConfig::default();
+        cfg.server.labels.insert("zone".into(), "test".into());
+        cfg.raft_store.raft_log_gc_count_limit = Some(123);
+
+        let flattened = to_flatten_config_info(&cfg);
+
+        let mut expected = HashMap::new();
+        let mut labels = Map::new();
+        labels.insert("zone".into(), Value::String("test".into()));
+        expected.insert("server.labels", Value::Object(labels));
+        expected.insert(
+            "raftstore.raft-log-gc-count-limit",
+            Value::Number(123.into()),
+        );
+
+        for v in &flattened {
+            let obj = v.as_object().unwrap();
+            if let Some(v) = expected.get(&obj["Name"].as_str().unwrap()) {
+                assert_eq!(v, &obj["ValueInFile"]);
+            } else {
+                assert!(!obj.contains_key("ValueInFile"));
+            }
+        }
     }
 
     #[test]

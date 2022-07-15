@@ -6170,6 +6170,7 @@ version = "0.0.1"
 dependencies = [
  "cc",
  "clap 2.33.0",
+ "serde_json",
  "server",
  "tikv",
  "time",
