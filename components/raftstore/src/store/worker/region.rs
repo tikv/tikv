@@ -815,8 +815,11 @@ where
             }
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
-                if let Err(_) = self.ctx.pre_apply_snapshot(&task) {
-                    ()
+                if let Err(e) = self.ctx.pre_apply_snapshot(&task) {
+                    info!(
+                        "pre apply snapshot failed";
+                        ?e;
+                    );
                 }
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
