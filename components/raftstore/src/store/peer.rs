@@ -70,7 +70,7 @@ use uuid::Uuid;
 
 use super::{
     cmd_resp,
-    local_metrics::{RaftMetrics, RaftReadyMetrics},
+    local_metrics::{RaftMetrics, RaftReadyMetrics, TimeTracker},
     metrics::*,
     peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
@@ -109,7 +109,8 @@ use crate::{
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
-const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
+#[doc(hidden)]
+pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -136,16 +137,16 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    /// Find the request times of given index.
-    /// Caller should check if term is matched before using request times.
-    fn find_request_times(&self, index: u64) -> Option<(u64, &SmallVec<[TiInstant; 4]>)> {
+    /// Find the trackers of given index.
+    /// Caller should check if term is matched before using trackers.
+    fn find_trackers(&self, index: u64) -> Option<(u64, &SmallVec<[TimeTracker; 4]>)> {
         self.queue
             .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
             .ok()
             .and_then(|i| {
                 self.queue[i]
                     .cb
-                    .get_request_times()
+                    .get_trackers()
                     .map(|ts| (self.queue[i].term, ts))
             })
     }
@@ -781,6 +782,8 @@ where
     last_urgent_proposal_idx: u64,
     /// The index of the latest committed split command.
     last_committed_split_idx: u64,
+    /// The index of last sent snapshot
+    last_sent_snapshot_idx: u64,
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
@@ -950,6 +953,7 @@ where
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
+            last_sent_snapshot_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
@@ -1216,7 +1220,7 @@ where
     pub fn destroy(
         &mut self,
         engines: &Engines<EK, ER>,
-        perf_context: &mut EK::PerfContext,
+        perf_context: &mut ER::PerfContext,
         keep_data: bool,
         pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
     ) -> Result<()> {
@@ -1570,8 +1574,16 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msgs: Vec<RaftMessage>,
     ) {
+        let mut now = None;
+        let std_now = Instant::now();
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
+            if msg_type == MessageType::MsgSnapshot {
+                let snap_index = msg.get_message().get_snapshot().get_metadata().get_index();
+                if snap_index > self.last_sent_snapshot_idx {
+                    self.last_sent_snapshot_idx = snap_index;
+                }
+            }
             if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
                 // After a leader transfer procedure is triggered, the lease for
                 // the old leader may be expired earlier than usual, since a new leader
@@ -1579,7 +1591,7 @@ where
                 // network partition from the new leader.
                 // For lease safety during leader transfer, transit `leader_lease`
                 // to suspect.
-                self.leader_lease.suspect(monotonic_raw_now());
+                self.leader_lease.suspect(*now.insert(monotonic_raw_now()));
             }
 
             let to_peer_id = msg.get_to_peer().get_id();
@@ -1594,6 +1606,28 @@ where
                 "to" => to_peer_id,
                 "disk_usage" => ?msg.get_disk_usage(),
             );
+
+            for (term, index) in msg
+                .get_message()
+                .get_entries()
+                .iter()
+                .map(|e| (e.get_term(), e.get_index()))
+            {
+                if let Ok(idx) = self
+                    .proposals
+                    .queue
+                    .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
+                {
+                    let proposal = &self.proposals.queue[idx];
+                    if term == proposal.term {
+                        for tracker in proposal.cb.get_trackers().iter().flat_map(|v| v.iter()) {
+                            tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
+                                &mut t.metrics.wf_send_proposal_nanos
+                            });
+                        }
+                    }
+                }
+            }
 
             if let Err(e) = ctx.trans.send(msg) {
                 // We use metrics to observe failure on production.
@@ -1718,22 +1752,19 @@ where
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
-        let mut now = None;
+        let now = Instant::now();
         for index in pre_persist_index + 1..=self.raft_group.raft.raft_log.persisted {
-            if let Some((term, times)) = self.proposals.find_request_times(index) {
+            if let Some((term, trackers)) = self.proposals.find_trackers(index) {
                 if self
                     .get_store()
                     .term(index)
                     .map(|t| t == term)
                     .unwrap_or(false)
                 {
-                    if now.is_none() {
-                        now = Some(TiInstant::now());
-                    }
-                    for t in times {
-                        metrics
-                            .wf_persist_log
-                            .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
+                    for tracker in trackers {
+                        tracker.observe(now, &metrics.wf_persist_log, |t| {
+                            &mut t.metrics.wf_persist_log_nanos
+                        });
                     }
                 }
             }
@@ -1744,25 +1775,26 @@ where
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
-        let mut now = None;
+        let now = Instant::now();
         for index in pre_commit_index + 1..=self.raft_group.raft.raft_log.committed {
-            if let Some((term, times)) = self.proposals.find_request_times(index) {
+            if let Some((term, trackers)) = self.proposals.find_trackers(index) {
                 if self
                     .get_store()
                     .term(index)
                     .map(|t| t == term)
                     .unwrap_or(false)
                 {
-                    if now.is_none() {
-                        now = Some(TiInstant::now());
-                    }
-                    let hist = if index <= self.raft_group.raft.raft_log.persisted {
+                    let commit_persisted = index <= self.raft_group.raft.raft_log.persisted;
+                    let hist = if commit_persisted {
                         &metrics.wf_commit_log
                     } else {
                         &metrics.wf_commit_not_persist_log
                     };
-                    for t in times {
-                        hist.observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
+                    for tracker in trackers {
+                        tracker.observe(now, hist, |t| {
+                            t.metrics.commit_not_persisted = !commit_persisted;
+                            &mut t.metrics.wf_commit_log_nanos
+                        });
                     }
                 }
             }
@@ -2026,6 +2058,7 @@ where
                     // prewrites or commits will be just a waste.
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
+                    self.last_sent_snapshot_idx = self.raft_group.raft.raft_log.last_index();
 
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
@@ -2483,20 +2516,17 @@ where
 
         let state_role = ready.ss().map(|ss| ss.raft_state);
         let has_new_entries = !ready.entries().is_empty();
-        let mut request_times = vec![];
+        let mut trackers = vec![];
         if ctx.raft_metrics.waterfall_metrics {
-            let mut now = None;
+            let now = Instant::now();
             for entry in ready.entries() {
-                if let Some((term, times)) = self.proposals.find_request_times(entry.get_index()) {
+                if let Some((term, times)) = self.proposals.find_trackers(entry.get_index()) {
                     if entry.term == term {
-                        request_times.extend_from_slice(times);
-                        if now.is_none() {
-                            now = Some(TiInstant::now());
-                        }
-                        for t in times {
-                            ctx.raft_metrics.wf_send_to_queue.observe(duration_to_sec(
-                                now.unwrap().saturating_duration_since(*t),
-                            ));
+                        trackers.extend_from_slice(times);
+                        for tracker in times {
+                            tracker.observe(now, &ctx.raft_metrics.wf_send_to_queue, |t| {
+                                &mut t.metrics.wf_send_to_queue_nanos
+                            });
                         }
                     }
                 }
@@ -2523,8 +2553,8 @@ where
                     task.messages = self.build_raft_messages(ctx, persisted_msgs);
                 }
 
-                if !request_times.is_empty() {
-                    task.request_times = request_times;
+                if !trackers.is_empty() {
+                    task.trackers = trackers;
                 }
 
                 if let Some(write_worker) = &mut ctx.sync_write_worker {
@@ -3968,12 +3998,14 @@ where
             || min_committed == 0
             || last_index - min_matched > ctx.cfg.merge_max_log_gap
             || last_index - min_committed > ctx.cfg.merge_max_log_gap * 2
+            || min_matched < self.last_sent_snapshot_idx
         {
             return Err(box_err!(
-                "log gap from matched: {} or committed: {} to last index: {} is too large, skip merge",
+                "log gap too large, skip merge: matched: {}, committed: {}, last index: {}, last_snapshot: {}",
                 min_matched,
                 min_committed,
-                last_index
+                last_index,
+                self.last_sent_snapshot_idx
             ));
         }
         let mut entry_size = 0;

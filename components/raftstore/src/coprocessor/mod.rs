@@ -86,9 +86,17 @@ pub trait AdminObserver: Coprocessor {
     /// Hook to call after applying admin request.
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminResponse) {}
+
+    /// Hook before exec admin request, returns whether we should skip this admin.
+    fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, _: &AdminRequest) -> bool {
+        false
+    }
 }
 
 pub trait QueryObserver: Coprocessor {
+    /// Hook when observe applying empty cmd, probably caused by leadership change.
+    fn on_empty_cmd(&self, _: &mut ObserverContext<'_>, _index: u64, _term: u64) {}
+
     /// Hook to call before proposing write request.
     ///
     /// We don't propose read request, hence there is no hook for it yet.
@@ -102,6 +110,11 @@ pub trait QueryObserver: Coprocessor {
     /// Hook to call after applying write request.
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
+
+    /// Hook before exec write request, returns whether we should skip this write.
+    fn pre_exec_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) -> bool {
+        false
+    }
 }
 
 pub trait ApplySnapshotObserver: Coprocessor {

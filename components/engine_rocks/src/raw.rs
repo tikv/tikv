@@ -8,13 +8,13 @@
 
 pub use rocksdb::{
     new_compaction_filter_raw, run_ldb_tool, run_sst_dump_tool, BlockBasedOptions, CFHandle, Cache,
-    ColumnFamilyOptions, CompactOptions, CompactionFilter, CompactionFilterContext,
+    ChecksumType, ColumnFamilyOptions, CompactOptions, CompactionFilter, CompactionFilterContext,
     CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
     CompactionJobInfo, CompactionOptions, CompactionPriority, DBBottommostLevelCompaction,
     DBCompactionFilter, DBCompactionStyle, DBCompressionType, DBEntryType, DBInfoLogLevel,
     DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode, DBStatisticsTickerType,
     DBTitanDBBlobRunMode, Env, EventListener, IngestExternalFileOptions, LRUCacheOptions,
-    MemoryAllocator, PerfContext, Range, ReadOptions, SeekKey, SliceTransform, TableFilter,
-    TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions,
-    Writable, WriteOptions, DB,
+    MemoryAllocator, PerfContext, PrepopulateBlockCache, Range, ReadOptions, SeekKey,
+    SliceTransform, TableFilter, TablePropertiesCollector, TablePropertiesCollectorFactory,
+    TitanBlobIndex, TitanDBOptions, Writable, WriteOptions, DB,
 };

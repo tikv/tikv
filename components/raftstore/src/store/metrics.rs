@@ -324,6 +324,12 @@ lazy_static! {
             "Bucketed histogram of proposals' send to write queue duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    pub static ref STORE_WF_SEND_PROPOSAL_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_wf_send_proposal_duration_seconds",
+            "Bucketed histogram of proposals' waterfall send duration",
+            exponential_buckets(1e-6, 2.0, 26).unwrap()
+        ).unwrap();
     pub static ref STORE_WF_BEFORE_WRITE_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_wf_before_write_duration_seconds",
@@ -654,6 +660,11 @@ lazy_static! {
         "Histogram of query balance",
         &["type"],
         linear_buckets(0.0, 0.05, 20).unwrap()
+    ).unwrap();
+
+    pub static ref LOAD_BASE_SPLIT_DURATION_HISTOGRAM : Histogram = register_histogram!(
+        "tikv_load_base_split_duration_seconds",
+        "Histogram of the time load base split costs in seconds"
     ).unwrap();
 
     pub static ref QUERY_REGION_VEC: HistogramVec = register_histogram_vec!(

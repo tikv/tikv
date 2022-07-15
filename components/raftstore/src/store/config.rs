@@ -947,7 +947,7 @@ impl ConfigManager for RaftstoreConfigManager {
         {
             let change = change.clone();
             self.config
-                .update(move |cfg: &mut Config| cfg.update(change));
+                .update(move |cfg: &mut Config| cfg.update(change))?;
         }
         if let Some(ConfigValue::Module(raft_batch_system_change)) =
             change.get("store_batch_system")

@@ -9,6 +9,7 @@ use std::{
 };
 
 use async_channel::SendError;
+use causal_ts::CausalTsProvider;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, SstCompressionType};
@@ -453,6 +454,7 @@ impl BackupRange {
         let mut cursor = CursorBuilder::new(snapshot, self.cf)
             .range(None, self.end_key.clone())
             .scan_mode(ScanMode::Forward)
+            .fill_cache(false)
             .build()?;
         if let Some(begin) = self.start_key.clone() {
             if !cursor.seek(&begin, cfstatistics)? {
@@ -575,8 +577,7 @@ pub struct ConfigManager(Arc<RwLock<BackupConfig>>);
 
 impl online_config::ConfigManager for ConfigManager {
     fn dispatch(&mut self, change: online_config::ConfigChange) -> online_config::Result<()> {
-        self.0.write().unwrap().update(change);
-        Ok(())
+        self.0.write().unwrap().update(change)
     }
 }
 
@@ -662,6 +663,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     concurrency_manager: ConcurrencyManager,
     softlimit: SoftLimitKeeper,
     api_version: ApiVersion,
+    causal_ts_provider: Option<Arc<dyn CausalTsProvider>>, // used in rawkv apiv2 only
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -783,6 +785,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
         api_version: ApiVersion,
+        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
     ) -> Endpoint<E, R> {
         let pool = ControlThreadPool::new();
         let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
@@ -800,6 +803,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             config_manager,
             concurrency_manager,
             api_version,
+            causal_ts_provider,
         }
     }
 
@@ -962,6 +966,26 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 error_unknown!(?err; "backup failed to send response");
             }
             return;
+        }
+        // Flush causal timestamp to make sure that future writes will have larger timestamps.
+        // And help TiKV-BR acquire a backup-ts with intact data smaller than it.
+        // (Note that intactness is not fully ensured now, until the safe-ts of RawKV is implemented.
+        // TiKV-BR need a workaround by rewinding backup-ts to a small "safe interval").
+        if request.is_raw_kv {
+            if let Err(e) = self
+                .causal_ts_provider
+                .as_ref()
+                .map_or(Ok(()), |provider| provider.flush())
+            {
+                error!("backup flush causal timestamp failed"; "err" => ?e);
+                let mut response = BackupResponse::default();
+                let err_msg = format!("fail to flush causal ts, {:?}", e);
+                response.set_error(crate::Error::Other(box_err!(err_msg)).into());
+                if let Err(err) = resp.unbounded_send(response) {
+                    error_unknown!(?err; "backup failed to send response");
+                }
+                return;
+            }
         }
         let start_key = codec.encode_backup_key(request.start_key.clone());
         let end_key = codec.encode_backup_key(request.end_key.clone());
@@ -1199,13 +1223,14 @@ pub mod tests {
     }
 
     pub fn new_endpoint() -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
-        new_endpoint_with_limiter(None, ApiVersion::V1, false)
+        new_endpoint_with_limiter(None, ApiVersion::V1, false, None)
     }
 
     pub fn new_endpoint_with_limiter(
         limiter: Option<Arc<IORateLimiter>>,
         api_version: ApiVersion,
         is_raw_kv: bool,
+        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
     ) -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
@@ -1237,6 +1262,7 @@ pub mod tests {
                 },
                 concurrency_manager,
                 api_version,
+                causal_ts_provider,
             ),
         )
     }
@@ -1446,7 +1472,7 @@ pub mod tests {
     fn test_handle_backup_task() {
         let limiter = Arc::new(IORateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
-        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), ApiVersion::V1, false);
+        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), ApiVersion::V1, false, None);
         let engine = endpoint.engine.clone();
 
         endpoint
@@ -1585,7 +1611,7 @@ pub mod tests {
     fn test_handle_backup_raw_task_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> bool {
         let limiter = Arc::new(IORateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
-        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true);
+        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true, None);
         let engine = endpoint.engine.clone();
 
         let start_key_idx: u64 = 100;
@@ -1720,6 +1746,32 @@ pub mod tests {
                 test_case.2
             );
         }
+    }
+
+    #[test]
+    fn test_backup_raw_apiv2_causal_ts() {
+        let limiter = Arc::new(IORateLimiter::new_for_test());
+        let ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+        let start_ts = ts_provider.get_ts().unwrap();
+        let (tmp, endpoint) = new_endpoint_with_limiter(
+            Some(limiter),
+            ApiVersion::V2,
+            true,
+            Some(ts_provider.clone()),
+        );
+
+        let mut req = BackupRequest::default();
+        let (tx, _) = unbounded();
+        let tmp1 = make_unique_dir(tmp.path());
+        req.set_storage_backend(make_local_backend(&tmp1));
+        req.set_start_key(b"r".to_vec());
+        req.set_end_key(b"s".to_vec());
+        req.set_is_raw_kv(true);
+        req.set_dst_api_version(ApiVersion::V2);
+        let (task, _) = Task::new(req, tx).unwrap();
+        endpoint.handle_backup_task(task);
+        let end_ts = ts_provider.get_ts().unwrap();
+        assert_eq!(end_ts.into_inner(), start_ts.next().into_inner() + 100);
     }
 
     #[test]

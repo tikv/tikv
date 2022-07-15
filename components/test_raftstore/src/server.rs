@@ -9,7 +9,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
-use causal_ts::CausalTsProvider;
+use causal_ts::{tests::DummyRawTsTracker, CausalTsProvider};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -61,11 +61,17 @@ use tikv::{
         ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
-    storage::{self, kv::SnapContext, txn::flow_controller::FlowController, Engine},
+    storage::{
+        self,
+        kv::SnapContext,
+        txn::flow_controller::{EngineFlowController, FlowController},
+        Engine,
+    },
 };
 use tikv_util::{
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
+    sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker},
     HandyRwLock,
@@ -359,7 +365,8 @@ impl ServerCluster {
             );
             self.causal_ts_providers
                 .insert(node_id, causal_ts_provider.clone());
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            let causal_ob =
+                causal_ts::CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default());
             causal_ob.register_to(&mut coprocessor_host);
         }
 
@@ -375,7 +382,11 @@ impl ServerCluster {
             cfg.quota.foreground_cpu_time,
             cfg.quota.foreground_write_bandwidth,
             cfg.quota.foreground_read_bandwidth,
+            cfg.quota.background_cpu_time,
+            cfg.quota.background_write_bandwidth,
+            cfg.quota.background_read_bandwidth,
             cfg.quota.max_delay_duration,
+            cfg.quota.enable_auto_tune,
         ));
         let store = create_raft_storage::<_, _, _, F>(
             engine,
@@ -384,7 +395,7 @@ impl ServerCluster {
             lock_mgr.clone(),
             concurrency_manager.clone(),
             lock_mgr.get_storage_dynamic_configs(),
-            Arc::new(FlowController::empty()),
+            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             pd_sender,
             res_tag_factory.clone(),
             quota_limiter.clone(),
@@ -448,6 +459,8 @@ impl ServerCluster {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()
                 .unwrap(),
         );
@@ -529,11 +542,13 @@ impl ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
+        let max_grpc_thread_count = cfg.server.grpc_concurrency;
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
+        let max_unified_read_pool_thread_count = cfg.readpool.unified.max_thread_count;
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
         let split_check_runner =
@@ -541,7 +556,12 @@ impl ServerCluster {
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
         let split_config_manager =
             SplitConfigManager::new(Arc::new(VersionTrack::new(cfg.tikv.split)));
-        let auto_split_controller = AutoSplitController::new(split_config_manager);
+        let auto_split_controller = AutoSplitController::new(
+            split_config_manager,
+            max_grpc_thread_count,
+            max_unified_read_pool_thread_count,
+            None,
+        );
         node.start(
             engines,
             simulate_trans.clone(),

@@ -6,12 +6,15 @@ use engine_traits::{
     RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, Result, SyncMutable, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+};
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
 
-use crate::{util, RocksEngine, RocksWriteBatch};
+use crate::{util, RocksEngine, RocksWriteBatchVec};
 
 impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -117,6 +120,34 @@ impl RaftEngineReadOnly for RocksEngine {
         )?;
         Ok(())
     }
+
+    fn is_empty(&self) -> Result<bool> {
+        let mut is_empty = true;
+        self.scan_cf(CF_DEFAULT, b"", b"", false, |_, _| {
+            is_empty = false;
+            Ok(false)
+        })?;
+
+        Ok(is_empty)
+    }
+
+    fn get_store_ident(&self) -> Result<Option<StoreIdent>> {
+        self.get_msg_cf(CF_DEFAULT, keys::STORE_IDENT_KEY)
+    }
+
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
+        self.get_msg_cf(CF_DEFAULT, keys::PREPARE_BOOTSTRAP_KEY)
+    }
+
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+        let key = keys::region_state_key(raft_group_id);
+        self.get_msg_cf(CF_DEFAULT, &key)
+    }
+
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+        let key = keys::apply_state_key(raft_group_id);
+        self.get_msg_cf(CF_DEFAULT, &key)
+    }
 }
 
 impl RaftEngineDebug for RocksEngine {
@@ -145,7 +176,7 @@ impl RocksEngine {
         raft_group_id: u64,
         mut from: u64,
         to: u64,
-        raft_wb: &mut RocksWriteBatch,
+        raft_wb: &mut RocksWriteBatchVec,
     ) -> Result<usize> {
         if from == 0 {
             let start_key = keys::raft_log_key(raft_group_id, 0);
@@ -176,10 +207,10 @@ impl RocksEngine {
 // for all KvEngines, but is currently implemented separately for
 // every engine.
 impl RaftEngine for RocksEngine {
-    type LogBatch = RocksWriteBatch;
+    type LogBatch = RocksWriteBatchVec;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
-        RocksWriteBatch::with_capacity(self, capacity)
+        RocksWriteBatchVec::with_unit_capacity(self, capacity)
     }
 
     fn sync(&self) -> Result<()> {
@@ -303,9 +334,41 @@ impl RaftEngine for RocksEngine {
 
         Ok(used_size)
     }
+
+    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
+        self.put_msg(keys::STORE_IDENT_KEY, ident)
+    }
+
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<Error>,
+    {
+        let start_key = keys::REGION_META_MIN_KEY;
+        let end_key = keys::REGION_META_MAX_KEY;
+        let mut err = None;
+        self.scan(start_key, end_key, false, |key, _| {
+            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
+
+            match f(region_id) {
+                Ok(()) => Ok(true),
+                Err(e) => {
+                    err = Some(e);
+                    Ok(false)
+                }
+            }
+        })?;
+        match err {
+            None => Ok(()),
+            Some(e) => Err(e),
+        }
+    }
 }
 
-impl RaftLogBatch for RocksWriteBatch {
+impl RaftLogBatch for RocksWriteBatchVec {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
         if let Some(max_size) = entries.iter().map(|e| e.compute_size()).max() {
             let ser_buf = Vec::with_capacity(max_size as usize);
@@ -336,9 +399,29 @@ impl RaftLogBatch for RocksWriteBatch {
     fn merge(&mut self, src: Self) -> Result<()> {
         WriteBatch::merge(self, src)
     }
+
+    fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()> {
+        self.put_msg(keys::STORE_IDENT_KEY, ident)
+    }
+
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
+        self.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region)
+    }
+
+    fn remove_prepare_bootstrap_region(&mut self) -> Result<()> {
+        self.delete(keys::PREPARE_BOOTSTRAP_KEY)
+    }
+
+    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+        self.put_msg(&keys::region_state_key(raft_group_id), state)
+    }
+
+    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+        self.put_msg(&keys::apply_state_key(raft_group_id), state)
+    }
 }
 
-impl RocksWriteBatch {
+impl RocksWriteBatchVec {
     fn append_impl(
         &mut self,
         raft_group_id: u64,

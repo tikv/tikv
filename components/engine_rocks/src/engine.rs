@@ -4,6 +4,7 @@ use std::{any::Any, fs, path::Path, sync::Arc};
 
 use engine_traits::{
     Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
+    TabletAccessor,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
@@ -25,16 +26,21 @@ use crate::{
 pub struct RocksEngine {
     db: Arc<DB>,
     shared_block_cache: bool,
+    support_multi_batch_write: bool,
 }
 
 impl RocksEngine {
     pub fn from_db(db: Arc<DB>) -> Self {
         RocksEngine {
-            db,
+            db: db.clone(),
             shared_block_cache: false,
+            support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
         }
     }
 
+    // Notice: After obtaining RocksEngine through this method, please make sure
+    // it has been initialized with db, otherwise do not call its member methods,
+    // as it'll contain garbage members.
     pub fn from_ref(db: &Arc<DB>) -> &Self {
         unsafe { &*(db as *const Arc<DB> as *const RocksEngine) }
     }
@@ -61,6 +67,10 @@ impl RocksEngine {
 
     pub fn set_shared_block_cache(&mut self, enable: bool) {
         self.shared_block_cache = enable;
+    }
+
+    pub fn support_multi_batch_write(&self) -> bool {
+        self.support_multi_batch_write
     }
 }
 
@@ -107,6 +117,16 @@ impl KvEngine for RocksEngine {
     fn bad_downcast<T: 'static>(&self) -> &T {
         let e: &dyn Any = &self.db;
         e.downcast_ref().expect("bad engine downcast")
+    }
+}
+
+impl TabletAccessor<RocksEngine> for RocksEngine {
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
+        f(0, 0, self);
+    }
+
+    fn is_single_engine(&self) -> bool {
+        true
     }
 }
 
