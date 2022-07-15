@@ -90,6 +90,23 @@ fn test_remove_and_add_peer() {
     cluster.stop();
 }
 
+#[test]
+fn test_increasing_put_and_split() {
+    test_util::init_log_for_test();
+    let node_id = alloc_node_id();
+    let mut cluster = ServerCluster::new(vec![node_id], |_, _| {});
+    cluster.put_kv(0..50, i_to_key, i_to_val);
+    for i in 1..5 {
+        let split_idx = i * 10;
+        let split_key = i_to_key(split_idx);
+        cluster.split(&split_key);
+        for _ in 0..10 {
+            cluster.put_kv(split_idx..split_idx+5, i_to_key, i_to_val);
+        }
+    }
+    cluster.stop()
+}
+
 fn sleep() {
     std::thread::sleep(Duration::from_millis(100));
 }
