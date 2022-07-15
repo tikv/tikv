@@ -454,6 +454,7 @@ impl BackupRange {
         let mut cursor = CursorBuilder::new(snapshot, self.cf)
             .range(None, self.end_key.clone())
             .scan_mode(ScanMode::Forward)
+            .fill_cache(false)
             .build()?;
         if let Some(begin) = self.start_key.clone() {
             if !cursor.seek(&begin, cfstatistics)? {
