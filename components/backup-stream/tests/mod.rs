@@ -706,7 +706,6 @@ mod test {
 
     #[test]
     fn fatal_error() {
-        test_util::init_log_for_test();
         let mut suite = super::SuiteBuilder::new_named("fatal_error")
             .nodes(3)
             .build();
