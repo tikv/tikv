@@ -1866,7 +1866,7 @@ mod tests {
 
     #[test]
     fn test_selector() {
-        type DummyTask<'a> = &'a [(&'a str, &'a [(&'a [u8], &'a [u8])])];
+        type DummyTask<'a> = (&'a str, &'a [(&'a [u8], &'a [u8])]);
 
         #[derive(Debug, Clone, Copy)]
         struct Case<'a /* 'static */> {
