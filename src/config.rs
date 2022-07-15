@@ -1171,6 +1171,8 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
+        let enable_multi_batch_write = !self.enable_pipelined_write && !self.enable_unordered_write;
+        opts.enable_multi_batch_write(enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.set_info_log(RocksdbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());

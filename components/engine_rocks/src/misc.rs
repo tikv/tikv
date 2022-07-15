@@ -567,6 +567,7 @@ mod tests {
 
         let mut opts = DBOptions::new();
         opts.create_if_missing(true);
+        opts.enable_multi_batch_write(true);
 
         let mut cf_opts = ColumnFamilyOptions::new();
         // Prefix extractor(trim the timestamp at tail) for write cf.

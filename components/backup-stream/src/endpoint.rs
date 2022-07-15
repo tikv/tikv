@@ -327,7 +327,7 @@ where
                             tokio::time::sleep(Duration::from_secs(2)).await;
                             break;
                         }
-                        _ => panic!("BUG: invalid event {:?}", event),
+                        _ => warn!("BUG: invalid event"; "event" => ?event),
                     }
                 } else {
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -375,7 +375,7 @@ where
                             tokio::time::sleep(Duration::from_secs(2)).await;
                             break;
                         }
-                        _ => panic!("BUG: invalid event {:?}", event),
+                        _ => warn!("BUG: invalid event"; "event" => ?event),
                     }
                 } else {
                     tokio::time::sleep(Duration::from_secs(1)).await;
