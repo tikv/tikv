@@ -7,7 +7,7 @@
 
 use std::{
     cmp,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     error::Error,
     fs, i32,
     io::{Error as IoError, ErrorKind, Write},
@@ -25,9 +25,9 @@ use engine_rocks::{
     get_env,
     properties::MvccPropertiesCollectorFactory,
     raw::{
-        BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-        DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
-        TitanDBOptions,
+        BlockBasedOptions, Cache, ChecksumType, ColumnFamilyOptions, CompactionPriority,
+        DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env,
+        LRUCacheOptions, PrepopulateBlockCache, TitanDBOptions,
     },
     raw_util::CFOptions,
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
@@ -53,6 +53,7 @@ use raftstore::{
 };
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
+use serde_json::{to_value, Map, Value};
 use tikv_util::{
     config::{
         self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
@@ -129,8 +130,11 @@ pub struct TitanCfConfig {
     pub max_gc_batch_size: ReadableSize,
     #[online_config(skip)]
     pub discardable_ratio: f64,
+    // deprecated.
     #[online_config(skip)]
-    pub sample_ratio: f64,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub sample_ratio: Option<f64>,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
     pub blob_run_mode: BlobRunMode,
@@ -156,7 +160,7 @@ impl Default for TitanCfConfig {
             min_gc_batch_size: ReadableSize::mb(16),
             max_gc_batch_size: ReadableSize::mb(64),
             discardable_ratio: 0.5,
-            sample_ratio: 0.1,
+            sample_ratio: None,
             merge_small_file_threshold: ReadableSize::mb(8),
             blob_run_mode: BlobRunMode::Normal,
             level_merge: false,
@@ -176,7 +180,6 @@ impl TitanCfConfig {
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0 as u64);
         opts.set_discardable_ratio(self.discardable_ratio);
-        opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
         opts.set_blob_run_mode(self.blob_run_mode.into());
         opts.set_level_merge(self.level_merge);
@@ -196,6 +199,9 @@ impl TitanCfConfig {
                 confuguration."
                     .into(),
             );
+        }
+        if self.sample_ratio.is_some() {
+            warn!("sample-ratio is deprecated. Ignoring the value.");
         }
         Ok(())
     }
@@ -335,6 +341,14 @@ macro_rules! cf_config {
             pub bottommost_zstd_compression_dict_size: i32,
             #[online_config(skip)]
             pub bottommost_zstd_compression_sample_size: i32,
+            #[serde(with = "rocks_config::prepopulate_block_cache_serde")]
+            #[online_config(skip)]
+            pub prepopulate_block_cache: PrepopulateBlockCache,
+            #[online_config(skip)]
+            pub format_version: u32,
+            #[serde(with = "rocks_config::checksum_serde")]
+            #[online_config(skip)]
+            pub checksum: ChecksumType,
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -349,6 +363,10 @@ macro_rules! cf_config {
                         MAX_BLOCK_SIZE
                     )
                     .into());
+                }
+                if self.format_version > 5 {
+                    // TODO: allow version 5 if we have another LTS capable of reading it?
+                    return Err("format-version larger than 5 is unsupported".into());
                 }
                 self.titan.validate()?;
                 Ok(())
@@ -478,9 +496,6 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "titan_discardable_ratio"])
             .set($cf.titan.discardable_ratio);
         $metrics
-            .with_label_values(&[$tag, "titan_sample_ratio"])
-            .set($cf.titan.sample_ratio);
-        $metrics
             .with_label_values(&[$tag, "titan_merge_small_file_threshold"])
             .set($cf.titan.merge_small_file_threshold.0 as f64);
     }};
@@ -503,12 +518,15 @@ macro_rules! build_cf_opt {
             .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
         if $opt.use_bloom_filter {
             block_base_opts.set_bloom_filter(
-                $opt.bloom_filter_bits_per_key,
+                $opt.bloom_filter_bits_per_key as f64,
                 $opt.block_based_bloom_filter,
             );
             block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
         }
         block_base_opts.set_read_amp_bytes_per_bit($opt.read_amp_bytes_per_bit);
+        block_base_opts.set_prepopulate_block_cache($opt.prepopulate_block_cache);
+        block_base_opts.set_format_version($opt.format_version);
+        block_base_opts.set_checksum($opt.checksum);
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_block_based_table_factory(&block_base_opts);
         cf_opts.set_num_levels($opt.num_levels);
@@ -524,6 +542,7 @@ macro_rules! build_cf_opt {
             0,     /* strategy */
             $opt.bottommost_zstd_compression_dict_size,
             $opt.bottommost_zstd_compression_sample_size,
+            1, /* parallel_threads */
         );
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
@@ -629,10 +648,13 @@ impl Default for DefaultCfConfig {
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan: TitanCfConfig::default(),
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan: TitanCfConfig::default(),
         }
     }
 }
@@ -738,10 +760,13 @@ impl Default for WriteCfConfig {
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan,
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan,
         }
     }
 }
@@ -833,10 +858,13 @@ impl Default for LockCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan,
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan,
         }
     }
 }
@@ -906,10 +934,13 @@ impl Default for RaftCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan,
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan,
         }
     }
 }
@@ -1029,6 +1060,7 @@ pub struct DbConfig {
     // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of multi-batch-write
     // in RocksDB has been removed.
     #[online_config(skip)]
+    #[serde(skip_serializing)]
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
     pub enable_unordered_write: bool,
@@ -1141,8 +1173,8 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
-        let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
-        opts.enable_pipelined_commit(enable_pipelined_commit);
+        let enable_multi_batch_write = !self.enable_pipelined_write && !self.enable_unordered_write;
+        opts.enable_multi_batch_write(enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.set_info_log(RocksdbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
@@ -1269,10 +1301,13 @@ impl Default for RaftDefaultCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
-            titan: TitanCfConfig::default(),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan: TitanCfConfig::default(),
         }
     }
 }
@@ -3398,6 +3433,15 @@ impl TiKvConfig {
             }
         }
 
+        if last_cfg.raftdb.defaultcf.format_version > 5
+            || last_cfg.rocksdb.defaultcf.format_version > 5
+            || last_cfg.rocksdb.writecf.format_version > 5
+            || last_cfg.rocksdb.lockcf.format_version > 5
+            || last_cfg.rocksdb.raftcf.format_version > 5
+        {
+            return Err("format_version larger than 5 is unsupported".into());
+        }
+
         Ok(())
     }
 
@@ -3563,6 +3607,71 @@ pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
     }
     fs::rename(&tmp_cfg_path, &path)?;
     Ok(())
+}
+
+// convert tikv config to a flatten array.
+pub fn to_flatten_config_info(cfg: &TiKvConfig) -> Vec<Value> {
+    fn to_cfg_value(default_value: &Value, cfg_value: Option<&Value>, key: &str) -> Value {
+        let mut res = Map::with_capacity(2);
+        res.insert("Name".into(), Value::String(key.into()));
+        res.insert("DefaultValue".into(), default_value.clone());
+        if let Some(cfg_val) = cfg_value {
+            if default_value != cfg_val {
+                res.insert("ValueInFile".into(), cfg_val.clone());
+            }
+        }
+
+        Value::Object(res)
+    }
+
+    // configs that should not be flatten because the config type is HashMap instead of submodule.
+    lazy_static! {
+        static ref NO_FLATTEN_CFGS: HashSet<&'static str> = {
+            let mut set = HashSet::new();
+            set.insert("server.labels");
+            set
+        };
+    }
+
+    fn flatten_value(
+        default_obj: &Map<String, Value>,
+        value_obj: &Map<String, Value>,
+        key_buf: &mut String,
+        res: &mut Vec<Value>,
+    ) {
+        for (k, v) in default_obj.iter() {
+            let cfg_val = value_obj.get(k);
+            let prev_len = key_buf.len();
+            if !key_buf.is_empty() {
+                key_buf.push('.');
+            }
+            key_buf.push_str(k);
+            if v.is_object() && !NO_FLATTEN_CFGS.contains(key_buf.as_str()) {
+                flatten_value(
+                    v.as_object().unwrap(),
+                    cfg_val.unwrap().as_object().unwrap(),
+                    key_buf,
+                    res,
+                );
+            } else {
+                res.push(to_cfg_value(v, cfg_val, key_buf));
+            }
+            key_buf.truncate(prev_len);
+        }
+    }
+
+    let cfg_value = to_value(cfg).unwrap();
+    let default_value = to_value(TiKvConfig::default()).unwrap();
+
+    let mut key_buf = String::new();
+    let mut res = Vec::new();
+    flatten_value(
+        default_value.as_object().unwrap(),
+        cfg_value.as_object().unwrap(),
+        &mut key_buf,
+        &mut res,
+    );
+    res
 }
 
 lazy_static! {
@@ -4070,6 +4179,33 @@ mod tests {
         });
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
+    }
+
+    #[test]
+    fn test_flatten_cfg() {
+        let mut cfg = TiKvConfig::default();
+        cfg.server.labels.insert("zone".into(), "test".into());
+        cfg.raft_store.raft_log_gc_count_limit = Some(123);
+
+        let flattened = to_flatten_config_info(&cfg);
+
+        let mut expected = HashMap::new();
+        let mut labels = Map::new();
+        labels.insert("zone".into(), Value::String("test".into()));
+        expected.insert("server.labels", Value::Object(labels));
+        expected.insert(
+            "raftstore.raft-log-gc-count-limit",
+            Value::Number(123.into()),
+        );
+
+        for v in &flattened {
+            let obj = v.as_object().unwrap();
+            if let Some(v) = expected.get(&obj["Name"].as_str().unwrap()) {
+                assert_eq!(v, &obj["ValueInFile"]);
+            } else {
+                assert!(!obj.contains_key("ValueInFile"));
+            }
+        }
     }
 
     #[test]
