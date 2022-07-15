@@ -3703,6 +3703,10 @@ where
         }
     }
 
+    fn should_stop(&self, _: bool) -> bool {
+        self.apply_ctx.kv_wb.should_write_to_engine()
+    }
+
     fn handle_control(&mut self, control: &mut ControlFsm) -> Option<usize> {
         loop {
             match control.receiver.try_recv() {

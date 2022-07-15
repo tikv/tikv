@@ -819,6 +819,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         }
     }
 
+    fn should_stop(&self, excceed_count: bool) -> bool {
+        return excceed_count
+    }
+
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
         let mut expected_msg_count = None;
         while self.store_msg_buf.len() < self.messages_per_tick {

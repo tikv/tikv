@@ -304,6 +304,7 @@ pub trait PollHandler<N, C>: Send + 'static {
     where
         for<'a> F: FnOnce(&'a Config);
 
+    fn should_stop(&self, excceed_count: bool) -> bool;
     /// This function is called when handling readiness for control FSM.
     ///
     /// If returned value is Some, then it represents a length of channel. This
@@ -450,10 +451,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
             }
             let mut fsm_cnt = batch.normals.len();
-            while batch.normals.len() < max_batch_size {
+            while !self.handler.should_stop(batch.normals.len() >= max_batch_size) {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
-                }
+                } 
                 // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
                 // may change state of the handler, we shall deal with it immediately after
                 // calling `begin` of `Handler`.
