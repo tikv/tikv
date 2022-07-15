@@ -121,6 +121,7 @@ pub mod kv {
         cfs: Vec<String>,
         opts: Option<Vec<CFOptions>>,
         registry: Arc<Mutex<HashMap<(u64, u64), KvTestEngine>>>,
+        is_multi_rocksdb: bool,
     }
 
     impl TestTabletFactory {
@@ -129,6 +130,7 @@ pub mod kv {
             db_opt: Option<DBOptions>,
             cfs: &[&str],
             opts: Option<Vec<CFOptions>>,
+            is_multi_rocksdb: bool,
         ) -> Self {
             Self {
                 root_path: root_path.to_string(),
@@ -136,12 +138,17 @@ pub mod kv {
                 cfs: cfs.iter().map(|s| s.to_string()).collect(),
                 opts,
                 registry: Arc::new(Mutex::new(HashMap::default())),
+                is_multi_rocksdb,
             }
         }
     }
 
     impl TabletFactory<KvTestEngine> for TestTabletFactory {
-        fn create_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
+        fn create_tablet(&self, mut id: u64, mut suffix: u64) -> Result<KvTestEngine> {
+            if !self.is_multi_rocksdb {
+                id = 0;
+                suffix = 0;
+            }
             let mut reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Err(box_err!(
@@ -164,7 +171,11 @@ pub mod kv {
             Ok(kv_engine)
         }
 
-        fn open_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
+        fn open_tablet(&self, mut id: u64, mut suffix: u64) -> Result<KvTestEngine> {
+            if !self.is_multi_rocksdb {
+                id = 0;
+                suffix = 0;
+            }
             let mut reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Ok(db.clone());
@@ -176,7 +187,11 @@ pub mod kv {
             Ok(db)
         }
 
-        fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<KvTestEngine> {
+        fn open_tablet_cache(&self, mut id: u64, mut suffix: u64) -> Option<KvTestEngine> {
+            if !self.is_multi_rocksdb {
+                id = 0;
+                suffix = 0;
+            }
             let reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Some(db.clone());
@@ -184,7 +199,10 @@ pub mod kv {
             None
         }
 
-        fn open_tablet_cache_any(&self, id: u64) -> Option<KvTestEngine> {
+        fn open_tablet_cache_any(&self, mut id: u64) -> Option<KvTestEngine> {
+            if !self.is_multi_rocksdb {
+                id = 0;
+            }
             let reg = self.registry.lock().unwrap();
             if let Some(k) = reg.keys().find(|k| k.0 == id) {
                 return Some(reg.get(k).unwrap().clone());
@@ -224,26 +242,42 @@ pub mod kv {
         }
 
         #[inline]
-        fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+        fn tablet_path(&self, mut id: u64, mut suffix: u64) -> PathBuf {
+            if !self.is_multi_rocksdb {
+                id = 0;
+                suffix = 0;
+            }
             Path::new(&self.root_path).join(format!("tablets/{}_{}", id, suffix))
         }
 
         #[inline]
-        fn mark_tombstone(&self, region_id: u64, suffix: u64) {
+        fn mark_tombstone(&self, mut region_id: u64, mut suffix: u64) {
+            if !self.is_multi_rocksdb {
+                region_id = 0;
+                suffix = 0;
+            }
             let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
             std::fs::File::create(&path).unwrap();
             self.registry.lock().unwrap().remove(&(region_id, suffix));
         }
 
         #[inline]
-        fn is_tombstoned(&self, region_id: u64, suffix: u64) -> bool {
+        fn is_tombstoned(&self, mut region_id: u64, mut suffix: u64) -> bool {
+            if !self.is_multi_rocksdb {
+                region_id = 0;
+                suffix = 0;
+            }
             self.tablet_path(region_id, suffix)
                 .join(TOMBSTONE_MARK)
                 .exists()
         }
 
         #[inline]
-        fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
+        fn destroy_tablet(&self, mut id: u64, mut suffix: u64) -> engine_traits::Result<()> {
+            if !self.is_multi_rocksdb {
+                id = 0;
+                suffix = 0;
+            }
             let path = self.tablet_path(id, suffix);
             self.registry.lock().unwrap().remove(&(id, suffix));
             let _ = std::fs::remove_dir_all(path);
@@ -252,6 +286,9 @@ pub mod kv {
 
         #[inline]
         fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<KvTestEngine> {
+            if !self.is_multi_rocksdb {
+                unimplemented!();
+            }
             {
                 let reg = self.registry.lock().unwrap();
                 if let Some(db) = reg.get(&(id, suffix)) {
@@ -273,7 +310,11 @@ pub mod kv {
         }
 
         fn get_factory_version(&self) -> engine_traits::TabletFactoryVersion {
-            engine_traits::TabletFactoryVersion::Test
+            if self.is_multi_rocksdb {
+                engine_traits::TabletFactoryVersion::Multi
+            } else {
+                engine_traits::TabletFactoryVersion::Single
+            }
         }
     }
 

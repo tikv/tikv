@@ -282,7 +282,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     }
 
     fn get_factory_version(&self) -> engine_traits::TabletFactoryVersion {
-        engine_traits::TabletFactoryVersion::V1
+        engine_traits::TabletFactoryVersion::Single
     }
 }
 

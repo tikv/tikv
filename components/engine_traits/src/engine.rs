@@ -153,9 +153,10 @@ impl Drop for TabletErrorCollector {
 #[derive(PartialEq, Eq)]
 pub enum TabletFactoryVersion {
     Dummy,
-    Test,
-    V1,
-    V2,
+    // Single rocksdb version
+    Single,
+    // Multi rocksdb version
+    Multi,
 }
 
 /// A factory trait to create new engine.
@@ -184,6 +185,8 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     }
 
     /// Open a tablet by id and any suffix from cache
+    /// todo(SpadeA): it may need to consider fetching the last one.
+    ///               Will restart load all the tablets into region?
     fn open_tablet_cache_any(&self, id: u64) -> Option<EK> {
         self.open_tablet_cache(id, 0)
     }

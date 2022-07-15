@@ -3,12 +3,13 @@
 // #[PerformanceCriticalPath]
 use std::{
     cell::Cell,
+    collections::HashMap,
     fmt::{self, Display, Formatter},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::Duration, collections::HashMap,
+    time::Duration,
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
@@ -433,7 +434,7 @@ where
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     delegates: LruCache<u64, Arc<ReadDelegate>>,
     snap_cache: HashMap<u64, Arc<E::Snapshot>>,
-    cache_read_id: ThreadReadId,
+    cache_read_id: HashMap<u64, ThreadReadId>,
     // A channel to raftstore.
     router: C,
 }
@@ -452,28 +453,25 @@ where
         create_time: Option<ThreadReadId>,
         mut region_id: u64,
     ) -> Arc<E::Snapshot> {
-        println!("Acquring snapshot ---- ");
+        if self.factory.get_factory_version() == TabletFactoryVersion::Single {
+            region_id = 0;
+        }
         if let Some(tablet) = self.factory.open_tablet_cache_any(region_id) {
             self.metrics.local_executed_requests += 1;
             if let Some(ts) = create_time {
-                if self.factory.get_factory_version() == TabletFactoryVersion::V1 {
-                    region_id = 0;
-                }
-                if ts == self.cache_read_id {
-                    if let Some(snap) = self.snap_cache.get(&region_id) {
-                        println!("Cache hit");
-                        self.metrics.local_executed_snapshot_cache_hit += 1;
-                        return snap.clone();
+                if let Some(cache_read_id) = self.cache_read_id.get(&region_id) {
+                    if ts == *cache_read_id {
+                        if let Some(snap) = self.snap_cache.get(&region_id) {
+                            self.metrics.local_executed_snapshot_cache_hit += 1;
+                            return snap.clone();
+                        }
                     }
                 }
-
-                println!("Cache miss");
                 let snap = Arc::new(tablet.snapshot());
-                self.cache_read_id = ts;
+                self.cache_read_id.insert(region_id, ts);
                 self.snap_cache.insert(region_id, snap.clone());
                 return snap;
             }
-            println!("Cache miss");
             Arc::new(tablet.snapshot())
         } else {
             panic!("No relevant tablet")
@@ -491,13 +489,12 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         router: C,
     ) -> Self {
-        let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
             factory,
             router,
             snap_cache: HashMap::new(),
-            cache_read_id,
+            cache_read_id: HashMap::new(),
             store_id: Cell::new(None),
             metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
@@ -941,7 +938,7 @@ mod tests {
     use std::{sync::mpsc::*, thread};
 
     use crossbeam::channel::TrySendError;
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
+    use engine_test::kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory};
     use engine_traits::ALL_CFS;
     use kvproto::raft_cmdpb::*;
     use tempfile::{Builder, TempDir};
@@ -997,16 +994,27 @@ mod tests {
         path: &str,
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
+        is_multi_rocksdb: bool,
     ) -> (
         TempDir,
         LocalReader<MockRouter, KvTestEngine>,
         Receiver<RaftCommand<KvTestSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
-            .unwrap();
+        let factory = TestTabletFactory::new(
+            path.path().to_str().unwrap(),
+            None,
+            ALL_CFS,
+            None,
+            is_multi_rocksdb,
+        );
+        let _ = factory.create_shared_db();
         let (ch, rx, _) = MockRouter::new();
-        let mut reader = LocalReader::new(db, store_meta, ch);
+        let mut reader = LocalReader::new(
+            engine_traits::TabletFactory::clone(&factory),
+            store_meta,
+            ch,
+        );
         reader.store_id = Cell::new(Some(store_id));
         (path, reader, rx)
     }
@@ -1056,7 +1064,8 @@ mod tests {
     fn test_read() {
         let store_id = 2;
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-        let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
+        let (_tmp, mut reader, rx) =
+            new_reader("test-local-reader", store_id, store_meta.clone(), false);
 
         // region: 1,
         // peers: 2, 3, 4,
@@ -1341,7 +1350,8 @@ mod tests {
     fn test_read_delegate_cache_update() {
         let store_id = 2;
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-        let (_tmp, mut reader, _) = new_reader("test-local-reader", store_id, store_meta.clone());
+        let (_tmp, mut reader, _) =
+            new_reader("test-local-reader", store_id, store_meta.clone(), false);
         let mut region = metapb::Region::default();
         region.set_id(1);
         {
@@ -1405,5 +1415,87 @@ mod tests {
         }
         let d = reader.get_delegate(1).unwrap();
         assert_eq!(d.leader_lease.clone().unwrap().term(), 3);
+    }
+
+    #[test]
+    fn test_snap_cache_hit_in_single_rocksdb() {
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, _) = new_reader("test-local-reader", 1, store_meta.clone(), false);
+        let read_id = Some(ThreadReadId::new());
+        for i in 0..10 {
+            // Different region id should reuse the cache
+            let _ = reader.get_snapshot(read_id.clone(), i);
+        }
+        // We should hit cache 9 times
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 9);
+
+        let read_id = Some(ThreadReadId::new());
+        let _ = reader.get_snapshot(read_id.clone(), 1);
+        // This time, we will miss the cache
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 9);
+        let _ = reader.get_snapshot(read_id.clone(), 1);
+        // We can hit it again.
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 10);
+
+        reader.release_snapshot_cache();
+        let _ = reader.get_snapshot(read_id.clone(), 1);
+        // After release, we will mss the cache even with the prevsiou read_id.
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 10);
+        let _ = reader.get_snapshot(read_id.clone(), 1);
+        // We can hit it again.
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 11);
+    }
+
+    #[test]
+    fn test_snap_cache_hit_in_multi_rocksdb() {
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, _) = new_reader("test-local-reader", 1, store_meta.clone(), true);
+        // Create some tablets (rocksdb)
+        for i in 1..10 {
+            let _ = reader.factory.create_tablet(i, 0);
+        }
+
+        let read_id = Some(ThreadReadId::new());
+        for i in 0..10 {
+            let _ = reader.get_snapshot(read_id.clone(), i);
+        }
+
+        // We should hit nothing as above acquisitions are all for different regions.
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 0);
+        // Now, we fetch them again
+        for i in 0..10 {
+            let _ = reader.get_snapshot(read_id.clone(), i);
+        }
+        // All of them should hit the cache as they all have been fetched before and read_id has not been changed
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 10);
+        for i in (0..10).rev() {
+            // Acquisition order should not affect the cache hit condition
+            let _ = reader.get_snapshot(read_id.clone(), i);
+        }
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 20);
+
+        // New read_id will make them miss the cache
+        let read_id = Some(ThreadReadId::new());
+        for i in 0..10 {
+            let _ = reader.get_snapshot(read_id.clone(), i);
+        }
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 20);
+        // Now, after cache update, we should hit again.
+        for i in 0..10 {
+            let _ = reader.get_snapshot(read_id.clone(), i);
+        }
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 30);
+
+        // Release the cache will make them miss the cache
+        reader.release_snapshot_cache();
+        for i in 0..10 {
+            let _ = reader.get_snapshot(read_id.clone(), i);
+        }
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 30);
+        // Now, after cache update, we should hit again.
+        for i in 0..10 {
+            let _ = reader.get_snapshot(read_id.clone(), i);
+        }
+        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 40);
     }
 }

@@ -148,7 +148,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     }
 
     fn get_factory_version(&self) -> engine_traits::TabletFactoryVersion {
-        engine_traits::TabletFactoryVersion::V2
+        engine_traits::TabletFactoryVersion::Multi
     }
 
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
