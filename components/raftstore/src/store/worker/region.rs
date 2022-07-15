@@ -35,7 +35,10 @@ use yatp::{
 
 use super::metrics::*;
 use crate::{
-    coprocessor::CoprocessorHost,
+    coprocessor::{
+        ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost,
+        ObserverContext,
+    },
     store::{
         self, check_abort,
         peer_storage::{
