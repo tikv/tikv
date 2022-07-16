@@ -158,10 +158,6 @@ pub struct S3Storage {
 }
 
 impl S3Storage {
-    pub fn name() -> &'static str {
-        STORAGE_NAME
-    }
-
     pub fn from_input(input: InputConfig) -> io::Result<Self> {
         Self::new(Config::from_input(input)?)
     }
@@ -519,7 +515,7 @@ impl<'client> S3Uploader<'client> {
     }
 }
 
-const STORAGE_NAME: &str = "s3";
+pub const STORAGE_NAME: &str = "s3";
 
 #[async_trait]
 impl BlobStorage for S3Storage {

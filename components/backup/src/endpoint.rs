@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_channel::SendError;
-use aws::S3Storage;
+use aws;
 use causal_ts::CausalTsProvider;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
@@ -1102,47 +1102,47 @@ pub fn backup_file_name(
     let since_the_epoch = start
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards");
-    match key {
-        Some(k) => {
-            // See https://github.com/pingcap/tidb/issues/30087
-            // To avoid 503 Slow Down error, if the backup storage is s3,
-            // organize the backup files by store_id (use slash (/) as delimiter).
-            if storage_name == S3Storage::name() {
-                format!(
-                    "{}/{}_{}_{}_{}",
-                    store_id,
-                    region.get_id(),
-                    region.get_region_epoch().get_version(),
-                    k,
-                    since_the_epoch.as_millis()
-                )
-            } else {
-                format!(
-                    "{}_{}_{}_{}_{}",
-                    store_id,
-                    region.get_id(),
-                    region.get_region_epoch().get_version(),
-                    k,
-                    since_the_epoch.as_millis()
-                )
-            }
+
+    match (key, storage_name) {
+        // See https://github.com/pingcap/tidb/issues/30087
+        // To avoid 503 Slow Down error, if the backup storage is s3,
+        // organize the backup files by store_id (use slash (/) as delimiter).
+        (Some(k), aws::STORAGE_NAME | external_storage::local::STORAGE_NAME) => {
+            format!(
+                "{}/{}_{}_{}_{}",
+                store_id,
+                region.get_id(),
+                region.get_region_epoch().get_version(),
+                k,
+                since_the_epoch.as_millis()
+            )
         }
-        None => {
-            if storage_name == S3Storage::name() {
-                format!(
-                    "{}/{}_{}",
-                    store_id,
-                    region.get_id(),
-                    region.get_region_epoch().get_version()
-                )
-            } else {
-                format!(
-                    "{}_{}_{}",
-                    store_id,
-                    region.get_id(),
-                    region.get_region_epoch().get_version()
-                )
-            }
+        (Some(k), _) => {
+            format!(
+                "{}_{}_{}_{}_{}",
+                store_id,
+                region.get_id(),
+                region.get_region_epoch().get_version(),
+                k,
+                since_the_epoch.as_millis()
+            )
+        }
+
+        (None, aws::STORAGE_NAME | external_storage::local::STORAGE_NAME) => {
+            format!(
+                "{}/{}_{}",
+                store_id,
+                region.get_id(),
+                region.get_region_epoch().get_version()
+            )
+        }
+        (None, _) => {
+            format!(
+                "{}_{}_{}",
+                store_id,
+                region.get_id(),
+                region.get_region_epoch().get_version()
+            )
         }
     }
 }
@@ -2013,10 +2013,10 @@ pub mod tests {
     fn test_backup_file_name() {
         let region = metapb::Region::default();
         let store_id = 1;
-        let test_cases = vec!["s3", "gcs", "azure", "local", "hdfs"];
+        let test_cases = vec!["s3", "local", "gcs", "azure", "hdfs"];
         let test_target = vec![
             "1/0_0_000",
-            "1_0_0_000",
+            "1/0_0_000",
             "1_0_0_000",
             "1_0_0_000",
             "1_0_0_000",
@@ -2031,6 +2031,13 @@ pub mod tests {
             prefix_arr.remove(prefix_arr.len() - 1);
 
             assert_eq!(target.to_string(), prefix_arr.join(delimiter));
+        }
+
+        let test_target = vec!["1/0_0", "1/0_0", "1_0_0", "1_0_0", "1_0_0"];
+        for (storage_name, target) in test_cases.iter().zip(test_target.iter()) {
+            let key = None;
+            let filename = backup_file_name(store_id, &region, key, storage_name);
+            assert_eq!(target.to_string(), filename);
         }
     }
 }
