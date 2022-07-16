@@ -204,11 +204,30 @@ mod parser {
         Ok((rest, frac * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
     }
 
+    /// a string can match datetime format only if it starts with a series of digits
+    /// whose length matches the full format of DateTime literal (12, 14)
+    /// or the string start with a date literal
+    fn format_can_match_datetime(input: &str) -> IResult<(), (), ()> {
+        let (rest, digits) = digit1(input)?;
+
+        if digits.len() == 12 || digits.len() == 14 {
+            return Ok(((), ()));
+        }
+
+        let (rest, _) = anysep(rest)?;
+        let (rest, _) = digit1(rest)?;
+        let (rest, _) = anysep(rest)?;
+        let (rest, _) = digit1(rest)?;
+
+        if matches!(rest.chars().next(), Some(c) if c == 'T' || c == ' ') { Ok(((), ())) }
+        else { Err(nom::Err::Error(())) }
+    }
+
     pub fn parse(
         ctx: &mut EvalContext,
         input: &str,
         fsp: u8,
-        fallback_to_daytime: bool,
+        fallback_to_datetime: bool,
         overflow_as_null: bool,
     ) -> Option<Duration> {
         let input = input.trim();
@@ -218,6 +237,10 @@ mod parser {
 
         let (rest, neg) = negative(input).ok()?;
         let (rest, _) = space0::<_, ()>(rest).ok()?;
+        let fallback_to_datetime = format_can_match_datetime(rest).is_ok() && fallback_to_datetime;
+        let chars_len = rest.len();
+        let mut truncated_parse = false;
+
         let duration = day_hhmmss(rest)
             .ok()
             .and_then(|(rest, (day, [hh, mm, ss]))| {
@@ -230,7 +253,10 @@ mod parser {
                 let (rest, frac) = fraction(rest, fsp).ok()?;
 
                 if !rest.is_empty() {
-                    return None;
+                    if chars_len >= 12 {
+                        return None;
+                    }
+                    truncated_parse = true;
                 }
 
                 Some(Duration::new_from_parts(
@@ -238,8 +264,18 @@ mod parser {
                 ))
             });
 
+        // in order to keep compatible with TiDB, when input string can only be partially parsed by hhmmss_compact
+        // and it can match the datetime format, we fallback to parse it using datetime format 
+        if truncated_parse && fallback_to_datetime {
+            return hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration))
+        }
+
         match duration {
-            Some(Ok(duration)) => Some(duration),
+            Some(Ok(duration)) => {
+                match ctx.handle_truncate(truncated_parse) {
+                    _ => Some(duration)
+                }
+            }
             Some(Err(err)) if err.is_overflow() => {
                 if overflow_as_null {
                     return None;
@@ -249,7 +285,7 @@ mod parser {
                     Some(Duration { nanos, fsp })
                 })
             }
-            None if fallback_to_daytime => {
+            None if fallback_to_datetime => {
                 hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration))
             }
             _ => None,
@@ -809,7 +845,7 @@ mod tests {
             ("2011-11-11 00:00:01", 0, Some("00:00:01")),
             ("20111111000001", 0, Some("00:00:01")),
             ("201112110102", 0, Some("11:01:02")),
-            ("2011-11-11", 0, None),
+            ("2011-11-11", 0, Some("00:20:11")),
             ("--23", 0, None),
             ("232 10", 0, None),
             ("-232 10", 0, None),
@@ -819,6 +855,13 @@ mod tests {
             ("00:00:00.777777", 6, Some("00:00:00.777777")),
             ("00:00:00.001", 3, Some("00:00:00.001")),
             // NOTE: The following case is easy to fail.
+            ("1-----", 0, Some("00:00:01")),
+            ("20100000-02-12", 0, None),
+            ("20100-02-12", 0, Some("02:01:00")),
+            ("99999-99-99", 0, None),
+            ("99990000", 0, None),
+            ("0000-00-00", 0, Some("00:00:00")),
+            ("00-00-00", 0, Some("00:00:00")),
             ("- 1 ", 0, Some("-00:00:01")),
             ("1:2:3", 0, Some("01:02:03")),
             ("1 1:2:3", 0, Some("25:02:03")),
@@ -846,13 +889,13 @@ mod tests {
             ("4294967295 0:59:59", 0, None),
             ("4294967295 232:59:59", 0, None),
             ("-4294967295 232:59:59", 0, None),
-            ("1::2:3", 0, None),
-            ("1.23 3", 0, None),
+            ("1::2:3", 0, Some("00:00:01")),
+            ("1.23 3", 0, Some("00:00:01")),
             ("1:62:3", 0, None),
             ("1:02:63", 0, None),
             ("-231342080", 0, None),
+            ("2010-02-12", 0, Some("00:20:10")),
             // test fallback to datetime
-            ("2010-02-12", 0, None),
             ("2010-02-12t12:23:34", 0, None),
             ("2010-02-12T12:23:34", 0, Some("12:23:34")),
             ("2010-02-12 12:23:34", 0, Some("12:23:34")),
@@ -871,6 +914,7 @@ mod tests {
         let cases: Vec<(&str, i8, Option<&'static str>, bool)> = vec![
             ("-790822912", 0, None, true),
             ("-790822912", 0, Some("-838:59:59"), false),
+            ("99990000", 0, Some("838:59:59"), false),
         ];
 
         for (input, fsp, expect, return_null) in cases {
