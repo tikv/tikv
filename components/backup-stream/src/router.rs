@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     result,
     sync::{
-        atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
     },
     time::Duration,
@@ -564,9 +564,28 @@ impl RouterInner {
         }
     }
 
+    pub async fn update_global_checkpoint(
+        &self,
+        task_name: &str,
+        global_checkpoint: u64,
+        store_id: u64,
+    ) -> Result<()> {
+        let t = self.get_task_info(&task_name).await?;
+        t.update_global_checkpoint(global_checkpoint, store_id)
+            .await?;
+        Ok(())
+    }
+
     /// tick aims to flush log/meta to extern storage periodically.
     pub async fn tick(&self) {
         for (name, task_info) in self.tasks.lock().await.iter() {
+            if let Err(e) = self
+                .scheduler
+                .schedule(Task::UpdateGlobalCheckpoint(name.to_string()))
+            {
+                error!("backup stream schedule task failed"; "error" => ?e);
+            }
+
             // if stream task need flush this time, schedule Task::Flush, or update time justly.
             if task_info.should_flush() && task_info.set_flushing_status_cas(false, true).is_ok() {
                 info!(
@@ -745,6 +764,8 @@ pub struct StreamTaskInfo {
     flushing: AtomicBool,
     /// This counts how many times this task has failed to flush.
     flush_fail_count: AtomicUsize,
+    /// global checkpoint ts for this task.
+    global_checkpoint_ts: AtomicU64,
 }
 
 impl Drop for StreamTaskInfo {
@@ -786,6 +807,7 @@ impl StreamTaskInfo {
             task.info.get_storage(),
             BackendConfig::default(),
         )?);
+        let start_ts = task.info.get_start_ts();
         Ok(Self {
             task,
             storage,
@@ -799,6 +821,7 @@ impl StreamTaskInfo {
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
             flush_fail_count: AtomicUsize::new(0),
+            global_checkpoint_ts: AtomicU64::new(start_ts),
         })
     }
 
@@ -1073,6 +1096,45 @@ impl StreamTaskInfo {
         }
 
         result
+    }
+
+    pub async fn safe_global_checkpoint(&self, store_id: u64) -> Result<()> {
+        let filename = format!("v1/global_checkpoint/{}.ts", store_id);
+        let buff = self
+            .global_checkpoint_ts
+            .load(Ordering::SeqCst)
+            .to_le_bytes();
+        self.storage
+            .write(
+                &filename,
+                UnpinReader(Box::new(Cursor::new(buff))),
+                buff.len() as _,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_global_checkpoint(
+        &self,
+        global_checkpoint: u64,
+        store_id: u64,
+    ) -> Result<()> {
+        let last_global_checkpoint = self.global_checkpoint_ts.load(Ordering::SeqCst);
+        if last_global_checkpoint < global_checkpoint {
+            if self
+                .global_checkpoint_ts
+                .compare_exchange(
+                    last_global_checkpoint,
+                    global_checkpoint,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                self.safe_global_checkpoint(store_id).await?;
+            }
+        }
+        Ok(())
     }
 }
 
