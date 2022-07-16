@@ -219,8 +219,11 @@ mod parser {
         let (rest, _) = anysep(rest)?;
         let (rest, _) = digit1(rest)?;
 
-        if matches!(rest.chars().next(), Some(c) if c == 'T' || c == ' ') { Ok(((), ())) }
-        else { Err(nom::Err::Error(())) }
+        if matches!(rest.chars().next(), Some(c) if c == 'T' || c == ' ') {
+            Ok(((), ()))
+        } else {
+            Err(nom::Err::Error(()))
+        }
     }
 
     pub fn parse(
@@ -265,17 +268,15 @@ mod parser {
             });
 
         // in order to keep compatible with TiDB, when input string can only be partially parsed by hhmmss_compact
-        // and it can match the datetime format, we fallback to parse it using datetime format 
+        // and it can match the datetime format, we fallback to parse it using datetime format
         if truncated_parse && fallback_to_datetime {
-            return hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration))
+            return hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration));
         }
 
         match duration {
-            Some(Ok(duration)) => {
-                match ctx.handle_truncate(truncated_parse) {
-                    _ => Some(duration)
-                }
-            }
+            Some(Ok(duration)) => match ctx.handle_truncate(truncated_parse) {
+                _ => Some(duration),
+            },
             Some(Err(err)) if err.is_overflow() => {
                 if overflow_as_null {
                     return None;
