@@ -9,7 +9,6 @@ use std::{
 };
 
 use async_channel::SendError;
-use aws;
 use causal_ts::CausalTsProvider;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
