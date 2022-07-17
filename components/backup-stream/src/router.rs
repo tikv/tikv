@@ -1521,8 +1521,8 @@ mod tests {
         let end_ts = TimeStamp::physical_now();
         let files = router.tasks.lock().await.get("dummy").unwrap().clone();
         let meta = files
-            .move_to_flushing_files()
-            .await
+            .move_to_flushing_files(1)
+            .await?
             .generate_metadata(1)
             .await?;
         assert_eq!(meta.files.len(), 3, "test file len = {}", meta.files.len());
@@ -1537,6 +1537,23 @@ mod tests {
             start_ts,
             end_ts
         );
+
+        // in some case when flush failed to write files to storage.
+        // we may run `generate_metadata` again with same files.
+        let another_meta = files
+            .move_to_flushing_files(1)
+            .await?
+            .generate_metadata(1)
+            .await?;
+
+        assert_eq!(meta.files.len(), another_meta.files.len());
+        for i in 0..meta.files.len() {
+            let file1 = meta.files.get(i).unwrap();
+            let file2 = another_meta.files.get(i).unwrap();
+            // we have to make sure two times sha256 of file must be the same.
+            assert_eq!(file1.sha256, file2.sha256);
+        }
+
         files.flush_log().await?;
         files.flush_meta(meta).await?;
         files.clear_flushing_files().await;
@@ -1781,8 +1798,8 @@ mod tests {
         router
             .get_task_info("cleanup_test")
             .await?
-            .move_to_flushing_files()
-            .await;
+            .move_to_flushing_files(1)
+            .await?;
         write_simple_data(&router).await;
         let mut w = walkdir::WalkDir::new(&tmp).into_iter();
         assert!(w.next().is_some(), "the temp files doesn't created");
