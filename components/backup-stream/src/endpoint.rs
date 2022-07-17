@@ -822,7 +822,6 @@ where
                         "task" => ?task,
                         "err" => ?e
                     );
-                    return;
                 }
             }
         });

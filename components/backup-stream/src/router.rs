@@ -570,7 +570,7 @@ impl RouterInner {
         global_checkpoint: u64,
         store_id: u64,
     ) -> Result<()> {
-        let t = self.get_task_info(&task_name).await?;
+        let t = self.get_task_info(task_name).await?;
         t.update_global_checkpoint(global_checkpoint, store_id)
             .await?;
         Ok(())
@@ -1121,16 +1121,13 @@ impl StreamTaskInfo {
     ) -> Result<()> {
         let last_global_checkpoint = self.global_checkpoint_ts.load(Ordering::SeqCst);
         if last_global_checkpoint < global_checkpoint {
-            if self
-                .global_checkpoint_ts
-                .compare_exchange(
-                    last_global_checkpoint,
-                    global_checkpoint,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
+            let r = self.global_checkpoint_ts.compare_exchange(
+                last_global_checkpoint,
+                global_checkpoint,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+            if r.is_ok() {
                 self.flush_global_checkpoint(store_id).await?;
             }
         }
