@@ -2019,15 +2019,22 @@ mod tests {
         // test no need to update global checkpoint
         let store_id = 3;
         let mut global_checkpoint = 10000;
-        let r = task.update_global_checkpoint(global_checkpoint, store_id).await;
+        let r = task
+            .update_global_checkpoint(global_checkpoint, store_id)
+            .await;
         assert_eq!(r.is_ok(), true);
         assert_eq!(task.global_checkpoint_ts.load(Ordering::SeqCst), 10001);
-        
+
         // test update global checkpoint
         global_checkpoint = 10002;
-        let r = task.update_global_checkpoint(global_checkpoint, store_id).await;
+        let r = task
+            .update_global_checkpoint(global_checkpoint, store_id)
+            .await;
         assert_eq!(r.is_ok(), true);
-        assert_eq!(task.global_checkpoint_ts.load(Ordering::SeqCst), global_checkpoint);
+        assert_eq!(
+            task.global_checkpoint_ts.load(Ordering::SeqCst),
+            global_checkpoint
+        );
 
         let filename = format!("v1/global_checkpoint/{}.ts", store_id);
         let filepath = tmp_dir.as_ref().join(filename);
@@ -2041,5 +2048,4 @@ mod tests {
         let ts = u64::from_le_bytes(ts);
         assert_eq!(ts, global_checkpoint);
     }
-
 }
