@@ -1098,7 +1098,7 @@ impl StreamTaskInfo {
         result
     }
 
-    pub async fn safe_global_checkpoint(&self, store_id: u64) -> Result<()> {
+    pub async fn flush_global_checkpoint(&self, store_id: u64) -> Result<()> {
         let filename = format!("v1/global_checkpoint/{}.ts", store_id);
         let buff = self
             .global_checkpoint_ts
@@ -1131,7 +1131,7 @@ impl StreamTaskInfo {
                 )
                 .is_ok()
             {
-                self.safe_global_checkpoint(store_id).await?;
+                self.flush_global_checkpoint(store_id).await?;
             }
         }
         Ok(())
@@ -1992,4 +1992,54 @@ mod tests {
             run(case)
         }
     }
+
+    #[tokio::test]
+    async fn test_update_global_checkpoint() {
+        // create local storage
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let backend = external_storage_export::make_local_backend(tmp_dir.path());
+
+        // build a StreamTaskInfo
+        let mut task_info = StreamBackupTaskInfo::default();
+        task_info.set_storage(backend);
+        let stream_task = StreamTask {
+            info: task_info,
+            is_paused: false,
+        };
+        let task = StreamTaskInfo::new(
+            tmp_dir.path().to_path_buf(),
+            stream_task,
+            Duration::from_secs(300),
+            vec![(vec![], vec![])],
+        )
+        .await
+        .unwrap();
+        task.global_checkpoint_ts.store(10001, Ordering::SeqCst);
+
+        // test no need to update global checkpoint
+        let store_id = 3;
+        let mut global_checkpoint = 10000;
+        let r = task.update_global_checkpoint(global_checkpoint, store_id).await;
+        assert_eq!(r.is_ok(), true);
+        assert_eq!(task.global_checkpoint_ts.load(Ordering::SeqCst), 10001);
+        
+        // test update global checkpoint
+        global_checkpoint = 10002;
+        let r = task.update_global_checkpoint(global_checkpoint, store_id).await;
+        assert_eq!(r.is_ok(), true);
+        assert_eq!(task.global_checkpoint_ts.load(Ordering::SeqCst), global_checkpoint);
+
+        let filename = format!("v1/global_checkpoint/{}.ts", store_id);
+        let filepath = tmp_dir.as_ref().join(filename);
+        let exist = file_system::file_exists(filepath.clone());
+        assert_eq!(exist, true);
+
+        let buff = file_system::read(filepath).unwrap();
+        assert_eq!(buff.len(), 8);
+        let mut ts = [b'0'; 8];
+        ts.copy_from_slice(&buff);
+        let ts = u64::from_le_bytes(ts);
+        assert_eq!(ts, global_checkpoint);
+    }
+
 }
