@@ -1066,6 +1066,13 @@ where
             if has_unflushed_data && should_write_to_engine(&cmd)
                 || apply_ctx.kv_wb().should_write_to_engine()
             {
+                if has_unflushed_data {
+                    PEER_WRITE_CMD_COUNTER.flush_unflushed.inc();
+                } else if should_write_to_engine(&cmd) {
+                    PEER_WRITE_CMD_COUNTER.flush_cmd.inc();
+                } else {
+                    PEER_WRITE_CMD_COUNTER.flush_batch.inc();
+                }
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.saturating_elapsed() >= apply_ctx.yield_duration {
@@ -1076,6 +1083,7 @@ where
             }
             if self.priority != apply_ctx.priority {
                 if has_unflushed_data {
+                    PEER_WRITE_CMD_COUNTER.flush_priority.inc();
                     apply_ctx.commit(self);
                 }
                 return ApplyResult::Yield;
@@ -3283,6 +3291,7 @@ where
     fn destroy(&mut self, ctx: &mut ApplyContext<EK>) {
         let region_id = self.delegate.region_id();
         if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
+            PEER_WRITE_CMD_COUNTER.flush_destroy.inc();
             // Flush before destroying to avoid reordering messages.
             ctx.flush();
         }
@@ -3410,7 +3419,7 @@ where
                 self.delegate.id == 1 && self.delegate.region_id() == 1,
                 |_| unimplemented!()
             );
-
+            PEER_WRITE_CMD_COUNTER.flush_snapshot.inc();
             apply_ctx.flush();
             self.delegate.last_flush_applied_index = applied_index;
         }
@@ -3482,6 +3491,7 @@ where
             Ok(()) => {
                 // Commit the writebatch for ensuring the following snapshot can get all previous writes.
                 if apply_ctx.kv_wb().count() > 0 {
+                    PEER_WRITE_CMD_COUNTER.flush_change.inc();
                     apply_ctx.commit(&mut self.delegate);
                 }
                 ReadResponse {
@@ -3791,6 +3801,7 @@ where
     }
 
     fn end(&mut self, fsms: &mut [Option<impl DerefMut<Target = ApplyFsm<EK>>>]) {
+        PEER_WRITE_CMD_COUNTER.flush_end.inc();
         self.apply_ctx.flush();
         for fsm in fsms.iter_mut().flatten() {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();

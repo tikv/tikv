@@ -3622,6 +3622,53 @@ where
     }
 
     pub fn maybe_witness_transfer_leader<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+        if self.is_leader() {
+            let has_witness = self.region().get_peers().iter().any(|p| p.is_witness);
+            if !has_witness {
+                // change one peer to witness
+                if let Some(mut peer) = self
+                    .region()
+                    .get_peers()
+                    .iter()
+                    .filter(|p| p.id != self.peer.id)
+                    .next()
+                    .cloned()
+                {
+                    info!(
+                        "change peer to witness";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer_id(),
+                        "change_peer" => peer.get_id(),
+                    );
+                    peer.set_is_witness(true);
+
+                    let mut admin = AdminRequest::default();
+                    admin.set_cmd_type(AdminCmdType::ChangePeer);
+                    admin
+                        .mut_change_peer()
+                        .set_change_type(ConfChangeType::AddNode);
+                    admin.mut_change_peer().set_peer(peer);
+
+                    let mut req = RaftCmdRequest::default();
+                    req.mut_header().set_region_id(self.region_id);
+                    req.mut_header()
+                        .set_region_epoch(self.region().get_region_epoch().clone());
+                    req.mut_header().set_peer(self.peer.clone());
+                    req.set_admin_request(admin);
+
+                    let cmd = RaftCommand::new(req, Callback::None);
+                    if let Err(e) = ctx.router.send_raft_command(cmd) {
+                        error!(
+                            "change to witness failed";
+                            "region_id" => self.region_id,
+                            "peer_id" => self.peer.get_id(),
+                            "err" => ?e,
+                        );
+                    }
+                }
+            }
+        }
+
         if !(self.is_witness() && self.is_leader()) {
             return;
         }

@@ -90,3 +90,24 @@ fn test_witness_leader() {
     std::thread::sleep(Duration::from_millis(100));
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 }
+
+#[test]
+fn test_witness_auto() {
+    test_util::init_log_for_test();
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k1", b"v1");
+
+    std::thread::sleep(Duration::from_millis(1000));
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let has_witness = region.get_peers().iter().any(|p| p.get_is_witness());
+    assert!(has_witness);
+    // must_get_none(&cluster.get_engine(3), b"k1");
+}

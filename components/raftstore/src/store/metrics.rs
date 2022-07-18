@@ -33,6 +33,14 @@ make_auto_flush_static_metric! {
         delete_range,
         ingest_sst,
         skip,
+        flush_unflushed,
+        flush_cmd,
+        flush_batch,
+        flush_snapshot,
+        flush_destroy,
+        flush_end,
+        flush_priority,
+        flush_change,
     }
 
     pub label_enum AdminCmdType {
