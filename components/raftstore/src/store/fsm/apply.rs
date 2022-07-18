@@ -2855,7 +2855,9 @@ pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
     req.has_change_peer() || req.has_change_peer_v2()
 }
 
-// We need to make this function public, so as to be used to validate sst files elsewhere.
+/// This function is used to check whether a sst is valid for ingestion.
+///
+/// The `sst` must have epoch and range matched with `region`.
 pub fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
     let uuid = sst.get_uuid();
     if let Err(e) = UuidBuilder::from_slice(uuid) {
