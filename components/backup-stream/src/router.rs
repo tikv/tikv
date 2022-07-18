@@ -1556,6 +1556,8 @@ mod tests {
             let file2 = another_meta.files.get(i).unwrap();
             // we have to make sure two times sha256 of file must be the same.
             assert_eq!(file1.sha256, file2.sha256);
+            assert_eq!(file1.start_key, file2.start_key);
+            assert_eq!(file1.end_key, file2.end_key);
         }
 
         files.flush_log().await?;
