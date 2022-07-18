@@ -656,7 +656,8 @@ where
 
     raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     raftlog_fetch_stats: AsyncFetchStats,
-    async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
+    // The Instant records the fetch task start time.
+    async_fetch_results: RefCell<HashMap<u64, (Instant, RaftlogFetchState)>>,
 
     pub tag: String,
 }
@@ -844,19 +845,23 @@ where
     // None indicates cleanning the fetched result.
     pub fn update_async_fetch_res(&mut self, low: u64, res: Option<Box<RaftlogFetchResult>>) {
         // If it's in fetching, don't clean the async fetch result.
-        if self.async_fetch_results.borrow().get(&low) == Some(&RaftlogFetchState::Fetching)
-            && res.is_none()
+        if let Some((_, RaftlogFetchState::Fetching)) = self.async_fetch_results.borrow().get(&low)
         {
-            return;
+            if res.is_none() {
+                return;
+            }
         }
 
         match res {
-            Some(res) => {
-                if let Some(RaftlogFetchState::Fetched(prev)) = self
-                    .async_fetch_results
-                    .borrow_mut()
-                    .insert(low, RaftlogFetchState::Fetched(res))
-                {
+            Some(res) => match self.async_fetch_results.borrow().get(&low) {
+                Some((time, RaftlogFetchState::Fetching)) => {
+                    RAFT_ENTRY_FETCHES_TASK_DURATION_HISTOGRAM
+                        .observe(time.saturating_elapsed_secs());
+                    self.async_fetch_results
+                        .borrow_mut()
+                        .insert(low, (*time, RaftlogFetchState::Fetched(res)));
+                }
+                Some((_, RaftlogFetchState::Fetched(prev))) => {
                     info!(
                         "unconsumed async fetch res";
                         "region_id" => self.region.get_id(),
@@ -865,7 +870,13 @@ where
                         "low" => low,
                     );
                 }
-            }
+                _ => {
+                    info!("I think this should not happen!");
+                    self.async_fetch_results
+                        .borrow_mut()
+                        .insert(low, (Instant::now(), RaftlogFetchState::Fetched(res)));
+                }
+            },
             None => {
                 let prev = self.async_fetch_results.borrow_mut().remove(&low);
                 if prev.is_some() {
@@ -884,16 +895,20 @@ where
         context: GetEntriesContext,
         buf: &mut Vec<Entry>,
     ) -> raft::Result<usize> {
-        if let Some(RaftlogFetchState::Fetching) = self.async_fetch_results.borrow().get(&low) {
+        if let Some((_, RaftlogFetchState::Fetching)) = self.async_fetch_results.borrow().get(&low)
+        {
             // already an async fetch in flight
             return Err(raft::Error::Store(
                 raft::StorageError::LogTemporarilyUnavailable,
             ));
         }
 
-        let tried_cnt = if let Some(RaftlogFetchState::Fetched(res)) =
+        let mut start_time = None; // The FetchTask start time.
+        let tried_cnt = if let Some((time, RaftlogFetchState::Fetched(res))) =
             self.async_fetch_results.borrow_mut().remove(&low)
         {
+            start_time = Some(time);
+            RAFT_ENTRY_FETCHES_USED_DURATION_HISTOGRAM.observe(time.saturating_elapsed_secs());
             assert_eq!(res.low, low);
             let mut ents = res.ents?;
             let first = ents.first().map(|e| e.index).unwrap();
@@ -910,6 +925,7 @@ where
                 let count = ents.len();
                 buf.append(&mut ents);
                 fail_point!("on_async_fetch_return");
+                RAFT_ENTRY_FETCHES_TOTAL_DURATION_HISTOGRAM.observe(time.saturating_elapsed_secs());
                 return Ok(count);
             } else if res.hit_size_limit && max_size <= res.max_size {
                 // async fetch res doesn't cover [low, high) due to hit size limit
@@ -918,6 +934,7 @@ where
                 };
                 let count = ents.len();
                 buf.append(&mut ents);
+                RAFT_ENTRY_FETCHES_TOTAL_DURATION_HISTOGRAM.observe(time.saturating_elapsed_secs());
                 return Ok(count);
             } else if last + RAFT_LOG_MULTI_GET_CNT > high - 1
                 && res.tried_cnt + 1 == MAX_ASYNC_FETCH_TRY_CNT
@@ -927,10 +944,13 @@ where
                     limit_size(&mut ents, Some(max_size));
                     let count = ents.len();
                     buf.append(&mut ents);
+                    RAFT_ENTRY_FETCHES_TOTAL_DURATION_HISTOGRAM
+                        .observe(time.saturating_elapsed_secs());
                     return Ok(count);
                 }
 
                 // the count of left entries isn't too large, fetch the remaining entries synchronously one by one
+                let t = Instant::now();
                 for idx in last + 1..high {
                     let ent = self.engines.raft.get_entry(region_id, idx)?;
                     match ent {
@@ -948,8 +968,19 @@ where
                         }
                     }
                 }
+                info!(
+                    "sync fetch remaining entries";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "low" => low,
+                    "high" => high,
+                    "max_size" => max_size,
+                    "takes" => t.saturating_elapsed_secs(),
+                );
+
                 let count = ents.len();
                 buf.append(&mut ents);
+                RAFT_ENTRY_FETCHES_TOTAL_DURATION_HISTOGRAM.observe(time.saturating_elapsed_secs());
                 return Ok(count);
             }
             info!(
@@ -977,6 +1008,7 @@ where
         if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
             // even the larger range is invalid again, fallback to fetch in sync way
             self.raftlog_fetch_stats.fallback_fetch.update(|m| m + 1);
+            let t = Instant::now();
             let count = self.engines.raft.fetch_entries_to(
                 region_id,
                 low,
@@ -984,13 +1016,24 @@ where
                 Some(max_size as usize),
                 buf,
             )?;
+            info!(
+                "fallback fetch";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "low" => low,
+                "high" => high,
+                "max_size" => max_size,
+                "takes" => t.saturating_elapsed_secs(),
+            );
+            RAFT_ENTRY_FETCHES_TOTAL_DURATION_HISTOGRAM
+                .observe(start_time.unwrap().saturating_elapsed_secs());
             return Ok(count);
         }
 
         self.raftlog_fetch_stats.async_fetch.update(|m| m + 1);
         self.async_fetch_results
             .borrow_mut()
-            .insert(low, RaftlogFetchState::Fetching);
+            .insert(low, (Instant::now(), RaftlogFetchState::Fetching));
         self.raftlog_fetch_scheduler
             .schedule(RaftlogFetchTask::PeerStorage {
                 region_id,
