@@ -828,7 +828,17 @@ impl ConvertTo<f64> for Bytes {
 }
 
 pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
-    if !ctx.cfg.flag.contains(Flag::IN_SELECT_STMT) {
+    get_valid_int_prefix_helper(ctx, s, false)
+}
+
+// As TiDB code(getValidIntPrefix()), cast function needs to give error/warning when input string
+// is like float.
+pub fn get_valid_int_prefix_helper<'a>(
+    ctx: &mut EvalContext,
+    s: &'a str,
+    is_cast_func: bool,
+) -> Result<Cow<'a, str>> {
+    if !is_cast_func {
         let vs = get_valid_float_prefix(ctx, s)?;
         Ok(float_str_to_int_string(ctx, vs))
     } else {
