@@ -1803,8 +1803,11 @@ impl<T: Simulator> Cluster<T> {
     pub fn get_tablet_factory(
         &self,
         node_id: u64,
-    ) -> Option<&Box<dyn TabletFactory<RocksEngine> + Send>> {
-        self.factory_map.get(&node_id)
+    ) -> Option<Box<dyn TabletFactory<RocksEngine> + Send>> {
+        if let Some(factory) = self.factory_map.get(&node_id) {
+            return Some(TabletFactory::clone(factory.as_ref()));
+        }
+        None
     }
 }
 

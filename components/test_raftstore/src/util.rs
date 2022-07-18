@@ -622,6 +622,7 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
+#[allow(clippy::type_complexity)]
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
@@ -672,7 +673,7 @@ pub fn create_test_engine(
     let engine = factory.create_shared_db().unwrap();
 
     let engines = Engines::new(engine, raft_engine);
-    (engines, key_manager, dir, sst_worker, factory.clone())
+    (engines, key_manager, dir, sst_worker, factory)
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
