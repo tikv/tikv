@@ -811,14 +811,14 @@ where
                         .update_global_checkpoint(&task, global_checkpoint, self.store_id)
                         .await
                     {
-                        info!("backup stream failed to update global checkpoint.";
+                        warn!("backup stream failed to update global checkpoint.";
                             "task" => ?task,
                             "err" => ?e
                         );
                     }
                 }
                 Err(e) => {
-                    info!("backup stream failed to get global checkpoint.";
+                    warn!("backup stream failed to get global checkpoint.";
                         "task" => ?task,
                         "err" => ?e
                     );
