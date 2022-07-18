@@ -439,6 +439,37 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    /// `post_exec` should be called immediately after we executed one raft command.
+    /// It notifies observers side effects of this command before execution of the next command,
+    /// including req/resp, apply state, modified region state, etc.
+    /// Return true observers think a persistence is necessary.
+    pub fn post_exec(
+        &self,
+        region: &Region,
+        cmd: &Cmd,
+        apply_state: &RaftApplyState,
+        region_state: &RegionState,
+    ) -> bool {
+        let mut ctx = ObserverContext::new(region);
+        if !cmd.response.has_admin_response() {
+            for observer in &self.registry.query_observers {
+                let observer = observer.observer.inner();
+                if observer.post_exec_query(&mut ctx, cmd, apply_state, region_state) {
+                    return true;
+                }
+            }
+            false
+        } else {
+            for observer in &self.registry.admin_observers {
+                let observer = observer.observer.inner();
+                if observer.post_exec_admin(&mut ctx, cmd, apply_state, region_state) {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+
     pub fn post_apply_plain_kvs_from_snapshot(
         &self,
         region: &Region,
@@ -764,7 +795,7 @@ mod tests {
         assert_all!([&ob.called], &[3]);
         let mut admin_resp = RaftCmdResponse::default();
         admin_resp.set_admin_response(AdminResponse::default());
-        host.post_apply(&region, &Cmd::new(0, admin_req, admin_resp));
+        host.post_apply(&region, &Cmd::new(0, 0, admin_req, admin_resp));
         assert_all!([&ob.called], &[6]);
 
         let mut query_req = RaftCmdRequest::default();
@@ -774,7 +805,7 @@ mod tests {
         host.pre_apply(&region, &query_req);
         assert_all!([&ob.called], &[15]);
         let query_resp = RaftCmdResponse::default();
-        host.post_apply(&region, &Cmd::new(0, query_req, query_resp));
+        host.post_apply(&region, &Cmd::new(0, 0, query_req, query_resp));
         assert_all!([&ob.called], &[21]);
 
         host.on_role_change(&region, RoleChange::new(StateRole::Leader));
@@ -853,7 +884,7 @@ mod tests {
             host.pre_apply(&region, &req);
             assert_all!([&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
 
-            host.post_apply(&region, &Cmd::new(0, req.clone(), resp.clone()));
+            host.post_apply(&region, &Cmd::new(0, 0, req.clone(), resp.clone()));
             assert_all!([&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
 
             set_all!(&[&ob2.bypass], false);
