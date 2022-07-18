@@ -63,6 +63,50 @@ const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
 /// and storage could take mistaken if writing all of these files to storage concurrently.
 const FLUSH_LOG_CONCURRENT_BATCH_COUNT: usize = 128;
 
+#[derive(Clone, Debug)]
+pub enum TaskSelector {
+    ByName(String),
+    ByKey(Vec<u8>),
+    ByRange(Vec<u8>, Vec<u8>),
+    All,
+}
+
+impl TaskSelector {
+    pub fn reference(&self) -> TaskSelectorRef<'_> {
+        match self {
+            TaskSelector::ByName(s) => TaskSelectorRef::ByName(s),
+            TaskSelector::ByKey(k) => TaskSelectorRef::ByKey(&*k),
+            TaskSelector::ByRange(s, e) => TaskSelectorRef::ByRange(&*s, &*e),
+            TaskSelector::All => TaskSelectorRef::All,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TaskSelectorRef<'a> {
+    ByName(&'a str),
+    ByKey(&'a [u8]),
+    ByRange(&'a [u8], &'a [u8]),
+    All,
+}
+
+impl<'a> TaskSelectorRef<'a> {
+    fn matches<'c, 'd>(
+        self,
+        task_name: &str,
+        mut task_range: impl Iterator<Item = (&'c [u8], &'d [u8])>,
+    ) -> bool {
+        match self {
+            TaskSelectorRef::ByName(name) => task_name == name,
+            TaskSelectorRef::ByKey(k) => task_range.any(|(s, e)| utils::is_in_range(k, (&*s, &*e))),
+            TaskSelectorRef::ByRange(x1, y1) => {
+                task_range.any(|(x2, y2)| utils::is_overlapping((x1, y1), (&*x2, &*y2)))
+            }
+            TaskSelectorRef::All => true,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ApplyEvent {
     pub key: Vec<u8>,
@@ -376,7 +420,8 @@ impl RouterInner {
 
         // register task info
         let prefix_path = self.prefix.join(&task_name);
-        let stream_task = StreamTaskInfo::new(prefix_path, task, self.max_flush_interval).await?;
+        let stream_task =
+            StreamTaskInfo::new(prefix_path, task, self.max_flush_interval, ranges.clone()).await?;
         self.tasks
             .lock()
             .await
@@ -403,6 +448,21 @@ impl RouterInner {
     pub fn get_task_by_key(&self, key: &[u8]) -> Option<String> {
         let r = self.ranges.read().unwrap();
         r.get_value_by_point(key).cloned()
+    }
+
+    pub async fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
+        let s = self.tasks.lock().await;
+        s.iter()
+            .filter(|(name, info)| {
+                selector.matches(
+                    name.as_str(),
+                    info.ranges
+                        .iter()
+                        .map(|(s, e)| (s.as_slice(), e.as_slice())),
+                )
+            })
+            .map(|(name, _)| name.to_owned())
+            .collect()
     }
 
     #[cfg(test)]
@@ -488,7 +548,10 @@ impl RouterInner {
                         // NOTE: Maybe we'd better record all errors and send them to the client?
                         try_send!(
                             self.scheduler,
-                            Task::FatalError(task_name.to_owned(), Box::new(e))
+                            Task::FatalError(
+                                TaskSelector::ByName(task_name.to_owned()),
+                                Box::new(e)
+                            )
                         );
                     }
                     return None;
@@ -528,6 +591,11 @@ struct TempFileKey {
     cf: CfName,
     cmd_type: CmdType,
     is_meta: bool,
+}
+
+pub enum FormatType {
+    Date,
+    Hour,
 }
 
 impl TempFileKey {
@@ -588,7 +656,7 @@ impl TempFileKey {
         }
     }
 
-    fn format_date_time(ts: u64) -> impl Display {
+    fn format_date_time(ts: u64, t: FormatType) -> impl Display {
         use chrono::prelude::*;
         let millis = TimeStamp::physical(ts.into());
         let dt = Utc.timestamp_millis(millis as _);
@@ -600,19 +668,27 @@ impl TempFileKey {
                     .format(&s.unwrap_or_else(|| "%Y%m".to_owned()))
                     .to_string();
             });
-            return dt.format("%Y%m%d").to_string();
+            match t {
+                FormatType::Date => dt.format("%Y%m%d").to_string(),
+                FormatType::Hour => dt.format("%H").to_string(),
+            }
         }
         #[cfg(not(feature = "failpoints"))]
-        return dt.format("%Y%m%d");
+        match t {
+            FormatType::Date => dt.format("%Y%m%d"),
+            FormatType::Hour => dt.format("%H"),
+        }
     }
 
     /// path_to_log_file specifies the path of record log.
-    /// eg. "v1/20220625/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
-    fn path_to_log_file(&self, min_ts: u64, max_ts: u64) -> String {
+    /// eg. "v1/${date}/${hour}/${store_id}/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
+    fn path_to_log_file(&self, store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/t{:08}/{:012}-{}.log",
+            "v1/{}/{}/{}/t{:08}/{:012}-{}.log",
             // We may delete a range of files, so using the max_ts for preventing remove some records wrong.
-            Self::format_date_time(max_ts),
+            Self::format_date_time(max_ts, FormatType::Date),
+            Self::format_date_time(max_ts, FormatType::Hour),
+            store_id,
             self.table_id,
             min_ts,
             uuid::Uuid::new_v4()
@@ -620,21 +696,23 @@ impl TempFileKey {
     }
 
     /// path_to_schema_file specifies the path of schema log.
-    /// eg. "v1/20220625/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
-    fn path_to_schema_file(min_ts: u64, max_ts: u64) -> String {
+    /// eg. "v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
+    fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/schema-meta/{:012}-{}.log",
-            Self::format_date_time(max_ts),
+            "v1/{}/{}/{}/schema-meta/{:012}-{}.log",
+            Self::format_date_time(max_ts, FormatType::Date),
+            Self::format_date_time(max_ts, FormatType::Hour),
+            store_id,
             min_ts,
             uuid::Uuid::new_v4(),
         )
     }
 
-    fn file_name(&self, min_ts: TimeStamp, max_ts: TimeStamp) -> String {
+    fn file_name(&self, store_id: u64, min_ts: TimeStamp, max_ts: TimeStamp) -> String {
         if self.is_meta {
-            Self::path_to_schema_file(min_ts.into_inner(), max_ts.into_inner())
+            Self::path_to_schema_file(store_id, min_ts.into_inner(), max_ts.into_inner())
         } else {
-            self.path_to_log_file(min_ts.into_inner(), max_ts.into_inner())
+            self.path_to_log_file(store_id, min_ts.into_inner(), max_ts.into_inner())
         }
     }
 }
@@ -643,6 +721,8 @@ pub struct StreamTaskInfo {
     pub(crate) task: StreamTask,
     /// support external storage. eg local/s3.
     pub(crate) storage: Arc<dyn ExternalStorage>,
+    /// The listening range of the task.
+    ranges: Vec<(Vec<u8>, Vec<u8>)>,
     /// The parent directory of temporary files.
     temp_dir: PathBuf,
     /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
@@ -699,6 +779,7 @@ impl StreamTaskInfo {
         temp_dir: PathBuf,
         task: StreamTask,
         flush_interval: Duration,
+        ranges: Vec<(Vec<u8>, Vec<u8>)>,
     ) -> Result<Self> {
         tokio::fs::create_dir_all(&temp_dir).await?;
         let storage = Arc::from(create_storage(
@@ -709,6 +790,7 @@ impl StreamTaskInfo {
             task,
             storage,
             temp_dir,
+            ranges,
             min_resolved_ts: TimeStamp::max(),
             files: SlotMap::default(),
             flushing_files: RwLock::default(),
@@ -790,7 +872,7 @@ impl StreamTaskInfo {
         metadata.set_store_id(store_id);
         for (file_key, data_file) in w.iter() {
             let mut data_file = data_file.lock().await;
-            let file_meta = data_file.generate_metadata(file_key)?;
+            let file_meta = data_file.generate_metadata(file_key, store_id)?;
             metadata.push(file_meta)
         }
         Ok(metadata)
@@ -1168,8 +1250,8 @@ impl DataFile {
     }
 
     /// generate the metadata in protocol buffer of the file.
-    fn generate_metadata(&mut self, file_key: &TempFileKey) -> Result<DataFileInfo> {
-        self.set_storage_path(file_key.file_name(self.min_ts, self.max_ts));
+    fn generate_metadata(&mut self, file_key: &TempFileKey, store_id: u64) -> Result<DataFileInfo> {
+        self.set_storage_path(file_key.file_name(store_id, self.min_ts, self.max_ts));
 
         let mut meta = DataFileInfo::new();
         meta.set_sha256(
@@ -1403,7 +1485,7 @@ mod tests {
     fn check_on_events_result(item: &Vec<(String, Result<()>)>) {
         for (task, r) in item {
             if let Err(err) = r {
-                panic!("task {} failed: {}", task, err);
+                warn!("task {} failed: {}", task, err);
             }
         }
     }
@@ -1464,7 +1546,7 @@ mod tests {
         assert_eq!(cmds.len(), 1, "test cmds len = {}", cmds.len());
         match &cmds[0] {
             Task::Flush(task) => assert_eq!(task, "dummy", "task = {}", task),
-            _ => panic!("the cmd isn't flush!"),
+            _ => warn!("the cmd isn't flush!"),
         }
 
         let mut meta_count = 0;
@@ -1512,6 +1594,7 @@ mod tests {
             tmp_dir.path().to_path_buf(),
             stream_task,
             Duration::from_secs(300),
+            vec![(vec![], vec![])],
         )
         .await
         .unwrap();
@@ -1753,7 +1836,7 @@ mod tests {
         assert!(
             messages.iter().any(|task| {
                 if let Task::FatalError(name, _err) = task {
-                    return name == "flush_failure";
+                    return matches!(name.reference(), TaskSelectorRef::ByName("flush_failure"));
                 }
                 false
             }),
@@ -1765,9 +1848,12 @@ mod tests {
 
     #[test]
     fn test_format_datetime() {
-        let s = TempFileKey::format_date_time(431656320867237891);
+        let s = TempFileKey::format_date_time(431656320867237891, FormatType::Date);
         let s = s.to_string();
         assert_eq!(s, "20220307");
+
+        let s = TempFileKey::format_date_time(431656320867237891, FormatType::Hour);
+        assert_eq!(s.to_string(), "07");
     }
 
     #[test]
@@ -1778,5 +1864,70 @@ mod tests {
 
         let begin_ts = DataFile::decode_begin_ts(value).unwrap();
         assert_eq!(begin_ts, start_ts);
+    }
+
+    #[test]
+    fn test_selector() {
+        type DummyTask<'a> = (&'a str, &'a [(&'a [u8], &'a [u8])]);
+
+        #[derive(Debug, Clone, Copy)]
+        struct Case<'a /* 'static */> {
+            tasks: &'a [DummyTask<'a>],
+            selector: TaskSelectorRef<'a>,
+            selected: &'a [&'a str],
+        }
+
+        let cases = [
+            Case {
+                tasks: &[("Zhao", &[(b"", b"")]), ("Qian", &[(b"", b"")])],
+                selector: TaskSelectorRef::ByName("Zhao"),
+                selected: &["Zhao"],
+            },
+            Case {
+                tasks: &[
+                    ("Zhao", &[(b"0001", b"1000"), (b"2000", b"")]),
+                    ("Qian", &[(b"0002", b"1000")]),
+                ],
+                selector: TaskSelectorRef::ByKey(b"0001"),
+                selected: &["Zhao"],
+            },
+            Case {
+                tasks: &[
+                    ("Zhao", &[(b"0001", b"1000"), (b"2000", b"")]),
+                    ("Qian", &[(b"0002", b"1000")]),
+                    ("Sun", &[(b"0004", b"1024")]),
+                    ("Li", &[(b"1001", b"2048")]),
+                ],
+                selector: TaskSelectorRef::ByRange(b"1001", b"2000"),
+                selected: &["Sun", "Li"],
+            },
+            Case {
+                tasks: &[
+                    ("Zhao", &[(b"0001", b"1000"), (b"2000", b"")]),
+                    ("Qian", &[(b"0002", b"1000")]),
+                    ("Sun", &[(b"0004", b"1024")]),
+                    ("Li", &[(b"1001", b"2048")]),
+                ],
+                selector: TaskSelectorRef::All,
+                selected: &["Zhao", "Qian", "Sun", "Li"],
+            },
+        ];
+
+        fn run(c: Case<'static>) {
+            assert!(
+                c.tasks
+                    .iter()
+                    .filter(|(name, range)| c.selector.matches(name, range.iter().copied()))
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>()
+                    == c.selected.iter().collect::<Vec<_>>(),
+                "case = {:?}",
+                c
+            )
+        }
+
+        for case in cases {
+            run(case)
+        }
     }
 }
