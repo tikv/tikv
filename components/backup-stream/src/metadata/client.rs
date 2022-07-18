@@ -421,6 +421,21 @@ impl<Store: MetaStore> MetadataClient<Store> {
         })
     }
 
+    /// set the storage checkpoint to metadata.
+    pub async fn set_storage_checkpoint(&self, task_name: &str, ts: u64) -> Result<()> {
+        let now = Instant::now();
+        defer! {
+            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
+        }
+        self.meta_store
+            .set(KeyValue(
+                MetaKey::storage_checkpoint_of(task_name, self.store_id),
+                ts.to_be_bytes().to_vec(),
+            ))
+            .await?;
+        Ok(())
+    }
+
     /// forward the progress of some task.
     pub async fn set_local_task_checkpoint(&self, task_name: &str, ts: u64) -> Result<()> {
         let now = Instant::now();

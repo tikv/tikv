@@ -806,15 +806,36 @@ where
             let ts = self.meta_client.global_progress_of_task(&task).await;
             match ts {
                 Ok(global_checkpoint) => {
-                    if let Err(e) = self
+                    let r = self
                         .range_router
                         .update_global_checkpoint(&task, global_checkpoint, self.store_id)
-                        .await
-                    {
-                        warn!("backup stream failed to update global checkpoint.";
-                            "task" => ?task,
-                            "err" => ?e
-                        );
+                        .await;
+                    match r {
+                        Ok(true) => {
+                            if let Err(err) = self
+                                .meta_client
+                                .set_storage_checkpoint(&task, global_checkpoint)
+                                .await
+                            {
+                                warn!("backup stream failed to update global checkpoint.";
+                                    "task" => ?task,
+                                    "global-checkpoint" => global_checkpoint,
+                                    "err" => ?err,
+                                );
+                            }
+                        }
+                        Ok(false) => {
+                            debug!("backup stream no need update global checkpoint.";
+                                "task" => ?task,
+                                "global-checkpoint" => global_checkpoint,
+                            );
+                        }
+                        Err(e) => {
+                            warn!("backup stream failed to update global checkpoint.";
+                                "task" => ?task,
+                                "err" => ?e
+                            );
+                        }
                     }
                 }
                 Err(e) => {
