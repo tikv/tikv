@@ -114,7 +114,7 @@ where
         concurrency_manager: ConcurrencyManager,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
-        let pool = create_tokio_runtime(4, "backup-stream")
+        let pool = create_tokio_runtime(config.work_threads, "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
 
         let meta_client = MetadataClient::new(store, store_id);
@@ -162,7 +162,7 @@ where
             observer.clone(),
             meta_client.clone(),
             pd_client.clone(),
-            config.num_threads,
+            config.scan_threads,
         );
         pool.spawn(op_loop);
         Endpoint {

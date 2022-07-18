@@ -2467,7 +2467,9 @@ pub struct BackupStreamConfig {
     #[online_config(skip)]
     pub max_flush_interval: ReadableDuration,
     #[online_config(skip)]
-    pub num_threads: usize,
+    pub scan_threads: usize,
+    #[online_config(skip)]
+    pub work_threads: usize,
     #[online_config(skip)]
     pub enable: bool,
     #[online_config(skip)]
@@ -2484,12 +2486,12 @@ impl BackupStreamConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         let limit = SysQuota::cpu_cores_quota() as usize;
         let default_cfg = BackupStreamConfig::default();
-        if self.num_threads == 0 || self.num_threads > limit {
+        if self.scan_threads == 0 || self.scan_threads > limit {
             warn!(
                 "log_backup.num_threads cannot be 0 or larger than {}, change it to {}",
-                limit, default_cfg.num_threads
+                limit, default_cfg.scan_threads
             );
-            self.num_threads = default_cfg.num_threads;
+            self.scan_threads = default_cfg.scan_threads;
         }
         Ok(())
     }
@@ -2503,7 +2505,8 @@ impl Default for BackupStreamConfig {
         Self {
             max_flush_interval: ReadableDuration::minutes(5),
             // use at most 50% of vCPU by default
-            num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
+            scan_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
+            work_threads: (cpu_num * 0.5).clamp(2.0, 4.0) as usize,
             enable: false,
             // TODO: may be use raft store directory
             temp_path: String::new(),
@@ -5242,7 +5245,7 @@ mod tests {
         cfg.raftdb.max_sub_compactions = default_cfg.raftdb.max_sub_compactions;
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
-        cfg.backup_stream.num_threads = default_cfg.backup_stream.num_threads;
+        cfg.backup_stream.scan_threads = default_cfg.backup_stream.scan_threads;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later on.
