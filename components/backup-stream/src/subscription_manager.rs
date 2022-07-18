@@ -11,7 +11,7 @@ use std::{
 use crossbeam::channel::{Receiver as SyncReceiver, Sender as SyncSender};
 use crossbeam_channel::SendError;
 use engine_traits::KvEngine;
-use error_code::{backup_stream::OBSERVE_CANCELED, ErrorCodeExt};
+use error_code::ErrorCodeExt;
 use futures::FutureExt;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
@@ -36,7 +36,7 @@ use crate::{
     metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
     metrics,
     observer::BackupStreamObserver,
-    router::Router,
+    router::{Router, TaskSelector},
     subscription_track::SubscriptionTracer,
     try_send,
     utils::{self, CallbackWaitGroup, Work},
@@ -45,12 +45,14 @@ use crate::{
 
 type ScanPool = yatp::ThreadPool<yatp::task::callback::TaskCell>;
 
+const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
+
 /// a request for doing initial scanning.
 struct ScanCmd {
     region: Region,
     handle: ObserveHandle,
     last_checkpoint: TimeStamp,
-    work: Work,
+    _work: Work,
 }
 
 /// The response of requesting resolve the new checkpoint of regions.
@@ -82,6 +84,25 @@ impl ResolvedRegions {
     }
 }
 
+/// returns whether the error should be retried.
+/// for some errors, like `epoch not match` or `not leader`,
+/// implies that the region is drifting, and no more need to be observed by us.
+fn should_retry(err: &Error) -> bool {
+    match err.without_context() {
+        Error::RaftRequest(pbe) => {
+            !(pbe.has_epoch_not_match()
+                || pbe.has_not_leader()
+                || pbe.get_message().contains("stale observe id")
+                || pbe.has_region_not_found())
+        }
+        Error::RaftStore(raftstore::Error::RegionNotFound(_))
+        | Error::RaftStore(raftstore::Error::NotLeader(..))
+        | Error::ObserveCanceled(..)
+        | Error::RaftStore(raftstore::Error::EpochNotMatch(..)) => false,
+        _ => true,
+    }
+}
+
 /// the abstraction over a "DB" which provides the initial scanning.
 trait InitialScan: Clone {
     fn do_initial_scan(
@@ -89,8 +110,9 @@ trait InitialScan: Clone {
         region: &Region,
         start_ts: TimeStamp,
         handle: ObserveHandle,
-        on_finish: impl FnOnce() + Send + 'static,
     ) -> Result<Statistics>;
+
+    fn handle_fatal_error(&self, region: &Region, err: Error);
 }
 
 impl<E, R, RT> InitialScan for InitialDataLoader<E, R, RT>
@@ -104,34 +126,72 @@ where
         region: &Region,
         start_ts: TimeStamp,
         handle: ObserveHandle,
-        on_finish: impl FnOnce() + Send + 'static,
     ) -> Result<Statistics> {
         let region_id = region.get_id();
+        // Note: we have external retry at `ScanCmd::exec_by_with_retry`, should we keep retrying here?
         let snap = self.observe_over_with_retry(region, move || {
             ChangeObserver::from_pitr(region_id, handle.clone())
         })?;
-        let stat = self.do_initial_scan(region, start_ts, snap, on_finish)?;
+        let stat = self.do_initial_scan(region, start_ts, snap)?;
         Ok(stat)
+    }
+
+    fn handle_fatal_error(&self, region: &Region, err: Error) {
+        try_send!(
+            self.scheduler,
+            Task::FatalError(
+                TaskSelector::ByRange(
+                    region.get_start_key().to_owned(),
+                    region.get_end_key().to_owned()
+                ),
+                Box::new(err),
+            )
+        );
     }
 }
 
 impl ScanCmd {
     /// execute the initial scanning via the specificated [`InitialDataLoader`].
-    fn exec_by(self, initial_scan: impl InitialScan) -> Result<()> {
+    fn exec_by(&self, initial_scan: impl InitialScan) -> Result<()> {
         let Self {
             region,
             handle,
             last_checkpoint,
-            work,
+            ..
         } = self;
         let begin = Instant::now_coarse();
-        let stat =
-            initial_scan.do_initial_scan(&region, last_checkpoint, handle, move || drop(work))?;
+        let stat = initial_scan.do_initial_scan(region, *last_checkpoint, handle.clone())?;
         info!("initial scanning of leader transforming finished!"; "takes" => ?begin.saturating_elapsed(), "region" => %region.get_id(), "from_ts" => %last_checkpoint);
         utils::record_cf_stat("lock", &stat.lock);
         utils::record_cf_stat("write", &stat.write);
         utils::record_cf_stat("default", &stat.data);
         Ok(())
+    }
+
+    /// execute the command, when meeting error, retrying.
+    fn exec_by_with_retry(self, init: impl InitialScan, cancel: &AtomicBool) {
+        let mut retry_time = INITIAL_SCAN_FAILURE_MAX_RETRY_TIME;
+        loop {
+            if cancel.load(Ordering::SeqCst) {
+                return;
+            }
+            match self.exec_by(init.clone()) {
+                Err(err) if should_retry(&err) && retry_time > 0 => {
+                    // NOTE: blocking this thread may stick the process.
+                    // Maybe spawn a task to tokio and reschedule the task then?
+                    std::thread::sleep(Duration::from_millis(500));
+                    warn!("meet retryable error"; "err" => %err, "retry_time" => retry_time);
+                    retry_time -= 1;
+                    continue;
+                }
+                Err(err) if retry_time == 0 => {
+                    init.handle_fatal_error(&self.region, err.context("retry time exceeds"));
+                    break;
+                }
+                // Errors which `should_retry` returns false means they can be ignored.
+                Err(_) | Ok(_) => break,
+            }
+        }
     }
 }
 
@@ -150,15 +210,11 @@ fn scan_executor_loop(
         if canceled.load(Ordering::Acquire) {
             return;
         }
+
         metrics::PENDING_INITIAL_SCAN_LEN
             .with_label_values(&["executing"])
             .inc();
-        let region_id = cmd.region.get_id();
-        if let Err(err) = cmd.exec_by(init.clone()) {
-            if err.error_code() != OBSERVE_CANCELED {
-                err.report(format!("during initial scanning of region {}", region_id));
-            }
-        }
+        cmd.exec_by_with_retry(init.clone(), &canceled);
         metrics::PENDING_INITIAL_SCAN_LEN
             .with_label_values(&["executing"])
             .dec();
@@ -370,13 +426,21 @@ where
                     if err.error_code() == error_code::backup_stream::OBSERVE_CANCELED {
                         return;
                     }
+                    let (start, end) = (
+                        region.get_start_key().to_owned(),
+                        region.get_end_key().to_owned(),
+                    );
                     match self.retry_observe(region, handle).await {
                         Ok(()) => {}
                         Err(e) => {
-                            self.fatal(
-                                e,
-                                format!("While retring to observe region, origin error is {}", err),
+                            let msg = Task::FatalError(
+                                TaskSelector::ByRange(start, end),
+                                Box::new(Error::Contextual {
+                                    context: format!("retry meet error, origin error is {}", err),
+                                    inner_error: Box::new(e),
+                                }),
                             );
+                            try_send!(self.scheduler, msg);
                         }
                     }
                 }
@@ -384,7 +448,7 @@ where
                     let now = Instant::now();
                     let timedout = self.wait(Duration::from_secs(30)).await;
                     if timedout {
-                        warn!("waiting for initial scanning done timed out, forcing progress(with risk of data loss)!"; 
+                        warn!("waiting for initial scanning done timed out, forcing progress!"; 
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
                     let cps = self.subs.resolve_with(min_ts);
@@ -397,10 +461,6 @@ where
                 }
             }
         }
-    }
-
-    fn fatal(&self, err: Error, message: String) {
-        try_send!(self.scheduler, Task::FatalError(message, Box::new(err)));
     }
 
     async fn refresh_resolver(&self, region: &Region) {
@@ -540,7 +600,7 @@ where
     async fn get_last_checkpoint_of(&self, task: &str, region: &Region) -> Result<TimeStamp> {
         let meta_cli = self.meta_cli.clone();
         let cp = meta_cli.get_region_checkpoint(task, region).await?;
-        info!("got region checkpoint"; "region_id" => %region.get_id(), "checkpoint" => ?cp);
+        debug!("got region checkpoint"; "region_id" => %region.get_id(), "checkpoint" => ?cp);
         if matches!(cp.provider, CheckpointProvider::Global) {
             metrics::STORE_CHECKPOINT_TS
                 .with_label_values(&[task])
@@ -574,7 +634,7 @@ where
             region: region.clone(),
             handle,
             last_checkpoint,
-            work: self.scans.clone().work(),
+            _work: self.scans.clone().work(),
         })
     }
 
@@ -602,10 +662,12 @@ mod test {
             _region: &Region,
             _start_ts: txn_types::TimeStamp,
             _handle: raftstore::coprocessor::ObserveHandle,
-            on_finish: impl FnOnce() + Send + 'static,
         ) -> crate::errors::Result<tikv::storage::Statistics> {
-            on_finish();
             Ok(Statistics::default())
+        }
+
+        fn handle_fatal_error(&self, region: &Region, err: crate::errors::Error) {
+            panic!("fatal {:?} {}", region, err)
         }
     }
 
@@ -641,7 +703,7 @@ mod test {
                 handle: Default::default(),
                 last_checkpoint: Default::default(),
                 // Note: Maybe make here a Box<dyn FnOnce()> or some other trait?
-                work: wg.work(),
+                _work: wg.work(),
             })
             .unwrap()
         }
