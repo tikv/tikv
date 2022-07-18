@@ -55,7 +55,7 @@ impl KvEngineFactoryBuilder {
             compact_event_sender: None,
         }
     }
-    
+
     pub fn region_info_accessor(mut self, accessor: RegionInfoAccessor) -> Self {
         self.inner.region_info_accessor = Some(accessor);
         self
@@ -264,7 +264,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
         Ok(())
     }
-    
+
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
         Box::new(std::clone::Clone::clone(self))
     }

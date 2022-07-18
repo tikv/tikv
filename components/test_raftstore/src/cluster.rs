@@ -15,8 +15,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{raw::DB, Compat, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
-    WriteBatchExt, CF_DEFAULT, CF_RAFT, TabletFactory,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, TabletFactory,
+    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
 use futures::executor::block_on;
@@ -247,8 +247,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
-        let (engines, key_manager, dir, sst_worker, factory) =
-            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg, self.multi_rocks);
+        let (engines, key_manager, dir, sst_worker, factory) = create_test_engine(
+            router,
+            self.io_rate_limiter.clone(),
+            &self.cfg,
+            self.multi_rocks,
+        );
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
@@ -368,9 +372,16 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
-        self.sim
-            .wl()
-            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system, self.factory_map[&node_id].clone())?;
+        self.sim.wl().run_node(
+            node_id,
+            cfg,
+            engines,
+            store_meta,
+            key_mgr,
+            router,
+            system,
+            self.factory_map[&node_id].clone(),
+        )?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -1789,7 +1800,10 @@ impl<T: Simulator> Cluster<T> {
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 
-    pub fn get_tablet_factory(&self, node_id: u64) -> Option<&Box<dyn TabletFactory<RocksEngine> + Send>> {
+    pub fn get_tablet_factory(
+        &self,
+        node_id: u64,
+    ) -> Option<&Box<dyn TabletFactory<RocksEngine> + Send>> {
         self.factory_map.get(&node_id)
     }
 }

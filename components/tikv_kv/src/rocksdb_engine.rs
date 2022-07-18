@@ -59,7 +59,7 @@ impl Runnable for Runner {
             Task::Snapshot(cb) => {
                 println!("Acquiring snapshot");
                 cb(Ok(Arc::new(self.0.kv.snapshot())))
-            },
+            }
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }

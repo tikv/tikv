@@ -534,7 +534,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         engine_rocks::FlowListener::new(tx)
     }
 
-    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>, factory: Box<dyn TabletFactory<RocksEngine> + Send>) {
+    fn init_engines(
+        &mut self,
+        engines: Engines<RocksEngine, ER>,
+        factory: Box<dyn TabletFactory<RocksEngine> + Send>,
+    ) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
@@ -584,7 +588,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         gc_worker
     }
 
-    fn init_servers<F: KvFormat>(&mut self, factory: Box<dyn TabletFactory<RocksEngine> + Send>) -> Arc<VersionTrack<ServerConfig>> {
+    fn init_servers<F: KvFormat>(
+        &mut self,
+        factory: Box<dyn TabletFactory<RocksEngine> + Send>,
+    ) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
@@ -1612,7 +1619,11 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>, Box<dyn TabletFactory<RocksEngine> + Send>) {
+    ) -> (
+        Engines<RocksEngine, CER>,
+        Arc<EnginesResourceInfo>,
+        Box<dyn TabletFactory<RocksEngine> + Send>,
+    ) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
             .config

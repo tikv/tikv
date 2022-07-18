@@ -49,17 +49,19 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let env = cfg.build_shared_rocks_env(None, None).unwrap();
-    let builder =
-        KvEngineFactoryBuilder::new(env, &cfg, tmp_path.path().to_str().unwrap());
+    let builder = KvEngineFactoryBuilder::new(env, &cfg, tmp_path.path().to_str().unwrap());
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
-    
+
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
     let raft_engine = Arc::new(
         engine_rocks::raw_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None)
             .unwrap(),
     );
-    let engines = Engines::new(engine.clone(), RocksEngine::from_db(Arc::clone(&raft_engine)));
+    let engines = Engines::new(
+        engine.clone(),
+        RocksEngine::from_db(Arc::clone(&raft_engine)),
+    );
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
     let mut node = Node::new(
