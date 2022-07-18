@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     result,
     sync::{
-        atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
     },
     time::Duration,
@@ -564,9 +564,28 @@ impl RouterInner {
         }
     }
 
+    pub async fn update_global_checkpoint(
+        &self,
+        task_name: &str,
+        global_checkpoint: u64,
+        store_id: u64,
+    ) -> Result<()> {
+        let t = self.get_task_info(task_name).await?;
+        t.update_global_checkpoint(global_checkpoint, store_id)
+            .await?;
+        Ok(())
+    }
+
     /// tick aims to flush log/meta to extern storage periodically.
     pub async fn tick(&self) {
         for (name, task_info) in self.tasks.lock().await.iter() {
+            if let Err(e) = self
+                .scheduler
+                .schedule(Task::UpdateGlobalCheckpoint(name.to_string()))
+            {
+                error!("backup stream schedule task failed"; "error" => ?e);
+            }
+
             // if stream task need flush this time, schedule Task::Flush, or update time justly.
             if task_info.should_flush() && task_info.set_flushing_status_cas(false, true).is_ok() {
                 info!(
@@ -745,6 +764,8 @@ pub struct StreamTaskInfo {
     flushing: AtomicBool,
     /// This counts how many times this task has failed to flush.
     flush_fail_count: AtomicUsize,
+    /// global checkpoint ts for this task.
+    global_checkpoint_ts: AtomicU64,
 }
 
 impl Drop for StreamTaskInfo {
@@ -786,6 +807,7 @@ impl StreamTaskInfo {
             task.info.get_storage(),
             BackendConfig::default(),
         )?);
+        let start_ts = task.info.get_start_ts();
         Ok(Self {
             task,
             storage,
@@ -799,6 +821,7 @@ impl StreamTaskInfo {
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
             flush_fail_count: AtomicUsize::new(0),
+            global_checkpoint_ts: AtomicU64::new(start_ts),
         })
     }
 
@@ -1073,6 +1096,42 @@ impl StreamTaskInfo {
         }
 
         result
+    }
+
+    pub async fn flush_global_checkpoint(&self, store_id: u64) -> Result<()> {
+        let filename = format!("v1/global_checkpoint/{}.ts", store_id);
+        let buff = self
+            .global_checkpoint_ts
+            .load(Ordering::SeqCst)
+            .to_le_bytes();
+        self.storage
+            .write(
+                &filename,
+                UnpinReader(Box::new(Cursor::new(buff))),
+                buff.len() as _,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_global_checkpoint(
+        &self,
+        global_checkpoint: u64,
+        store_id: u64,
+    ) -> Result<()> {
+        let last_global_checkpoint = self.global_checkpoint_ts.load(Ordering::SeqCst);
+        if last_global_checkpoint < global_checkpoint {
+            let r = self.global_checkpoint_ts.compare_exchange(
+                last_global_checkpoint,
+                global_checkpoint,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+            if r.is_ok() {
+                self.flush_global_checkpoint(store_id).await?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1929,5 +1988,61 @@ mod tests {
         for case in cases {
             run(case)
         }
+    }
+
+    #[tokio::test]
+    async fn test_update_global_checkpoint() {
+        // create local storage
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let backend = external_storage_export::make_local_backend(tmp_dir.path());
+
+        // build a StreamTaskInfo
+        let mut task_info = StreamBackupTaskInfo::default();
+        task_info.set_storage(backend);
+        let stream_task = StreamTask {
+            info: task_info,
+            is_paused: false,
+        };
+        let task = StreamTaskInfo::new(
+            tmp_dir.path().to_path_buf(),
+            stream_task,
+            Duration::from_secs(300),
+            vec![(vec![], vec![])],
+        )
+        .await
+        .unwrap();
+        task.global_checkpoint_ts.store(10001, Ordering::SeqCst);
+
+        // test no need to update global checkpoint
+        let store_id = 3;
+        let mut global_checkpoint = 10000;
+        let r = task
+            .update_global_checkpoint(global_checkpoint, store_id)
+            .await;
+        assert_eq!(r.is_ok(), true);
+        assert_eq!(task.global_checkpoint_ts.load(Ordering::SeqCst), 10001);
+
+        // test update global checkpoint
+        global_checkpoint = 10002;
+        let r = task
+            .update_global_checkpoint(global_checkpoint, store_id)
+            .await;
+        assert_eq!(r.is_ok(), true);
+        assert_eq!(
+            task.global_checkpoint_ts.load(Ordering::SeqCst),
+            global_checkpoint
+        );
+
+        let filename = format!("v1/global_checkpoint/{}.ts", store_id);
+        let filepath = tmp_dir.as_ref().join(filename);
+        let exist = file_system::file_exists(filepath.clone());
+        assert_eq!(exist, true);
+
+        let buff = file_system::read(filepath).unwrap();
+        assert_eq!(buff.len(), 8);
+        let mut ts = [b'0'; 8];
+        ts.copy_from_slice(&buff);
+        let ts = u64::from_le_bytes(ts);
+        assert_eq!(ts, global_checkpoint);
     }
 }
