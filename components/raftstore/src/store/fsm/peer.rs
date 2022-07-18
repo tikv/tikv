@@ -4943,7 +4943,7 @@ where
         self.fsm
             .peer
             .mut_store()
-            .maybe_gc_cache(alive_cache_idx, applied_idx);
+            .maybe_gc_cache(alive_cache_idx);
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_cache(true);
             if !self.fsm.peer.get_store().cache_is_empty() {

@@ -1406,26 +1406,12 @@ where
         (self.cache.first_index(), self.cache.persisted)
     }
 
-    pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
-        if self.engines.raft.has_builtin_entry_cache() {
-            let rid = self.get_region_id();
-            self.engines.raft.gc_entry_cache(rid, apply_idx + 1);
-        }
-        if replicated_idx == apply_idx {
-            // The region is inactive, clear the cache immediately.
-            self.cache.compact_to(apply_idx + 1);
-            return;
-        }
+    pub fn maybe_gc_cache(&mut self, alive_replicated_idx: u64) {
         let cache_first_idx = match self.cache.first_index() {
             None => return,
             Some(idx) => idx,
         };
-        if cache_first_idx > replicated_idx + 1 {
-            // Catching up log requires accessing fs already, let's optimize for
-            // the common case.
-            // Maybe gc to second least replicated_idx is better.
-            self.cache.compact_to(apply_idx + 1);
-        }
+        self.cache.compact_to(alive_replicated_idx + 1);
     }
 
     /// Evict entries from the cache.
