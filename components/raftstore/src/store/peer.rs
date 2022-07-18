@@ -13,7 +13,6 @@ use std::{
     time::{Duration, Instant},
     u64, usize,
 };
-
 use bitflags::bitflags;
 use bytes::Bytes;
 use collections::{HashMap, HashSet};
@@ -767,6 +766,8 @@ where
     ///  the region or ingested one file which may be overlapped with the existed data,
     /// reset the flag so that the region can be splitted again.
     pub may_skip_split_check: bool,
+    pub last_region_split_size: u64,
+    pub last_region_split_keys: u64,
 
     /// The state for consistency check.
     pub consistency_state: ConsistencyState,
@@ -933,6 +934,8 @@ where
             approximate_size: None,
             approximate_keys: None,
             may_skip_split_check: false,
+            last_region_split_size: cfg.region_split_size.0,
+            last_region_split_keys: cfg.region_split_keys.0,
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,

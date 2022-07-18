@@ -256,6 +256,7 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub region_split_size: ReadableSize,
+    pub region_split_keys: ReadableSize,
     // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number.
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -360,6 +361,7 @@ impl Default for Config {
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
+            region_split_keys: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(500),
             report_min_resolved_ts_interval: ReadableDuration::millis(0),

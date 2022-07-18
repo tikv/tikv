@@ -146,6 +146,7 @@ where
     pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
+    
     /// Sometimes applied raft logs won't be compacted in time, because less compact means less
     /// sync-log in apply threads. Stale logs will be deleted if the skip time reaches this
     /// `skip_gc_raft_log_ticks`.
@@ -1910,6 +1911,17 @@ where
             self.fsm.peer.mut_store().flush_cache_metrics();
             return;
         }
+        // When change split-key/size, trigger split checker to split region
+        if self.fsm.peer.last_region_split_size == self.ctx.cfg.region_split_size.0 || self.fsm.peer.last_region_split_keys ==  self.ctx.cfg.region_split_keys.0 {
+            self.fsm.peer.may_skip_split_check = false;
+            self.register_split_region_check_tick();
+            if self.fsm.peer.last_region_split_size !=  self.ctx.cfg.region_split_size.0 {
+                self.fsm.peer.last_region_split_size =  self.ctx.cfg.region_split_size.0;
+            }
+            if self.fsm.peer.last_region_split_keys !=  self.ctx.cfg.region_split_keys.0 {
+                self.fsm.peer.last_region_split_keys =  self.ctx.cfg.region_split_keys.0;
+            }
+          };
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
