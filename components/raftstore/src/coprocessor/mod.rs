@@ -14,6 +14,7 @@ use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_serverpb::RaftApplyState,
 };
 use raft::{eraftpb, StateRole};
 
@@ -74,6 +75,12 @@ impl<'a> ObserverContext<'a> {
     }
 }
 
+pub struct RegionState {
+    pub peer_id: u64,
+    pub pending_remove: bool,
+    pub modified_region: Option<Region>,
+}
+
 pub trait AdminObserver: Coprocessor {
     /// Hook to call before proposing admin request.
     fn pre_propose_admin(&self, _: &mut ObserverContext<'_>, _: &mut AdminRequest) -> Result<()> {
@@ -89,6 +96,18 @@ pub trait AdminObserver: Coprocessor {
 
     /// Hook before exec admin request, returns whether we should skip this admin.
     fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, _: &AdminRequest) -> bool {
+        false
+    }
+
+    /// Hook to call immediately after exec command
+    /// Will be a special persistence after this exec if a observer returns true.
+    fn post_exec_admin(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &Cmd,
+        _: &RaftApplyState,
+        _: &RegionState,
+    ) -> bool {
         false
     }
 }
@@ -113,6 +132,18 @@ pub trait QueryObserver: Coprocessor {
 
     /// Hook before exec write request, returns whether we should skip this write.
     fn pre_exec_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) -> bool {
+        false
+    }
+
+    /// Hook to call immediately after exec command.
+    /// Will be a special persistence after this exec if a observer returns true.
+    fn post_exec_query(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &Cmd,
+        _: &RaftApplyState,
+        _: &RegionState,
+    ) -> bool {
         false
     }
 }
@@ -215,14 +246,16 @@ pub trait RegionChangeObserver: Coprocessor {
 #[derive(Clone, Debug, Default)]
 pub struct Cmd {
     pub index: u64,
+    pub term: u64,
     pub request: RaftCmdRequest,
     pub response: RaftCmdResponse,
 }
 
 impl Cmd {
-    pub fn new(index: u64, request: RaftCmdRequest, response: RaftCmdResponse) -> Cmd {
+    pub fn new(index: u64, term: u64, request: RaftCmdRequest, response: RaftCmdResponse) -> Cmd {
         Cmd {
             index,
+            term,
             request,
             response,
         }
