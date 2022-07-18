@@ -16,4 +16,10 @@ lazy_static! {
         "metadata event(task_add, task_removed, error) count.",
         &["type"],
     }.unwrap();
+
+    pub static ref METADATA_KEY_OPERATION: IntCounterVec = register_int_counter_vec! {
+        "tikv_log_backup_metadata_key_operation",
+        "the operation over keys",
+        &["type"],
+    }.unwrap();
 }

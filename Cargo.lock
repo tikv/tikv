@@ -395,6 +395,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "async-channel",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crc64fast",
@@ -475,6 +476,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempdir",
+ "tempfile",
  "test_raftstore",
  "test_util",
  "thiserror",
@@ -758,6 +760,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "bitflags",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "criterion",
@@ -1518,6 +1521,7 @@ dependencies = [
 name = "engine_test"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "encryption",
  "engine_panic",
  "engine_rocks",
@@ -2614,7 +2618,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/jiayang-zheng/kvproto?branch=add_sm4_encryption#86ad71124c7333ffb02105f29d35cd70557be798"
+source = "git+https://github.com/pingcap/kvproto.git#d88fa382391ec305e879be7635e39beae6a19890"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2743,7 +2747,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/jiayang-zheng/rust-rocksdb.git?branch=add_sm4_encryption#3545fc96326e461d5268f7755111123621b7359d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2e00e78b945194e8a672e8e078b6c73956e9ace0"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2762,7 +2766,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/jiayang-zheng/rust-rocksdb.git?branch=add_sm4_encryption#3545fc96326e461d5268f7755111123621b7359d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2e00e78b945194e8a672e8e078b6c73956e9ace0"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3398,8 +3402,9 @@ checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
 
 [[package]]
 name = "openssl"
-version = "0.10.40"
-source = "git+https://github.com/jiayang-zheng/rust-openssl?branch=support_sm4#f0f67bee135d4ade2f153c4dcb8f0eecd793cddd"
+version = "0.10.41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "618febf65336490dfcf20b73f885f5651a0c89c64c2d4a8c3662585a70bf5bd0"
 dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
@@ -3413,7 +3418,8 @@ dependencies = [
 [[package]]
 name = "openssl-macros"
 version = "0.1.0"
-source = "git+https://github.com/jiayang-zheng/rust-openssl?branch=support_sm4#f0f67bee135d4ade2f153c4dcb8f0eecd793cddd"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b501e44f11665960c7e7fcf062c7d96a14ade4aa98116c004b2e37b5be7d736c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3437,8 +3443,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.74"
-source = "git+https://github.com/jiayang-zheng/rust-openssl?branch=support_sm4#f0f67bee135d4ade2f153c4dcb8f0eecd793cddd"
+version = "0.9.75"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5f9bd0c2710541a3cda73d6f9ac4f1b240de4ae261065d309dbe73d9dceb42f"
 dependencies = [
  "autocfg",
  "cc",
@@ -4024,7 +4031,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#07dcadbf51b43fed70346e33b5db07723e655828"
+source = "git+https://github.com/tikv/raft-engine.git#7a436eae40a6b62371123c96941e058b7fe52b63"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4055,7 +4062,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#07dcadbf51b43fed70346e33b5db07723e655828"
+source = "git+https://github.com/tikv/raft-engine.git#7a436eae40a6b62371123c96941e058b7fe52b63"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -4168,12 +4175,14 @@ dependencies = [
 name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
+ "batch-system",
  "collections",
  "crossbeam",
  "engine_test",
  "engine_traits",
  "error_code",
  "fail",
+ "futures-util",
  "kvproto",
  "pd_client",
  "raft",
@@ -4574,7 +4583,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/jiayang-zheng/rust-rocksdb.git?branch=add_sm4_encryption#3545fc96326e461d5268f7755111123621b7359d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2e00e78b945194e8a672e8e078b6c73956e9ace0"
 dependencies = [
  "libc 0.2.125",
  "librocksdb_sys",
@@ -6173,6 +6182,7 @@ version = "0.0.1"
 dependencies = [
  "cc",
  "clap 2.33.0",
+ "serde_json",
  "server",
  "tikv",
  "time",
