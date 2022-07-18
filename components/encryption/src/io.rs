@@ -377,6 +377,7 @@ pub fn create_aes_ctr_crypter(
         EncryptionMethod::Aes128Ctr => OCipher::aes_128_ctr(),
         EncryptionMethod::Aes192Ctr => OCipher::aes_192_ctr(),
         EncryptionMethod::Aes256Ctr => OCipher::aes_256_ctr(),
+        EncryptionMethod::Sm4Ctr => OCipher::sm4_ctr(),
     };
     let crypter = OCrypter::new(cipher, mode, key, Some(iv.as_slice()))?;
     Ok((cipher, crypter))
@@ -525,6 +526,7 @@ mod tests {
             EncryptionMethod::Aes128Ctr,
             EncryptionMethod::Aes192Ctr,
             EncryptionMethod::Aes256Ctr,
+            EncryptionMethod::Sm4Ctr,
         ];
         let ivs = [
             Iv::new_ctr(),
@@ -593,6 +595,7 @@ mod tests {
             EncryptionMethod::Aes128Ctr,
             EncryptionMethod::Aes192Ctr,
             EncryptionMethod::Aes256Ctr,
+            EncryptionMethod::Sm4Ctr,
         ];
         let mut plaintext = vec![0; 10240];
         OsRng.fill_bytes(&mut plaintext);
@@ -628,6 +631,7 @@ mod tests {
             EncryptionMethod::Aes128Ctr,
             EncryptionMethod::Aes192Ctr,
             EncryptionMethod::Aes256Ctr,
+            EncryptionMethod::Sm4Ctr,
         ];
         let mut plaintext = vec![0; 10240];
         OsRng.fill_bytes(&mut plaintext);
@@ -700,6 +704,7 @@ mod tests {
             EncryptionMethod::Aes128Ctr,
             EncryptionMethod::Aes192Ctr,
             EncryptionMethod::Aes256Ctr,
+            EncryptionMethod::Sm4Ctr,
         ];
         let iv = Iv::new_ctr();
         let mut plain_text = vec![0; 10240];

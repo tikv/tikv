@@ -88,7 +88,7 @@ pub mod kv {
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
-        RocksSnapshot as KvTestSnapshot, RocksWriteBatch as KvTestWriteBatch,
+        RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
     use engine_traits::{Result, TabletAccessor, TabletFactory};
     use tikv_util::box_err;
@@ -141,6 +141,17 @@ pub mod kv {
                 multi_rocksdb,
             }
         }
+    }
+
+    // Extract tablet id and tablet suffix from the path.
+    fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
+        let (mut tablet_id, mut tablet_suffix) = (0, 1);
+        if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
+            let mut split = s.split('_');
+            tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+        }
+        (tablet_id, tablet_suffix)
     }
 
     impl TabletFactory<KvTestEngine> for TestTabletFactory {
@@ -245,12 +256,7 @@ pub mod kv {
                     path.to_str().unwrap_or_default()
                 ));
             }
-            let (mut tablet_id, mut tablet_suffix) = (0, 1);
-            if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
-                let mut split = s.split('_');
-                tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-                tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
-            }
+            let (tablet_id, tablet_suffix) = get_id_and_suffix_from_path(path);
             self.create_tablet(tablet_id, tablet_suffix)
         }
 
@@ -330,7 +336,12 @@ pub mod kv {
 
             let db_path = self.tablet_path(id, suffix);
             std::fs::rename(path, &db_path)?;
-            self.open_tablet_raw(db_path.as_path(), false)
+            let new_engine = self.open_tablet_raw(db_path.as_path(), false);
+            if new_engine.is_ok() {
+                let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
+                self.registry.lock().unwrap().remove(&(old_id, old_suffix));
+            }
+            new_engine
         }
 
         fn clone(&self) -> Box<dyn TabletFactory<KvTestEngine> + Send> {
@@ -425,6 +436,7 @@ pub mod ctor {
     pub struct DBOptions {
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IORateLimiter>>,
+        enable_multi_batch_write: bool,
     }
 
     impl DBOptions {
@@ -434,6 +446,10 @@ pub mod ctor {
 
         pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IORateLimiter>>) {
             self.rate_limiter = rate_limiter;
+        }
+
+        pub fn set_enable_multi_batch_write(&mut self, enable: bool) {
+            self.enable_multi_batch_write = enable;
         }
     }
 
@@ -706,6 +722,11 @@ pub mod ctor {
             let mut rocks_db_opts = RawRocksDBOptions::new();
             let env = get_env(db_opts.key_manager.clone(), db_opts.rate_limiter)?;
             rocks_db_opts.set_env(env);
+            if db_opts.enable_multi_batch_write {
+                rocks_db_opts.enable_unordered_write(false);
+                rocks_db_opts.enable_pipelined_write(false);
+                rocks_db_opts.enable_multi_batch_write(true);
+            }
             let rocks_db_opts = RocksDBOptions::from_raw(rocks_db_opts);
             Ok(rocks_db_opts)
         }

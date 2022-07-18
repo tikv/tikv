@@ -234,6 +234,37 @@ make_static_metric! {
             hibernated,
         },
     }
+
+    pub label_enum LoadBaseSplitEventType {
+        // Workload fits the QPS threshold or byte threshold.
+        load_fit,
+        // Workload fits the CPU threshold.
+        cpu_load_fit,
+        // The statistical key is empty.
+        empty_statistical_key,
+        // Split info has been collected, ready to split.
+        ready_to_split,
+        // Split info has not been collected yet, not ready to split.
+        not_ready_to_split,
+        // The number of sampled keys does not meet the threshold.
+        no_enough_sampled_key,
+        // The number of sampled keys located on left and right does not meet the threshold.
+        no_enough_lr_key,
+        // The number of balanced keys does not meet the score.
+        no_balance_key,
+        // The number of contained keys does not meet the score.
+        no_uncross_key,
+        // Split info for the top hot CPU region has been collected, ready to split.
+        ready_to_split_cpu_top,
+        // Hottest key range for the top hot CPU region could not be found.
+        empty_hottest_key_range,
+        // The top hot CPU region could not be split.
+        unable_to_split_cpu_top,
+    }
+
+    pub struct LoadBaseSplitEventCounterVec: IntCounter {
+        "type" => LoadBaseSplitEventType,
+    }
 }
 
 lazy_static! {
@@ -648,8 +679,9 @@ lazy_static! {
         &["order"]
         ).unwrap();
 
-    pub static ref LOAD_BASE_SPLIT_EVENT: IntCounterVec =
-        register_int_counter_vec!(
+    pub static ref LOAD_BASE_SPLIT_EVENT: LoadBaseSplitEventCounterVec =
+        register_static_int_counter_vec!(
+            LoadBaseSplitEventCounterVec,
             "tikv_load_base_split_event",
             "Load base split event.",
             &["type"]
