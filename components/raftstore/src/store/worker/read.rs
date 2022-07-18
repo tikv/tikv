@@ -445,7 +445,7 @@ where
     E: KvEngine,
 {
     fn get_tablet(&self, region_id: u64) -> E {
-        self.factory.open_tablet_cache_any(region_id).unwrap()
+        self.factory.open_tablet_cache_latest(region_id).unwrap()
     }
 
     fn get_snapshot(
@@ -456,7 +456,7 @@ where
         if self.factory.get_factory_version() == TabletFactoryVersion::Single {
             region_id = 0;
         }
-        if let Some(tablet) = self.factory.open_tablet_cache_any(region_id) {
+        if let Some(tablet) = self.factory.open_tablet_cache_latest(region_id) {
             self.metrics.local_executed_requests += 1;
             if let Some(ts) = create_time {
                 if let Some(cache_read_id) = self.cache_read_id.get(&region_id) {

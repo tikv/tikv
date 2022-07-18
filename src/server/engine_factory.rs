@@ -103,22 +103,6 @@ impl KvEngineFactoryBuilder {
         };
         factory
     }
-
-    // pub fn build(self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
-    //     let factory = KvEngineFactory {
-    //         inner: Arc::new(self.inner),
-    //         compact_event_sender: self.compact_event_sender.clone(),
-    //     };
-    //     if self.multi_rocksdb {
-    //         let factory = KvEngineFactoryV2 {
-    //             inner: factory,
-    //             registry: Arc::new(Mutex::new(HashMap::default())),
-    //         };
-    //         TabletFactory::clone(&factory)
-    //     } else {
-    //         TabletFactory::clone(&factory)
-    //     }
-    // }
 }
 
 #[derive(Clone)]
@@ -258,6 +242,10 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         self.create_shared_db()
     }
 
+    fn open_tablet_cache_latest(&self, id: u64) -> Option<RocksEngine> {
+        self.open_tablet_cache_any(id)
+    }
+
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
         TabletFactory::create_tablet(self, 0, 0)
     }
@@ -265,9 +253,11 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn exists_raw(&self, _path: &Path) -> bool {
         false
     }
+
     fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
         self.kv_engine_path()
     }
+
     fn tablets_path(&self) -> PathBuf {
         self.kv_engine_path()
     }

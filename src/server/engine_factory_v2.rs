@@ -67,6 +67,24 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         None
     }
 
+    fn open_tablet_cache_latest(&self, id: u64) -> Option<RocksEngine> {
+        let reg = self.registry.lock().unwrap();
+        let mut max_suffix = 0;
+        let _: Vec<_> = reg
+            .keys()
+            .map(|k| {
+                if k.0 == id && k.1 > max_suffix {
+                    max_suffix = k.1;
+                }
+            })
+            .collect();
+        if max_suffix > 0 {
+            debug!("choose the latest tablet"; "region_id" => id, "suffix" => max_suffix);
+            return Some(reg.get(&(id, max_suffix)).unwrap().clone());
+        }
+        None
+    }
+
     fn open_tablet_raw(&self, path: &Path, _readonly: bool) -> Result<RocksEngine> {
         if !RocksEngine::exists(path.to_str().unwrap_or_default()) {
             return Err(box_err!(

@@ -163,7 +163,7 @@ pub struct Cluster<T: Simulator> {
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IORateLimiter>>,
     pub engines: HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
-    pub factoriy_map: HashMap<u64, Box<dyn TabletFactory<RocksEngine> + Send>>,
+    pub factory_map: HashMap<u64, Box<dyn TabletFactory<RocksEngine> + Send>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
     group_props: HashMap<u64, GroupProperties>,
@@ -200,7 +200,7 @@ impl<T: Simulator> Cluster<T> {
             key_managers: vec![],
             io_rate_limiter: None,
             engines: HashMap::default(),
-            factoriy_map: HashMap::default(),
+            factory_map: HashMap::default(),
             key_managers_map: HashMap::default(),
             labels: HashMap::default(),
             group_props: HashMap::default(),
@@ -370,7 +370,7 @@ impl<T: Simulator> Cluster<T> {
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
             .wl()
-            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system, self.factoriy_map[&node_id].clone())?;
+            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system, self.factory_map[&node_id].clone())?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -648,7 +648,7 @@ impl<T: Simulator> Cluster<T> {
             let factory = self.factories[i].clone();
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
-            self.factoriy_map.insert(id, factory);
+            self.factory_map.insert(id, factory);
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
@@ -1790,7 +1790,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_tablet_factory(&self, node_id: u64) -> Option<&Box<dyn TabletFactory<RocksEngine> + Send>> {
-        self.factoriy_map.get(&node_id)
+        self.factory_map.get(&node_id)
     }
 }
 

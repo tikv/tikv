@@ -8,7 +8,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, TabletFactory, ALL_CFS};
+use engine_traits::{Engines, TabletFactory};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{
     coprocessor::CoprocessorHost,

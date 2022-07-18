@@ -6,7 +6,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{Engines, Peekable, ALL_CFS, CF_RAFT};
+use engine_traits::{Engines, Peekable, CF_RAFT};
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -53,11 +53,7 @@ fn test_node_bootstrap_with_prepared_data() {
         KvEngineFactoryBuilder::new(env, &cfg, tmp_path.path().to_str().unwrap());
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
-
-    // let engine = Arc::new(
-    //     engine_rocks::raw_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None)
-    //         .unwrap(),
-    // );
+    
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
     let raft_engine = Arc::new(
         engine_rocks::raw_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None)

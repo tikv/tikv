@@ -48,9 +48,9 @@ fn test_raftkv() {
 
 #[test]
 fn test_get_snapshot_from_different_tablet() {
-    // todo(SpadeA): When the test is writing, the master version does not support multi-rocksdb completely.
+    // todo(SpadeA): When the test is writing, the master version does not support tablet split and merge.
     // So, when region is split, the kv rocksdb will not be splitted. To work around it, we create
-    // relevant tablets(rocksdb) manually.
+    // relevant tablets manually. When the tablet split and merge are supported, the test can be modified.
 
     let count = 1;
     let mut cluster = new_server_cluster(1, count);

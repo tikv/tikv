@@ -12,7 +12,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
 use engine_traits::{
     MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE,
+    CF_WRITE, TabletFactory,
 };
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
@@ -958,47 +958,49 @@ fn test_debug_scan_mvcc() {
     assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
 }
 
-// #[test]
-// fn test_double_run_node() {
-//     let count = 1;
-//     let mut cluster = new_node_cluster(0, count);
-//     cluster.run();
-//     let id = *cluster.engines.keys().next().unwrap();
-//     let engines = cluster.engines.values().next().unwrap().clone();
-//     let router = cluster.sim.rl().get_router(id).unwrap();
-//     let mut sim = cluster.sim.wl();
-//     let node = sim.get_node(id).unwrap();
-//     let pd_worker = LazyWorker::new("test-pd-worker");
-//     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
-//     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
-//     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
-//     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
-//     let importer = {
-//         let dir = Path::new(engines.kv.path()).join("import-sst");
-//         Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
-//     };
-//     let (split_check_scheduler, _) = dummy_scheduler();
+#[test]
+fn test_double_run_node() {
+    let count = 1;
+    let mut cluster = new_node_cluster(0, count);
+    cluster.run();
+    let id = *cluster.engines.keys().next().unwrap();
+    let engines = cluster.engines.values().next().unwrap().clone();
+    let factory = cluster.factory_map.values().next().unwrap().clone();
+    let router = cluster.sim.rl().get_router(id).unwrap();
+    let mut sim = cluster.sim.wl();
+    let node = sim.get_node(id).unwrap();
+    let pd_worker = LazyWorker::new("test-pd-worker");
+    let simulate_trans = SimulateTransport::new(ChannelTransport::new());
+    let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
+    let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
+    let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
+    let importer = {
+        let dir = Path::new(engines.kv.path()).join("import-sst");
+        Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
+    };
+    let (split_check_scheduler, _) = dummy_scheduler();
 
-//     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
-//     let e = node
-//         .start(
-//             engines,
-//             simulate_trans,
-//             snap_mgr,
-//             pd_worker,
-//             store_meta,
-//             coprocessor_host,
-//             importer,
-//             split_check_scheduler,
-//             AutoSplitController::default(),
-//             ConcurrencyManager::new(1.into()),
-//             CollectorRegHandle::new_for_test(),
-//         )
-//         .unwrap_err();
-//     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
-//     drop(sim);
-//     cluster.shutdown();
-// }
+    let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
+    let e = node
+        .start(
+            engines,
+            simulate_trans,
+            snap_mgr,
+            pd_worker,
+            store_meta,
+            coprocessor_host,
+            importer,
+            split_check_scheduler,
+            AutoSplitController::default(),
+            ConcurrencyManager::new(1.into()),
+            CollectorRegHandle::new_for_test(),
+            TabletFactory::clone(factory.as_ref()),
+        )
+        .unwrap_err();
+    assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
+    drop(sim);
+    cluster.shutdown();
+}
 
 #[test]
 fn test_pessimistic_lock() {
@@ -1133,6 +1135,10 @@ fn test_batch_commands() {
 
 #[test]
 fn test_batch_get_commands_in_multi_rocksdb() {
+    // todo(SpadeA): When the test is writing, the master version does not support tablet split and merge.
+    // So, when region is split, the kv rocksdb will not be splitted. To work around it, we create
+    // relevant tablets manually. When the tablet split and merge are supported, the test can be modified.
+
     let mut cluster = new_server_cluster(0, 1);
     cluster.set_multi_rocks();
     cluster.run();
@@ -1148,7 +1154,7 @@ fn test_batch_get_commands_in_multi_rocksdb() {
     let region_3 = cluster.get_region(b"k61");
 
     // Generate the relevant tablets
-    let factory = cluster.factoriy_map.get(&1).unwrap();
+    let factory = cluster.factory_map.get(&1).unwrap();
     let tablet_1 = factory.create_tablet(region_1.get_id(), 0).unwrap();
     let tablet_2 = factory.create_tablet(region_2.get_id(), 0).unwrap();
     let tablet_3 = factory.create_tablet(region_3.get_id(), 0).unwrap();
