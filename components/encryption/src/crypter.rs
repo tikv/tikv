@@ -16,6 +16,7 @@ pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DB
         EncryptionMethod::Aes128Ctr => DBEncryptionMethod::Aes128Ctr,
         EncryptionMethod::Aes192Ctr => DBEncryptionMethod::Aes192Ctr,
         EncryptionMethod::Aes256Ctr => DBEncryptionMethod::Aes256Ctr,
+        EncryptionMethod::Sm4Ctr => DBEncryptionMethod::Sm4Ctr,
         EncryptionMethod::Unknown => DBEncryptionMethod::Unknown,
     }
 }
@@ -26,6 +27,7 @@ pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -
         DBEncryptionMethod::Aes128Ctr => EncryptionMethod::Aes128Ctr,
         DBEncryptionMethod::Aes192Ctr => EncryptionMethod::Aes192Ctr,
         DBEncryptionMethod::Aes256Ctr => EncryptionMethod::Aes256Ctr,
+        DBEncryptionMethod::Sm4Ctr => EncryptionMethod::Sm4Ctr,
         DBEncryptionMethod::Unknown => EncryptionMethod::Unknown,
     }
 }
@@ -40,6 +42,7 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
         EncryptionMethod::Aes128Ctr => 16,
         EncryptionMethod::Aes192Ctr => 24,
         EncryptionMethod::Aes256Ctr => 32,
+        EncryptionMethod::Sm4Ctr => 16,
         unknown => panic!("bad EncryptionMethod {:?}", unknown),
     }
 }
