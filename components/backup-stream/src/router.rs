@@ -915,6 +915,10 @@ impl StreamTaskInfo {
         let mut w = self.files.write().await;
         let mut fw = self.flushing_files.write().await;
         for (k, v) in w.drain() {
+            // we should generate file metadata(calculate sha256) when moving file.
+            // because sha256 calculation is a unsafe move operation.
+            // we cannot re-calculate it in retry.
+            // TODO refactor move_to_flushing_files and generate_metadata
             let file_meta = v.lock().await.generate_metadata(&k, store_id)?;
             fw.push((k, v, file_meta));
         }
