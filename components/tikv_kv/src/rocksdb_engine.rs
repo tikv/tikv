@@ -56,10 +56,7 @@ impl Runnable for Runner {
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => cb(write_modifies(&self.0.kv, modifies)),
-            Task::Snapshot(cb) => {
-                println!("Acquiring snapshot");
-                cb(Ok(Arc::new(self.0.kv.snapshot())))
-            }
+            Task::Snapshot(cb) => cb(Ok(Arc::new(self.0.kv.snapshot()))),
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
