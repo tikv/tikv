@@ -2618,7 +2618,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a5d4ffd2ba337dad0bc99e9fb53bf665864a3f3b"
+source = "git+https://github.com/pingcap/kvproto.git#d88fa382391ec305e879be7635e39beae6a19890"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2747,7 +2747,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c8878e2df0c7c23d553d345d337d9dda332e2d5a"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2e00e78b945194e8a672e8e078b6c73956e9ace0"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2766,7 +2766,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c8878e2df0c7c23d553d345d337d9dda332e2d5a"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2e00e78b945194e8a672e8e078b6c73956e9ace0"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3402,16 +3402,28 @@ checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
 
 [[package]]
 name = "openssl"
-version = "0.10.38"
+version = "0.10.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c7ae222234c30df141154f159066c5093ff73b63204dcda7121eb082fc56a95"
+checksum = "618febf65336490dfcf20b73f885f5651a0c89c64c2d4a8c3662585a70bf5bd0"
 dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
  "foreign-types",
  "libc 0.2.125",
  "once_cell",
+ "openssl-macros",
  "openssl-sys",
+]
+
+[[package]]
+name = "openssl-macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b501e44f11665960c7e7fcf062c7d96a14ade4aa98116c004b2e37b5be7d736c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3431,9 +3443,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.72"
+version = "0.9.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e46109c383602735fa0a2e48dd2b7c892b048e1bf69e5c3b1d804b7d9c203cb"
+checksum = "e5f9bd0c2710541a3cda73d6f9ac4f1b240de4ae261065d309dbe73d9dceb42f"
 dependencies = [
  "autocfg",
  "cc",
@@ -4571,7 +4583,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c8878e2df0c7c23d553d345d337d9dda332e2d5a"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2e00e78b945194e8a672e8e078b6c73956e9ace0"
 dependencies = [
  "libc 0.2.125",
  "librocksdb_sys",

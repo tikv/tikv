@@ -801,6 +801,32 @@ where
         }));
     }
 
+    fn on_update_global_checkpoint(&self, task: String) {
+        self.pool.block_on(async move {
+            let ts = self.meta_client.global_progress_of_task(&task).await;
+            match ts {
+                Ok(global_checkpoint) => {
+                    if let Err(e) = self
+                        .range_router
+                        .update_global_checkpoint(&task, global_checkpoint, self.store_id)
+                        .await
+                    {
+                        warn!("backup stream failed to update global checkpoint.";
+                            "task" => ?task,
+                            "err" => ?e
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!("backup stream failed to get global checkpoint.";
+                        "task" => ?task,
+                        "err" => ?e
+                    );
+                }
+            }
+        });
+    }
+
     /// Modify observe over some region.
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
@@ -839,6 +865,7 @@ where
             Task::MarkFailover(t) => self.failover_time = Some(t),
             Task::FlushWithMinTs(task, min_ts) => self.on_flush_with_min_ts(task, min_ts),
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
+            Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
         }
     }
 
@@ -958,6 +985,8 @@ pub enum Task {
     FlushWithMinTs(String, TimeStamp),
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
+    /// update global-checkpoint-ts to storage.
+    UpdateGlobalCheckpoint(String),
 }
 
 #[derive(Debug)]
@@ -1054,6 +1083,9 @@ impl fmt::Debug for Task {
                 .field(arg1)
                 .finish(),
             Self::RegionCheckpointsOp(s) => f.debug_tuple("GetRegionCheckpoints").field(s).finish(),
+            Self::UpdateGlobalCheckpoint(task) => {
+                f.debug_tuple("UpdateGlobalCheckpoint").field(task).finish()
+            }
         }
     }
 }
@@ -1090,6 +1122,7 @@ impl Task {
             Task::MarkFailover(_) => "mark_failover",
             Task::FlushWithMinTs(..) => "flush_with_min_ts",
             Task::RegionCheckpointsOp(..) => "get_checkpoints",
+            Task::UpdateGlobalCheckpoint(..) => "update_global_checkpoint",
         }
     }
 }
