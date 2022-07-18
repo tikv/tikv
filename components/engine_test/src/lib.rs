@@ -215,16 +215,23 @@ pub mod kv {
                 self.open_tablet_cache_any(id)
             } else {
                 let reg = self.registry.lock().unwrap();
-                let mut max_suffix = 0;
+                let mut max_suffix = None;
                 let _: Vec<_> = reg
                     .keys()
                     .map(|k| {
-                        if k.0 == id && k.1 > max_suffix {
-                            max_suffix = k.1;
+                        if k.0 == id {
+                            match max_suffix {
+                                Some(i) => {
+                                    if k.1 > i {
+                                        max_suffix = Some(k.1)
+                                    }
+                                }
+                                None => max_suffix = Some(k.1),
+                            }
                         }
                     })
                     .collect();
-                if max_suffix > 0 {
+                if let Some(max_suffix) = max_suffix {
                     return Some(reg.get(&(id, max_suffix)).unwrap().clone());
                 }
                 None

@@ -240,8 +240,10 @@ impl<T: Simulator> Cluster<T> {
     /// mark them as bootstrapped in `Cluster`.
     pub fn set_bootstrapped(&mut self, node_id: u64, offset: usize) {
         let engines = self.dbs[offset].clone();
+        let factory = TabletFactory::clone(self.factories[offset].as_ref());
         let key_mgr = self.key_managers[offset].clone();
         assert!(self.engines.insert(node_id, engines).is_none());
+        assert!(self.factory_map.insert(node_id, factory).is_none());
         assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
         assert!(self.sst_workers_map.insert(node_id, offset).is_none());
     }
@@ -285,7 +287,7 @@ impl<T: Simulator> Cluster<T> {
             self.create_engine(Some(router.clone()));
 
             let engines = self.dbs.last().unwrap().clone();
-            let factory = self.factories[self.factories.len() - 1].clone();
+            let factory = TabletFactory::clone(self.factories.last().unwrap().as_ref());
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
@@ -301,10 +303,11 @@ impl<T: Simulator> Cluster<T> {
                 key_mgr.clone(),
                 router,
                 system,
-                factory,
+                factory.clone(),
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
+            self.factory_map.insert(node_id, factory);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
             self.sst_workers_map
@@ -752,6 +755,11 @@ impl<T: Simulator> Cluster<T> {
         let engines = self.dbs.last().unwrap().clone();
         bootstrap_store(&engines, self.id(), node_id).unwrap();
         self.engines.insert(node_id, engines);
+
+        self.factory_map.insert(
+            node_id,
+            TabletFactory::clone(self.factories.last().unwrap().as_ref()),
+        );
 
         let key_mgr = self.key_managers.last().unwrap().clone();
         self.key_managers_map.insert(node_id, key_mgr);

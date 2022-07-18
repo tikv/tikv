@@ -19,7 +19,8 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
+    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions,
+    CF_LOCK,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -5376,15 +5377,16 @@ where
     ER: RaftEngine,
 {
     fn get_tablet(&self, region_id: u64) -> EK {
-        self.factory.open_tablet_cache_any(region_id).unwrap()
+        self.factory.open_tablet_cache_latest(region_id).unwrap()
     }
 
     fn get_snapshot(&mut self, _: Option<ThreadReadId>, region_id: u64) -> Arc<EK::Snapshot> {
-        if let Some(tablet) = self.factory.open_tablet_cache_any(region_id) {
-            Arc::new(tablet.snapshot())
-        } else {
-            panic!("No relevant tablet")
-        }
+        Arc::new(
+            self.factory
+                .open_tablet_cache_latest(region_id)
+                .unwrap()
+                .snapshot(),
+        )
     }
 }
 

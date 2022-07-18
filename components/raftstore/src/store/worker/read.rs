@@ -44,7 +44,12 @@ use crate::{
 };
 
 pub trait ReadExecutor<E: KvEngine> {
+    // If multi-rocksdb is enabled, we must ensure that the tablet with `region_id` must be
+    // cached in the tablet factory.
     fn get_tablet(&self, region_id: u64) -> E;
+
+    // If multi-rocksdb is enabled, we must ensure that the tablet with `region_id` must be
+    // cached in the tablet factory.
     fn get_snapshot(&mut self, ts: Option<ThreadReadId>, region_id: u64) -> Arc<E::Snapshot>;
 
     fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
@@ -456,26 +461,23 @@ where
         if self.factory.get_factory_version() == TabletFactoryVersion::Single {
             region_id = 0;
         }
-        if let Some(tablet) = self.factory.open_tablet_cache_latest(region_id) {
-            self.metrics.local_executed_requests += 1;
-            if let Some(ts) = create_time {
-                if let Some(cache_read_id) = self.cache_read_id.get(&region_id) {
-                    if ts == *cache_read_id {
-                        if let Some(snap) = self.snap_cache.get(&region_id) {
-                            self.metrics.local_executed_snapshot_cache_hit += 1;
-                            return snap.clone();
-                        }
+        let tablet = self.factory.open_tablet_cache_latest(region_id).unwrap();
+        self.metrics.local_executed_requests += 1;
+        if let Some(ts) = create_time {
+            if let Some(cache_read_id) = self.cache_read_id.get(&region_id) {
+                if ts == *cache_read_id {
+                    if let Some(snap) = self.snap_cache.get(&region_id) {
+                        self.metrics.local_executed_snapshot_cache_hit += 1;
+                        return snap.clone();
                     }
                 }
-                let snap = Arc::new(tablet.snapshot());
-                self.cache_read_id.insert(region_id, ts);
-                self.snap_cache.insert(region_id, snap.clone());
-                return snap;
             }
-            Arc::new(tablet.snapshot())
-        } else {
-            panic!("No relevant tablet")
+            let snap = Arc::new(tablet.snapshot());
+            self.cache_read_id.insert(region_id, ts);
+            self.snap_cache.insert(region_id, snap.clone());
+            return snap;
         }
+        Arc::new(tablet.snapshot())
     }
 }
 
