@@ -713,7 +713,6 @@ where
             // Forward to raftstore.
             Ok(None) => self.redirect(RaftCommand::new(req, cb)),
             Err(e) => {
-                println!("{:?}", e);
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self.delegates.get(&req.get_header().get_region_id()) {
                     cmd_resp::bind_term(&mut response, delegate.term);
@@ -997,7 +996,7 @@ mod tests {
         path: &str,
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
-        is_multi_rocksdb: bool,
+        multi_rocksdb: bool,
     ) -> (
         TempDir,
         LocalReader<MockRouter, KvTestEngine>,
@@ -1009,7 +1008,7 @@ mod tests {
             None,
             ALL_CFS,
             None,
-            is_multi_rocksdb,
+            multi_rocksdb,
         );
         let _ = factory.create_shared_db();
         let (ch, rx, _) = MockRouter::new();

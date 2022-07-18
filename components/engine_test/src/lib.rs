@@ -130,7 +130,7 @@ pub mod kv {
             db_opt: Option<DBOptions>,
             cfs: &[&str],
             opts: Option<Vec<CFOptions>>,
-            is_multi_rocksdb: bool,
+            multi_rocksdb: bool,
         ) -> Self {
             Self {
                 root_path: root_path.to_string(),
@@ -138,7 +138,7 @@ pub mod kv {
                 cfs: cfs.iter().map(|s| s.to_string()).collect(),
                 opts,
                 registry: Arc::new(Mutex::new(HashMap::default())),
-                multi_rocksdb: is_multi_rocksdb,
+                multi_rocksdb,
             }
         }
     }
