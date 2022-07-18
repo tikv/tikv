@@ -164,7 +164,7 @@ impl SubscriptionTracer {
         let region_id = region.get_id();
         let remove_result = self.0.get_mut(&region_id);
         match remove_result {
-            Some(o) => {
+            Some(mut o) => {
                 // If the state is 'removal', we should act as if the region subscription
                 // has been removed: the callback should not be called because somebody may
                 // use this method to check whether a key exists:
