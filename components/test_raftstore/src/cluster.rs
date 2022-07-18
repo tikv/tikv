@@ -656,9 +656,9 @@ impl<T: Simulator> Cluster<T> {
     /// Must be called after `create_engines`.
     pub fn bootstrap_region(&mut self) -> Result<()> {
         for (i, engines) in self.dbs.iter().enumerate() {
-            let factory = self.factories[i].clone();
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
+            let factory = self.factories[i].clone();
             self.factory_map.insert(id, factory);
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
@@ -694,6 +694,8 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
+            let factory = self.factories[i].clone();
+            self.factory_map.insert(id, factory);
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
