@@ -302,6 +302,10 @@ impl LockManagerTrait for LockManager {
     fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
         self.waiter_mgr_scheduler.dump_wait_table(cb);
     }
+
+    fn dump_wait_for_history(&self, cb: waiter_manager::Callback) {
+        self.waiter_mgr_scheduler.dump_wait_history(cb);
+    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 
 use std::{
     cell::RefCell,
+    collections::BinaryHeap,
     fmt::{self, Debug, Display, Formatter},
     pin::Pin,
     rc::Rc,
@@ -9,7 +10,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant}, mem, cmp
 };
 
 use collections::HashMap;
@@ -118,6 +119,10 @@ pub enum Task {
     Dump {
         cb: Callback,
     },
+    DumpHistory {
+        cb: Callback,
+    },
+    ChangeHistoryCapacity(usize),
     Deadlock {
         // Which txn causes deadlock
         start_ts: TimeStamp,
@@ -149,6 +154,8 @@ impl Display for Task {
             }
             Task::WakeUp { lock_ts, .. } => write!(f, "waking up txns waiting for {}", lock_ts),
             Task::Dump { .. } => write!(f, "dump"),
+            Task::DumpHistory { .. } => write!(f, "dump history"),
+            Task::ChangeHistoryCapacity(capacity) => write!(f, "change history capacity to {}", capacity),
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
             Task::ChangeConfig { timeout, delay } => write!(
                 f,
@@ -180,6 +187,7 @@ pub(crate) struct Waiter {
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
     _lifetime_timer: HistogramTimer,
+    wait_start_time: Instant,
 }
 
 impl Waiter {
@@ -199,6 +207,7 @@ impl Waiter {
             delay: Delay::new(deadline),
             diag_ctx,
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            wait_start_time: Instant::now(),
         }
     }
 
@@ -280,23 +289,65 @@ impl Waiter {
             _ => panic!("unexpected progress result"),
         }
     }
+
+    pub fn to_entry(&self) -> WaitForEntry {
+        let mut wait_for_entry = WaitForEntry::default();
+        wait_for_entry.set_txn(self.start_ts.into_inner());
+        wait_for_entry.set_wait_for_txn(self.lock.ts.into_inner());
+        wait_for_entry.set_key_hash(self.lock.hash);
+        wait_for_entry.set_key(self.diag_ctx.key.clone());
+        wait_for_entry.set_resource_group_tag(self.diag_ctx.resource_group_tag.clone());
+        wait_for_entry.set_wait_time(self.wait_start_time.elapsed().as_millis() as u64);
+        wait_for_entry
+    }
 }
 
 // NOTE: Now we assume `Waiters` is not very long.
 // Maybe needs to use `BinaryHeap` or sorted `VecDeque` instead.
 type Waiters = Vec<Waiter>;
 
+// A wrapper around `WaitForEntry` to make sure it is compared by `wait_time`.
+#[derive(Debug)]
+struct WaitForEntryWrapper(WaitForEntry);
+
+impl cmp::PartialEq for WaitForEntryWrapper {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.get_wait_time() == other.0.get_wait_time()
+    }
+}
+
+impl cmp::Eq for WaitForEntryWrapper {
+    
+}
+
+impl cmp::PartialOrd for WaitForEntryWrapper {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        other.0.get_wait_time().partial_cmp(&self.0.get_wait_time())
+    }
+}
+
+impl cmp::Ord for WaitForEntryWrapper {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        other.0.get_wait_time().cmp(&self.0.get_wait_time())
+    }
+}
+
 struct WaitTable {
     // Map lock hash to waiters.
     wait_table: HashMap<u64, Waiters>,
     waiter_count: Arc<AtomicUsize>,
+    // The wait history entries are sorted by `wait_time`, we'll keep the largest `wait_history_capacity` entries.
+    history: BinaryHeap<WaitForEntryWrapper>,
+    wait_history_capacity: usize,
 }
 
 impl WaitTable {
-    fn new(waiter_count: Arc<AtomicUsize>) -> Self {
+    fn new(waiter_count: Arc<AtomicUsize>, wait_history_capacity: usize) -> Self {
         Self {
             wait_table: HashMap::default(),
             waiter_count,
+            history: BinaryHeap::with_capacity(wait_history_capacity),
+            wait_history_capacity,
         }
     }
 
@@ -345,6 +396,10 @@ impl WaitTable {
         if waiters.is_empty() {
             self.remove(lock);
         }
+        self.history.push(waiter.to_entry()).to_entry());
+        if self.history.len() > self.wait_history_capacity {
+            self.history.pop();
+        }
         Some(waiter)
     }
 
@@ -363,24 +418,17 @@ impl WaitTable {
         let oldest = waiters.swap_remove(oldest_idx);
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
         WAIT_TABLE_STATUS_GAUGE.txns.dec();
+        self.history.push(oldest.to_entry());
+        if self.history.len() > self.wait_history_capacity {
+            self.history.pop();
+        }
         Some((oldest, waiters))
     }
 
     fn to_wait_for_entries(&self) -> Vec<WaitForEntry> {
         self.wait_table
             .iter()
-            .flat_map(|(_, waiters)| {
-                waiters.iter().map(|waiter| {
-                    let mut wait_for_entry = WaitForEntry::default();
-                    wait_for_entry.set_txn(waiter.start_ts.into_inner());
-                    wait_for_entry.set_wait_for_txn(waiter.lock.ts.into_inner());
-                    wait_for_entry.set_key_hash(waiter.lock.hash);
-                    wait_for_entry.set_key(waiter.diag_ctx.key.clone());
-                    wait_for_entry
-                        .set_resource_group_tag(waiter.diag_ctx.resource_group_tag.clone());
-                    wait_for_entry
-                })
-            })
+            .flat_map(|(_, waiters)| waiters.iter().map(|waiter| waiter.into()))
             .collect()
     }
 }
@@ -432,6 +480,10 @@ impl Scheduler {
     }
 
     pub fn dump_wait_table(&self, cb: Callback) -> bool {
+        self.notify_scheduler(Task::DumpHistory { cb })
+    }
+
+    pub fn dump_wait_history(&self, cb: Callback) -> bool {
         self.notify_scheduler(Task::Dump { cb })
     }
 
@@ -456,6 +508,13 @@ impl Scheduler {
         delay: Option<ReadableDuration>,
     ) {
         self.notify_scheduler(Task::ChangeConfig { timeout, delay });
+    }
+
+    pub fn change_wait_history_capacity(
+        &self,
+        capacity: usize
+    ) {
+        self.notify_scheduler(Task::ChangeHistoryCapacity(capacity));
     }
 
     #[cfg(any(test, feature = "testexport"))]
@@ -486,7 +545,10 @@ impl WaiterManager {
         cfg: &Config,
     ) -> Self {
         Self {
-            wait_table: Rc::new(RefCell::new(WaitTable::new(waiter_count))),
+            wait_table: Rc::new(RefCell::new(WaitTable::new(
+                waiter_count,
+                cfg.wait_history_capacity,
+            ))),
             detector_scheduler,
             default_wait_for_lock_timeout: cfg.wait_for_lock_timeout,
             wake_up_delay_duration: cfg.wake_up_delay_duration,
@@ -549,6 +611,11 @@ impl WaiterManager {
 
     fn handle_dump(&self, cb: Callback) {
         cb(self.wait_table.borrow().to_wait_for_entries());
+    }
+
+    fn handle_dump_history(&self, cb: Callback) {
+        let history = mem::take(&mut self.wait_table.borrow_mut().history).into().collect();
+        cb(history);
     }
 
     fn handle_deadlock(
@@ -617,6 +684,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 self.handle_dump(cb);
                 TASK_COUNTER_METRICS.dump.inc();
             }
+            Task::DumpHistory { cb } => self.handle_dump_history(cb),
             Task::Deadlock {
                 start_ts,
                 lock,
@@ -631,6 +699,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 self.default_wait_for_lock_timeout,
                 self.wake_up_delay_duration,
             ),
+            Task::ChangeHistoryCapacity(capacity) => self.wait_table.borrow_mut().wait_history_capacity = capacity,
         }
     }
 }
@@ -659,6 +728,7 @@ pub mod tests {
             diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            wait_start_time: Instant::now(),
         }
     }
 
@@ -941,7 +1011,7 @@ pub mod tests {
 
     #[test]
     fn test_wait_table_add_and_remove() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)), 0);
         let mut waiter_info = Vec::new();
         let mut rng = rand::thread_rng();
         for _ in 0..20 {
@@ -982,7 +1052,7 @@ pub mod tests {
 
     #[test]
     fn test_wait_table_add_duplicated_waiter() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)), 0);
         let waiter_ts = 10.into();
         let lock = Lock {
             ts: 20.into(),
@@ -1002,7 +1072,7 @@ pub mod tests {
 
     #[test]
     fn test_wait_table_remove_oldest_waiter() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)), 0);
         let lock = Lock {
             ts: 10.into(),
             hash: 10,
@@ -1030,7 +1100,7 @@ pub mod tests {
     #[test]
     fn test_wait_table_is_empty() {
         let waiter_count = Arc::new(AtomicUsize::new(0));
-        let mut wait_table = WaitTable::new(Arc::clone(&waiter_count));
+        let mut wait_table = WaitTable::new(Arc::clone(&waiter_count), 0);
 
         let lock = Lock {
             ts: 2.into(),
@@ -1066,7 +1136,7 @@ pub mod tests {
 
     #[test]
     fn test_wait_table_to_wait_for_entries() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)), 0);
         assert!(wait_table.to_wait_for_entries().is_empty());
 
         for i in 1..5 {

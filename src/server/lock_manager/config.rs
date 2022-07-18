@@ -31,6 +31,8 @@ pub struct Config {
     /// we assume that the success rate of pessimistic transactions is important to
     /// people who disable the pipelined pessimistic lock feature.
     pub in_memory: bool,
+    /// maximum lock wait information count to be stored in memory
+    pub wait_history_capacity: usize,
 }
 
 // u64 is for backward compatibility since v3.x uses it.
@@ -62,6 +64,7 @@ impl Default for Config {
             wake_up_delay_duration: ReadableDuration::millis(20),
             pipelined: true,
             in_memory: true,
+            wait_history_capacity: 0,
         }
     }
 }
@@ -87,7 +90,7 @@ impl LockManagerConfigManager {
         waiter_mgr_scheduler: WaiterMgrScheduler,
         detector_scheduler: DeadlockScheduler,
         pipelined: Arc<AtomicBool>,
-        in_memory: Arc<AtomicBool>,
+        in_memory: Arc<AtomicBool>
     ) -> Self {
         LockManagerConfigManager {
             waiter_mgr_scheduler,
@@ -116,6 +119,9 @@ impl ConfigManager for LockManagerConfigManager {
         }
         if let Some(p) = change.remove("in_memory").map(Into::into) {
             self.in_memory.store(p, Ordering::Relaxed);
+        }
+        if let Some(p) = change.remove("wait_history_capacity").map(Into::into) {
+            self.waiter_mgr_scheduler.change_wait_history_capacity(p);
         }
         Ok(())
     }

@@ -97,6 +97,8 @@ pub trait LockManager: Clone + Send + 'static {
     }
 
     fn dump_wait_for_entries(&self, cb: waiter_manager::Callback);
+
+    fn dump_wait_for_history(&self, cb: waiter_manager::Callback);
 }
 
 // For test
@@ -126,6 +128,11 @@ impl LockManager for DummyLockManager {
     }
 
     fn dump_wait_for_entries(&self, cb: Callback) {
+        cb(vec![])
+    }
+
+
+    fn dump_wait_for_history(&self, cb: waiter_manager::Callback) {
         cb(vec![])
     }
 }
