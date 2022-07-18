@@ -164,10 +164,9 @@ impl SubscriptionTracer {
         let region_id = region.get_id();
         let remove_result = self.0.get_mut(&region_id);
         match remove_result {
+            Some(o) if o.state == SubscriptionState::Removal => false,
             Some(mut o) if if_cond(o.value(), region) => {
-                if o.state != SubscriptionState::Removal {
-                    TRACK_REGION.dec();
-                }
+                TRACK_REGION.dec();
                 o.value_mut().stop();
                 info!("stop listen stream from store"; "observer" => ?o.value(), "region_id"=> %region_id);
                 true
