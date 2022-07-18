@@ -57,7 +57,7 @@ fn create_tmp_engine(
     Box<dyn TabletFactory<RocksEngine> + Send>,
 ) {
     let env = cfg.build_shared_rocks_env(None, None).unwrap();
-    let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path().join("db").to_str().unwrap());
+    let builder = KvEngineFactoryBuilder::new(env, cfg, dir.path().join("db").to_str().unwrap());
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
 

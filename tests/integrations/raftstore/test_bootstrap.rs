@@ -127,7 +127,7 @@ fn test_node_bootstrap_with_prepared_data() {
     )
     .unwrap();
     assert!(
-        Arc::clone(&engine.as_inner())
+        Arc::clone(engine.as_inner())
             .c()
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()

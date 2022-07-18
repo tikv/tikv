@@ -85,11 +85,10 @@ impl KvEngineFactoryBuilder {
     }
 
     pub fn build(self) -> impl TabletFactory<RocksEngine> {
-        let factory = KvEngineFactory {
+        KvEngineFactory {
             inner: Arc::new(self.inner),
             compact_event_sender: self.compact_event_sender.clone(),
-        };
-        factory
+        }
     }
 
     pub fn buildv2(self) -> impl TabletFactory<RocksEngine> {
@@ -97,11 +96,10 @@ impl KvEngineFactoryBuilder {
             inner: Arc::new(self.inner),
             compact_event_sender: self.compact_event_sender.clone(),
         };
-        let factory = KvEngineFactoryV2 {
+        KvEngineFactoryV2 {
             inner: factory,
             registry: Arc::new(Mutex::new(HashMap::default())),
-        };
-        factory
+        }
     }
 }
 

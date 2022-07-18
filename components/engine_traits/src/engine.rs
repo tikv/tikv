@@ -259,7 +259,7 @@ where
         Ok(self.engine.as_ref().unwrap().clone())
     }
 
-    fn open_tablet_cache_latest(&self, id: u64) -> Option<EK> {
+    fn open_tablet_cache_latest(&self, _id: u64) -> Option<EK> {
         Some(self.engine.as_ref().unwrap().clone())
     }
 

@@ -172,13 +172,12 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
     ) -> Result<Option<Vec<u8>>> {
         // no scan_count for this kind of op.
         let key_len = key.as_encoded().len();
-        let val = self.snapshot.get_cf(cf, key).map(|value| {
+        self.snapshot.get_cf(cf, key).map(|value| {
             stats.data.flow_stats.read_keys = 1;
             stats.data.flow_stats.read_bytes =
                 key_len + value.as_ref().map(|v| v.len()).unwrap_or(0);
             value
-        });
-        val
+        })
     }
 
     /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys. If `end_key` is

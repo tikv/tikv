@@ -38,8 +38,6 @@
 
 #![cfg(test)]
 
-use engine_test::kv::TestTabletFactory;
-
 mod basic_read_write;
 mod cf_names;
 mod ctor;

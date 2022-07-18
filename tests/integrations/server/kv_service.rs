@@ -11,8 +11,8 @@ use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
 use engine_traits::{
-    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE, TabletFactory,
+    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, TabletFactory, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
@@ -965,7 +965,7 @@ fn test_double_run_node() {
     cluster.run();
     let id = *cluster.engines.keys().next().unwrap();
     let engines = cluster.engines.values().next().unwrap().clone();
-    let factory = cluster.factory_map.values().next().unwrap().clone();
+    let factory = cluster.factory_map.values().next().unwrap();
     let router = cluster.sim.rl().get_router(id).unwrap();
     let mut sim = cluster.sim.wl();
     let node = sim.get_node(id).unwrap();
@@ -1179,25 +1179,28 @@ fn test_batch_get_commands_in_multi_rocksdb() {
     let peer_2 = cluster.leader_of_region(region_2.get_id()).unwrap();
     let peer_3 = cluster.leader_of_region(region_3.get_id()).unwrap();
     let (client, mut ctx) = build_client(&cluster);
-    ctx.set_region_id(region_1.get_id());
-    ctx.set_region_epoch(region_1.get_region_epoch().clone());
-    ctx.set_peer(peer_1);
 
     let (mut sender, receiver) = client.batch_commands().unwrap();
-    for i in 0..9 {
+    for i in 0..10 {
         let mut batch_req = BatchCommandsRequest::default();
-        for j in 0..10 {
-            let idx = i * 10 + j;
-            if idx == 30 {
+        for j in 0..9 {
+            // Use 10 * j rather than 10 * i to let each batch contain requests for different regions
+            let idx = i + 10 * j;
+
+            if idx < 30 {
+                ctx.set_region_id(region_1.get_id());
+                ctx.set_region_epoch(region_1.get_region_epoch().clone());
+                ctx.set_peer(peer_1.clone());
+            } else if idx < 60 {
                 ctx.set_region_id(region_2.get_id());
                 ctx.set_region_epoch(region_2.get_region_epoch().clone());
                 ctx.set_peer(peer_2.clone());
-            }
-            if idx == 60 {
+            } else if idx < 90 {
                 ctx.set_region_id(region_3.get_id());
                 ctx.set_region_epoch(region_3.get_region_epoch().clone());
                 ctx.set_peer(peer_3.clone());
             }
+
             let mut get = RawGetRequest::default();
             get.set_key(format!("k{:02}", idx).into_bytes());
             get.set_context(ctx.clone());

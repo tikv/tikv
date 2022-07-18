@@ -1421,7 +1421,7 @@ mod tests {
     #[test]
     fn test_snap_cache_hit_in_single_rocksdb() {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-        let (_tmp, mut reader, _) = new_reader("test-local-reader", 1, store_meta.clone(), false);
+        let (_tmp, mut reader, _) = new_reader("test-local-reader", 1, store_meta, false);
         let read_id = Some(ThreadReadId::new());
         for i in 0..10 {
             // Different region id should reuse the cache
@@ -1442,7 +1442,7 @@ mod tests {
         let _ = reader.get_snapshot(read_id.clone(), 1);
         // After release, we will mss the cache even with the prevsiou read_id.
         assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 10);
-        let _ = reader.get_snapshot(read_id.clone(), 1);
+        let _ = reader.get_snapshot(read_id, 1);
         // We can hit it again.
         assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 11);
     }
@@ -1450,7 +1450,7 @@ mod tests {
     #[test]
     fn test_snap_cache_hit_in_multi_rocksdb() {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-        let (_tmp, mut reader, _) = new_reader("test-local-reader", 1, store_meta.clone(), true);
+        let (_tmp, mut reader, _) = new_reader("test-local-reader", 1, store_meta, true);
         // Create some tablets (rocksdb)
         for i in 1..10 {
             let _ = reader.factory.create_tablet(i, 0);

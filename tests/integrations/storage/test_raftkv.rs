@@ -64,7 +64,6 @@ fn test_get_snapshot_from_different_tablet() {
     let region_1 = region.get_id();
     let region = cluster.get_region(b"i");
     let region_2 = region.get_id();
-    println!("{} {}", region_1, region_2);
 
     let factory = cluster.get_tablet_factory(1).unwrap();
 
