@@ -574,6 +574,34 @@ lazy_static! {
     pub static ref RAFT_ENTRY_FETCHES: RaftEntryFetches =
         auto_flush_from!(RAFT_ENTRY_FETCHES_VEC, RaftEntryFetches);
 
+    // FIXME: use a HistogramVec instead.
+    //
+    // Relations among different raft_entry_fetch duration
+    //
+    // task = db + scheduler_wait
+    // used = task + raft_one_loop??
+    // total = used + sync_fetch
+    pub static ref RAFT_ENTRY_FETCHES_TASK_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_entry_fetches_task_duration_seconds",
+            "Bucketed histogram of raft entry fetches duration.",
+            exponential_buckets(0.00005, 1.8, 26).unwrap()
+        ).unwrap();
+
+    pub static ref RAFT_ENTRY_FETCHES_USED_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_entry_fetches_used_duration_seconds",
+            "Bucketed histogram of using raft entry fetches result duration.",
+            exponential_buckets(0.00005, 1.8, 26).unwrap()
+        ).unwrap();
+
+    pub static ref RAFT_ENTRY_FETCHES_TOTAL_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_entry_fetches_total_duration_seconds",
+            "Bucketed histogram of raft entry fetches total duration.",
+            exponential_buckets(0.00005, 1.8, 26).unwrap()
+        ).unwrap();
+
     pub static ref LEADER_MISSING: IntGauge =
         register_int_gauge!(
             "tikv_raftstore_leader_missing",

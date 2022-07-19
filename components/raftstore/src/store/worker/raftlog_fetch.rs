@@ -5,8 +5,9 @@ use std::fmt;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use raft::GetEntriesContext;
-use tikv_util::worker::Runnable;
+use tikv_util::{time::Instant, worker::Runnable};
 
+use super::metrics::*;
 use crate::store::{RaftlogFetchResult, SignificantMsg, SignificantRouter, MAX_INIT_ENTRY_COUNT};
 
 pub enum Task {
@@ -84,6 +85,8 @@ where
             } => {
                 let mut ents =
                     Vec::with_capacity(std::cmp::min((high - low) as usize, MAX_INIT_ENTRY_COUNT));
+
+                let start_time = Instant::now();
                 let res = self.raft_engine.fetch_entries_to(
                     region_id,
                     low,
@@ -91,6 +94,8 @@ where
                     Some(max_size),
                     &mut ents,
                 );
+                RAFT_ENTRY_FETCHES_DB_DURATION_HISTOGRAM
+                    .observe(start_time.saturating_elapsed_secs());
 
                 let hit_size_limit = res
                     .as_ref()

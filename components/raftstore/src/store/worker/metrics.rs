@@ -128,6 +128,12 @@ lazy_static! {
         "Total number of stale read requests directly executed by local reader."
     )
     .unwrap();
+    pub static ref RAFT_ENTRY_FETCHES_DB_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raftstore_entry_fetches_db_duration_seconds",
+        "Bucketed histogram of raft entry fetches db duration.",
+        exponential_buckets(0.00005, 1.8, 26).unwrap()
+    )
+    .unwrap();
     pub static ref RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_raft_log_gc_write_duration_secs",
         "Bucketed histogram of write duration of raft log gc.",
