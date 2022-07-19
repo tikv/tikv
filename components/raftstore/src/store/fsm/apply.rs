@@ -93,6 +93,7 @@ use crate::{
     },
     Error, Result,
 };
+use crate::coprocessor::ApplyCtxInfo;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -404,6 +405,11 @@ where
     /// this entry will never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SstMetaInfo>,
 
+    /// A self-defined engine may be slow to ingest ssts.
+    /// It may move some elements of `delete_ssts` into `pending_clean_ssts` to delay deletion.
+    /// Otherwise we may lost data.
+    pending_clean_ssts: Vec<SstMetaInfo>,
+
     /// The priority of this Handler.
     priority: Priority,
     /// Whether to yield high-latency operation to low-priority handler.
@@ -461,6 +467,7 @@ where
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
             delete_ssts: vec![],
+            pending_clean_ssts: vec![],
             store_id,
             pending_create_peers,
             priority,
@@ -1305,6 +1312,10 @@ where
         self.applied_index_term = term;
 
         let cmd = Cmd::new(index, term, req.clone(), resp.clone());
+        let apply_ctx_info = ApplyCtxInfo {
+            delete_ssts: &mut ctx.delete_ssts,
+            pending_clean_ssts: &mut ctx.pending_clean_ssts,
+        };
         let should_write = ctx.host.post_exec(
             &self.region,
             &cmd,
@@ -1323,6 +1334,7 @@ where
                     _ => None,
                 },
             },
+            &apply_ctx_info,
         );
 
         if let ApplyResult::Res(ref exec_result) = exec_result {
@@ -4946,12 +4958,13 @@ mod tests {
     }
 
     impl AdminObserver for ApplyObserver {
-        fn post_exec_admin(
+        fn post_exec_admin<'a>(
             &self,
             _: &mut ObserverContext<'_>,
             cmd: &Cmd,
             _: &RaftApplyState,
             region_state: &RegionState,
+            _: &ApplyCtxInfo<'a>
         ) -> bool {
             let request = cmd.request.get_admin_request();
             match request.get_cmd_type() {

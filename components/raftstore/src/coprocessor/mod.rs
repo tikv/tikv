@@ -9,6 +9,7 @@ use std::{
     vec::IntoIter,
 };
 
+use engine_traits::SstMetaInfo;
 use engine_traits::CfName;
 use kvproto::{
     metapb::Region,
@@ -62,6 +63,11 @@ pub struct ObserverContext<'a> {
     pub bypass: bool,
 }
 
+pub struct ApplyCtxInfo<'a> {
+    pub delete_ssts: &'a mut Vec<SstMetaInfo>,
+    pub pending_clean_ssts: &'a mut Vec<SstMetaInfo>,
+}
+
 impl<'a> ObserverContext<'a> {
     pub fn new(region: &Region) -> ObserverContext<'_> {
         ObserverContext {
@@ -101,12 +107,13 @@ pub trait AdminObserver: Coprocessor {
 
     /// Hook to call immediately after exec command
     /// Will be a special persistence after this exec if a observer returns true.
-    fn post_exec_admin(
+    fn post_exec_admin<'a>(
         &self,
         _: &mut ObserverContext<'_>,
         _: &Cmd,
         _: &RaftApplyState,
         _: &RegionState,
+        _: &ApplyCtxInfo<'a>
     ) -> bool {
         false
     }
@@ -137,12 +144,13 @@ pub trait QueryObserver: Coprocessor {
 
     /// Hook to call immediately after exec command.
     /// Will be a special persistence after this exec if a observer returns true.
-    fn post_exec_query(
+    fn post_exec_query<'a>(
         &self,
         _: &mut ObserverContext<'_>,
         _: &Cmd,
         _: &RaftApplyState,
         _: &RegionState,
+        _: &ApplyCtxInfo<'a>
     ) -> bool {
         false
     }

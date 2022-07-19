@@ -443,18 +443,19 @@ impl<E: KvEngine> CoprocessorHost<E> {
     /// It notifies observers side effects of this command before execution of the next command,
     /// including req/resp, apply state, modified region state, etc.
     /// Return true observers think a persistence is necessary.
-    pub fn post_exec(
+    pub fn post_exec<'a>(
         &self,
         region: &Region,
         cmd: &Cmd,
         apply_state: &RaftApplyState,
         region_state: &RegionState,
+        apply_ctx: &ApplyCtxInfo<'a>
     ) -> bool {
         let mut ctx = ObserverContext::new(region);
         if !cmd.response.has_admin_response() {
             for observer in &self.registry.query_observers {
                 let observer = observer.observer.inner();
-                if observer.post_exec_query(&mut ctx, cmd, apply_state, region_state) {
+                if observer.post_exec_query(&mut ctx, cmd, apply_state, region_state, apply_ctx) {
                     return true;
                 }
             }
@@ -462,7 +463,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         } else {
             for observer in &self.registry.admin_observers {
                 let observer = observer.observer.inner();
-                if observer.post_exec_admin(&mut ctx, cmd, apply_state, region_state) {
+                if observer.post_exec_admin(&mut ctx, cmd, apply_state, region_state, apply_ctx) {
                     return true;
                 }
             }
