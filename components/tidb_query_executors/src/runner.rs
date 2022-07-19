@@ -442,8 +442,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
-
         let mut time_slice_start = Instant::now();
+
         loop {
             // Check whether we should yield from the execution
             if need_reschedule(time_slice_start) {
@@ -456,13 +456,19 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             let mut sample = self.quota_limiter.new_sample();
             let (drained, record_len) = {
                 let _guard = sample.observe_cpu();
-                self.internal_handle_request(
+                match self.internal_handle_request(
                     false,
                     batch_size,
                     &mut chunk,
                     &mut warnings,
                     &mut ctx,
-                )?
+                ) {
+                    Ok((drained, record_len)) => (drained, record_len),
+                    Err(e) => {
+                        MEMTRACE_QUERY_EXECUTOR.chunk.sub(record_all as i64);
+                        return Err(e);
+                    }
+                }
             };
 
             let quota_delay = self.quota_limiter.consume_sample(sample, true).await;

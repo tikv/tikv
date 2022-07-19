@@ -312,7 +312,6 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
             .copied();
 
-        let mut n_bytes = 0;
         let mut last_index = 0usize;
         for handle_index in &self.handle_indices {
             // `handle_indices` is expected to be sorted.
@@ -328,7 +327,6 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 } else {
                     columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
                 }
-                n_bytes += columns.last().unwrap().len();
             }
 
             // For PK handles, we construct a decoded `VectorValue` because it is directly
@@ -339,7 +337,6 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             ));
 
             last_index = *handle_index + 1;
-            n_bytes += columns.last().unwrap().len();
         }
 
         // Then fill remaining columns after the last handle column. If there are no PK columns,
@@ -354,11 +351,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             } else {
                 columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
             }
-            n_bytes += columns.last().unwrap().len();
         }
-
-        // FIXME: Need a mutable ref
-        // self.alloc_trace(n_bytes);
 
         assert_eq!(columns.len(), columns_len);
         LazyBatchColumnVec::from(columns)
