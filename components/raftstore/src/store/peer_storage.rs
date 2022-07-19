@@ -843,6 +843,7 @@ where
 
     // Update the async fetch result.
     // None indicates cleanning the fetched result.
+    #[allow(unused_assignments)]
     pub fn update_async_fetch_res(&mut self, low: u64, res: Option<Box<RaftlogFetchResult>>) {
         // If it's in fetching, don't clean the async fetch result.
         if let Some((_, RaftlogFetchState::Fetching)) = self.async_fetch_results.borrow().get(&low)
@@ -853,30 +854,32 @@ where
         }
 
         match res {
-            Some(res) => match self.async_fetch_results.borrow().get(&low) {
-                Some((time, RaftlogFetchState::Fetching)) => {
-                    RAFT_ENTRY_FETCHES_TASK_DURATION_HISTOGRAM
-                        .observe(time.saturating_elapsed_secs());
-                    self.async_fetch_results
-                        .borrow_mut()
-                        .insert(low, (*time, RaftlogFetchState::Fetched(res)));
-                }
-                Some((_, RaftlogFetchState::Fetched(prev))) => {
-                    info!(
-                        "unconsumed async fetch res";
-                        "region_id" => self.region.get_id(),
-                        "peer_id" => self.peer_id,
-                        "res" => ?prev,
-                        "low" => low,
-                    );
-                }
-                _ => {
-                    info!("I think this should not happen!");
-                    self.async_fetch_results
-                        .borrow_mut()
-                        .insert(low, (Instant::now(), RaftlogFetchState::Fetched(res)));
-                }
-            },
+            Some(res) => {
+                let mut results = self.async_fetch_results.borrow_mut();
+                let mut start_time = None;
+                match results.get(&low) {
+                    Some((time, RaftlogFetchState::Fetching)) => {
+                        RAFT_ENTRY_FETCHES_TASK_DURATION_HISTOGRAM
+                            .observe(time.saturating_elapsed_secs());
+                        start_time = Some(*time)
+                    }
+                    Some((_, RaftlogFetchState::Fetched(prev))) => {
+                        info!(
+                            "unconsumed async fetch res";
+                            "region_id" => self.region.get_id(),
+                            "peer_id" => self.peer_id,
+                            "res" => ?prev,
+                            "low" => low,
+                        );
+                        return;
+                    }
+                    _ => {
+                        info!("I think this should not happen!");
+                        start_time = Some(Instant::now());
+                    }
+                };
+                results.insert(low, (start_time.unwrap(), RaftlogFetchState::Fetched(res)));
+            }
             None => {
                 let prev = self.async_fetch_results.borrow_mut().remove(&low);
                 if prev.is_some() {
