@@ -100,12 +100,11 @@ impl ExternalStorage for LocalStorage {
                     }
                 })?;
         }
-        // Sanitize check, do not save file if it is already exist.
+
+        // Because s3 could support writing(put_object) a existed object.
+        // For the interface consistent with s3, local storage need also support write a existed file.
         if fs::metadata(self.base.join(name)).await.is_ok() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("[{}] is already exists in {}", name, self.base.display()),
-            ));
+            info!("[{}] is already exists in {}", name, self.base.display());
         }
         let tmp_path = self.tmp_path(Path::new(name));
         let mut tmp_f = File::create(&tmp_path).await?;
