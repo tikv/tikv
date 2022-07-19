@@ -31,32 +31,6 @@ use crate::store::{
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
 pub const TOP_N: usize = 10;
 
-// LOAD_BASE_SPLIT_EVENT metrics label definitions.
-// Workload fits the QPS threshold or byte threshold.
-const LOAD_FIT: &str = "load_fit";
-// Workload fits the CPU threshold.
-const CPU_LOAD_FIT: &str = "cpu_load_fit";
-// The statistical key is empty.
-const EMPTY_STATISTICAL_KEY: &str = "empty_statistical_key";
-// Split info has been collected, ready to split.
-const READY_TO_SPLIT: &str = "ready_to_split";
-// Split info has not been collected yet, not ready to split.
-const NOT_READY_TO_SPLIT: &str = "not_ready_to_split";
-// The number of sampled keys does not meet the threshold.
-const NO_ENOUGH_SAMPLED_KEY: &str = "no_enough_sampled_key";
-// The number of sampled keys located on left and right does not meet the threshold.
-const NO_ENOUGH_LR_KEY: &str = "no_enough_lr_key";
-// The number of balanced keys does not meet the score.
-const NO_BALANCE_KEY: &str = "no_balance_key";
-// The number of contained keys does not meet the score.
-const NO_UNCROSS_KEY: &str = "no_uncross_key";
-// Split info for the top hot CPU region has been collected, ready to split.
-const READY_TO_SPLIT_CPU_TOP: &str = "ready_to_split_cpu_top";
-// Hottest key range for the top hot CPU region could not be found.
-const EMPTY_HOTTEST_KEY_RANGE: &str = "empty_hottest_key_range";
-// The top hot CPU region could not be split.
-const UNABLE_TO_SPLIT_CPU_TOP: &str = "unable_to_split_cpu_top";
-
 // It will return prefix sum of the given iter,
 // `read` is a function to process the item from the iter.
 #[inline(always)]
@@ -231,9 +205,7 @@ impl Samples {
             }
             let evaluated_key_num_lr = sample.left + sample.right;
             if evaluated_key_num_lr == 0 {
-                LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[NO_ENOUGH_LR_KEY])
-                    .inc();
+                LOAD_BASE_SPLIT_EVENT.no_enough_lr_key.inc();
                 continue;
             }
             let evaluated_key_num = (sample.contained + evaluated_key_num_lr) as f64;
@@ -246,9 +218,7 @@ impl Samples {
                 .with_label_values(&["balance_score"])
                 .observe(balance_score);
             if balance_score >= split_balance_score {
-                LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[NO_BALANCE_KEY])
-                    .inc();
+                LOAD_BASE_SPLIT_EVENT.no_balance_key.inc();
                 continue;
             }
 
@@ -259,9 +229,7 @@ impl Samples {
                 .with_label_values(&["contained_score"])
                 .observe(contained_score);
             if contained_score >= split_contained_score {
-                LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[NO_UNCROSS_KEY])
-                    .inc();
+                LOAD_BASE_SPLIT_EVENT.no_uncross_key.inc();
                 continue;
             }
 
@@ -336,7 +304,7 @@ impl Recorder {
         // so we do this check after the samples are calculated.
         if (recorded_key_ranges.len() as u64) < config.sample_threshold {
             LOAD_BASE_SPLIT_EVENT
-                .with_label_values(&[NO_ENOUGH_SAMPLED_KEY])
+                .no_enough_sampled_key
                 .inc_by(samples.0.len() as u64);
             return vec![];
         }
@@ -834,7 +802,7 @@ impl AutoSplitController {
                 continue;
             }
 
-            LOAD_BASE_SPLIT_EVENT.with_label_values(&[LOAD_FIT]).inc();
+            LOAD_BASE_SPLIT_EVENT.load_fit.inc();
 
             let detect_times = self.cfg.detect_times;
             let recorder = self
@@ -853,9 +821,7 @@ impl AutoSplitController {
                 RegionInfo::get_key_ranges_mut,
             );
             if key_ranges.is_empty() {
-                LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[EMPTY_STATISTICAL_KEY])
-                    .inc();
+                LOAD_BASE_SPLIT_EVENT.empty_statistical_key.inc();
                 continue;
             }
             recorder.record(key_ranges);
@@ -867,9 +833,7 @@ impl AutoSplitController {
                         recorder.peer.clone(),
                         key,
                     ));
-                    LOAD_BASE_SPLIT_EVENT
-                        .with_label_values(&[READY_TO_SPLIT])
-                        .inc();
+                    LOAD_BASE_SPLIT_EVENT.ready_to_split.inc();
                     info!("load base split region";
                         "region_id" => region_id,
                         "qps" => qps,
@@ -878,15 +842,11 @@ impl AutoSplitController {
                     );
                     self.recorders.remove(&region_id);
                 } else if is_unified_read_pool_busy && is_region_busy {
-                    LOAD_BASE_SPLIT_EVENT
-                        .with_label_values(&[CPU_LOAD_FIT])
-                        .inc();
+                    LOAD_BASE_SPLIT_EVENT.cpu_load_fit.inc();
                     top_cpu_usage.push(region_id);
                 }
             } else {
-                LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[NOT_READY_TO_SPLIT])
-                    .inc();
+                LOAD_BASE_SPLIT_EVENT.not_ready_to_split.inc();
             }
 
             top_qps.push(qps);
@@ -894,49 +854,46 @@ impl AutoSplitController {
 
         // Check if the top CPU usage region could be split.
         // TODO: avoid unnecessary split by introducing the feedback mechanism from PD.
-        if !top_cpu_usage.is_empty() && !is_grpc_poll_busy {
-            // Calculate by using the latest CPU usage.
-            top_cpu_usage.sort_unstable_by(|a, b| {
-                let cpu_usage_a = self.recorders.get(a).unwrap().cpu_usage;
-                let cpu_usage_b = self.recorders.get(b).unwrap().cpu_usage;
-                cpu_usage_b.partial_cmp(&cpu_usage_a).unwrap()
-            });
-            let region_id = top_cpu_usage[0];
-            let recorder = self.recorders.get_mut(&region_id).unwrap();
-            if recorder.hottest_key_range.is_some() {
-                split_infos.push(SplitInfo::with_start_end_key(
-                    region_id,
-                    recorder.peer.clone(),
-                    recorder
-                        .hottest_key_range
-                        .as_ref()
-                        .unwrap()
-                        .start_key
-                        .clone(),
-                    recorder.hottest_key_range.as_ref().unwrap().end_key.clone(),
-                ));
-                LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[READY_TO_SPLIT_CPU_TOP])
-                    .inc();
-                info!("load base split region";
-                    "region_id" => region_id,
-                    "start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
-                    "end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),
-                    "cpu_usage" => recorder.cpu_usage,
-                );
+        if !top_cpu_usage.is_empty() {
+            // Only split the top CPU region when the gRPC poll is not busy.
+            if !is_grpc_poll_busy {
+                // Calculate by using the latest CPU usage.
+                top_cpu_usage.sort_unstable_by(|a, b| {
+                    let cpu_usage_a = self.recorders.get(a).unwrap().cpu_usage;
+                    let cpu_usage_b = self.recorders.get(b).unwrap().cpu_usage;
+                    cpu_usage_b.partial_cmp(&cpu_usage_a).unwrap()
+                });
+                let region_id = top_cpu_usage[0];
+                let recorder = self.recorders.get_mut(&region_id).unwrap();
+                if recorder.hottest_key_range.is_some() {
+                    split_infos.push(SplitInfo::with_start_end_key(
+                        region_id,
+                        recorder.peer.clone(),
+                        recorder
+                            .hottest_key_range
+                            .as_ref()
+                            .unwrap()
+                            .start_key
+                            .clone(),
+                        recorder.hottest_key_range.as_ref().unwrap().end_key.clone(),
+                    ));
+                    LOAD_BASE_SPLIT_EVENT.ready_to_split_cpu_top.inc();
+                    info!("load base split region";
+                        "region_id" => region_id,
+                        "start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
+                        "end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),
+                        "cpu_usage" => recorder.cpu_usage,
+                    );
+                } else {
+                    LOAD_BASE_SPLIT_EVENT.empty_hottest_key_range.inc();
+                }
             } else {
-                LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&[EMPTY_HOTTEST_KEY_RANGE])
-                    .inc();
+                LOAD_BASE_SPLIT_EVENT.unable_to_split_cpu_top.inc();
             }
-        } else {
-            LOAD_BASE_SPLIT_EVENT
-                .with_label_values(&[UNABLE_TO_SPLIT_CPU_TOP])
-                .inc();
-        }
-        // Clean up the rest top CPU usage recorders.
-        for region_id in top_cpu_usage {
-            self.recorders.remove(&region_id);
+            // Clean up the rest top CPU usage recorders.
+            for region_id in top_cpu_usage {
+                self.recorders.remove(&region_id);
+            }
         }
 
         (top_qps.into_vec(), split_infos)
