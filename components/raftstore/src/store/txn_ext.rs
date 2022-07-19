@@ -38,7 +38,7 @@ impl TxnExt {
 
     pub fn new(cfg: &Config) -> Self {
         let pessimistic_locks =
-            RwLock::new(PeerPessimisticLocks::new(cfg.in_memory_capacity.0 as usize));
+            RwLock::new(PeerPessimisticLocks::new(cfg.in_memory_pessimistic_locks_capacity.0 as usize));
         TxnExt {
             pessimistic_locks,
             max_ts_sync_status: Default::default(),

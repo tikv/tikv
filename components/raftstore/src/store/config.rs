@@ -281,7 +281,7 @@ pub struct Config {
 
     /// The capacity of in-memory pessimistic locks. Make it smaller than `raft-max-size-per-msg` so that
     /// locks in one region can be proposed in a single command.
-    pub in_memory_capacity: ReadableSize,
+    pub in_memory_pessimistic_locks_capacity: ReadableSize,
 }
 
 impl Default for Config {
@@ -371,7 +371,7 @@ impl Default for Config {
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
-            in_memory_capacity: ReadableSize(512 * 1024),
+            in_memory_pessimistic_locks_capacity: ReadableSize(512 * 1024),
         }
     }
 }
