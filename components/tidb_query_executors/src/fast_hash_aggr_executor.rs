@@ -299,6 +299,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
             rows_len,
         )?;
 
+        let mut n_bytes = 0;
+
         match group_by_result {
             RpnStackNode::Scalar { value, .. } => {
                 match_template::match_template! {
@@ -306,7 +308,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                     match value {
                         ScalarValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
-                                handle_scalar_group_each_row(
+                                n_bytes += handle_scalar_group_each_row(
                                     v,
                                     &entities.each_aggr_fn,
                                     group,
@@ -331,7 +333,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                     match group_by_physical_vec {
                         VectorValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
-                                calc_groups_each_row(
+                                n_bytes += calc_groups_each_row(
                                     v,
                                     group_by_logical_rows,
                                     &entities.each_aggr_fn,
@@ -353,7 +355,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                             #[allow(clippy::transmute_ptr_to_ptr)]
                                             let group: &mut HashMap<Option<SortKey<Bytes, TT>>, usize> =
                                                 unsafe { std::mem::transmute(group) };
-                                            calc_groups_each_row(
+                                            n_bytes += calc_groups_each_row(
                                                 v,
                                                 group_by_logical_rows,
                                                 &entities.each_aggr_fn,
@@ -375,7 +377,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
             }
         };
 
-        let n_bytes = self.states_offset_each_logical_row.len() * size_of::<usize>()
+        n_bytes += self.states_offset_each_logical_row.len() * size_of::<usize>()
             + entities.context.n_bytes;
 
         entities.context.n_bytes = 0;
@@ -447,11 +449,13 @@ fn calc_groups_each_row<'a, TT: EvaluableRef<'a>, T: 'a + ChunkRef<'a, TT>, S, F
     states: &mut Vec<Box<dyn AggrFunctionState>>,
     states_offset_each_logical_row: &mut Vec<usize>,
     map_to_sort_key: F,
-) -> Result<()>
+) -> Result<usize>
 where
     S: Hash + Eq + Clone,
     F: Fn(Option<TT>) -> Result<Option<S>>,
 {
+    let mut n_bytes = 0;
+
     for physical_idx in logical_rows {
         let val = map_to_sort_key(physical_column.get_option_ref(physical_idx))?;
 
@@ -460,20 +464,24 @@ where
             Some(offset) => {
                 // Group exists, use the offset of existing group.
                 states_offset_each_logical_row.push(*offset);
+                // Track sizeof(*offset)
+                n_bytes += size_of::<usize>();
             }
             None => {
                 // Group does not exist, prepare groups.
                 let offset = states.len();
                 states_offset_each_logical_row.push(offset);
                 group.insert(val, offset);
+                n_bytes += size_of::<Result<Option<S>>>() + size_of::<usize>();
                 for aggr_fn in aggr_fns {
                     states.push(aggr_fn.create_state());
+                    n_bytes += size_of::<Box<dyn AggrFunctionState>>();
                 }
             }
         }
     }
 
-    Ok(())
+    Ok(n_bytes)
 }
 
 fn handle_scalar_group_each_row<T>(
@@ -483,14 +491,17 @@ fn handle_scalar_group_each_row<T>(
     states: &mut Vec<Box<dyn AggrFunctionState>>,
     logical_row_len: usize,
     states_offset_each_logical_row: &mut Vec<usize>,
-) -> Result<()>
+) -> Result<usize>
 where
     T: Hash + Eq + Clone,
 {
+    let mut n_bytes = 0;
+
     if group.is_empty() {
         group.insert(scalar_value.clone(), 0);
         for aggr_fn in aggr_fns {
             states.push(aggr_fn.create_state());
+            n_bytes += size_of::<Box<dyn AggrFunctionState>>();
         }
     } else if !group.contains_key(scalar_value) {
         // As a constant group-by expression, all scalar results it produce
@@ -500,9 +511,10 @@ where
 
     for _ in 0..logical_row_len {
         states_offset_each_logical_row.push(0);
+        n_bytes += size_of::<usize>();
     }
 
-    Ok(())
+    Ok(n_bytes)
 }
 
 #[cfg(test)]
