@@ -72,11 +72,7 @@ impl<EK: Engine, L: LockManager> ConfigManager for StorageConfigManger<EK, L> {
         } else if let Some(ConfigValue::Module(mut flow_control)) = change.remove("flow_control") {
             if let Some(v) = flow_control.remove("enable") {
                 let enable: bool = v.into();
-                let enable_str: if enable {
-                    "true"
-                } else {
-                    "false"
-                };
+                let enable_str = if enable { "true" } else { "false" };
                 self.tablet_factory.for_each_opened_tablet(
                     &mut |_region_id, _suffix, tablet: &EK::Local| {
                         for cf in tablet.cf_names() {
@@ -86,7 +82,7 @@ impl<EK: Engine, L: LockManager> ConfigManager for StorageConfigManger<EK, L> {
                         }
                     },
                 );
-                self.flow_controller.enable(enable); 
+                self.flow_controller.enable(enable);
             }
         } else if let Some(v) = change.get("scheduler_worker_pool_size") {
             let pool_size: usize = v.into();
