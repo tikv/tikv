@@ -68,5 +68,6 @@ lazy_static! {
 }
 
 pub trait MemoryTrace {
+    fn free_trace(&mut self, len: usize);
     fn alloc_trace(&mut self, len: usize);
 }

@@ -263,6 +263,11 @@ impl MemoryTrace for SlowHashAggregationImpl {
         self.n_bytes += len;
         MEMTRACE_QUERY_EXECUTOR.aggr_slow_hash.add(len as i64);
     }
+    #[inline]
+    fn free_trace(&mut self, len: usize) {
+        self.n_bytes -= len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_slow_hash.sub(len as i64);
+    }
 }
 
 unsafe impl Send for SlowHashAggregationImpl {}
@@ -307,6 +312,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             &mut input_physical_columns,
             input_logical_rows,
         )?;
+
+        self.alloc_trace(context.n_bytes);
+        context.n_bytes = 0;
+
         assert!(self.group_by_results_unsafe.is_empty());
         unsafe {
             eval_exprs_decoded_no_lifetime(
@@ -449,6 +458,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             &mut self.states,
             &self.states_offset_each_logical_row,
         )?;
+
+        n_bytes += entities.context.n_bytes;
+        entities.context.n_bytes = 0;
+
+        warn!(""; "n_bytes: " => ?n_bytes, "ctx.n_bytes: " => ?entities.context.n_bytes);
 
         // Remember to remove expression results of the current batch. They are invalid
         // in the next batch.

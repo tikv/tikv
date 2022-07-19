@@ -261,6 +261,11 @@ impl MemoryTrace for FastHashAggregationImpl {
         self.n_bytes += len;
         MEMTRACE_QUERY_EXECUTOR.aggr_fast_hash.add(len as i64);
     }
+    #[inline]
+    fn free_trace(&mut self, len: usize) {
+        self.n_bytes -= len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_fast_hash.sub(len as i64);
+    }
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImpl {
@@ -276,6 +281,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         mut input_physical_columns: LazyBatchColumnVec,
         input_logical_rows: &[usize],
     ) -> Result<()> {
+        self.free_trace(self.states_offset_each_logical_row.len() * size_of::<usize>());
+
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_logical_row.clear();
 
@@ -369,7 +376,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
             }
         };
 
-        self.alloc_trace(self.states_offset_each_logical_row.len() * size_of::<usize>());
+        warn!(""; "ctx.n_bytes: " => ?entities.context.n_bytes);
+
+        let n_bytes = self.states_offset_each_logical_row.len() * size_of::<usize>()
+            + entities.context.n_bytes;
+
+        entities.context.n_bytes = 0;
+
+        self.alloc_trace(n_bytes);
 
         // 2. Update states according to the group.
         HashAggregationHelper::update_each_row_states_by_offset(

@@ -241,6 +241,11 @@ impl MemoryTrace for IndexScanExecutorImpl {
         self.n_bytes += len;
         MEMTRACE_QUERY_EXECUTOR.index_scan.add(len as i64);
     }
+    #[inline]
+    fn free_trace(&mut self, len: usize) {
+        self.n_bytes -= len;
+        MEMTRACE_QUERY_EXECUTOR.index_scan.sub(len as i64);
+    }
 }
 
 impl ScanExecutorImpl for IndexScanExecutorImpl {

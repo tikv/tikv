@@ -153,6 +153,11 @@ impl MemoryTrace for SimpleAggregationImpl {
         self.n_bytes += len;
         MEMTRACE_QUERY_EXECUTOR.aggr_simple.add(len as i64);
     }
+    #[inline]
+    fn free_trace(&mut self, len: usize) {
+        self.n_bytes -= len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_simple.sub(len as i64);
+    }
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl {

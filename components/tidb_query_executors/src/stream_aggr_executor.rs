@@ -125,6 +125,11 @@ impl MemoryTrace for BatchStreamAggregationImpl {
         self.n_bytes += len;
         MEMTRACE_QUERY_EXECUTOR.aggr_stream.add(len as i64);
     }
+    #[inline]
+    fn free_trace(&mut self, len: usize) {
+        self.n_bytes -= len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_stream.sub(len as i64);
+    }
 }
 
 impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
@@ -271,6 +276,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             &mut input_physical_columns,
             input_logical_rows,
         )?;
+
+        self.alloc_trace(context.n_bytes);
+        context.n_bytes = 0;
 
         assert!(self.group_by_results_unsafe.is_empty());
         assert!(self.aggr_expr_results_unsafe.is_empty());

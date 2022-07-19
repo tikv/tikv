@@ -218,6 +218,9 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             &logical_rows,
         )?;
 
+        self.alloc_trace(self.context.n_bytes);
+        self.context.n_bytes = 0;
+
         if !logical_rows.is_empty() && self.n_bytes == 0 {
             self.alloc_trace(logical_rows.len() * size_of::<usize>());
         }

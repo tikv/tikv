@@ -203,6 +203,8 @@ impl LazyBatchColumn {
             }
         }
 
+        ctx.n_bytes += raw_vec_len;
+
         *self = LazyBatchColumn::Decoded(decoded_column);
 
         Ok(())
