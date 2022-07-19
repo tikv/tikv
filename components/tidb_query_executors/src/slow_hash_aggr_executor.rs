@@ -300,7 +300,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         let rows_len = input_logical_rows.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
 
-        // FIXME: Will this add the logical rows memory multiple times?
         if rows_len > 0 && self.n_bytes == 0 {
             self.alloc_trace(rows_len * size_of::<usize>());
         }
@@ -332,7 +331,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 
         let group_key_buffer_len = self.group_key_buffer.len();
         let group_key_offsets_len = self.group_key_offsets.len();
-        let mut n_bytes = (input_logical_rows.len() - rows_len) * size_of::<usize>();
+        let mut n_bytes = 0;
 
         for logical_row_idx in 0..rows_len {
             let offset_begin = self.group_key_buffer.len();
@@ -461,9 +460,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             &self.states_offset_each_logical_row,
         )?;
 
-        n_bytes = self.states_offset_each_logical_row.len() * size_of::<usize>()
+        n_bytes += self.states_offset_each_logical_row.len() * size_of::<usize>()
             + entities.context.n_bytes;
-
         entities.context.n_bytes = 0;
 
         // Remember to remove expression results of the current batch. They are invalid
