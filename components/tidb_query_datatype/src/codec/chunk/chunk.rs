@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use codec::buffer::BufferWriter;
+use tidb_query_common::metrics::*;
 use tipb::FieldType;
 
 use super::{
@@ -8,7 +9,6 @@ use super::{
     Result,
 };
 use crate::{codec::Datum, FieldTypeAccessor};
-use tidb_query_common::{metrics::*};
 
 /// `Chunk` stores multiple rows of data.
 /// Values are appended in compact format and can be directly accessed without decoding.
@@ -20,16 +20,17 @@ pub struct Chunk {
 
 impl Drop for Chunk {
     fn drop(&mut self) {
-        MEMTRACE_QUERY_EXECUTOR
-            .chunk
-            .sub(self.n_bytes as i64);
+        MEMTRACE_QUERY_EXECUTOR.chunk.sub(self.n_bytes as i64);
     }
 }
 
 impl Chunk {
     /// Creates a new Chunk from Chunk columns.
     pub fn from_columns(columns: Vec<Column>) -> Chunk {
-        Chunk { columns, n_bytes: 0 }
+        Chunk {
+            columns,
+            n_bytes: 0,
+        }
     }
 
     /// Create a new chunk with field types and capacity.
@@ -38,7 +39,10 @@ impl Chunk {
         for ft in field_types {
             columns.push(Column::new(ft.as_accessor().tp(), cap));
         }
-        Chunk { columns, n_bytes: 0 }
+        Chunk {
+            columns,
+            n_bytes: 0,
+        }
     }
 
     /// Reset the chunk, so the memory it allocated can be reused.

@@ -207,21 +207,29 @@ impl EvalWarnings {
 pub struct EvalContext {
     pub cfg: Arc<EvalConfig>,
     pub warnings: EvalWarnings,
-    pub n_bytes : usize,
+    pub n_bytes: usize,
 }
 
 impl Default for EvalContext {
     fn default() -> EvalContext {
         let cfg = Arc::new(EvalConfig::default());
         let warnings = cfg.new_eval_warnings();
-        EvalContext { cfg, warnings, n_bytes: 0 }
+        EvalContext {
+            cfg,
+            warnings,
+            n_bytes: 0,
+        }
     }
 }
 
 impl EvalContext {
     pub fn new(cfg: Arc<EvalConfig>) -> EvalContext {
         let warnings = cfg.new_eval_warnings();
-        EvalContext { cfg, warnings, n_bytes: 0 }
+        EvalContext {
+            cfg,
+            warnings,
+            n_bytes: 0,
+        }
     }
 
     pub fn handle_truncate(&mut self, is_truncated: bool) -> Result<()> {
