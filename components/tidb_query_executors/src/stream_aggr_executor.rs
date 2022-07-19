@@ -362,6 +362,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             rows_len,
         )?;
 
+        self.alloc_trace(context.n_bytes);
+        context.n_bytes = 0;
+
         // Remember to remove expression results of the current batch. They are invalid
         // in the next batch.
         self.group_by_results_unsafe.clear();

@@ -290,6 +290,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         mut input_physical_columns: LazyBatchColumnVec,
         input_logical_rows: &[usize],
     ) -> Result<()> {
+        self.free_trace(self.states_offset_each_logical_row.len() * size_of::<usize>());
+
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_logical_row.clear();
 
@@ -459,10 +461,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             &self.states_offset_each_logical_row,
         )?;
 
-        n_bytes += entities.context.n_bytes;
-        entities.context.n_bytes = 0;
+        n_bytes = self.states_offset_each_logical_row.len() * size_of::<usize>()
+            + entities.context.n_bytes;
 
-        warn!(""; "n_bytes: " => ?n_bytes, "ctx.n_bytes: " => ?entities.context.n_bytes);
+        entities.context.n_bytes = 0;
 
         // Remember to remove expression results of the current batch. They are invalid
         // in the next batch.

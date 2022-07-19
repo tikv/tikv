@@ -116,6 +116,9 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             }
 
             condition_index += 1;
+
+            self.alloc_trace(self.context.n_bytes);
+            self.context.n_bytes = 0;
         }
 
         Ok(())

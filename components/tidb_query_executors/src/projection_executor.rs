@@ -136,6 +136,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
             }
         }
 
+        self.alloc_trace(self.context.n_bytes);
+        self.context.n_bytes = 0;
+
         warnings.merge(&mut self.context.warnings);
         BatchExecuteResult {
             physical_columns: LazyBatchColumnVec::from(eval_result),

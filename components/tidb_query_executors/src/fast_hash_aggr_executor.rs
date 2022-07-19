@@ -282,7 +282,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         input_logical_rows: &[usize],
     ) -> Result<()> {
         self.free_trace(self.states_offset_each_logical_row.len() * size_of::<usize>());
-
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_logical_row.clear();
 
@@ -375,8 +374,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                 }
             }
         };
-
-        warn!(""; "ctx.n_bytes: " => ?entities.context.n_bytes);
 
         let n_bytes = self.states_offset_each_logical_row.len() * size_of::<usize>()
             + entities.context.n_bytes;

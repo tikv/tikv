@@ -42,6 +42,7 @@ make_static_metric! {
         limit,
         projection,
         selection,
+        chunk,
     }
 
     pub struct MemTraceGauge : IntGauge {

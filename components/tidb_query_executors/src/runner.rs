@@ -475,6 +475,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             if record_len > 0 {
                 chunks.push(chunk);
                 record_all += record_len;
+                MEMTRACE_QUERY_EXECUTOR.chunk.add(record_len as i64);
             }
 
             if drained || self.paging_size.map_or(false, |p| record_all >= p as usize) {
@@ -516,6 +517,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
+                MEMTRACE_QUERY_EXECUTOR.chunk.sub(record_all as i64);
                 return Ok((sel_resp, range));
             }
 
@@ -630,15 +632,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     ctx,
                 )?;
             }
-        } else {
-            data_len = 0;
         }
-
-        // The data_len is from tipb::Chunk. We track it here, this means that
-        // the the metrics will not track it for the lifetime of tipb::Chunk
-        // but the lifetime of self.outmost_executor.
-        self.out_most_executor
-            .alloc_trace(result.logical_rows.len() + data_len);
 
         warnings.merge(&mut result.warnings);
         Ok((is_drained, result.logical_rows.len()))
