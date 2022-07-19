@@ -2343,7 +2343,7 @@ mod tests {
                 vec![ERR_TRUNCATE_WRONG_VALUE],
                 Cond::Unsigned,
             ),
-            ("0.5", 0 as i64, vec![ERR_TRUNCATE_WRONG_VALUE], Cond::None),
+            ("0.5", 0_i64, vec![ERR_TRUNCATE_WRONG_VALUE], Cond::None),
         ];
 
         for (input, expected, mut err_code, cond) in cs {
