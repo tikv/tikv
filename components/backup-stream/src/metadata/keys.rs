@@ -25,7 +25,7 @@ const TASKS_PREFIX: &str = "/tidb/br-stream/info/";
 /// For the status of tasks:
 /// <PREFIX>/pause/<task_name> -> ""
 /// For the global checkpoint ts of tasks:
-/// <PREFIX>/global-checkpoint/<task_name>/<store_id(u64,be)> -> <ts(u64,be)>
+/// <PREFIX>/storage-checkpoint/<task_name>/<store_id(u64,be)> -> <ts(u64,be)>
 /// ```
 #[derive(Clone)]
 pub struct MetaKey(pub Vec<u8>);

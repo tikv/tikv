@@ -214,4 +214,22 @@ mod tests {
     fn test_url_of_backend() {
         assert_eq!(url_for(Path::new("/tmp/a")).to_string(), "local:///tmp/a");
     }
+
+    #[tokio::test]
+    async fn test_write_existed_file() {
+        let temp_dir = Builder::new().tempdir().unwrap();
+        let path = temp_dir.path();
+        let ls = LocalStorage::new(path).unwrap();
+
+        let filename = "existed.file";
+        let buf: &[u8] = b"pingcap";
+        let r = ls
+            .write(filename, UnpinReader(Box::new(buf)), buf.len() as _)
+            .await;
+        assert!(r.is_ok());
+        let r = ls
+            .write(filename, UnpinReader(Box::new(buf)), buf.len() as _)
+            .await;
+        assert!(r.is_ok());
+    }
 }

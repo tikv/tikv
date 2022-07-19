@@ -817,7 +817,7 @@ where
                                 .set_storage_checkpoint(&task, global_checkpoint)
                                 .await
                             {
-                                warn!("backup stream failed to update global checkpoint.";
+                                warn!("backup stream failed to set global checkpoint.";
                                     "task" => ?task,
                                     "global-checkpoint" => global_checkpoint,
                                     "err" => ?err,

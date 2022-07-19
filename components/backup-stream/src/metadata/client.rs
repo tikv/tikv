@@ -421,11 +421,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
         })
     }
 
-    /// set the storage checkpoint to metadata.
+    /// Set the storage checkpoint to metadata.
     pub async fn set_storage_checkpoint(&self, task_name: &str, ts: u64) -> Result<()> {
         let now = Instant::now();
         defer! {
-            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
+            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["storage_checkpoint"]).observe(now.saturating_elapsed().as_secs_f64())
         }
         self.meta_store
             .set(KeyValue(
@@ -436,6 +436,25 @@ impl<Store: MetaStore> MetadataClient<Store> {
         Ok(())
     }
 
+    /// Get the storage checkpoint from metadata. This function is justly used for test.
+    pub async fn get_storage_checkpoint(&self, task_name: &str) -> Result<TimeStamp> {
+        let now = Instant::now();
+        defer! {
+            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
+        }
+        let snap = self.meta_store.snapshot().await?;
+        let ts = snap
+            .get(Keys::Key(MetaKey::storage_checkpoint_of(
+                task_name,
+                self.store_id,
+            )))
+            .await?;
+
+        match ts.as_slice() {
+            [ts, ..] => Ok(TimeStamp::new(parse_ts_from_bytes(ts.value())?)),
+            [] => Ok(self.get_task_start_ts_checkpoint(task_name).await?.ts),
+        }
+    }
     /// forward the progress of some task.
     pub async fn set_local_task_checkpoint(&self, task_name: &str, ts: u64) -> Result<()> {
         let now = Instant::now();
