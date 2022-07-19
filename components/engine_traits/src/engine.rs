@@ -317,8 +317,8 @@ mod tests {
     fn test_tablet_error_collector_err() {
         let mut err = TabletErrorCollector::new();
         err.add_result(1, 1, Ok(()));
-        err.add_result(1, 1, Err("this is an error1".to_string().into()));
-        err.add_result(1, 1, Err("this is an error2".to_string().into()));
+        err.add_result(1, 1, Err(Status::with_code(Code::Aborted).into()));
+        err.add_result(1, 1, Err(Status::with_code(Code::NotFound).into()));
         err.add_result(1, 1, Ok(()));
         let r = err.take_result();
         assert!(r.is_err());

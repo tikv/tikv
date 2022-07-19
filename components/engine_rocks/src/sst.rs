@@ -3,8 +3,8 @@
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 
 use engine_traits::{
-    Error, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SeekKey,
-    SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    Error, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SstCompressionType,
+    SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
 };
 use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
@@ -14,9 +14,7 @@ use rocksdb::{
     SstFileWriter, DB,
 };
 
-// FIXME: Move RocksSeekKey into a common module since
-// it's shared between multiple iterators
-use crate::{engine::RocksEngine, engine_iterator::RocksSeekKey, options::RocksReadOptions};
+use crate::{engine::RocksEngine, options::RocksReadOptions, r2e};
 
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
@@ -51,7 +49,7 @@ impl RocksSstReader {
             cf_options.set_env(env);
         }
         let mut reader = SstFileReader::new(cf_options);
-        reader.open(path)?;
+        r2e!(reader.open(path))?;
         let inner = Rc::new(reader);
         Ok(RocksSstReader { inner })
     }
@@ -70,7 +68,7 @@ impl SstReader for RocksSstReader {
         Self::open_with_env(path, None)
     }
     fn verify_checksum(&self) -> Result<()> {
-        self.inner.verify_checksum()?;
+        r2e!(self.inner.verify_checksum())?;
         Ok(())
     }
     fn iter(&self) -> Self::Iterator {
@@ -81,17 +79,14 @@ impl SstReader for RocksSstReader {
 impl Iterable for RocksSstReader {
     type Iterator = RocksSstIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
+    /// Cf is ignored as there is only one cf in sst.
+    fn iterator_opt(&self, _cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let opt = opt.into_raw();
         Ok(RocksSstIterator(SstFileReader::iter_opt_rc(
             self.inner.clone(),
             opt,
         )))
-    }
-
-    fn iterator_cf_opt(&self, _cf: &str, _opts: IterOptions) -> Result<Self::Iterator> {
-        unimplemented!() // FIXME: What should happen here?
     }
 }
 
@@ -103,30 +98,38 @@ pub struct RocksSstIterator(DBIterator<Rc<SstFileReader>>);
 unsafe impl Send for RocksSstIterator {}
 
 impl Iterator for RocksSstIterator {
-    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
-        let k: RocksSeekKey<'_> = key.into();
-        self.0.seek(k.into_raw()).map_err(Error::Engine)
+    fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        r2e!(self.0.seek(rocksdb::SeekKey::Key(key)))
     }
 
-    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
-        let k: RocksSeekKey<'_> = key.into();
-        self.0.seek_for_prev(k.into_raw()).map_err(Error::Engine)
+    fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        r2e!(self.0.seek_for_prev(rocksdb::SeekKey::Key(key)))
+    }
+
+    /// Seek to the first key in the database.
+    fn seek_to_first(&mut self) -> Result<bool> {
+        r2e!(self.0.seek(rocksdb::SeekKey::Start))
+    }
+
+    /// Seek to the last key in the database.
+    fn seek_to_last(&mut self) -> Result<bool> {
+        r2e!(self.0.seek(rocksdb::SeekKey::End))
     }
 
     fn prev(&mut self) -> Result<bool> {
         #[cfg(not(feature = "nortcheck"))]
         if !self.valid()? {
-            return Err(Error::Engine("Iterator invalid".to_string()));
+            return r2e!(Err("Iterator invalid"));
         }
-        self.0.prev().map_err(Error::Engine)
+        r2e!(self.0.prev())
     }
 
     fn next(&mut self) -> Result<bool> {
         #[cfg(not(feature = "nortcheck"))]
         if !self.valid()? {
-            return Err(Error::Engine("Iterator invalid".to_string()));
+            return r2e!(Err("Iterator invalid"));
         }
-        self.0.next().map_err(Error::Engine)
+        r2e!(self.0.next())
     }
 
     fn key(&self) -> &[u8] {
@@ -138,7 +141,7 @@ impl Iterator for RocksSstIterator {
     }
 
     fn valid(&self) -> Result<bool> {
-        self.0.valid().map_err(Error::Engine)
+        r2e!(self.0.valid())
     }
 }
 
@@ -190,9 +193,10 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         let mut env = None;
         let mut io_options = if let Some(db) = self.db.as_ref() {
             env = db.env();
-            let handle = db
-                .cf_handle(self.cf.as_deref().unwrap_or(CF_DEFAULT))
-                .ok_or_else(|| format!("CF {:?} is not found", self.cf))?;
+            let handle = r2e!(
+                db.cf_handle(self.cf.as_deref().unwrap_or(CF_DEFAULT))
+                    .ok_or_else(|| format!("CF {:?} is not found", self.cf))
+            )?;
             db.get_options_cf(handle)
         } else {
             ColumnFamilyOptions::new()
@@ -240,7 +244,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         io_options.bottommost_compression(DBCompressionType::Disable);
         let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
         fail_point!("on_open_sst_writer");
-        writer.open(path)?;
+        r2e!(writer.open(path))?;
         Ok(RocksSstWriter { writer, env })
     }
 }
@@ -255,11 +259,11 @@ impl SstWriter for RocksSstWriter {
     type ExternalSstFileReader = SequentialFile;
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
-        Ok(self.writer.put(key, val)?)
+        r2e!(self.writer.put(key, val))
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<()> {
-        Ok(self.writer.delete(key)?)
+        r2e!(self.writer.delete(key))
     }
 
     fn file_size(&mut self) -> u64 {
@@ -267,22 +271,23 @@ impl SstWriter for RocksSstWriter {
     }
 
     fn finish(mut self) -> Result<Self::ExternalSstFileInfo> {
-        Ok(RocksExternalSstFileInfo(self.writer.finish()?))
+        Ok(RocksExternalSstFileInfo(r2e!(self.writer.finish())?))
     }
 
     fn finish_read(mut self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)> {
-        let env = self.env.take().ok_or_else(|| {
-            Error::Engine("failed to read sequential file no env provided".to_owned())
-        })?;
-        let sst_info = self.writer.finish()?;
+        let env = r2e!(
+            self.env
+                .take()
+                .ok_or("failed to read sequential file no env provided")
+        )?;
+        let sst_info = r2e!(self.writer.finish())?;
         let p = sst_info.file_path();
-        let path = p.as_os_str().to_str().ok_or_else(|| {
-            Error::Engine(format!(
-                "failed to sequential file bad path {}",
-                p.display()
-            ))
-        })?;
-        let seq_file = env.new_sequential_file(path, EnvOptions::new())?;
+        let path = r2e!(
+            p.as_os_str()
+                .to_str()
+                .ok_or_else(|| { format!("failed to sequential file bad path {}", p.display()) })
+        )?;
+        let seq_file = r2e!(env.new_sequential_file(path, EnvOptions::new()))?;
         Ok((RocksExternalSstFileInfo(sst_info), seq_file))
     }
 }

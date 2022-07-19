@@ -5,20 +5,20 @@ use std::sync::Arc;
 use engine_traits::{EngineFileSystemInspector, FileSystemInspector};
 use rocksdb::FileSystemInspector as DBFileSystemInspector;
 
-use crate::raw::Env;
+use crate::{e2r, r2e, raw::Env};
 
 // Use engine::Env directly since Env is not abstracted.
 pub(crate) fn get_env(
     base_env: Option<Arc<Env>>,
     limiter: Option<Arc<file_system::IORateLimiter>>,
-) -> Result<Arc<Env>, String> {
+) -> engine_traits::Result<Arc<Env>> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
-    Ok(Arc::new(Env::new_file_system_inspected_env(
+    Ok(Arc::new(r2e!(Env::new_file_system_inspected_env(
         base_env,
         WrappedFileSystemInspector {
             inspector: EngineFileSystemInspector::from_limiter(limiter),
         },
-    )?))
+    ))?))
 }
 
 pub struct WrappedFileSystemInspector<T: FileSystemInspector> {
@@ -27,11 +27,11 @@ pub struct WrappedFileSystemInspector<T: FileSystemInspector> {
 
 impl<T: FileSystemInspector> DBFileSystemInspector for WrappedFileSystemInspector<T> {
     fn read(&self, len: usize) -> Result<usize, String> {
-        self.inspector.read(len)
+        e2r!(self.inspector.read(len))
     }
 
     fn write(&self, len: usize) -> Result<usize, String> {
-        self.inspector.write(len)
+        e2r!(self.inspector.write(len))
     }
 }
 

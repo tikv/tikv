@@ -8,7 +8,8 @@ use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
-    engine::RocksEngine, rocks_metrics_defs::*, sst::RocksSstWriterBuilder, util, RocksSstWriter,
+    engine::RocksEngine, r2e, rocks_metrics_defs::*, sst::RocksSstWriterBuilder, util,
+    RocksSstWriter,
 };
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -54,8 +55,8 @@ impl RocksEngine {
             }
             last_end_key = Some(r.end_key.to_owned());
 
-            let mut it = self.iterator_cf_opt(cf, opts.clone())?;
-            let mut it_valid = it.seek(r.start_key.into())?;
+            let mut it = self.iterator_opt(cf, opts.clone())?;
+            let mut it_valid = it.seek(r.start_key)?;
             while it_valid {
                 if it.key() >= r.end_key {
                     break;
@@ -106,8 +107,8 @@ impl RocksEngine {
             // to avoid referring to missing blob files.
             opts.set_key_only(true);
         }
-        let mut it = self.iterator_cf_opt(cf, opts)?;
-        let mut it_valid = it.seek(range.start_key.into())?;
+        let mut it = self.iterator_opt(cf, opts)?;
+        let mut it_valid = it.seek(range.start_key)?;
         let mut wb = self.write_batch();
         while it_valid {
             wb.delete_cf(cf, it.key())?;
@@ -127,12 +128,12 @@ impl RocksEngine {
 
 impl MiscExt for RocksEngine {
     fn flush(&self, sync: bool) -> Result<()> {
-        Ok(self.as_inner().flush(sync)?)
+        r2e!(self.as_inner().flush(sync))
     }
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        Ok(self.as_inner().flush_cf(handle, sync)?)
+        r2e!(self.as_inner().flush_cf(handle, sync))
     }
 
     fn delete_ranges_cf(
@@ -151,12 +152,12 @@ impl MiscExt for RocksEngine {
                     if r.start_key >= r.end_key {
                         continue;
                     }
-                    self.as_inner().delete_files_in_range_cf(
+                    r2e!(self.as_inner().delete_files_in_range_cf(
                         handle,
                         r.start_key,
                         r.end_key,
                         false,
-                    )?;
+                    ))?;
                 }
             }
             DeleteStrategy::DeleteBlobs => {
@@ -166,12 +167,12 @@ impl MiscExt for RocksEngine {
                         if r.start_key >= r.end_key {
                             continue;
                         }
-                        self.as_inner().delete_blob_files_in_range_cf(
+                        r2e!(self.as_inner().delete_blob_files_in_range_cf(
                             handle,
                             r.start_key,
                             r.end_key,
                             false,
-                        )?;
+                        ))?;
                     }
                 }
             }
@@ -241,7 +242,11 @@ impl MiscExt for RocksEngine {
 
         for cf in db.cf_names() {
             let handle = util::get_cf_handle(db, cf)?;
-            db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)?;
+            r2e!(db.delete_files_in_ranges_cf(
+                handle,
+                &delete_ranges,
+                /* include_end */ false
+            ))?;
         }
 
         Ok(())
@@ -252,7 +257,7 @@ impl MiscExt for RocksEngine {
     }
 
     fn sync_wal(&self) -> Result<()> {
-        Ok(self.as_inner().sync_wal()?)
+        r2e!(self.as_inner().sync_wal())
     }
 
     fn exists(path: &str) -> bool {
@@ -340,7 +345,7 @@ mod tests {
     use std::sync::Arc;
 
     use engine_traits::{
-        DeleteStrategy, Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt, ALL_CFS,
+        DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt, ALL_CFS,
     };
     use tempfile::Builder;
 
@@ -353,8 +358,8 @@ mod tests {
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {
-            let mut iter = db.iterator_cf(cf).unwrap();
-            iter.seek(SeekKey::Start).unwrap();
+            let mut iter = db.iterator(cf).unwrap();
+            iter.seek_to_first().unwrap();
             for &(k, v) in expected {
                 assert_eq!(k, iter.key());
                 assert_eq!(v, iter.value());

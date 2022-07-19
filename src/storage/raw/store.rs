@@ -197,7 +197,7 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         if limit == 0 {
             return Ok(vec![]);
         }
-        let mut cursor = Cursor::new(self.snapshot.iter_cf(cf, option)?, ScanMode::Forward, false);
+        let mut cursor = Cursor::new(self.snapshot.iter(cf, option)?, ScanMode::Forward, false);
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
@@ -248,11 +248,7 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         if limit == 0 {
             return Ok(vec![]);
         }
-        let mut cursor = Cursor::new(
-            self.snapshot.iter_cf(cf, option)?,
-            ScanMode::Backward,
-            false,
-        );
+        let mut cursor = Cursor::new(self.snapshot.iter(cf, option)?, ScanMode::Backward, false);
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.reverse_seek(start_key, statistics)? {
             return Ok(vec![]);
@@ -303,8 +299,7 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
             let cf_stats = stats.mut_cf_statistics(cf);
             let mut opts = IterOptions::new(None, None, false);
             opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
-            let mut cursor =
-                Cursor::new(self.snapshot.iter_cf(cf, opts)?, ScanMode::Forward, false);
+            let mut cursor = Cursor::new(self.snapshot.iter(cf, opts)?, ScanMode::Forward, false);
             cursor.seek(&Key::from_encoded(r.get_start_key().to_vec()), cf_stats)?;
             while cursor.valid()? {
                 row_count += 1;

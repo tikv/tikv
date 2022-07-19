@@ -13,6 +13,8 @@ use rocksdb::{
 };
 use tikv_util::warn;
 
+use crate::r2e;
+
 pub struct CFOptions<'a> {
     cf: &'a str,
     options: ColumnFamilyOptions,
@@ -92,12 +94,16 @@ pub fn new_engine_opt(
             cfs_v.push(x.cf);
             cf_opts_v.push(x.options.clone());
         }
-        let mut db = DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cf_opts_v).collect())?;
+        let mut db = r2e!(DB::open_cf(
+            db_opt,
+            path,
+            cfs_v.into_iter().zip(cf_opts_v).collect()
+        ))?;
         for x in cfs_opts {
             if x.cf == CF_DEFAULT {
                 continue;
             }
-            db.create_cf((x.cf, x.options))?;
+            r2e!(db.create_cf((x.cf, x.options)))?;
         }
 
         return Ok(db);
@@ -106,7 +112,7 @@ pub fn new_engine_opt(
     db_opt.create_if_missing(false);
 
     // Lists all column families in current db.
-    let cfs_list = DB::list_column_families(&db_opt, path)?;
+    let cfs_list = r2e!(DB::list_column_families(&db_opt, path))?;
     let existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
     let needed: Vec<&str> = cfs_opts.iter().map(|x| x.cf).collect();
 
@@ -134,7 +140,11 @@ pub fn new_engine_opt(
             cfs_opts_v.push(x.options);
         }
 
-        let db = DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cfs_opts_v).collect())?;
+        let db = r2e!(DB::open_cf(
+            db_opt,
+            path,
+            cfs_v.into_iter().zip(cfs_opts_v).collect()
+        ))?;
         return Ok(db);
     }
 
@@ -155,28 +165,30 @@ pub fn new_engine_opt(
         }
     }
     let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
-    let mut db = DB::open_cf(db_opt, path, cfds)?;
+    let mut db = r2e!(DB::open_cf(db_opt, path, cfds))?;
 
     // Drops discarded column families.
     //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
     for cf in cfs_diff(&existed, &needed) {
         // Never drop default column families.
         if cf != CF_DEFAULT {
-            db.drop_cf(cf)?;
+            r2e!(db.drop_cf(cf))?;
         }
     }
 
     // Creates needed column families if they don't exist.
     for cf in cfs_diff(&needed, &existed) {
-        db.create_cf((
-            cf,
-            cfs_opts
-                .iter()
-                .find(|x| x.cf == cf)
-                .unwrap()
-                .options
-                .clone(),
-        ))?;
+        r2e!(
+            db.create_cf((
+                cf,
+                cfs_opts
+                    .iter()
+                    .find(|x| x.cf == cf)
+                    .unwrap()
+                    .options
+                    .clone(),
+            ))
+        )?;
     }
     Ok(db)
 }

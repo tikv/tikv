@@ -2276,7 +2276,7 @@ mod tests {
         store
             .engines
             .kv
-            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |_, _| {
+            .scan(CF_RAFT, &meta_start, &meta_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })
@@ -2289,7 +2289,7 @@ mod tests {
         store
             .engines
             .kv
-            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |_, _| {
+            .scan(CF_RAFT, &raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })
