@@ -628,7 +628,7 @@ pub fn create_test_engine(
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IORateLimiter>>,
     cfg: &Config,
-    is_multi_rocks: bool,
+    multi_rocks: bool,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
@@ -665,7 +665,7 @@ pub fn create_test_engine(
             router: Mutex::new(router),
         }));
     }
-    let factory = if is_multi_rocks {
+    let factory = if multi_rocks {
         builder.buildv2().clone()
     } else {
         builder.build().clone()
