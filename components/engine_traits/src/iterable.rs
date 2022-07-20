@@ -49,8 +49,8 @@ use crate::*;
 pub trait Iterator: Send {
     /// Move the iterator to a specific key.
     ///
-    /// When an exact match is not found, `seek` sets the iterator to the next key greater than
-    /// that specified as `key`, if such a key exists;
+    /// When an exact match is not found, `seek` sets the iterator to the next
+    /// key greater than that specified as `key`, if such a key exists;
     /// `seek_for_prev` sets the iterator to the previous key less than
     /// that specified as `key`, if such a key exists.
     ///
@@ -71,7 +71,7 @@ pub trait Iterator: Send {
     /// `false` if seeking failed and the iterator is invalid.
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool>;
 
-    /// Seek to the first key in the database.
+    /// Seek to the first key in the engine.
     fn seek_to_first(&mut self) -> Result<bool>;
 
     /// Seek to the last key in the database.
