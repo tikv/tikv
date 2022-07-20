@@ -438,7 +438,7 @@ where
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     delegates: LruCache<u64, Arc<ReadDelegate>>,
-    snap_cache: HashMap<u64, Arc<E::Snapshot>>,
+    snap_cache: HashMap<u64, (ThreadReadId, Arc<E::Snapshot>)>,
     cache_read_id: HashMap<u64, ThreadReadId>,
     // A channel to raftstore.
     router: C,
@@ -456,28 +456,20 @@ where
     fn get_snapshot(
         &mut self,
         create_time: Option<ThreadReadId>,
-        mut region_id: u64,
+        region_id: u64,
     ) -> Arc<E::Snapshot> {
-        if self.factory.get_factory_version() == TabletFactoryVersion::Single {
-            region_id = 0;
-        }
-        let tablet = self.factory.open_tablet_cache_latest(region_id).unwrap();
         self.metrics.local_executed_requests += 1;
-        if let Some(ts) = create_time {
-            if let Some(cache_read_id) = self.cache_read_id.get(&region_id) {
-                if ts == *cache_read_id {
-                    if let Some(snap) = self.snap_cache.get(&region_id) {
-                        self.metrics.local_executed_snapshot_cache_hit += 1;
-                        return snap.clone();
-                    }
-                }
-            }
-            let snap = Arc::new(tablet.snapshot());
-            self.cache_read_id.insert(region_id, ts);
-            self.snap_cache.insert(region_id, snap.clone());
-            return snap;
+        if let Some(snap) = self.get_snap_from_cache(region_id, &create_time) {
+            return snap.clone();
         }
-        Arc::new(tablet.snapshot())
+
+        let tablet = self.factory.open_tablet_cache_latest(region_id).unwrap();
+        let snap = Arc::new(tablet.snapshot());
+        if let Some(ts) = create_time {
+            self.store_snap_in_cache(region_id, snap.clone(), ts);
+        }
+
+        snap
     }
 }
 
@@ -744,6 +736,49 @@ where
 
     pub fn release_snapshot_cache(&mut self) {
         self.snap_cache.clear();
+    }
+
+    fn get_snap_from_cache(
+        &mut self,
+        region_id: u64,
+        create_time: &Option<ThreadReadId>,
+    ) -> Option<&Arc<E::Snapshot>> {
+        if let Some(ts) = create_time {
+            let factory_version = self.factory.get_factory_version();
+            let snap_cache;
+            if factory_version == TabletFactoryVersion::Single {
+                // In single rocksdb version, we only have one global kv rocksdb, so always use 0 to
+                // get snap from cache.
+                snap_cache = self.snap_cache.get(&0);
+            } else {
+                assert!(factory_version == TabletFactoryVersion::Multi);
+                snap_cache = self.snap_cache.get(&region_id)
+            }
+            if let Some(snap_cache) = snap_cache {
+                if *ts == snap_cache.0 {
+                    self.metrics.local_executed_snapshot_cache_hit += 1;
+                    return Some(&snap_cache.1);
+                }
+            }
+        }
+        None
+    }
+
+    fn store_snap_in_cache(
+        &mut self,
+        region_id: u64,
+        snap: Arc<E::Snapshot>,
+        create_time: ThreadReadId,
+    ) {
+        let factory_version = self.factory.get_factory_version();
+        if factory_version == TabletFactoryVersion::Single {
+            // In single rocksdb version, we only have one global kv rocksdb, so always use 0 to
+            // store snap into cache.
+            self.snap_cache.insert(0, (create_time, snap));
+        } else {
+            assert!(factory_version == TabletFactoryVersion::Multi);
+            self.snap_cache.insert(region_id, (create_time, snap));
+        }
     }
 }
 

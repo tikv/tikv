@@ -177,17 +177,10 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     }
 
     /// Open a tablet by id and suffix from cache---that means it should already be opened.
-    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK> {
-        if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(id, suffix), false) {
-            return Some(engine);
-        }
-        None
-    }
+    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK>;
 
     /// Open a tablet by id and any suffix from cache
-    fn open_tablet_cache_any(&self, id: u64) -> Option<EK> {
-        self.open_tablet_cache(id, 0)
-    }
+    fn open_tablet_cache_any(&self, id: u64) -> Option<EK>;
 
     /// Open a tablet by id and latest available suffix from cache
     fn open_tablet_cache_latest(&self, id: u64) -> Option<EK>;
@@ -257,6 +250,14 @@ where
 
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
+    }
+
+    fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<EK> {
+        Some(self.engine.as_ref().unwrap().clone())
+    }
+
+    fn open_tablet_cache_any(&self, _id: u64) -> Option<EK> {
+        Some(self.engine.as_ref().unwrap().clone())
     }
 
     fn open_tablet_cache_latest(&self, _id: u64) -> Option<EK> {

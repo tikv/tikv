@@ -240,8 +240,19 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         self.create_shared_db()
     }
 
-    fn open_tablet_cache_latest(&self, id: u64) -> Option<RocksEngine> {
-        self.open_tablet_cache_any(id)
+    fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<RocksEngine> {
+        if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(0, 0), false) {
+            return Some(engine);
+        }
+        None
+    }
+
+    fn open_tablet_cache_any(&self, _id: u64) -> Option<RocksEngine> {
+        self.open_tablet_cache(0, 0)
+    }
+
+    fn open_tablet_cache_latest(&self, _id: u64) -> Option<RocksEngine> {
+        self.open_tablet_cache(0, 0)
     }
 
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
