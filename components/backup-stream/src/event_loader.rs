@@ -9,7 +9,6 @@ use std::{
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
-use prometheus::core::Atomi;
 use raftstore::{
     coprocessor::RegionInfoProvider,
     router::RaftStoreRouter,
