@@ -439,7 +439,6 @@ where
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     delegates: LruCache<u64, Arc<ReadDelegate>>,
     snap_cache: HashMap<u64, (ThreadReadId, Arc<E::Snapshot>)>,
-    cache_read_id: HashMap<u64, ThreadReadId>,
     // A channel to raftstore.
     router: C,
 }
@@ -488,7 +487,6 @@ where
             factory,
             router,
             snap_cache: HashMap::new(),
-            cache_read_id: HashMap::new(),
             store_id: Cell::new(None),
             metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
@@ -791,7 +789,6 @@ where
             metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
             snap_cache: HashMap::new(),
-            cache_read_id: self.cache_read_id.clone(),
         }
     }
 }
