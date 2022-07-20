@@ -88,9 +88,11 @@ pub mod kv {
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
-        RocksSnapshot as KvTestSnapshot, RocksWriteBatch as KvTestWriteBatch,
+        RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
-    use engine_traits::{Result, TabletAccessor, TabletFactory};
+    use engine_traits::{
+        CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+    };
     use tikv_util::box_err;
 
     use crate::ctor::{CFOptions, DBOptions, KvEngineConstructorExt};
@@ -279,8 +281,17 @@ pub mod kv {
             new_engine
         }
 
-        fn clone(&self) -> Box<dyn TabletFactory<KvTestEngine> + Send> {
-            Box::new(std::clone::Clone::clone(self))
+        fn set_shared_block_cache_capacity(
+            &self,
+            capacity: u64,
+        ) -> std::result::Result<(), String> {
+            let reg = self.registry.lock().unwrap();
+            // pick up any tablet and set the shared block cache capacity
+            if let Some(((_id, _suffix), tablet)) = (*reg).iter().next() {
+                let opt = tablet.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+                opt.set_block_cache_capacity(capacity)?;
+            }
+            Ok(())
         }
     }
 
@@ -364,6 +375,7 @@ pub mod ctor {
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IORateLimiter>>,
         avoid_flush_during_shutdown: bool,
+        enable_multi_batch_write: bool,
     }
 
     impl DBOptions {
@@ -377,6 +389,10 @@ pub mod ctor {
 
         pub fn avoid_flush_during_shutdown(&mut self, avoid: bool) {
             self.avoid_flush_during_shutdown = avoid;
+        }
+
+        pub fn set_enable_multi_batch_write(&mut self, enable: bool) {
+            self.enable_multi_batch_write = enable;
         }
     }
 
@@ -656,6 +672,11 @@ pub mod ctor {
             rocks_db_opts.avoid_flush_during_shutdown(db_opts.avoid_flush_during_shutdown);
             let env = get_env(db_opts.key_manager.clone(), db_opts.rate_limiter)?;
             rocks_db_opts.set_env(env);
+            if db_opts.enable_multi_batch_write {
+                rocks_db_opts.enable_unordered_write(false);
+                rocks_db_opts.enable_pipelined_write(false);
+                rocks_db_opts.enable_multi_batch_write(true);
+            }
             let rocks_db_opts = RocksDBOptions::from_raw(rocks_db_opts);
             Ok(rocks_db_opts)
         }

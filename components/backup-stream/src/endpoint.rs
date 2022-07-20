@@ -55,7 +55,7 @@ use crate::{
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
-    router::{ApplyEvents, Router},
+    router::{ApplyEvents, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::SubscriptionTracer,
     try_send,
@@ -197,45 +197,59 @@ where
         self.meta_client.clone()
     }
 
-    fn on_fatal_error(&self, task: String, err: Box<Error>) {
-        // Let's pause the task first.
-        self.unload_task(&task);
+    fn on_fatal_error(&self, select: TaskSelector, err: Box<Error>) {
         err.report_fatal();
-        metrics::update_task_status(TaskStatus::Error, &task);
+        let tasks = self
+            .pool
+            .block_on(self.range_router.select_task(select.reference()));
+        warn!("fatal error reporting"; "selector" => ?select, "selected" => ?tasks, "err" => %err);
+        for task in tasks {
+            // Let's pause the task first.
+            self.unload_task(&task);
+            metrics::update_task_status(TaskStatus::Error, &task);
 
-        let meta_cli = self.get_meta_client();
-        let pdc = self.pd_client.clone();
-        let store_id = self.store_id;
-        let sched = self.scheduler.clone();
-        let safepoint_name = self.pause_guard_id_for_task(&task);
-        let safepoint_ttl = self.pause_guard_duration();
-        self.pool.block_on(async move {
-            let err_fut = async {
-                let safepoint = meta_cli.global_progress_of_task(&task).await?;
-                pdc.update_service_safe_point(
-                    safepoint_name,
-                    TimeStamp::new(safepoint - 1),
-                    safepoint_ttl,
-                )
-                .await?;
-                meta_cli.pause(&task).await?;
-                let mut last_error = StreamBackupError::new();
-                last_error.set_error_code(err.error_code().code.to_owned());
-                last_error.set_error_message(err.to_string());
-                last_error.set_store_id(store_id);
-                last_error.set_happen_at(TimeStamp::physical_now());
-                meta_cli.report_last_error(&task, last_error).await?;
-                Result::Ok(())
-            };
-            if let Err(err_report) = err_fut.await {
-                err_report.report(format_args!("failed to upload error {}", err_report));
-                // Let's retry reporting after 5s.
-                tokio::task::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    try_send!(sched, Task::FatalError(task, err));
-                });
-            }
-        })
+            let meta_cli = self.get_meta_client();
+            let pdc = self.pd_client.clone();
+            let store_id = self.store_id;
+            let sched = self.scheduler.clone();
+            let safepoint_name = self.pause_guard_id_for_task(&task);
+            let safepoint_ttl = self.pause_guard_duration();
+            let code = err.error_code().code.to_owned();
+            let msg = err.to_string();
+            self.pool.block_on(async move {
+                let err_fut = async {
+                    let safepoint = meta_cli.global_progress_of_task(&task).await?;
+                    pdc.update_service_safe_point(
+                        safepoint_name,
+                        TimeStamp::new(safepoint - 1),
+                        safepoint_ttl,
+                    )
+                    .await?;
+                    meta_cli.pause(&task).await?;
+                    let mut last_error = StreamBackupError::new();
+                    last_error.set_error_code(code);
+                    last_error.set_error_message(msg.clone());
+                    last_error.set_store_id(store_id);
+                    last_error.set_happen_at(TimeStamp::physical_now());
+                    meta_cli.report_last_error(&task, last_error).await?;
+                    Result::Ok(())
+                };
+                if let Err(err_report) = err_fut.await {
+                    err_report.report(format_args!("failed to upload error {}", err_report));
+                    // Let's retry reporting after 5s.
+                    tokio::task::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        try_send!(
+                            sched,
+                            Task::FatalError(
+                                TaskSelector::ByName(task.to_owned()),
+                                Box::new(annotate!(err_report, "origin error: {}", msg))
+                            )
+                        );
+                    });
+                }
+            });
+        }
     }
 
     async fn starts_flush_ticks(router: Router) {
@@ -324,7 +338,7 @@ where
                             tokio::time::sleep(Duration::from_secs(2)).await;
                             break;
                         }
-                        _ => panic!("BUG: invalid event {:?}", event),
+                        _ => warn!("BUG: invalid event"; "event" => ?event),
                     }
                 } else {
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -372,7 +386,7 @@ where
                             tokio::time::sleep(Duration::from_secs(2)).await;
                             break;
                         }
-                        _ => panic!("BUG: invalid event {:?}", event),
+                        _ => warn!("BUG: invalid event"; "event" => ?event),
                     }
                 } else {
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -787,6 +801,32 @@ where
         }));
     }
 
+    fn on_update_global_checkpoint(&self, task: String) {
+        self.pool.block_on(async move {
+            let ts = self.meta_client.global_progress_of_task(&task).await;
+            match ts {
+                Ok(global_checkpoint) => {
+                    if let Err(e) = self
+                        .range_router
+                        .update_global_checkpoint(&task, global_checkpoint, self.store_id)
+                        .await
+                    {
+                        warn!("backup stream failed to update global checkpoint.";
+                            "task" => ?task,
+                            "err" => ?e
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!("backup stream failed to get global checkpoint.";
+                        "task" => ?task,
+                        "err" => ?e
+                    );
+                }
+            }
+        });
+    }
+
     /// Modify observe over some region.
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
@@ -825,6 +865,7 @@ where
             Task::MarkFailover(t) => self.failover_time = Some(t),
             Task::FlushWithMinTs(task, min_ts) => self.on_flush_with_min_ts(task, min_ts),
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
+            Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
         }
     }
 
@@ -922,7 +963,7 @@ pub enum Task {
     /// Convert status of some task into `flushing` and do flush then.
     ForceFlush(String),
     /// FatalError pauses the task and set the error.
-    FatalError(String, Box<Error>),
+    FatalError(TaskSelector, Box<Error>),
     /// Run the callback when see this message. Only for test usage.
     /// NOTE: Those messages for testing are not guared by `#[cfg(test)]` for now, because
     ///       the integration test would not enable test config when compiling (why?)
@@ -944,6 +985,8 @@ pub enum Task {
     FlushWithMinTs(String, TimeStamp),
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
+    /// update global-checkpoint-ts to storage.
+    UpdateGlobalCheckpoint(String),
 }
 
 #[derive(Debug)]
@@ -1040,6 +1083,9 @@ impl fmt::Debug for Task {
                 .field(arg1)
                 .finish(),
             Self::RegionCheckpointsOp(s) => f.debug_tuple("GetRegionCheckpoints").field(s).finish(),
+            Self::UpdateGlobalCheckpoint(task) => {
+                f.debug_tuple("UpdateGlobalCheckpoint").field(task).finish()
+            }
         }
     }
 }
@@ -1076,6 +1122,7 @@ impl Task {
             Task::MarkFailover(_) => "mark_failover",
             Task::FlushWithMinTs(..) => "flush_with_min_ts",
             Task::RegionCheckpointsOp(..) => "get_checkpoints",
+            Task::UpdateGlobalCheckpoint(..) => "update_global_checkpoint",
         }
     }
 }
