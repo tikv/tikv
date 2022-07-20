@@ -500,6 +500,7 @@ impl ReadThroughputRecorder {
         let r = self_thread_inspector().ok().and_then(|insp| {
             let stat = insp.io_stat();
             debug!("read throughput recorder: get initial io stat"; "stat" => ?stat);
+            println!("start {:?}", stat);
             let stat = stat.ok()??;
             Some((insp, stat))
         });
@@ -522,6 +523,7 @@ impl ReadThroughputRecorder {
         let begin = self.begin.as_ref()?;
         let end = ins.io_stat();
         debug!("read throughput recorder: get terminal io stat"; "stat" => ?end);
+        println!("end {:?}", end);
         let end = end.ok()??;
         Some(end.read - begin.read)
     }
@@ -530,6 +532,7 @@ impl ReadThroughputRecorder {
         self.try_get_delta_from_unix().unwrap_or_else(|| {
             let delta = self.ejector.delta();
             debug!("io stat failed; using rocksdb perf context"; "delta" => ?delta);
+            println!("delta {:?}", delta);
             delta.block_read_byte
         })
     }
