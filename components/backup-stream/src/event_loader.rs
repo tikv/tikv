@@ -384,6 +384,8 @@ where
                 "{:?}", msg
             ))));
             let mut events = ApplyEvents::with_capacity(1024, region.id);
+            // Note: the call of `fill_entries` is the only step which would read the disk.
+            //       we only need to record the disk throughput of this.
             let (stat, disk_read) =
                 utils::with_record_read_throughput(|| event_loader.fill_entries());
             let stat = stat?;
