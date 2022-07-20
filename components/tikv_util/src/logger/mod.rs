@@ -78,7 +78,7 @@ where
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
             .build_with_guard();
-        let drain = async_log.fuse();
+        let drain = async_log.filter_level(level).fuse();
         let drain = SlowLogFilter {
             threshold: slow_threshold,
             inner: drain,
@@ -87,7 +87,7 @@ where
 
         (slog::Logger::root(filtered, slog_o!()), Some(guard))
     } else {
-        let drain = LogAndFuse(Mutex::new(drain));
+        let drain = LogAndFuse(Mutex::new(drain).filter_level(level));
         let drain = SlowLogFilter {
             threshold: slow_threshold,
             inner: drain,
@@ -287,9 +287,7 @@ pub fn get_log_level() -> Option<Level> {
 }
 
 pub fn set_log_level(new_level: Level) {
-    LOG_LEVEL.store(new_level.as_usize(), Ordering::SeqCst);
-    // also change std log to new level.
-    let _ = slog_global::redirect_std_log(Some(new_level));
+    LOG_LEVEL.store(new_level.as_usize(), Ordering::SeqCst)
 }
 
 pub struct TikvFormat<D>
