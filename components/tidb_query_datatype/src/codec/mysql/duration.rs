@@ -150,9 +150,9 @@ mod parser {
         Ok((rest, hhmmss))
     }
 
-    /// a string can match datetime format only if it starts with a series of digits
+    /// A string can match datetime format only if it starts with a series of digits
     /// whose length matches the full format of DateTime literal (12, 14)
-    /// or the string start with a date literal
+    /// or the string starts with a date literal.
     fn format_can_match_datetime(input: &str) -> IResult<(), (), ()> {
         let (rest, digits) = digit1(input)?;
 
@@ -172,8 +172,8 @@ mod parser {
         }
     }
 
-    /// caller should make sure the input string can match datetime format
-    /// according to format_can_match_datetime 
+    /// Caller should make sure the input string can match datetime format
+    /// according to format_can_match_datetime.
     fn hhmmss_datetime<'a>(
         ctx: &mut EvalContext,
         input: &'a str,
@@ -253,8 +253,8 @@ mod parser {
                 ))
             });
 
-        // in order to keep compatible with TiDB, when input string can only be partially parsed by hhmmss_compact
-        // and it can match the datetime format, we fallback to parse it using datetime format
+        // In order to keep compatible with TiDB, when input string can only be partially parsed by hhmmss_compact
+        // and it can match the datetime format, we fallback to parse it using datetime format.
         if truncated_parse && fallback_to_datetime {
             return hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration));
         }
