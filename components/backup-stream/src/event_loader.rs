@@ -510,8 +510,8 @@ mod tests {
 
         let mut r = Region::new();
         r.set_id(42);
-        r.set_start_key(b"".to_vec().into());
-        r.set_end_key(b"".to_vec().into());
+        r.set_start_key(b"".to_vec());
+        r.set_end_key(b"".to_vec());
         let snap = engine.snapshot_on_kv_engine(b"", b"").unwrap();
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
