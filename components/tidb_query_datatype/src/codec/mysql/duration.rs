@@ -173,7 +173,7 @@ mod parser {
     }
 
     /// Caller should make sure the input string can match datetime format
-    /// according to format_can_match_datetime.
+    /// according to `format_can_match_datetime`.
     fn hhmmss_datetime<'a>(
         ctx: &mut EvalContext,
         input: &'a str,
@@ -253,7 +253,7 @@ mod parser {
                 ))
             });
 
-        // In order to keep compatible with TiDB, when input string can only be partially parsed by hhmmss_compact
+        // In order to keep compatible with TiDB, when input string can only be partially parsed by `hhmmss_compact`
         // and it can match the datetime format, we fallback to parse it using datetime format.
         if truncated_parse && fallback_to_datetime {
             return hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration));
