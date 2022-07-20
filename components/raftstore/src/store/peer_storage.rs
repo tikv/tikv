@@ -1385,16 +1385,11 @@ where
 
     pub fn compact_to(&mut self, idx: u64) {
         self.compact_cache_to(idx);
-
         self.cancel_generating_snap(Some(idx));
     }
 
     pub fn compact_cache_to(&mut self, idx: u64) {
         self.cache.compact_to(idx);
-        let rid = self.get_region_id();
-        if self.engines.raft.has_builtin_entry_cache() {
-            self.engines.raft.gc_entry_cache(rid, idx);
-        }
     }
 
     #[inline]
@@ -1402,31 +1397,9 @@ where
         self.cache.is_empty()
     }
 
-    pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
-        if self.engines.raft.has_builtin_entry_cache() {
-            let rid = self.get_region_id();
-            self.engines.raft.gc_entry_cache(rid, apply_idx + 1);
-        }
-        if replicated_idx == apply_idx {
-            // The region is inactive, clear the cache immediately.
-            self.cache.compact_to(apply_idx + 1);
-            return;
-        }
-        let cache_first_idx = match self.cache.first_index() {
-            None => return,
-            Some(idx) => idx,
-        };
-        if cache_first_idx > replicated_idx + 1 {
-            // Catching up log requires accessing fs already, let's optimize for
-            // the common case.
-            // Maybe gc to second least replicated_idx is better.
-            self.cache.compact_to(apply_idx + 1);
-        }
-    }
-
     /// Evict entries from the cache.
     pub fn evict_cache(&mut self, half: bool) {
-        if !self.cache.cache.is_empty() {
+        if !self.is_cache_empty() {
             let cache = &mut self.cache;
             let cache_len = cache.cache.len();
             let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
@@ -1436,22 +1409,11 @@ where
         }
     }
 
-    pub fn cache_is_empty(&self) -> bool {
-        self.cache.cache.is_empty()
-    }
-
     #[inline]
     pub fn flush_cache_metrics(&mut self) {
         // NOTE: memory usage of entry cache is flushed realtime.
         self.cache.flush_stats();
         self.raftlog_fetch_stats.flush_stats();
-        if self.engines.raft.has_builtin_entry_cache() {
-            if let Some(stats) = self.engines.raft.flush_stats() {
-                RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
-                RAFT_ENTRY_FETCHES.hit.inc_by(stats.hit as u64);
-                RAFT_ENTRY_FETCHES.miss.inc_by(stats.miss as u64);
-            }
-        }
     }
 
     // Apply the peer with given snapshot.

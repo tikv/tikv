@@ -4926,25 +4926,30 @@ where
         //                  ^                                       ^
         //                  |-----------------threshold------------ |
         //              first_index                         replicated_index
-        // `alive_cache_idx` is the smallest `replicated_index` of healthy up nodes.
-        // `alive_cache_idx` is only used to gc cache.
+        // `alive_replicated_idx` is the smallest `replicated_index` of healthy up nodes.
+        // `alive_replicated_idx` is only used to gc cache.
         let applied_idx = self.fsm.peer.get_store().applied_index();
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
+        let first_idx = self.fsm.peer.get_store().first_index();
         let last_idx = self.fsm.peer.get_store().last_index();
-        let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
+
+        let (mut replicated_idx, mut alive_replicated_idx) = (last_idx, last_idx);
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
-                if alive_cache_idx > p.matched
-                    && p.matched >= truncated_idx
-                    && *last_heartbeat > cache_alive_limit
-                {
-                    alive_cache_idx = p.matched;
+                if *last_heartbeat > cache_alive_limit {
+                    if alive_replicated_idx > p.matched && p.matched >= truncated_idx {
+                        alive_replicated_idx = p.matched;
+                    } else if p.matched == 0 {
+                        // the new peer is still applying snapshot, do not compact cache now
+                        alive_replicated_idx = 0;
+                    }
                 }
             }
         }
+
         // When an election happened or a new peer is added, replicated_idx can be 0.
         if replicated_idx > 0 {
             assert!(
@@ -4958,17 +4963,13 @@ where
         self.fsm
             .peer
             .mut_store()
-            .maybe_gc_cache(alive_cache_idx, applied_idx);
+            .compact_cache_to(alive_replicated_idx + 1);
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_cache(true);
-            if !self.fsm.peer.get_store().cache_is_empty() {
+            if !self.fsm.peer.get_store().is_cache_empty() {
                 self.register_entry_cache_evict_tick();
             }
         }
-
-        let mut total_gc_logs = 0;
-
-        let first_idx = self.fsm.peer.get_store().first_index();
 
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
@@ -5007,7 +5008,6 @@ where
                 .compact_idx_too_small += 1;
             return;
         }
-        total_gc_logs += compact_idx - first_idx;
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();
@@ -5022,7 +5022,7 @@ where
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
-        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs);
+        PEER_GC_RAFT_LOG_COUNTER.inc_by(compact_idx - first_idx);
     }
 
     fn register_entry_cache_evict_tick(&mut self) {
@@ -5036,7 +5036,7 @@ where
         }
         let mut _usage = 0;
         if memory_usage_reaches_high_water(&mut _usage)
-            && !self.fsm.peer.get_store().cache_is_empty()
+            && !self.fsm.peer.get_store().is_cache_empty()
         {
             self.register_entry_cache_evict_tick();
         }
