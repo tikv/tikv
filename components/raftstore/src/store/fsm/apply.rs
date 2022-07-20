@@ -5857,10 +5857,7 @@ mod tests {
             .build();
 
         obs.delay_remove_ssts.store(true, Ordering::SeqCst);
-        router.schedule_task(
-            1,
-            Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])),
-        );
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])));
         fetch_apply_res(&rx);
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.exec_res.len(), 1);
