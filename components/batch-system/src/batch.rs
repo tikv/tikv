@@ -7,10 +7,10 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    borrow::Cow,
+    borrow::{BorrowMut, Cow},
     ops::{Deref, DerefMut},
     sync::{atomic::AtomicUsize, Arc, Mutex},
-    thread::{self, current, JoinHandle, ThreadId},
+    thread::{self, current, sleep_ms, JoinHandle, ThreadId},
     time::Duration,
 };
 
@@ -185,6 +185,11 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
+    fn force_release(&mut self, mut fsm: NormalFsm<N>) {
+        let mailbox = fsm.take_mailbox().unwrap();
+        mailbox.release(fsm.fsm);
+    }
+
     /// Remove the normal FSM located at `index`.
     ///
     /// This method should only be called when the FSM is stopped.
@@ -342,6 +347,8 @@ pub struct Poller<N: Fsm, C: Fsm, Handler> {
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
     pub joinable_workers: Option<Arc<Mutex<Vec<ThreadId>>>>,
+    pub parallel_apply: bool,
+    pub name: String,
 }
 
 impl<N, C, Handler> Drop for Poller<N, C, Handler>
@@ -381,8 +388,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         !batch.is_empty()
     }
 
-    // Poll for readiness and forward to handler. Remove stale peer if necessary.
-    pub fn poll(&mut self) {
+    fn poll_normal(&mut self) {
+        info!("[for debug] poll_normal");
         fail_point!("poll");
         let mut batch = Batch::with_capacity(self.max_batch_size);
         let mut reschedule_fsms = Vec::with_capacity(self.max_batch_size);
@@ -507,6 +514,81 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         }
         batch.clear();
     }
+
+    fn poll_parallel_apply(&mut self) {
+        info!("[for debug] poll_parallel_apply");
+        fail_point!("poll_parallel_apply");
+        let mut batch = Batch::with_capacity(self.max_batch_size);
+
+        // Fetch batch after every round is finished. It's helpful to protect regions
+        // from becoming hungry if some regions are hot points. Since we fetch new fsm every time
+        // calling `poll`, we do not need to configure a large value for `self.max_batch_size`.
+        let mut run = true;
+        let mut loop_cnt = 0;
+        while run && self.fetch_fsm(&mut batch) {
+            // If there is some region wait to be deal, we must deal with it even if it has overhead
+            // max size of batch. It's helpful to protect regions from becoming hungry
+            // if some regions are hot points.
+            let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
+            // update some online config if needed.
+            {
+                // TODO: rust 2018 does not support capture disjoint field within a closure.
+                // See https://github.com/rust-lang/rust/issues/53488 for more details.
+                // We can remove this once we upgrade to rust 2021 or later edition.
+                let batch_size = &mut self.max_batch_size;
+                self.handler.begin(max_batch_size, |cfg| {
+                    *batch_size = cfg.max_batch_size();
+                });
+            }
+
+            if batch.control.is_some() {
+                let len = self.handler.handle_control(batch.control.as_mut().unwrap());
+                if batch.control.as_ref().unwrap().is_stopped() {
+                    batch.remove_control(&self.router.control_box);
+                } else if let Some(len) = len {
+                    batch.release_control(&self.router.control_box, len);
+                }
+            }
+
+            while let Some(p) = batch.normals.pop() {
+                let mut normal_fsm = p.unwrap();
+                let res = self.handler.handle_normal(normal_fsm.borrow_mut());
+                let mut stop_schedule = normal_fsm.is_stopped();
+
+                // If we could reschedule the apply fsm immediately though there may still have
+                // pending messages in the mailbox, other apply workers could steal these messages
+                // and help to process them, then parallel apply could be achieved.
+                if !stop_schedule {
+                    if let HandleResult::StopAt { progress, skip_end } = res {
+                        batch.force_release(normal_fsm);
+                    } else {
+                        self.router.normal_scheduler.schedule(normal_fsm.fsm);
+                    }
+                } else {
+                    batch.remove(normal_fsm);
+                }
+            }
+
+            let mut tmp_batch = Batch::<N, C>::with_capacity(0);
+            self.handler.light_end(&mut tmp_batch.normals);
+            self.handler.end(&mut tmp_batch.normals);
+            loop_cnt += 1;
+        }
+        if let Some(fsm) = batch.control.take() {
+            self.router.control_scheduler.schedule(fsm);
+            info!("poller will exit, release the left ControlFsm");
+        }
+        batch.clear();
+    }
+
+    // Poll for readiness and forward to handler. Remove stale peer if necessary.
+    pub fn poll(&mut self) {
+        if !self.parallel_apply {
+            self.poll_normal();
+        } else {
+            self.poll_parallel_apply();
+        }
+    }
 }
 
 /// A builder trait that can build up poll handlers.
@@ -533,6 +615,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     reschedule_duration: Duration,
     low_priority_pool_size: usize,
     pool_state_builder: Option<PoolStateBuilder<N, C>>,
+    parallel_apply: bool,
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -580,6 +663,8 @@ where
             } else {
                 None
             },
+            parallel_apply: self.parallel_apply,
+            name: name.clone(),
         };
         let props = tikv_util::thread_group::current_properties();
         let t = thread::Builder::new()
@@ -729,6 +814,10 @@ pub fn create_system<N: Fsm, C: Fsm>(
         reschedule_duration: cfg.reschedule_duration.0,
         low_priority_pool_size: cfg.low_priority_pool_size,
         pool_state_builder: Some(pool_state_builder),
+        parallel_apply: cfg.parallel_apply,
     };
+    info!("[for debug] parallel apply";
+        "parallel_apply" => cfg.parallel_apply,
+    );
     (router, system)
 }

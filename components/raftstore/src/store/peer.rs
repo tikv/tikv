@@ -3146,7 +3146,7 @@ where
         }
 
         let applied_index = apply_state.get_applied_index();
-        self.raft_group.advance_apply_to(applied_index);
+        // self.raft_group.advance_apply_to(applied_index);
 
         self.cmd_epoch_checker.advance_apply(
             applied_index,

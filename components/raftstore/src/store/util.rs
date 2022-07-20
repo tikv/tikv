@@ -1207,6 +1207,9 @@ impl RegionReadProgressCore {
 
     // Return the `safe_ts` if it is updated
     fn update_applied(&mut self, applied: u64) -> Option<u64> {
+        if applied < self.applied_index {
+            return None;
+        }
         // The apply index should not decrease
         assert!(applied >= self.applied_index);
         self.applied_index = applied;

@@ -463,7 +463,12 @@ impl<T: Simulator> Cluster<T> {
             };
             request.mut_header().set_peer(leader);
             let resp = match self.call_command(request.clone(), timeout) {
-                e @ Err(_) => return e,
+                e @ Err(_) => {
+                    info!("[for debug] call_command returns error";
+                        "err" => ?&e,
+                    );
+                    return e;
+                }
                 Ok(resp) => resp,
             };
             if self.refresh_leader_if_needed(&resp, region_id)

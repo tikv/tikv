@@ -10,6 +10,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
 use test_raftstore::*;
+use test_util::init_log_for_test;
 use tikv_util::HandyRwLock;
 
 struct CbReceivers {
@@ -84,6 +85,36 @@ fn make_write_req(cluster: &mut Cluster<NodeCluster>, k: &[u8]) -> RaftCmdReques
     let leader = cluster.leader_of_region(r.get_id()).unwrap();
     req.mut_header().set_peer(leader);
     req
+}
+
+#[test]
+fn test_basic_parallel_apply() {
+    init_log_for_test();
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.parallel_apply = true;
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    cluster.run();
+
+    // Try to raise two put requests, they are in the same region but they should be processed
+    // in different apply workers if parallel is enabled.
+    sleep_ms(1500);
+    info!("[for debug] >>>>>> begin to test");
+    let mut r1 = cluster.async_put(b"k1", b"v1").unwrap();
+    sleep_ms(200);
+    info!("[for debug] <<< finish to send the 1st client request");
+    let mut r2 = cluster.async_put(b"k2", b"v2").unwrap();
+    info!("[for debug] <<<<<< finish to send all client requests");
+    let resp_1 = r1.recv_timeout(Duration::from_secs(5)).unwrap();
+    let resp_2 = r2.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    info!("[for debug]";
+        "resp_1" => ?resp_1,
+        "resp_2" => ?resp_2,
+    );
+    assert_eq!(cluster.must_get(b"k1").unwrap(), b"v1");
+    assert_eq!(cluster.must_get(b"k2").unwrap(), b"v2");
 }
 
 #[test]

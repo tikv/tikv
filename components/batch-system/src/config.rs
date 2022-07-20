@@ -14,12 +14,19 @@ pub struct Config {
     pub reschedule_duration: ReadableDuration,
     #[online_config(skip)]
     pub low_priority_pool_size: usize,
+    pub parallel_apply: bool,
 }
 
 impl Config {
     pub fn max_batch_size(&self) -> usize {
         // `Config::validate` is not called for test so the `max_batch_size` is None.
         self.max_batch_size.unwrap_or(256)
+    }
+
+    pub fn apply_config() -> Self {
+        let mut conf = Config::default();
+        conf.parallel_apply = true;
+        conf
     }
 }
 
@@ -30,6 +37,7 @@ impl Default for Config {
             pool_size: 2,
             reschedule_duration: ReadableDuration::secs(5),
             low_priority_pool_size: 1,
+            parallel_apply: false,
         }
     }
 }

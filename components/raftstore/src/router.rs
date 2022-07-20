@@ -7,7 +7,7 @@ use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::SnapshotStatus;
-use tikv_util::time::ThreadReadId;
+use tikv_util::{info, time::ThreadReadId};
 
 use crate::{
     store::{

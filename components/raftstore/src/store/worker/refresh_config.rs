@@ -64,6 +64,8 @@ where
                 max_batch_size: self.state.max_batch_size,
                 reschedule_duration: self.state.reschedule_duration,
                 joinable_workers: Some(Arc::clone(&self.state.joinable_workers)),
+                parallel_apply: false,
+                name: "".to_string(),
             };
             let props = tikv_util::thread_group::current_properties();
             let t = thread::Builder::new()

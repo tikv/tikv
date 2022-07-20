@@ -125,14 +125,16 @@ impl Resolver {
     }
 
     pub fn update_tracked_index(&mut self, index: u64) {
-        assert!(
-            self.tracked_index <= index,
-            "region {}, tracked_index: {}, incoming index: {}",
-            self.region_id,
-            self.tracked_index,
-            index
-        );
-        self.tracked_index = index;
+        if self.tracked_index <= index {
+            assert!(
+                self.tracked_index <= index,
+                "region {}, tracked_index: {}, incoming index: {}",
+                self.region_id,
+                self.tracked_index,
+                index
+            );
+            self.tracked_index = index;
+        }
     }
 
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>, index: Option<u64>) {
