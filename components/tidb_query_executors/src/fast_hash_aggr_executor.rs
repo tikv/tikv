@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryFrom, hash::Hash, mem::size_of, sync::Arc};
+use std::{convert::TryFrom, hash::Hash, mem::size_of, mem::size_of_val, sync::Arc};
 
 use collections::HashMap;
 use tidb_query_aggr::*;
@@ -474,8 +474,9 @@ where
                 group.insert(val, offset);
                 n_bytes += size_of::<Result<Option<S>>>() + size_of::<usize>();
                 for aggr_fn in aggr_fns {
-                    states.push(aggr_fn.create_state());
-                    n_bytes += size_of::<Box<dyn AggrFunctionState>>();
+                    let state = aggr_fn.create_state();
+                    n_bytes += size_of::<Box<dyn AggrFunctionState>>() + size_of_val(&*state);
+                    states.push(state);
                 }
             }
         }
