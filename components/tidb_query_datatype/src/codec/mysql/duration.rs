@@ -240,9 +240,10 @@ mod parser {
 
         let (rest, neg) = negative(input).ok()?;
         let (rest, _) = space0::<_, ()>(rest).ok()?;
-        let fallback_to_datetime = format_can_match_datetime(rest).is_ok() && fallback_to_datetime;
+
         let chars_len = rest.len();
         let mut truncated_parse = false;
+        let format_match_datetime = format_can_match_datetime(rest).is_ok();
 
         let duration = day_hhmmss(rest)
             .ok()
@@ -269,7 +270,7 @@ mod parser {
 
         // in order to keep compatible with TiDB, when input string can only be partially parsed by hhmmss_compact
         // and it can match the datetime format, we fallback to parse it using datetime format
-        if truncated_parse && fallback_to_datetime {
+        if truncated_parse && fallback_to_datetime && format_match_datetime {
             return hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration));
         }
 
