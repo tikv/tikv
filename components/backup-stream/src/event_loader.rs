@@ -92,8 +92,8 @@ impl<S: Snapshot> EventLoader<S> {
         let region_id = region.get_id();
         let scanner = ScannerBuilder::new(snapshot, to_ts)
             .range(
-                Some(Key::from_encoded_slice(&region.start_key)),
-                Some(Key::from_encoded_slice(&region.end_key)),
+                (!region.start_key.is_empty()).then(|| Key::from_encoded_slice(&region.start_key)),
+                (!region.end_key.is_empty()).then(|| Key::from_encoded_slice(&region.end_key)),
             )
             .hint_min_ts(Some(from_ts))
             .fill_cache(false)
@@ -123,7 +123,7 @@ impl<S: Snapshot> EventLoader<S> {
 
     /// Drain the internal buffer, converting them to the [`ApplyEvents`],
     /// and tracking the locks at the same time.
-    fn omit_entries_to(
+    fn emit_entries_to(
         &mut self,
         result: &mut ApplyEvents,
         resolver: &mut TwoPhaseResolver,
@@ -389,7 +389,7 @@ where
             let (stat, disk_read) =
                 utils::with_record_read_throughput(|| event_loader.fill_entries());
             let stat = stat?;
-            self.with_resolver(region, |r| event_loader.omit_entries_to(&mut events, r))?;
+            self.with_resolver(region, |r| event_loader.emit_entries_to(&mut events, r))?;
             if events.is_empty() {
                 metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
                 return Ok(stats.stat);
@@ -470,5 +470,59 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use engine_traits::CompactExt;
+    use kvproto::metapb::*;
+    use tikv::storage::{txn::tests::*, Engine, TestEngineBuilder};
+    use txn_types::TimeStamp;
+
+    use super::EventLoader;
+    use crate::{
+        router::ApplyEvents, subscription_track::TwoPhaseResolver,
+        utils::with_record_read_throughput,
+    };
+
+    #[test]
+    fn test_disk_read() {
+        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        for i in 0..100 {
+            let owned_key = format!("{:06}", i);
+            let key = owned_key.as_bytes();
+            let owned_value = format!(
+                r#"[{:06}] Lorem ipsum dolor sit amet, consectetur adipiscing elit,
+                    sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. 
+                    Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris 
+                    nisi ut aliquip ex ea commodo consequat. 
+                    Duis aute irure dolor in reprehenderit in 
+                    voluptate velit esse cillum dolore eu fugiat nulla pariatur. 
+                    Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."#,
+                i
+            );
+            let value = owned_value.as_bytes();
+            must_prewrite_put(&engine, key, value, key, i * 2);
+            must_commit(&engine, key, i * 2, i * 2 + 1);
+        }
+        // let compact the memtable to disk so we can see the disk read.
+        engine.get_rocksdb().as_inner().compact_range(None, None);
+
+        let mut r = Region::new();
+        r.set_id(42);
+        r.set_start_key(b"".to_vec().into());
+        r.set_end_key(b"".to_vec().into());
+        let snap = engine.snapshot_on_kv_engine(b"", b"").unwrap();
+        let mut loader =
+            EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
+
+        let (r, data_load) = with_record_read_throughput(|| loader.fill_entries());
+        r.unwrap();
+        let mut events = ApplyEvents::with_capacity(1024, 42);
+        let mut res = TwoPhaseResolver::new(42, None);
+        loader.emit_entries_to(&mut events, &mut res).unwrap();
+        assert_ne!(events.len(), 0);
+        assert_ne!(data_load, 0);
     }
 }
