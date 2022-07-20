@@ -1014,9 +1014,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
             if let Some(wb) = raft_wb {
                 write_worker.handle_raft_write(wb);
-                write_worker.write_to_db(false);
             }
+
             if self.poll_ctx.has_ready {
+                write_worker.write_to_db(false);
                 for mut inspector in latency_inspect {
                     inspector.record_store_write(write_begin.saturating_elapsed());
                     inspector.finish();
@@ -1146,12 +1147,119 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
+    // fn init(&mut self) -> Result<Vec<SenderFsmPair<EK, ER>>> {
+    //     // Scan region meta to get saved regions.
+    //     let start_key = keys::REGION_META_MIN_KEY;
+    //     let end_key = keys::REGION_META_MAX_KEY;
+    //     let kv_engine = self.engines.kv.clone();
+    //     // let raft_engine = self.engines.raft.clone();
+    //     let store_id = self.store.get_id();
+    //     let mut total_count = 0;
+    //     let mut tombstone_count = 0;
+    //     let mut applying_count = 0;
+    //     let mut region_peers = vec![];
+
+    //     let t = TiInstant::now();
+    //     let mut kv_wb = self.engines.kv.write_batch();
+    //     let mut raft_wb = self.engines.raft.log_batch(4 * 1024);
+    //     let mut applying_regions = vec![];
+    //     let mut merging_count = 0;
+    //     let mut meta = self.store_meta.lock().unwrap();
+    //     let mut replication_state = self.global_replication_state.lock().unwrap();
+    //     let mut recover_peers = |region_id, local_state: RegionLocalState| {
+    //         total_count += 1;
+    //         match local_state.get_state() {
+    //             PeerState::Tombstone => {
+    //                 tombstone_count += 1;
+    //             }
+    //             PeerState::Applying => {
+    //                 applying_count += 1;
+    //                 applying_regions.push(local_state.get_region().clone());
+    //             }
+    //             PeerState::Merging => {
+    //                 merging_count += 1;
+    //             }
+    //             _ => {}
+    //         }
+    //         if let Some((tx, peer)) = box_try!(self.recover_peer_from_local_state(
+    //             region_id,
+    //             local_state,
+    //             &mut meta,
+    //             &mut kv_wb,
+    //             &mut raft_wb,
+    //             &mut *replication_state,
+    //         )) {
+    //             region_peers.push((tx, peer));
+    //         }
+
+    //         Ok(true)
+    //     };
+    //     if self.should_recover_from_raftdb() {
+    //         // raft_engine.scan_region_state(|region_id, local_state| {
+    //         //     recover_peers(region_id, local_state)
+    //         // })?;
+    //     } else {
+    //         kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
+    //             let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+    //             if suffix != keys::REGION_STATE_SUFFIX {
+    //                 return Ok(true);
+    //             }
+
+    //             let mut local_state = RegionLocalState::default();
+    //             local_state.merge_from_bytes(value)?;
+    //             recover_peers(region_id, local_state)
+    //         })?;
+    //     }
+
+    //     if !kv_wb.is_empty() {
+    //         kv_wb.write().unwrap();
+    //         self.engines.kv.sync_wal().unwrap();
+    //     }
+    //     if !raft_wb.is_empty() {
+    //         self.engines.raft.consume(&mut raft_wb, true).unwrap();
+    //     }
+
+    //     // schedule applying snapshot after raft writebatch were written.
+    //     for region in applying_regions {
+    //         info!("region is applying snapshot"; "region" => ?region, "store_id" => store_id);
+    //         let (tx, mut peer) = PeerFsm::create(
+    //             store_id,
+    //             &self.cfg.value(),
+    //             self.region_scheduler.clone(),
+    //             self.raftlog_fetch_scheduler.clone(),
+    //             self.engines.clone(),
+    //             &region,
+    //         )?;
+    //         peer.peer.init_replication_mode(&mut *replication_state);
+    //         peer.schedule_applying_snapshot();
+    //         meta.region_ranges
+    //             .insert(enc_end_key(&region), region.get_id());
+    //         meta.region_read_progress
+    //             .insert(region.get_id(), peer.peer.read_progress.clone());
+    //         meta.regions.insert(region.get_id(), region);
+    //         region_peers.push((tx, peer));
+    //     }
+
+    //     info!(
+    //         "start store";
+    //         "store_id" => store_id,
+    //         "region_count" => total_count,
+    //         "tombstone_count" => tombstone_count,
+    //         "applying_count" =>  applying_count,
+    //         "merge_count" => merging_count,
+    //         "takes" => ?t.saturating_elapsed(),
+    //     );
+
+    //     self.clear_stale_data(&meta)?;
+
+    //     Ok(region_peers)
+    // }
+
     fn init(&mut self) -> Result<Vec<SenderFsmPair<EK, ER>>> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let kv_engine = self.engines.kv.clone();
-        // let raft_engine = self.engines.raft.clone();
         let store_id = self.store.get_id();
         let mut total_count = 0;
         let mut tombstone_count = 0;
@@ -1165,50 +1273,64 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
         let mut replication_state = self.global_replication_state.lock().unwrap();
-        let mut recover_peers = |region_id, local_state: RegionLocalState| {
+        kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
+            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
             total_count += 1;
-            match local_state.get_state() {
-                PeerState::Tombstone => {
-                    tombstone_count += 1;
-                }
-                PeerState::Applying => {
-                    applying_count += 1;
-                    applying_regions.push(local_state.get_region().clone());
-                }
-                PeerState::Merging => {
-                    merging_count += 1;
-                }
-                _ => {}
+
+            let mut local_state = RegionLocalState::default();
+            local_state.merge_from_bytes(value)?;
+
+            let region = local_state.get_region();
+            if local_state.get_state() == PeerState::Tombstone {
+                tombstone_count += 1;
+                debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
+                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
+                return Ok(true);
             }
-            if let Some((tx, peer)) = box_try!(self.recover_peer_from_local_state(
-                region_id,
-                local_state,
-                &mut meta,
-                &mut kv_wb,
-                &mut raft_wb,
-                &mut *replication_state,
-            )) {
-                region_peers.push((tx, peer));
+            if local_state.get_state() == PeerState::Applying {
+                // in case of restart happen when we just write region state to Applying,
+                // but not write raft_local_state to raft rocksdb in time.
+                box_try!(peer_storage::recover_from_applying_state(
+                    &self.engines,
+                    &mut raft_wb,
+                    region_id
+                ));
+                applying_count += 1;
+                applying_regions.push(region.clone());
+                return Ok(true);
             }
 
+            let (tx, mut peer) = box_try!(PeerFsm::create(
+                store_id,
+                &self.cfg.value(),
+                self.region_scheduler.clone(),
+                self.raftlog_fetch_scheduler.clone(),
+                self.engines.clone(),
+                region,
+            ));
+            peer.peer.init_replication_mode(&mut *replication_state);
+            if local_state.get_state() == PeerState::Merging {
+                info!("region is merging"; "region" => ?region, "store_id" => store_id);
+                merging_count += 1;
+                peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
+            }
+            meta.region_ranges.insert(enc_end_key(region), region_id);
+            meta.regions.insert(region_id, region.clone());
+            meta.region_read_progress
+                .insert(region_id, peer.peer.read_progress.clone());
+            // No need to check duplicated here, because we use region id as the key
+            // in DB.
+            region_peers.push((tx, peer));
+            self.coprocessor_host.on_region_changed(
+                region,
+                RegionChangeEvent::Create,
+                StateRole::Follower,
+            );
             Ok(true)
-        };
-        if self.should_recover_from_raftdb() {
-            // raft_engine.scan_region_state(|region_id, local_state| {
-            //     recover_peers(region_id, local_state)
-            // })?;
-        } else {
-            kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
-                let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
-                if suffix != keys::REGION_STATE_SUFFIX {
-                    return Ok(true);
-                }
-
-                let mut local_state = RegionLocalState::default();
-                local_state.merge_from_bytes(value)?;
-                recover_peers(region_id, local_state)
-            })?;
-        }
+        })?;
 
         if !kv_wb.is_empty() {
             kv_wb.write().unwrap();
