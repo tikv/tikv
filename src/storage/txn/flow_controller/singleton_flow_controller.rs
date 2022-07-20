@@ -989,7 +989,8 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
 pub(super) mod tests {
     use std::sync::atomic::AtomicU64;
 
-    use engine_traits::Result;
+    use engine_rocks::RocksColumnFamilyOptions;
+    use engine_traits::{CFOptionsExt, Result};
 
     use super::{super::FlowController, *};
 
@@ -1015,6 +1016,17 @@ pub(super) mod tests {
     impl CFNamesExt for EngineStub {
         fn cf_names(&self) -> Vec<&str> {
             vec!["default"]
+        }
+    }
+
+    impl CFOptionsExt for EngineStub {
+        type ColumnFamilyOptions = RocksColumnFamilyOptions;
+        fn get_options_cf(&self, _cf: &str) -> Result<Self::ColumnFamilyOptions> {
+            unimplemented!();
+        }
+
+        fn set_options_cf(&self, _cf: &str, _options: &[(&str, &str)]) -> Result<()> {
+            unimplemented!();
         }
     }
 
