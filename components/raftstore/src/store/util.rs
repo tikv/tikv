@@ -261,10 +261,6 @@ pub fn check_region_epoch(
     }
 
     let from_epoch = req.get_header().get_region_epoch();
-    println!(
-        "!!!! check_region_epoch {:?} {:?} {:?} {:?} {:?}",
-        from_epoch, region, check_conf_ver, check_ver, include_region
-    );
     compare_region_epoch(
         from_epoch,
         region,

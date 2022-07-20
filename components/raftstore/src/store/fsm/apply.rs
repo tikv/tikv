@@ -1312,7 +1312,6 @@ where
         self.applied_index_term = term;
 
         let cmd = Cmd::new(index, term, req.clone(), resp.clone());
-        println!("!!!! exec_result {:?}", exec_result);
         let (modified_region, mut pending_handle_ssts) = match exec_result {
             ApplyResult::Res(ref e) => match e {
                 ExecResult::SplitRegion { ref derived, .. } => (Some(derived.clone()), None),
@@ -1324,7 +1323,6 @@ where
             },
             _ => (None, None),
         };
-        println!("!!!! pending_handle_ssts {:?}", pending_handle_ssts);
         let mut apply_ctx_info = ApplyCtxInfo {
             pending_handle_ssts: &mut pending_handle_ssts,
             delete_ssts: &mut ctx.delete_ssts,
@@ -1341,7 +1339,6 @@ where
             },
             &mut apply_ctx_info,
         );
-        println!("!!!! post post exec {:?}", exec_result);
         match pending_handle_ssts {
             None => (),
             Some(mut v) => {
@@ -1402,7 +1399,6 @@ where
             }
         }
 
-        println!("!!!! R");
         (resp, exec_result, should_write)
     }
 
@@ -1457,9 +1453,7 @@ where
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
-        println!("!!! exec 1");
         check_region_epoch(req, &self.region, include_region)?;
-        println!("!!! exec 2");
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req)
         } else {
@@ -1566,7 +1560,6 @@ where
         let exec_res = if !ranges.is_empty() {
             ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            println!("!!!! sst");
             #[cfg(feature = "failpoints")]
             {
                 let mut dont_delete_ingested_sst_fp = || {
@@ -1765,7 +1758,6 @@ where
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
 
-        println!("!!! s1");
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
             error!(?e;
                  "ingest fail";
@@ -1779,7 +1771,6 @@ where
             return Err(e);
         }
 
-        println!("!!! s2");
         match ctx.importer.validate(sst) {
             Ok(meta_info) => {
                 ctx.pending_ssts.push(meta_info.clone());
@@ -1792,7 +1783,6 @@ where
             }
         };
 
-        println!("!!! s3");
         Ok(())
     }
 }
@@ -5013,12 +5003,6 @@ mod tests {
                 },
                 Ordering::SeqCst,
             );
-            println!(
-                "!!!! Zzfsf {:?} {:?} {:?}",
-                self.last_delete_sst_count,
-                self.last_pending_clean_sst_count,
-                self.last_pending_handle_sst_count
-            );
             false
         }
     }
@@ -5854,16 +5838,8 @@ mod tests {
         let r1_epoch = r1.get_region_epoch();
         index_id += 1;
         let keys_count = 10;
-        println!("!!!!! zz {}", index_id);
 
         let mut kvs: Vec<(&[u8], &[u8])> = Vec::new();
-        let mut keys: Vec<String> = Vec::default();
-        // for i in 0..keys_count {
-        //     keys.push(format!("k{}", i));
-        // }
-        // for i in 0..keys_count {
-        //     kvs.push((keys.get(i).unwrap().as_bytes(), b"2"));
-        // }
         kvs.push((b"k3", b"2"));
         let sst_path = import_dir.path().join("test.sst");
         let (mut meta, data) = gen_sst_file_with_kvs(&sst_path, &kvs);
@@ -5876,7 +5852,6 @@ mod tests {
         let dst = file.get_import_path().save.to_str().unwrap();
         std::fs::copy(src.clone(), dst).unwrap();
         assert!(src.as_path().exists());
-        println!("!!! cpy {:?} {:?}", src, dst);
         let ingestsst = EntryBuilder::new(index_id, 1)
             .ingest_sst(&meta)
             .epoch(r1_epoch.get_conf_ver(), r1_epoch.get_version())
@@ -5890,7 +5865,6 @@ mod tests {
         assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
         assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 0);
         assert_eq!(obs.last_pending_clean_sst_count.load(Ordering::SeqCst), 1);
-        println!("!!!!! zzz {:?}", obs.last_pending_clean_sst_count);
 
         system.shutdown();
     }
