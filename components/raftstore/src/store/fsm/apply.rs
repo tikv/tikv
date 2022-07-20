@@ -5838,8 +5838,7 @@ mod tests {
         // Phase 3: we test if we can delay deletion of some sst files.
         let r1_epoch = r1.get_region_epoch();
         index_id += 1;
-        let mut kvs: Vec<(&[u8], &[u8])> = Vec::new();
-        kvs.push((b"k3", b"2"));
+        let mut kvs: Vec<(&[u8], &[u8])> = vec![(b"k3", b"2")];
         let sst_path = import_dir.path().join("test.sst");
         let (mut meta, data) = gen_sst_file_with_kvs(&sst_path, &kvs);
         meta.set_region_id(1);
