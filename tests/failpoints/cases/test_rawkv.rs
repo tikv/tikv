@@ -186,7 +186,8 @@ fn test_region_merge() {
         b"r\x00\x00\x00k2",
         b"r\x00\x00\x00k3",
         b"r\x00\x00\x00k4",
-        b"r\x00\x00\x00k5"];
+        b"r\x00\x00\x00k5",
+    ];
 
     suite.must_raw_put(keys[1], b"v1");
     suite.must_raw_put(keys[3], b"v3");
