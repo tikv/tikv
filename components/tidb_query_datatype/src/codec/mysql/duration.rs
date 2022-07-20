@@ -150,31 +150,38 @@ mod parser {
         Ok((rest, hhmmss))
     }
 
+    /// a string can match datetime format only if it starts with a series of digits
+    /// whose length matches the full format of DateTime literal (12, 14)
+    /// or the string start with a date literal
+    fn format_can_match_datetime(input: &str) -> IResult<(), (), ()> {
+        let (rest, digits) = digit1(input)?;
+
+        if digits.len() == 12 || digits.len() == 14 {
+            return Ok(((), ()));
+        }
+
+        let (rest, _) = anysep(rest)?;
+        let (rest, _) = digit1(rest)?;
+        let (rest, _) = anysep(rest)?;
+        let (rest, _) = digit1(rest)?;
+
+        if matches!(rest.chars().next(), Some(c) if c == 'T' || c == ' ') {
+            Ok(((), ()))
+        } else {
+            Err(nom::Err::Error(()))
+        }
+    }
+
+    /// caller should make sure the input string can match datetime format
+    /// according to format_can_match_datetime 
     fn hhmmss_datetime<'a>(
         ctx: &mut EvalContext,
         input: &'a str,
         fsp: u8,
     ) -> IResult<&'a str, Duration, ()> {
-        let (rest, digits) = digit1(input)?;
-        if digits.len() == 12 || digits.len() == 14 {
-            let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
-                .map_err(|_| nom::Err::Error(()))?;
-            return Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?));
-        }
-        let (rest, _) = anysep(rest)?;
-        let (rest, _) = digit1(rest)?;
-        let (rest, _) = anysep(rest)?;
-        let (rest, _) = digit1(rest)?;
-
-        let has_datetime_sep = matches!(rest.chars().next(), Some(c) if c == 'T' || c == ' ');
-
-        if !has_datetime_sep {
-            return Err(nom::Err::Error(()));
-        }
-
         let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
             .map_err(|_| nom::Err::Error(()))?;
-        Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?))
+        return Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?));
     }
 
     fn anysep(input: &str) -> IResult<&str, char, ()> {
@@ -202,28 +209,6 @@ mod parser {
         };
 
         Ok((rest, frac * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
-    }
-
-    /// a string can match datetime format only if it starts with a series of digits
-    /// whose length matches the full format of DateTime literal (12, 14)
-    /// or the string start with a date literal
-    fn format_can_match_datetime(input: &str) -> IResult<(), (), ()> {
-        let (rest, digits) = digit1(input)?;
-
-        if digits.len() == 12 || digits.len() == 14 {
-            return Ok(((), ()));
-        }
-
-        let (rest, _) = anysep(rest)?;
-        let (rest, _) = digit1(rest)?;
-        let (rest, _) = anysep(rest)?;
-        let (rest, _) = digit1(rest)?;
-
-        if matches!(rest.chars().next(), Some(c) if c == 'T' || c == ' ') {
-            Ok(((), ()))
-        } else {
-            Err(nom::Err::Error(()))
-        }
     }
 
     pub fn parse(
@@ -287,7 +272,7 @@ mod parser {
                     Some(Duration { nanos, fsp })
                 })
             }
-            None if fallback_to_datetime => {
+            None if fallback_to_datetime && format_match_datetime => {
                 hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration))
             }
             _ => None,
