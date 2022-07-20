@@ -9,8 +9,7 @@ use std::{
     vec::IntoIter,
 };
 
-use engine_traits::SstMetaInfo;
-use engine_traits::CfName;
+use engine_traits::{CfName, SstMetaInfo};
 use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
@@ -64,6 +63,7 @@ pub struct ObserverContext<'a> {
 }
 
 pub struct ApplyCtxInfo<'a> {
+    pub pending_handle_ssts: &'a mut Option<Vec<SstMetaInfo>>,
     pub delete_ssts: &'a mut Vec<SstMetaInfo>,
     pub pending_clean_ssts: &'a mut Vec<SstMetaInfo>,
 }
@@ -113,7 +113,7 @@ pub trait AdminObserver: Coprocessor {
         _: &Cmd,
         _: &RaftApplyState,
         _: &RegionState,
-        _: &ApplyCtxInfo<'a>
+        _: &mut ApplyCtxInfo<'a>,
     ) -> bool {
         false
     }
@@ -150,7 +150,7 @@ pub trait QueryObserver: Coprocessor {
         _: &Cmd,
         _: &RaftApplyState,
         _: &RegionState,
-        _: &ApplyCtxInfo<'a>
+        _: &mut ApplyCtxInfo<'a>,
     ) -> bool {
         false
     }

@@ -167,6 +167,10 @@ impl ImportFile {
         }
         Ok(())
     }
+
+    pub fn get_import_path(&self) -> &ImportPath {
+        &self.path
+    }
 }
 
 impl fmt::Debug for ImportFile {
