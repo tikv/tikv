@@ -475,8 +475,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use kvproto::metapb::*;
     use tikv::storage::{txn::tests::*, Engine, TestEngineBuilder};
     use txn_types::TimeStamp;
@@ -519,12 +517,7 @@ mod tests {
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
 
-        let (r, data_load) = with_record_read_throughput(|| {
-            let result = loader.fill_entries();
-            // give the proc fs enough time to refresh.
-            std::thread::sleep(Duration::from_secs(1));
-            result
-        });
+        let (r, data_load) = with_record_read_throughput(|| loader.fill_entries());
         r.unwrap();
         let mut events = ApplyEvents::with_capacity(1024, 42);
         let mut res = TwoPhaseResolver::new(42, None);
