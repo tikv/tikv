@@ -2137,11 +2137,8 @@ mod tests {
         }
         assert_eq!(ctx.take_warnings().warnings.len(), 0);
 
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
-            Flag::IN_SELECT_STMT | Flag::IGNORE_TRUNCATE | Flag::OVERFLOW_AS_WARNING,
-        )));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
-            ("+0.0", "+0"),
             ("100", "100"),
             ("+100", "+100"),
             ("-100", "-100"),
@@ -2156,6 +2153,14 @@ mod tests {
             assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
         }
         assert_eq!(ctx.take_warnings().warnings.len(), 0);
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
+        let cases = vec![("+0.0", "+0"), ("0.5", "0"), ("+0.5", "+0")];
+        for (i, e) in cases {
+            let o = super::get_valid_int_prefix_helper(&mut ctx, i, true);
+            assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
+        }
+        assert_eq!(ctx.take_warnings().warnings.len(), 3);
     }
 
     #[test]
