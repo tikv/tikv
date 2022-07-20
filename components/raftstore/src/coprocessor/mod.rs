@@ -62,12 +62,6 @@ pub struct ObserverContext<'a> {
     pub bypass: bool,
 }
 
-pub struct ApplyCtxInfo<'a> {
-    pub pending_handle_ssts: &'a mut Option<Vec<SstMetaInfo>>,
-    pub delete_ssts: &'a mut Vec<SstMetaInfo>,
-    pub pending_clean_ssts: &'a mut Vec<SstMetaInfo>,
-}
-
 impl<'a> ObserverContext<'a> {
     pub fn new(region: &Region) -> ObserverContext<'_> {
         ObserverContext {
@@ -81,10 +75,18 @@ impl<'a> ObserverContext<'a> {
     }
 }
 
+/// Context of a region provided for observers.
 pub struct RegionState {
     pub peer_id: u64,
     pub pending_remove: bool,
     pub modified_region: Option<Region>,
+}
+
+/// Context for exec observers of mutation to be applied to ApplyContext.
+pub struct ApplyCtxInfo<'a> {
+    pub pending_handle_ssts: &'a mut Option<Vec<SstMetaInfo>>,
+    pub delete_ssts: &'a mut Vec<SstMetaInfo>,
+    pub pending_clean_ssts: &'a mut Vec<SstMetaInfo>,
 }
 
 pub trait AdminObserver: Coprocessor {

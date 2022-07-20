@@ -5835,10 +5835,9 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(apply_res.apply_state, state);
 
+        // Phase 3: we test if we can delay deletion of some sst files.
         let r1_epoch = r1.get_region_epoch();
         index_id += 1;
-        let keys_count = 10;
-
         let mut kvs: Vec<(&[u8], &[u8])> = Vec::new();
         kvs.push((b"k3", b"2"));
         let sst_path = import_dir.path().join("test.sst");
@@ -5858,12 +5857,28 @@ mod tests {
             .build();
 
         obs.delay_remove_ssts.store(true, Ordering::SeqCst);
-        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])));
-        let apply_res = fetch_apply_res(&rx);
+        router.schedule_task(
+            1,
+            Msg::apply(apply(peer_id, 1, 1, vec![ingestsst.clone()], vec![])),
+        );
+        fetch_apply_res(&rx);
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.exec_res.len(), 1);
         assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
         assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_pending_clean_sst_count.load(Ordering::SeqCst), 1);
+
+        index_id += 1;
+        let ingestsst = EntryBuilder::new(index_id, 1)
+            .ingest_sst(&meta)
+            .epoch(r1_epoch.get_conf_ver(), r1_epoch.get_version())
+            .build();
+        obs.delay_remove_ssts.store(false, Ordering::SeqCst);
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])));
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.exec_res.len(), 1);
+        assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 1);
         assert_eq!(obs.last_pending_clean_sst_count.load(Ordering::SeqCst), 1);
 
         system.shutdown();
