@@ -101,7 +101,6 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         if self.index > 0 {
             self.get_db()
                 .multi_batch_write(self.as_inner(), &opt.into_raw())
-                .map(|_| 0)
                 .map_err(Error::Engine)
         } else {
             self.get_db()
