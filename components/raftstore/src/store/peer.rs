@@ -68,6 +68,8 @@ use time::Timespec;
 use txn_types::WriteBatchFlags;
 use uuid::Uuid;
 
+use crate::store::fsm::apply::Notifier;
+
 use super::{
     cmd_resp,
     local_metrics::{RaftMetrics, RaftReadyMetrics},
@@ -87,13 +89,13 @@ use crate::{
     store::{
         async_io::{write::WriteMsg, write_router::WriteRouter},
         fsm::{
-            apply::{self, CatchUpLogs},
+            apply::{self, CatchUpLogs, ApplyRes},
             store::{PollContext, RaftRouter},
             Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        msg::{PeerMsg, CasualMessage, RaftCommand, SignificantMsg, StoreMsg},
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
@@ -2689,7 +2691,7 @@ where
     fn handle_raft_committed_entries<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        committed_entries: Vec<Entry>,
+        mut committed_entries: Vec<Entry>,
     ) {
         if committed_entries.is_empty() {
             return;
@@ -2768,7 +2770,8 @@ where
             } else {
                 vec![]
             };
-            // Note that the `commit_index` and `commit_term` here may be used to
+
+             // Note that the `commit_index` and `commit_term` here may be used to
             // forward the commit index. So it must be less than or equal to persist
             // index.
             let commit_index = cmp::min(
@@ -2776,6 +2779,38 @@ where
                 self.raft_group.raft.raft_log.persisted,
             );
             let commit_term = self.get_store().term(commit_index).unwrap();
+
+            if self.is_witness() {
+                committed_entries = committed_entries.into_iter().filter(|e| {
+                    let ctx = ProposalContext::from_bytes(&e.context);
+                    !ctx.contains(ProposalContext::NO_ADMIN)
+                }).collect();
+            }
+            if committed_entries.is_empty() {
+                // let metrics = ApplyMetrics::default();
+                // let mut apply_state = self.get_store().apply_state().clone();
+                // apply_state.set_applied_index(self.last_applying_idx);
+                // apply_state.set_commit_index(commit_index);
+                // apply_state.set_commit_term(commit_term);
+                // let has_ready = self.post_apply(
+                //     ctx,
+                //     apply_state,
+                //     self.get_store().term(self.last_applying_idx).unwrap(),
+                //     &metrics,
+                // );
+                // if has_ready {
+                //     // trigger has ready check
+                //     ctx.router.notify_one(self.region_id, PeerMsg::CasualMessage(CasualMessage::SnapshotApplied));
+                // }
+                return;
+            }
+
+            let prev_state = if self.is_witness() {
+                Some(self.last_applying_idx)
+            } else {
+                None
+            };
+           
             let mut apply = Apply::new(
                 self.peer_id(),
                 self.region_id,
@@ -2785,6 +2820,7 @@ where
                 committed_entries,
                 cbs,
                 self.region_buckets.as_ref().map(|b| b.meta.clone()),
+                prev_state,
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()

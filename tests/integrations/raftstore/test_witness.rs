@@ -107,7 +107,23 @@ fn test_witness_auto() {
 
     std::thread::sleep(Duration::from_millis(1000));
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    let has_witness = region.get_peers().iter().any(|p| p.get_is_witness());
-    assert!(has_witness);
-    // must_get_none(&cluster.get_engine(3), b"k1");
+    let witness = region.get_peers().iter().find(|p| p.get_is_witness());
+    assert!(witness.is_some());
+    must_get_none(&cluster.get_engine(witness.unwrap().get_store_id()), b"k1");
+
+    
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k5", b"v5");
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k4");
+    cluster.must_put(b"k3", b"v6");
+    cluster.must_put(b"k6", b"v6");
+
+    must_get_none(&cluster.get_engine(witness.unwrap().get_store_id()), b"k3");
+    must_get_none(&cluster.get_engine(witness.unwrap().get_store_id()), b"k6");
+}
+
+#[test]
+fn test_witness() {
+    
 }

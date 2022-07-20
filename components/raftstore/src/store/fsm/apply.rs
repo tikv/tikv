@@ -964,14 +964,17 @@ where
                 break;
             }
 
-            let expect_index = self.apply_state.get_applied_index() + 1;
-            if expect_index != entry.get_index() {
-                panic!(
-                    "{} expect index {}, but got {}",
-                    self.tag,
-                    expect_index,
-                    entry.get_index()
-                );
+            let peer = util::find_peer_by_id(&self.region, self.id).unwrap();
+            if !peer.is_witness {
+                let expect_index = self.apply_state.get_applied_index() + 1;
+                if expect_index != entry.get_index() {
+                    panic!(
+                        "{} expect index {}, but got {}",
+                        self.tag,
+                        expect_index,
+                        entry.get_index()
+                    );
+                }
             }
 
             // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by `unimplemented!()`,
@@ -1049,13 +1052,13 @@ where
         let term = entry.get_term();
         let data = entry.get_data();
 
-        let peer = util::find_peer_by_id(&self.region, self.id).unwrap();
-        let skip = peer.is_witness
-            && ProposalContext::from_bytes(entry.get_context()).contains(ProposalContext::NO_ADMIN);
-        if skip {
-            PEER_WRITE_CMD_COUNTER.skip.inc(); 
-        }
-        if !data.is_empty() && !skip {
+        // let peer = util::find_peer_by_id(&self.region, self.id).unwrap();
+        // let skip = peer.is_witness
+        //     && ProposalContext::from_bytes(entry.get_context()).contains(ProposalContext::NO_ADMIN);
+        // if skip {
+        //     PEER_WRITE_CMD_COUNTER.skip.inc(); 
+        // }
+        if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
             if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
@@ -1090,11 +1093,10 @@ where
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
-        } else if data.is_empty() {
-            // we should observe empty cmd, aka leader change,
-            // read index during confchange, or other situations.
-            apply_ctx.host.on_empty_cmd(&self.region, index, term);
         }
+        // we should observe empty cmd, aka leader change,
+        // read index during confchange, or other situations.
+        apply_ctx.host.on_empty_cmd(&self.region, index, term);
 
         self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
@@ -2761,6 +2763,7 @@ where
     pub entries_size: usize,
     pub cbs: Vec<Proposal<S>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
+    pub prev_state: Option<u64>,
 }
 
 impl<S: Snapshot> Apply<S> {
@@ -2773,6 +2776,7 @@ impl<S: Snapshot> Apply<S> {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
         buckets: Option<Arc<BucketMeta>>,
+        prev_state: Option<u64>,
     ) -> Apply<S> {
         let mut entries_size = 0;
         for e in &entries {
@@ -2789,6 +2793,7 @@ impl<S: Snapshot> Apply<S> {
             entries_size,
             cbs,
             bucket_meta: buckets,
+            prev_state,
         }
     }
 
@@ -3197,6 +3202,10 @@ where
 
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
+        }
+
+        if let Some(idx) = apply.prev_state.take() {
+            self.delegate.apply_state.applied_index = idx;
         }
 
         let mut entries = Vec::new();
