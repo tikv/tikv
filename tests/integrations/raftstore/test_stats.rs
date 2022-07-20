@@ -603,7 +603,7 @@ fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool) {
 }
 
 fn test_raw_delete_query<F: KvFormat>() {
-    let mut k = b"r\x00\x00\x00_test_raw_delete_query".to_vec();
+    let mut k = b"r\x00\x00\x00_key".to_vec();
     let store_id = 1;
 
     {

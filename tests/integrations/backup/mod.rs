@@ -378,6 +378,7 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
     } else {
         (vec![b'r', b'a'], vec![b'r', b'z'])
     };
+    println!("{:?}", (&backup_start,&backup_end));
     let rx = target_suite.backup_raw(
         backup_start, // start
         backup_end,   // end
