@@ -53,7 +53,7 @@ fn url_for(base: &Path) -> url::Url {
     u
 }
 
-const STORAGE_NAME: &str = "local";
+pub const STORAGE_NAME: &str = "local";
 
 #[async_trait]
 impl ExternalStorage for LocalStorage {
