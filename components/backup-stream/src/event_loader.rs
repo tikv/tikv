@@ -475,7 +475,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::CompactExt;
     use kvproto::metapb::*;
     use tikv::storage::{txn::tests::*, Engine, TestEngineBuilder};
     use txn_types::TimeStamp;
