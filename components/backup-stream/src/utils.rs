@@ -498,9 +498,7 @@ struct ReadThroughputRecorder {
 impl ReadThroughputRecorder {
     fn start() -> Self {
         let r = self_thread_inspector().ok().and_then(|insp| {
-            let stat = insp.io_stat();
-            debug!("read throughput recorder: get initial io stat"; "stat" => ?stat);
-            let stat = stat.ok()??;
+            let stat = insp.io_stat().ok()??;
             Some((insp, stat))
         });
         match r {
@@ -520,18 +518,13 @@ impl ReadThroughputRecorder {
     fn try_get_delta_from_unix(&self) -> Option<u64> {
         let ins = self.ins.as_ref()?;
         let begin = self.begin.as_ref()?;
-        let end = ins.io_stat();
-        debug!("read throughput recorder: get terminal io stat"; "stat" => ?end);
-        let end = end.ok()??;
+        let end = ins.io_stat().ok()??;
         Some(end.read - begin.read)
     }
 
     fn end(self) -> u64 {
-        self.try_get_delta_from_unix().unwrap_or_else(|| {
-            let delta = self.ejector.delta();
-            debug!("io stat failed; using rocksdb perf context"; "delta" => ?delta);
-            delta.block_read_byte
-        })
+        self.try_get_delta_from_unix()
+            .unwrap_or_else(|| self.ejector.delta().block_read_byte)
     }
 }
 
