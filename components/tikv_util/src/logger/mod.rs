@@ -83,7 +83,7 @@ where
             threshold: slow_threshold,
             inner: drain,
         };
-        let filtered = drain.filter(filter).fuse();
+        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
 
         (slog::Logger::root(filtered, slog_o!()), Some(guard))
     } else {
@@ -92,7 +92,7 @@ where
             threshold: slow_threshold,
             inner: drain,
         };
-        let filtered = drain.filter(filter).fuse();
+        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
         (slog::Logger::root(filtered, slog_o!()), None)
     };
 
@@ -407,17 +407,15 @@ where
     type Err = slog::Never;
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
-            if let Err(e) = self.0.log(record, values) {
-                let fatal_drainer = Mutex::new(text_format(term_writer(), true)).ignore_res();
-                fatal_drainer.log(record, values).unwrap();
-                let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
-                slog::slog_crit!(
-                    fatal_logger,
-                    "logger encountered error";
-                    "err" => %e,
-                );
-            }
+        if let Err(e) = self.0.log(record, values) {
+            let fatal_drainer = Mutex::new(text_format(term_writer(), true)).ignore_res();
+            fatal_drainer.log(record, values).unwrap();
+            let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
+            slog::slog_crit!(
+                fatal_logger,
+                "logger encountered error";
+                "err" => %e,
+            );
         }
         Ok(())
     }
@@ -449,6 +447,36 @@ where
             }
         }
         self.inner.log(record, values)
+    }
+}
+
+// GlobalLevelFilter is a filter that base on the global `LOG_LEVEL`'s value.
+pub struct GlobalLevelFilter<D: Drain>(pub D);
+
+impl<D: Drain> GlobalLevelFilter<D> {
+    /// Create `LevelFilter`
+    pub fn new(drain: D) -> Self {
+        Self(drain)
+    }
+}
+
+impl<D> Drain for GlobalLevelFilter<D>
+where
+    D: Drain,
+    D::Ok: Default,
+{
+    type Ok = D::Ok;
+    type Err = D::Err;
+    fn log(&self, record: &Record, logger_values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
+            self.0.log(record, logger_values)
+        } else {
+            Ok(Default::default())
+        }
+    }
+    #[inline]
+    fn is_enabled(&self, level: Level) -> bool {
+        level.as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) && self.0.is_enabled(level)
     }
 }
 
@@ -819,6 +847,35 @@ mod tests {
             }
             buffer.clear();
         });
+    }
+
+    #[test]
+    fn test_global_level_filter() {
+        let drain = Mutex::new(json_format(TestWriter, true)).map(slog::Fuse);
+        let logger =
+            slog::Logger::root_typed(GlobalLevelFilter::new(drain), slog_o!()).into_erased();
+
+        let expected = "[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome]";
+        let check_log = |log: &str| {
+            BUFFER.with(|buffer| {
+                let mut buffer = buffer.borrow_mut();
+                let output = from_utf8(&*buffer).unwrap();
+                assert_eq!(output, log);
+                buffer.clean();
+            });
+        };
+
+        set_log_level(Level::Info);
+        slog_info!(logger, "Welcome");
+        check_log(expected);
+
+        set_log_level(Level::Warning);
+        slog_info!(logger, "Welcome");
+        check_log("");
+
+        set_log_level(Level::Info);
+        slog_info!(logger, "Welcome");
+        check_log(expected);
     }
 
     /// Removes the wrapping signs, peels `"[hello]"` to `"hello"`, or peels `"(hello)"` to `"hello"`,
