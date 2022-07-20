@@ -116,7 +116,106 @@ fn test_store_setup() {
 }
 
 #[test]
+fn test_consistency_check() {
+    // ComputeHash and VerifyHash shall be filtered.
+    let (mut cluster, pd_client) = new_mock_cluster(0, 2);
+
+    cluster.run();
+
+    cluster.must_put(b"k", b"v");
+    let region = cluster.get_region("k".as_bytes());
+    let region_id = region.get_id();
+
+    let r = new_verify_hash_request(vec![1, 2, 3, 4, 5, 6], 1000);
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+
+    let r = new_verify_hash_request(vec![7, 8, 9, 0], 1000);
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+
+    cluster.must_put(b"k2", b"v2");
+    cluster.shutdown();
+}
+
+#[test]
+fn test_compact_log() {
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+    cluster.run();
+
+    cluster.must_put(b"k", b"v");
+    let region = cluster.get_region("k".as_bytes());
+    let region_id = region.get_id();
+
+    fail::cfg("on_empty_cmd_normal", "return").unwrap();
+    fail::cfg("try_flush_data", "return(0)").unwrap();
+    for i in 0..10 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        cluster.must_put(k.as_bytes(), v.as_bytes());
+    }
+
+    let prev_state = collect_all_states(&cluster, region_id);
+
+    let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
+    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    // compact index should less than applied index
+    assert!(!res.get_header().has_error(), "{:?}", res);
+
+    // CompactLog is filtered, because we can't flush data.
+    let new_state = collect_all_states(&cluster, region_id);
+    for i in prev_state.keys() {
+        let old = prev_state.get(i).unwrap();
+        let new = new_state.get(i).unwrap();
+        assert_eq!(
+            old.in_memory_apply_state.get_truncated_state(),
+            new.in_memory_apply_state.get_truncated_state()
+        );
+        assert_eq!(
+            old.in_disk_apply_state.get_truncated_state(),
+            new.in_disk_apply_state.get_truncated_state()
+        );
+    }
+
+    fail::remove("on_empty_cmd_normal");
+    fail::remove("try_flush_data");
+
+    let (compact_index, compact_term) = get_valid_compact_index(&new_state);
+    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(!res.get_header().has_error(), "{:?}", res);
+
+    cluster.must_put(b"kz", b"vz");
+    check_key(&cluster, b"kz", b"vz", Some(true), None, None);
+
+    // CompactLog is not filtered
+    let new_state = collect_all_states(&cluster, region_id);
+    for i in prev_state.keys() {
+        let old = prev_state.get(i).unwrap();
+        let new = new_state.get(i).unwrap();
+        assert_ne!(
+            old.in_memory_apply_state.get_truncated_state(),
+            new.in_memory_apply_state.get_truncated_state()
+        );
+    }
+
+    cluster.shutdown();
+}
+
+#[test]
 fn test_empty_cmd() {
+    // Test if a empty command can be observed when leadership changes.
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
     // Disable compact log
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);

@@ -1230,52 +1230,62 @@ where
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
-        ctx.exec_log_index = index;
-        ctx.exec_log_term = term;
-        ctx.kv_wb_mut().set_save_point();
-        let mut origin_epoch = None;
-
         // Remember if the raft cmd fails to be applied, it must have no side effects.
         // E.g. `RaftApplyState` must not be changed.
-        let (resp, exec_result, flash_res) = match self.exec_raft_cmd(ctx, &req) {
-            Ok(a) => {
-                ctx.kv_wb_mut().pop_save_point().unwrap();
-                if req.has_admin_request() {
-                    origin_epoch = Some(self.region.get_region_epoch().clone());
-                }
-                a
-            }
-            Err(e) => {
-                // clear dirty values.
-                ctx.kv_wb_mut().rollback_to_save_point().unwrap();
-                match e {
-                    Error::EpochNotMatch(..) => debug!(
-                        "epoch not match";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "err" => ?e
-                    ),
-                    _ => error!(?e;
-                        "execute raft command";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                    ),
-                }
-                {
-                    // hacked by solotzg.
-                    let cmds = WriteCmds::new();
-                    ctx.engine_store_server_helper.handle_write_raft_cmd(
-                        &cmds,
-                        RaftCmdHeader::new(self.region.get_id(), index, term),
-                    );
-                }
 
-                (
-                    cmd_resp::new_error(e),
-                    ApplyResult::None,
-                    EngineStoreApplyRes::None,
-                )
+        let mut origin_epoch = None;
+        let (resp, exec_result, flash_res) = if ctx.host.pre_exec(&self.region, req) {
+            // One of the observers want to filter execution of the command.
+            let mut resp = RaftCmdResponse::default();
+            if !req.get_header().get_uuid().is_empty() {
+                let uuid = req.get_header().get_uuid().to_vec();
+                resp.mut_header().set_uuid(uuid);
             }
+            (resp, ApplyResult::None, EngineStoreApplyRes::None)
+        } else {
+            ctx.exec_log_index = index;
+            ctx.exec_log_term = term;
+            ctx.kv_wb_mut().set_save_point();
+            let (resp, exec_result, flash_res) = match self.exec_raft_cmd(ctx, req) {
+                Ok(a) => {
+                    ctx.kv_wb_mut().pop_save_point().unwrap();
+                    if req.has_admin_request() {
+                        origin_epoch = Some(self.region.get_region_epoch().clone());
+                    }
+                    a
+                }
+                Err(e) => {
+                    // clear dirty values.
+                    ctx.kv_wb_mut().rollback_to_save_point().unwrap();
+                    match e {
+                        Error::EpochNotMatch(..) => debug!(
+                            "epoch not match";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "err" => ?e
+                        ),
+                        _ => error!(?e;
+                            "execute raft command";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                        ),
+                    }
+                    {
+                        // hacked by solotzg.
+                        let cmds = WriteCmds::new();
+                        ctx.engine_store_server_helper.handle_write_raft_cmd(
+                            &cmds,
+                            RaftCmdHeader::new(self.region.get_id(), index, term),
+                        );
+                    }
+                    (
+                        cmd_resp::new_error(e),
+                        ApplyResult::None,
+                        EngineStoreApplyRes::None,
+                    )
+                }
+            };
+            (resp, exec_result, flash_res)
         };
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return (resp, exec_result);
@@ -1459,21 +1469,15 @@ where
             }
         }
 
-        let ori_apply_state = if cmd_type == AdminCmdType::CompactLog {
-            Some(self.apply_state.clone())
-        } else {
-            None
-        };
-
         let (mut response, mut exec_result) = match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
             AdminCmdType::ChangePeerV2 => self.exec_change_peer_v2(ctx, request),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(request),
-            AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
-            AdminCmdType::ComputeHash => Ok((AdminResponse::new(), ApplyResult::None)),
-            AdminCmdType::VerifyHash => Ok((AdminResponse::new(), ApplyResult::None)),
+            AdminCmdType::TransferLeader => self.exec_transfer_leader(request, ctx.exec_log_term),
+            AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request), // Will filtered by pre_exec
+            AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request), // Will filtered by pre_exec
             // TODO: is it backward compatible to add new cmd_type?
             AdminCmdType::PrepareMerge => self.exec_prepare_merge(ctx, request),
             AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
@@ -1497,17 +1501,6 @@ where
                 RaftCmdHeader::new(self.region.get_id(), ctx.exec_log_index, ctx.exec_log_term),
             )
         };
-
-        match flash_res {
-            EngineStoreApplyRes::None => {
-                if cmd_type == AdminCmdType::CompactLog {
-                    response = AdminResponse::new();
-                    exec_result = ApplyResult::None;
-                    self.apply_state = ori_apply_state.unwrap();
-                }
-            }
-            _ => {}
-        }
 
         resp.set_admin_response(response);
         Ok((resp, exec_result, flash_res))
@@ -5014,6 +5007,23 @@ mod tests {
             self
         }
 
+        fn compact_log(mut self, index: u64, term: u64) -> EntryBuilder {
+            let mut req = AdminRequest::default();
+            req.set_cmd_type(AdminCmdType::CompactLog);
+            req.mut_compact_log().set_compact_index(index);
+            req.mut_compact_log().set_compact_term(term);
+            self.req.set_admin_request(req);
+            self
+        }
+
+        fn compute_hash(mut self, context: Vec<u8>) -> EntryBuilder {
+            let mut req = AdminRequest::default();
+            req.set_cmd_type(AdminCmdType::ComputeHash);
+            req.mut_compute_hash().set_context(context);
+            self.req.set_admin_request(req);
+            self
+        }
+
         fn build(mut self) -> Entry {
             self.entry
                 .set_data(self.req.write_to_bytes().unwrap().into());
@@ -5026,6 +5036,8 @@ mod tests {
         pre_query_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
+        filter_compact_log: Arc<AtomicBool>,
+        filter_consistency_check: Arc<AtomicBool>,
     }
 
     impl Coprocessor for ApplyObserver {}
@@ -5037,6 +5049,23 @@ mod tests {
 
         fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl AdminObserver for ApplyObserver {
+        fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, req: &AdminRequest) -> bool {
+            let cmd_type = req.get_cmd_type();
+            if cmd_type == AdminCmdType::CompactLog
+                && self.filter_compact_log.deref().load(Ordering::SeqCst)
+            {
+                return true;
+            };
+            if (cmd_type == AdminCmdType::ComputeHash || cmd_type == AdminCmdType::VerifyHash)
+                && self.filter_consistency_check.deref().load(Ordering::SeqCst)
+            {
+                return true;
+            };
+            false
         }
     }
 
@@ -5578,6 +5607,208 @@ mod tests {
             let dk = keys::data_key(&keys[i]);
             assert_eq!(engine.get_value(&dk).unwrap().unwrap(), &expected_vals[i]);
         }
+    }
+
+    #[test]
+    fn test_bucket_version_change_in_try_batch() {
+        let (_path, engine) = create_tmp_engine("test-bucket");
+        let (_, importer) = create_tmp_importer("test-bucket");
+        let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = {
+            let mut cfg = Config::default();
+            cfg.apply_batch_system.pool_size = 1;
+            cfg.apply_batch_system.low_priority_pool_size = 0;
+            Arc::new(VersionTrack::new(cfg))
+        };
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engine,
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-bucket".to_owned(), builder);
+
+        let mut reg = Registration {
+            id: 1,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(1, 1));
+        reg.region.set_start_key(b"k1".to_vec());
+        reg.region.set_end_key(b"k2".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let entry1 = {
+            let mut entry = EntryBuilder::new(1, 1);
+            entry = entry.put(b"key1", b"value1");
+            entry.epoch(1, 3).build()
+        };
+
+        let entry2 = {
+            let mut entry = EntryBuilder::new(2, 1);
+            entry = entry.put(b"key2", b"value2");
+            entry.epoch(1, 3).build()
+        };
+
+        let (capture_tx, _capture_rx) = mpsc::channel();
+        let mut apply1 = apply(1, 1, 1, vec![entry1], vec![cb(1, 1, capture_tx.clone())]);
+        let bucket_meta = BucketMeta {
+            region_id: 1,
+            region_epoch: RegionEpoch::default(),
+            version: 1,
+            keys: vec![b"".to_vec(), b"".to_vec()],
+            sizes: vec![0, 0],
+        };
+        apply1.bucket_meta = Some(Arc::new(bucket_meta));
+
+        let mut apply2 = apply(1, 1, 1, vec![entry2], vec![cb(2, 1, capture_tx)]);
+        let mut bucket_meta2 = BucketMeta {
+            region_id: 1,
+            region_epoch: RegionEpoch::default(),
+            version: 2,
+            keys: vec![b"".to_vec(), b"".to_vec()],
+            sizes: vec![0, 0],
+        };
+        bucket_meta2.version = 2;
+        apply2.bucket_meta = Some(Arc::new(bucket_meta2));
+
+        router.schedule_task(1, Msg::apply(apply1));
+        router.schedule_task(1, Msg::apply(apply2));
+
+        let res = fetch_apply_res(&rx);
+        let bucket_version = res.bucket_stat.unwrap().as_ref().meta.version;
+
+        assert_eq!(bucket_version, 2);
+
+        validate(&router, 1, |delegate| {
+            let bucket_version = delegate.buckets.as_ref().unwrap().meta.version;
+            assert_eq!(bucket_version, 2);
+        });
+    }
+
+    #[test]
+    fn test_exec_observer() {
+        let (_path, engine) = create_tmp_engine("test-exec-observer");
+        let (_import_dir, importer) = create_tmp_importer("test-exec-observer");
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        let obs = ApplyObserver::default();
+        host.registry
+            .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = Config::default();
+        let (router, mut system) = create_apply_batch_system(&cfg);
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-exec-observer".to_owned(),
+            cfg: Arc::new(VersionTrack::new(cfg)),
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engine,
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-exec-observer".to_owned(), builder);
+
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(1, peer_id));
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let mut index_id = 1;
+        let put_entry = EntryBuilder::new(1, 1)
+            .put(b"k1", b"v1")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
+        fetch_apply_res(&rx);
+
+        index_id += 1;
+        let compact_entry = EntryBuilder::new(index_id, 1)
+            .compact_log(index_id - 1, 2)
+            .epoch(1, 3)
+            .build();
+        // Filter CompactLog
+        obs.filter_compact_log.store(true, Ordering::SeqCst);
+        router.schedule_task(
+            1,
+            Msg::apply(apply(peer_id, 1, 1, vec![compact_entry], vec![])),
+        );
+        let apply_res = fetch_apply_res(&rx);
+        // applied_index can still be advanced.
+        assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
+        assert_eq!(apply_res.applied_index_term, 1);
+        // Executing CompactLog is filtered and takes no effect.
+        assert_eq!(apply_res.exec_res.len(), 0);
+        assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
+
+        index_id += 1;
+        // Don't filter CompactLog
+        obs.filter_compact_log.store(false, Ordering::SeqCst);
+        let compact_entry = EntryBuilder::new(index_id, 1)
+            .compact_log(index_id - 1, 2)
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(peer_id, 1, 1, vec![compact_entry], vec![])),
+        );
+        let apply_res = fetch_apply_res(&rx);
+        // applied_index can still be advanced.
+        assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
+        assert_eq!(apply_res.applied_index_term, 1);
+        // We can get exec result of CompactLog.
+        assert_eq!(apply_res.exec_res.len(), 1);
+        assert_eq!(
+            apply_res.apply_state.get_truncated_state().get_index(),
+            index_id - 1
+        );
+
+        index_id += 1;
+        obs.filter_consistency_check.store(true, Ordering::SeqCst);
+        let compute_hash_entry = EntryBuilder::new(index_id, 1).compute_hash(vec![]).build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(peer_id, 1, 1, vec![compute_hash_entry], vec![])),
+        );
+        let apply_res = fetch_apply_res(&rx);
+        // applied_index can still be advanced.
+        assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
+        assert_eq!(apply_res.applied_index_term, 1);
+        // We can't get exec result of ComputeHash.
+        assert_eq!(apply_res.exec_res.len(), 0);
+        obs.filter_consistency_check.store(false, Ordering::SeqCst);
+
+        system.shutdown();
     }
 
     #[test]

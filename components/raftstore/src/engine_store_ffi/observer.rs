@@ -4,8 +4,9 @@ use std::sync::{mpsc, Arc, Mutex};
 
 use collections::HashMap;
 use engine_tiflash::FsStatsExt;
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use sst_importer::SstImporter;
-use tikv_util::debug;
+use tikv_util::{debug, error};
 use yatp::{
     pool::{Builder, ThreadPool},
     task::future::TaskCell,
@@ -131,6 +132,10 @@ impl TiFlashObserver {
         &self,
         coprocessor_host: &mut CoprocessorHost<E>,
     ) {
+        coprocessor_host.registry.register_admin_observer(
+            TIFLASH_OBSERVER_PRIORITY,
+            BoxAdminObserver::new(self.clone()),
+        );
         coprocessor_host.registry.register_query_observer(
             TIFLASH_OBSERVER_PRIORITY,
             BoxQueryObserver::new(self.clone()),
@@ -158,6 +163,39 @@ impl Coprocessor for TiFlashObserver {
     fn stop(&self) {
         // TODO(tiflash)
         // self.apply_snap_pool.as_ref().unwrap().shutdown();
+    }
+}
+
+impl AdminObserver for TiFlashObserver {
+    fn pre_exec_admin(&self, ob_ctx: &mut ObserverContext<'_>, req: &AdminRequest) -> bool {
+        match req.get_cmd_type() {
+            AdminCmdType::CompactLog => {
+                if !self
+                    .engine_store_server_helper
+                    .try_flush_data(ob_ctx.region().get_id(), false)
+                {
+                    debug!("can't flush data, should filter CompactLog";
+                        "region" => ?ob_ctx.region(),
+                        "req" => ?req,
+                    );
+                    return true;
+                }
+                // Otherwise, we can exec CompactLog, without later rolling back.
+            }
+            AdminCmdType::ComputeHash | AdminCmdType::VerifyHash => {
+                // We can't support.
+                return true;
+            }
+            AdminCmdType::TransferLeader => {
+                error!("transfer leader won't exec";
+                        "region" => ?ob_ctx.region(),
+                        "req" => ?req,
+                );
+                return true;
+            }
+            _ => (),
+        };
+        false
     }
 }
 
