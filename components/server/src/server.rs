@@ -81,7 +81,7 @@ use raftstore::{
 };
 use security::SecurityManager;
 use tikv::{
-    config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
+    config::{ConfigController, DBConfigManger, DBType, LogConfigManager, TiKvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
@@ -621,6 +621,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 &self.quota_limiter,
             ))),
         );
+
+        cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
