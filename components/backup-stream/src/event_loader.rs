@@ -9,6 +9,7 @@ use std::{
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
+use prometheus::core::Atomic;
 use raftstore::{
     coprocessor::RegionInfoProvider,
     router::RaftStoreRouter,
@@ -178,19 +179,22 @@ impl<S: Snapshot> EventLoader<S> {
 /// The context for loading incremental data between range.
 /// Like [`cdc::Initializer`], but supports initialize over range.
 /// Note: maybe we can merge those two structures?
+/// Note': maybe extract more fields to trait so it would be easier to test.
 #[derive(Clone)]
 pub struct InitialDataLoader<E, R, RT> {
-    pub(crate) router: RT,
-    pub(crate) regions: R,
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     pub(crate) sink: Router,
     pub(crate) tracing: SubscriptionTracer,
     pub(crate) scheduler: Scheduler<Task>,
+    // Note: this is only for `init_range`, maybe make it an argument?
+    pub(crate) regions: R,
+    // Note: Maybe move those fields about initial scanning into some trait?
+    pub(crate) router: RT,
     pub(crate) quota: PendingMemoryQuota,
-    pub(crate) handle: Handle,
     pub(crate) limit: Limiter,
 
+    pub(crate) handle: Handle,
     _engine: PhantomData<E>,
 }
 
@@ -381,14 +385,10 @@ where
                 "{:?}", msg
             ))));
             let mut events = ApplyEvents::with_capacity(1024, region.id);
-            let stat = event_loader.fill_entries()?;
-            let disk_read = self.with_resolver(region, |r| {
-                let (result, byte_size) = utils::with_record_read_throughput(|| {
-                    event_loader.omit_entries_to(&mut events, r)
-                });
-                result?;
-                Result::Ok(byte_size)
-            })?;
+            let (stat, disk_read) =
+                utils::with_record_read_throughput(|| event_loader.fill_entries());
+            let stat = stat?;
+            self.with_resolver(region, |r| event_loader.omit_entries_to(&mut events, r))?;
             if events.is_empty() {
                 metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
                 return Ok(stats.stat);
@@ -402,6 +402,7 @@ where
             self.limit.blocking_consume(disk_read as _);
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
+            metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
             join_handles.push(tokio::spawn(async move {
                 utils::handle_on_event_result(&sched, sink.on_events(events).await);
