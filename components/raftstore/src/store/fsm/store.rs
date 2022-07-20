@@ -2721,7 +2721,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 };
                 match seq.version.cmp(&self.fsm.store.latest_seqno_version) {
                     Ordering::Less => {
-                        self.fsm.store.seqno_window.push(seq);
+                        // self.fsm.store.seqno_window.push(seq);
                     }
                     Ordering::Equal => {
                         let seqno_relations = self
@@ -2764,7 +2764,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let max_seqno_relation = seqno_relations
             .into_iter()
             .map(|r| {
-                committed_sn = self.fsm.store.seqno_window.push(r.seqno);
+                // committed_sn = self.fsm.store.seqno_window.push(r.seqno);
                 r
             })
             .max_by(|x, y| x.seqno.number.cmp(&y.seqno.number))

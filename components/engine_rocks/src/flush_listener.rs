@@ -29,13 +29,13 @@ impl EventListener for FlushListener {
     fn on_flush_begin(&self, info: &FlushJobInfo) {
         let flush_seqno = info.largest_seqno();
         let mut spin_wait = SpinWait::new();
-        loop {
-            let max_seqno = SYNCED_MAX_SEQUENCE_NUMBER.load(Ordering::SeqCst);
-            if max_seqno >= flush_seqno {
-                break;
-            }
-            spin_wait.spin_no_yield();
-        }
+        // loop {
+        //     let max_seqno = SYNCED_MAX_SEQUENCE_NUMBER.load(Ordering::SeqCst);
+        //     if max_seqno >= flush_seqno {
+        //         break;
+        //     }
+        //     spin_wait.spin_no_yield();
+        // }
         debug!("flush begin"; "seqno" => flush_seqno);
     }
 
