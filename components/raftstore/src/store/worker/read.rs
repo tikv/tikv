@@ -13,7 +13,7 @@ use std::{
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory, TabletFactoryVersion};
+use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory};
 use fail::fail_point;
 use kvproto::{
     errorpb,
@@ -744,16 +744,13 @@ where
         create_time: &Option<ThreadReadId>,
     ) -> Option<&Arc<E::Snapshot>> {
         if let Some(ts) = create_time {
-            let factory_version = self.factory.get_factory_version();
-            let snap_cache;
-            if factory_version == TabletFactoryVersion::Single {
+            let snap_cache = if self.factory.is_single_engine() {
                 // In single rocksdb version, we only have one global kv rocksdb, so always use 0 to
                 // get snap from cache.
-                snap_cache = self.snap_cache.get(&0);
+                self.snap_cache.get(&0)
             } else {
-                assert!(factory_version == TabletFactoryVersion::Multi);
-                snap_cache = self.snap_cache.get(&region_id)
-            }
+                self.snap_cache.get(&region_id)
+            };
             if let Some(snap_cache) = snap_cache {
                 if *ts == snap_cache.0 {
                     self.metrics.local_executed_snapshot_cache_hit += 1;
@@ -770,13 +767,11 @@ where
         snap: Arc<E::Snapshot>,
         create_time: ThreadReadId,
     ) {
-        let factory_version = self.factory.get_factory_version();
-        if factory_version == TabletFactoryVersion::Single {
+        if self.factory.is_single_engine() {
             // In single rocksdb version, we only have one global kv rocksdb, so always use 0 to
             // store snap into cache.
             self.snap_cache.insert(0, (create_time, snap));
         } else {
-            assert!(factory_version == TabletFactoryVersion::Multi);
             self.snap_cache.insert(region_id, (create_time, snap));
         }
     }
@@ -975,7 +970,7 @@ mod tests {
     use std::{sync::mpsc::*, thread};
 
     use crossbeam::channel::TrySendError;
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory};
+    use engine_test::kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory, TestTabletFactoryV2};
     use engine_traits::ALL_CFS;
     use kvproto::raft_cmdpb::*;
     use tempfile::{Builder, TempDir};
@@ -1038,20 +1033,24 @@ mod tests {
         Receiver<RaftCommand<KvTestSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let factory = TestTabletFactory::new(
-            path.path().to_str().unwrap(),
-            None,
-            ALL_CFS,
-            None,
-            multi_rocksdb,
-        );
+        let factory = if multi_rocksdb {
+            TabletFactory::clone(&TestTabletFactoryV2::new(
+                path.path().to_str().unwrap(),
+                None,
+                ALL_CFS,
+                None,
+            ))
+        } else {
+            TabletFactory::clone(&TestTabletFactory::new(
+                path.path().to_str().unwrap(),
+                None,
+                ALL_CFS,
+                None,
+            ))
+        };
         let _ = factory.create_shared_db();
         let (ch, rx, _) = MockRouter::new();
-        let mut reader = LocalReader::new(
-            engine_traits::TabletFactory::clone(&factory),
-            store_meta,
-            ch,
-        );
+        let mut reader = LocalReader::new(factory, store_meta, ch);
         reader.store_id = Cell::new(Some(store_id));
         (path, reader, rx)
     }

@@ -279,10 +279,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
         Box::new(std::clone::Clone::clone(self))
     }
-
-    fn get_factory_version(&self) -> engine_traits::TabletFactoryVersion {
-        engine_traits::TabletFactoryVersion::Single
-    }
 }
 
 impl TabletAccessor<RocksEngine> for KvEngineFactory {

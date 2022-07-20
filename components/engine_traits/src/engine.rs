@@ -150,15 +150,6 @@ impl Drop for TabletErrorCollector {
     }
 }
 
-#[derive(PartialEq, Eq)]
-pub enum TabletFactoryVersion {
-    Dummy,
-    // Single rocksdb version
-    Single,
-    // Multi rocksdb version
-    Multi,
-}
-
 /// A factory trait to create new engine.
 ///
 // It should be named as `EngineFactory` for consistency, but we are about to rename
@@ -227,9 +218,6 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     fn is_tombstoned(&self, _region_id: u64, _suffix: u64) -> bool {
         unimplemented!();
     }
-
-    /// Get the tablet factory version
-    fn get_factory_version(&self) -> TabletFactoryVersion;
 }
 
 pub struct DummyFactory<EK>
@@ -296,11 +284,8 @@ where
             root_path: self.root_path.clone(),
         })
     }
-
-    fn get_factory_version(&self) -> TabletFactoryVersion {
-        TabletFactoryVersion::Dummy
-    }
 }
+
 impl<EK> TabletAccessor<EK> for DummyFactory<EK>
 where
     EK: Clone + Send + 'static,
