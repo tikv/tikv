@@ -881,28 +881,6 @@ impl TiKVServer {
         let cf_opt = &conf.rocksdb.writecf;
         kv_opts.table_builder_options.block_size = cf_opt.block_size.0 as usize;
         kv_opts.table_builder_options.max_table_size = cf_opt.target_file_size_base.0 as usize;
-        kv_opts.table_builder_options.compression_tps = match cf_opt.bottommost_level_compression {
-            DBCompressionType::Disable => [
-                convert_compression_type(cf_opt.compression_per_level[0]),
-                convert_compression_type(cf_opt.compression_per_level[1]),
-                convert_compression_type(cf_opt.compression_per_level[2]),
-            ],
-            DBCompressionType::No => [
-                kvengine::table::sstable::NO_COMPRESSION,
-                kvengine::table::sstable::NO_COMPRESSION,
-                kvengine::table::sstable::NO_COMPRESSION,
-            ],
-            DBCompressionType::Lz4 => [
-                kvengine::table::sstable::NO_COMPRESSION,
-                kvengine::table::sstable::LZ4_COMPRESSION,
-                kvengine::table::sstable::LZ4_COMPRESSION,
-            ],
-            _ => [
-                kvengine::table::sstable::LZ4_COMPRESSION,
-                kvengine::table::sstable::LZ4_COMPRESSION,
-                kvengine::table::sstable::ZSTD_COMPRESSION,
-            ],
-        };
         let opts = Arc::new(kv_opts);
         let recoverer = rfstore::store::RecoverHandler::new(rf_engine.clone());
         let meta_iter = recoverer.clone();
@@ -922,14 +900,6 @@ impl TiKVServer {
         )
         .unwrap();
         Engines::new(kv_engine, rf_engine, (sender, receiver))
-    }
-}
-
-fn convert_compression_type(tp: DBCompressionType) -> u8 {
-    match tp {
-        DBCompressionType::Lz4 => kvengine::table::sstable::LZ4_COMPRESSION,
-        DBCompressionType::Zstd => kvengine::table::sstable::ZSTD_COMPRESSION,
-        _ => kvengine::table::sstable::NO_COMPRESSION,
     }
 }
 

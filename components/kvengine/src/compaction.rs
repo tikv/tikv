@@ -418,7 +418,9 @@ impl Engine {
     }
 
     pub(crate) fn set_alloc_ids_for_request(&self, req: &mut CompactionRequest, total_size: u64) {
-        let id_cnt = total_size as usize / req.max_table_size + 8; // Add 8 here just in case we run out of ID.
+        // We must ensure there are enough ids for remote compactor to use, so we need to allocate
+        // more ids than needed.
+        let id_cnt = (total_size as usize / req.max_table_size) * 2 + 16;
         info!("alloc id count {} for total size {}", id_cnt, total_size);
         let ids = self.id_allocator.alloc_id(id_cnt);
         req.file_ids = ids;

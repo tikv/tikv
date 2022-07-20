@@ -39,7 +39,7 @@ impl Default for TableBuilderOptions {
         Self {
             block_size: 64 * 1024,
             max_table_size: 16 * 1024 * 1024,
-            compression_tps: [LZ4_COMPRESSION, LZ4_COMPRESSION, ZSTD_COMPRESSION],
+            compression_tps: [LZ4_COMPRESSION, ZSTD_COMPRESSION, ZSTD_COMPRESSION],
         }
     }
 }
