@@ -181,7 +181,7 @@ mod parser {
     ) -> IResult<&'a str, Duration, ()> {
         let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
             .map_err(|_| nom::Err::Error(()))?;
-        return Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?));
+        Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?))
     }
 
     fn anysep(input: &str) -> IResult<&str, char, ()> {
