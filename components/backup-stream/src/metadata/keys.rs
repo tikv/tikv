@@ -24,7 +24,7 @@ const TASKS_PREFIX: &str = "/tidb/br-stream/info/";
 /// <PREFIX>/checkpoint/<task_name>/<store_id(u64,be)>/<region_id(u64,be)> -> <next_backup_ts(u64,be)>
 /// For the status of tasks:
 /// <PREFIX>/pause/<task_name> -> ""
-/// For the global checkpoint ts of tasks:
+/// For the storage checkpoint ts of tasks:
 /// <PREFIX>/storage-checkpoint/<task_name>/<store_id(u64,be)> -> <ts(u64,be)>
 /// ```
 #[derive(Clone)]
