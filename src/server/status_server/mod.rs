@@ -62,7 +62,7 @@ use self::profile::{
     read_file, start_one_cpu_profile, start_one_heap_profile,
 };
 use crate::{
-    config::{log_level_serde, ConfigController},
+    config::{ConfigController, LogLevel},
     server::Result,
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
@@ -79,8 +79,7 @@ static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct LogLevelRequest {
-    #[serde(with = "log_level_serde")]
-    pub log_level: slog::Level,
+    pub log_level: LogLevel,
 }
 
 pub struct StatusServer<E, R> {
@@ -403,7 +402,7 @@ where
 
         match log_level_request {
             Ok(req) => {
-                set_log_level(req.log_level);
+                set_log_level(req.log_level.into());
                 Ok(Response::new(Body::empty()))
             }
             Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
@@ -1464,7 +1463,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let new_log_level = slog::Level::Debug;
+        let new_log_level = slog::Level::Debug.into();
         let mut log_level_request = Request::new(Body::from(
             serde_json::to_string(&LogLevelRequest {
                 log_level: new_log_level,
@@ -1484,7 +1483,7 @@ mod tests {
                 .await
                 .map(move |res| {
                     assert_eq!(res.status(), StatusCode::OK);
-                    assert_eq!(get_log_level(), Some(new_log_level));
+                    assert_eq!(get_log_level(), Some(new_log_level.into()));
                 })
                 .unwrap()
         });
