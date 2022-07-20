@@ -128,8 +128,8 @@ impl SuiteBuilder {
         let Self {
             name: case,
             nodes: n,
-            use_v3: _,
             metastore_error,
+            use_v3: _,
         } = self;
 
         info!("start test"; "case" => %case, "nodes" => %n);

@@ -2480,6 +2480,9 @@ pub struct BackupStreamConfig {
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
+    #[serde(skip)]
+    #[online_config(skip)]
+    pub use_checkpoint_v3: bool,
 }
 
 impl BackupStreamConfig {
@@ -2510,9 +2513,10 @@ impl Default for BackupStreamConfig {
             enable: false,
             // TODO: may be use raft store directory
             temp_path: String::new(),
-            file_size_limit: ReadableSize::mb(128),
+            file_size_limit: ReadableSize::mb(256),
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
+            use_checkpoint_v3: true,
         }
     }
 }
