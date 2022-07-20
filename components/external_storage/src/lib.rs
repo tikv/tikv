@@ -24,9 +24,14 @@ use tikv_util::time::{Instant, Limiter};
 use tokio::time::timeout;
 
 mod hdfs;
+<<<<<<< HEAD
 pub use hdfs::HdfsConfig;
 pub use hdfs::HdfsStorage;
 mod local;
+=======
+pub use hdfs::{HdfsConfig, HdfsStorage};
+pub mod local;
+>>>>>>> 82e8f865c... br: Adjust the backup organization structure (#12958)
 pub use local::LocalStorage;
 mod noop;
 pub use noop::NoopStorage;
