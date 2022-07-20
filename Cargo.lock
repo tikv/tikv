@@ -7061,9 +7061,10 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#2f5f6e47ba6fce8d55e7a57b7ee39a93bc0e8194"
+source = "git+https://github.com/sticnarf/yatp.git?branch=one-spinner#886d682a438a6045ea49b8dc971de02d22679073"
 dependencies = [
  "crossbeam-deque",
+ "crossbeam-utils 0.8.8",
  "dashmap",
  "fail",
  "lazy_static",
