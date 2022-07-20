@@ -66,9 +66,6 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// CHECKPOINT_SAFEPOINT_TTL_IF_ERROR specifies the safe point TTL(24 hour) if task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 
-/// CHECKPOINT_ADVANCE_USE_V3 use only the v3 checkpoint advance currenly.
-const CHECKPOINT_ADVANCE_USE_V3: bool = true;
-
 pub struct Endpoint<S, R, E, RT, PDC> {
     // Note: those fields are more like a shared context between components.
     // For now, we copied them everywhere, maybe we'd better extract them into a
@@ -387,7 +384,7 @@ where
 
     fn flush_observer(&self) -> Box<dyn FlushObserver> {
         let basic = BasicFlushObserver::new(self.pd_client.clone(), self.store_id);
-        if CHECKPOINT_ADVANCE_USE_V3 {
+        if self.config.use_checkpoint_v3 {
             Box::new(CheckpointV3FlushObserver::new(
                 self.scheduler.clone(),
                 self.meta_client.clone(),
@@ -551,6 +548,7 @@ where
         let cli = self.meta_client.clone();
         let init = self.make_initial_loader();
         let range_router = self.range_router.clone();
+        let use_v3 = self.config.use_checkpoint_v3;
 
         info!(
             "register backup stream task";
@@ -574,7 +572,7 @@ where
             let task_clone = task.clone();
             let run = async move {
                 let task_name = task.info.get_name();
-                if !CHECKPOINT_ADVANCE_USE_V3 {
+                if !use_v3 {
                     cli.init_task(&task.info).await?;
                 }
                 let ranges = cli.ranges_of_task(task_name).await?;

@@ -128,8 +128,8 @@ impl SuiteBuilder {
         let Self {
             name: case,
             nodes: n,
+            use_v3,
             metastore_error,
-            use_v3: _,
         } = self;
 
         info!("start test"; "case" => %case, "nodes" => %n);
@@ -156,7 +156,7 @@ impl SuiteBuilder {
         }
         suite.cluster.run();
         for id in 1..=(n as u64) {
-            suite.start_endpoint(id);
+            suite.start_endpoint(id, use_v3);
         }
         // TODO: The current mock metastore (slash_etc) doesn't supports multi-version.
         //       We must wait until the endpoints get ready to watching the metastore, or some modifies may be lost.
@@ -247,7 +247,7 @@ impl Suite {
         worker
     }
 
-    fn start_endpoint(&mut self, id: u64) {
+    fn start_endpoint(&mut self, id: u64, use_v3: bool) {
         let cluster = &mut self.cluster;
         let worker = self.endpoints.get_mut(&id).unwrap();
         let sim = cluster.sim.wl();
@@ -256,6 +256,7 @@ impl Suite {
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
         let mut cfg = BackupStreamConfig::default();
         cfg.enable = true;
+        cfg.use_checkpoint_v3 = use_v3;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let ob = self.obs.get(&id).unwrap().clone();
         let endpoint = Endpoint::new(
