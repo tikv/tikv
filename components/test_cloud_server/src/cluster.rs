@@ -1,46 +1,28 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, ops::Range, path::Path, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::Path, sync::Arc, thread::sleep, time::Duration};
 
 use cloud_server::TiKVServer;
 use futures::executor::block_on;
 use grpcio::{Channel, ChannelBuilder, EnvBuilder, Environment};
 use kvengine::dfs::InMemFS;
 use kvproto::{
-    kvrpcpb::{CommitRequest, Context, Mutation, Op, PrewriteRequest, SplitRegionRequest},
+    kvrpcpb::{Mutation, Op},
     raft_cmdpb::RaftCmdRequest,
-    tikvpb::TikvClient,
 };
 use pd_client::PdClient;
 use rfstore::{store::Callback, RaftStoreRouter};
 use security::SecurityManager;
 use tempfile::TempDir;
 use test_raftstore::{find_peer, TestPdClient};
-use tikv::{config::TiKvConfig, import::SstImporter, storage::mvcc::TimeStamp};
+use tikv::{config::TiKvConfig, import::SstImporter};
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
     thread_group::GroupProperties,
     time::Instant,
 };
 
-// Retry if encounter error
-macro_rules! retry_req {
-    ($call_req: expr, $check_resp: expr, $resp:ident, $retry:literal, $timeout:literal) => {
-        let start = Instant::now();
-        let timeout = Duration::from_millis($timeout);
-        let mut tried_times = 0;
-        while tried_times < $retry || start.saturating_elapsed() < timeout {
-            if $check_resp {
-                break;
-            } else {
-                std::thread::sleep(Duration::from_millis(200));
-                tried_times += 1;
-                $resp = $call_req;
-                continue;
-            }
-        }
-    };
-}
+use crate::client::ClusterClient;
 
 #[allow(dead_code)]
 pub struct ServerCluster {
@@ -74,6 +56,7 @@ impl ServerCluster {
         for node_id in nodes {
             cluster.start_node(node_id, &update_conf);
         }
+        cluster.wait_pd_region_count(1);
         cluster
     }
 
@@ -106,23 +89,6 @@ impl ServerCluster {
         self.pd_client.clone()
     }
 
-    pub fn get_kv_client(&self, store_id: u64) -> TikvClient {
-        TikvClient::new(self.get_client_channel(store_id))
-    }
-
-    pub fn get_client_channel(&self, store_id: u64) -> Channel {
-        self.channels.get(&store_id).unwrap().clone()
-    }
-
-    pub fn new_rpc_context(&self, key: &[u8]) -> Context {
-        let region_info = self.pd_client.get_region_info(key).unwrap();
-        let mut ctx = Context::new();
-        ctx.set_region_id(region_info.get_id());
-        ctx.set_region_epoch(region_info.get_region_epoch().clone());
-        ctx.set_peer(region_info.leader.unwrap());
-        ctx
-    }
-
     pub fn get_nodes(&self) -> Vec<u16> {
         self.servers.keys().copied().collect()
     }
@@ -141,88 +107,6 @@ impl ServerCluster {
         }
     }
 
-    pub fn get_ts(&self) -> TimeStamp {
-        block_on(self.pd_client.get_tso()).unwrap()
-    }
-
-    pub fn kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
-        let ctx = self.new_rpc_context(&pk);
-        let kv_client = self.get_kv_client(ctx.get_peer().get_store_id());
-
-        let mut prewrite_req = PrewriteRequest::default();
-        prewrite_req.set_context(ctx);
-        prewrite_req.set_mutations(muts.into());
-        prewrite_req.primary_lock = pk;
-        prewrite_req.start_version = ts.into_inner();
-        prewrite_req.lock_ttl = 3000;
-        prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
-        let mut prewrite_resp = kv_client.kv_prewrite(&prewrite_req).unwrap();
-        retry_req!(
-            kv_client.kv_prewrite(&prewrite_req).unwrap(),
-            !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
-            prewrite_resp,
-            10,   // retry 10 times
-            3000  // 3s timeout
-        );
-        assert!(
-            !prewrite_resp.has_region_error(),
-            "{:?}",
-            prewrite_resp.get_region_error()
-        );
-        assert!(
-            prewrite_resp.errors.is_empty(),
-            "{:?}",
-            prewrite_resp.get_errors()
-        );
-    }
-
-    pub fn kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
-        let ctx = self.new_rpc_context(keys.first().unwrap());
-        let kv_client = self.get_kv_client(ctx.get_peer().get_store_id());
-
-        let mut commit_req = CommitRequest::default();
-        commit_req.set_context(ctx);
-        commit_req.start_version = start_ts.into_inner();
-        commit_req.set_keys(keys.into());
-        commit_req.commit_version = commit_ts.into_inner();
-        let mut commit_resp = kv_client.kv_commit(&commit_req).unwrap();
-        retry_req!(
-            kv_client.kv_commit(&commit_req).unwrap(),
-            !commit_resp.has_region_error() && !commit_resp.has_error(),
-            commit_resp,
-            10,   // retry 10 times
-            3000  // 3s timeout
-        );
-        assert!(
-            !commit_resp.has_region_error(),
-            "{:?}",
-            commit_resp.get_region_error()
-        );
-        assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
-    }
-
-    pub fn put_kv<F, G>(&self, rng: Range<usize>, gen_key: F, gen_val: G)
-    where
-        F: Fn(usize) -> Vec<u8>,
-        G: Fn(usize) -> Vec<u8>,
-    {
-        let start_key = gen_key(rng.start);
-        let start_ts = self.get_ts();
-
-        let mut mutations = vec![];
-        for i in rng.clone() {
-            let mut m = Mutation::default();
-            m.set_op(Op::Put);
-            m.set_key(gen_key(i));
-            m.set_value(gen_val(i));
-            mutations.push(m)
-        }
-        let keys = mutations.iter().map(|m| m.get_key().to_vec()).collect();
-        self.kv_prewrite(mutations, start_key, start_ts);
-        let commit_ts = self.get_ts();
-        self.kv_commit(keys, start_ts, commit_ts);
-    }
-
     pub fn get_kvengine(&self, node_id: u16) -> kvengine::Engine {
         let server = self.servers.get(&node_id).unwrap();
         server.get_kv_engine()
@@ -235,8 +119,8 @@ impl ServerCluster {
 
     pub fn get_snap(&self, node_id: u16, key: &[u8]) -> kvengine::SnapAccess {
         let engine = self.get_kvengine(node_id);
-        let ctx = self.new_rpc_context(key);
-        engine.get_snap_access(ctx.region_id).unwrap()
+        let region = self.pd_client.get_region(key).unwrap();
+        engine.get_snap_access(region.id).unwrap()
     }
 
     pub fn get_sst_importer(&self, node_id: u16) -> Arc<SstImporter> {
@@ -244,30 +128,14 @@ impl ServerCluster {
         server.get_sst_importer()
     }
 
-    pub fn split(&self, key: &[u8]) {
-        for _ in 0..10 {
-            let ctx = self.new_rpc_context(key);
-            let client = self.get_kv_client(ctx.get_peer().get_store_id());
-            let mut split_req = SplitRegionRequest::default();
-            split_req.set_context(ctx);
-            split_req.set_split_key(key.to_vec());
-            let resp = client.split_region(&split_req).unwrap();
-            if !resp.has_region_error() {
+    pub fn send_raft_command(&self, cmd: RaftCmdRequest) {
+        let store_id = cmd.get_header().get_peer().get_store_id();
+        for (_, server) in &self.servers {
+            if server.get_store_id() == store_id {
+                server.get_raft_router().send_command(cmd, Callback::None);
                 return;
             }
-            std::thread::sleep(Duration::from_millis(10));
         }
-        panic!("failed to split key {:?}", key);
-    }
-
-    pub fn get_region_id(&self, key: &[u8]) -> u64 {
-        let ctx = self.new_rpc_context(key);
-        ctx.region_id
-    }
-
-    pub fn send_raft_command(&self, node_id: u16, cmd: RaftCmdRequest) {
-        let server = self.servers.get(&node_id).unwrap();
-        server.get_raft_router().send_command(cmd, Callback::None);
     }
 
     pub fn wait_region_replicated(&self, key: &[u8], replica_cnt: usize) {
@@ -341,6 +209,15 @@ impl ServerCluster {
         }
         panic!("server not found");
     }
+
+    pub fn new_client(&self) -> ClusterClient {
+        ClusterClient {
+            pd_client: self.pd_client.clone(),
+            channels: self.channels.clone(),
+            region_ranges: Default::default(),
+            regions: Default::default(),
+        }
+    }
 }
 
 pub fn new_test_config(base_dir: &Path, node_id: u16) -> TiKvConfig {
@@ -377,4 +254,19 @@ pub fn put_mut(key: &str, val: &str) -> Mutation {
     mutation.key = key.as_bytes().to_vec();
     mutation.value = val.as_bytes().to_vec();
     mutation
+}
+
+pub fn must_wait<F>(f: F, seconds: usize, fail_msg: &str)
+where
+    F: Fn() -> bool,
+{
+    let begin = Instant::now_coarse();
+    let timeout = Duration::from_secs(seconds as u64);
+    while begin.saturating_elapsed() < timeout {
+        if f() {
+            return;
+        }
+        sleep(Duration::from_millis(100))
+    }
+    panic!("{}", fail_msg);
 }

@@ -19,7 +19,7 @@ use kvproto::{
 };
 use rand::Rng;
 use tempfile::Builder;
-use test_cloud_server::ServerCluster;
+use test_cloud_server::{client::ClusterClient, ServerCluster};
 use tikv::config::TiKvConfig;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use txn_types::TimeStamp;
@@ -77,10 +77,11 @@ fn test_backup_and_import() {
     let mut cluster1 = ServerCluster::new(vec![node_id], update_conf);
     // Backup file should be empty.
     let tmp = Builder::new().tempdir().unwrap();
-    let backup_ts = cluster1.get_ts();
+    let mut client1 = cluster1.new_client();
+    let backup_ts = client1.get_ts();
     let storage_path = make_unique_dir(tmp.path());
     let resps0 = backup(
-        &cluster1,
+        &mut client1,
         vec![],    // start
         vec![255], // end
         0.into(),  // begin_ts
@@ -91,12 +92,12 @@ fn test_backup_and_import() {
 
     // 3 version for each key.
     let key_count = 2000;
-    must_kv_put(&cluster1, key_count, 3);
+    must_kv_put(&mut client1, key_count, 3);
 
     // Push down backup request.
-    let backup_ts = cluster1.get_ts();
+    let backup_ts = client1.get_ts();
     let resps1 = backup(
-        &cluster1,
+        &mut client1,
         vec![],
         vec![255],
         0.into(),
@@ -111,8 +112,11 @@ fn test_backup_and_import() {
     // Use importer to restore backup files.
     let node2_id = alloc_node_id();
     let mut cluster2 = ServerCluster::new(vec![node2_id], update_conf);
-    let context = cluster2.new_rpc_context(b"");
-    let channel = cluster2.get_client_channel(context.get_peer().get_store_id());
+    let mut client2 = cluster2.new_client();
+    let store_id = client2.get_stores().pop().unwrap();
+    let region_id = client2.get_region_id(b"");
+    let context = client2.new_rpc_ctx(region_id);
+    let channel = client2.get_client_channel(store_id);
     let import_sst_client = ImportSstClient::new(channel);
     let mut switch_mode_req = SwitchModeRequest::default();
     switch_mode_req.set_mode(SwitchMode::Import);
@@ -140,7 +144,7 @@ fn test_backup_and_import() {
         }
     }
     for store_id in cluster2.get_stores() {
-        let channel = cluster2.get_client_channel(store_id);
+        let channel = client2.get_client_channel(store_id);
         let download_client = ImportSstClient::new(channel);
         for (m, name) in &metas {
             let mut download_req = DownloadRequest::new();
@@ -161,7 +165,7 @@ fn test_backup_and_import() {
 
     // Backup file should have same contents.
     let resps2 = backup(
-        &cluster2,
+        &mut client2,
         vec![],
         vec![255],
         0.into(),
@@ -187,7 +191,7 @@ fn test_backup_and_import() {
     cluster2.stop();
 }
 
-pub fn must_kv_put(cluster: &ServerCluster, key_count: usize, versions: usize) {
+pub fn must_kv_put(client: &mut ClusterClient, key_count: usize, versions: usize) {
     let mut batch = Vec::with_capacity(1024);
     let mut keys = Vec::with_capacity(1024);
     // Write 50 times to include more different ts.
@@ -195,7 +199,7 @@ pub fn must_kv_put(cluster: &ServerCluster, key_count: usize, versions: usize) {
     for _ in 0..versions {
         let mut j = 0;
         while j < key_count {
-            let start_ts = cluster.get_ts();
+            let start_ts = client.get_ts();
             let limit = cmp::min(key_count, j + batch_size);
             batch.clear();
             keys.clear();
@@ -205,17 +209,17 @@ pub fn must_kv_put(cluster: &ServerCluster, key_count: usize, versions: usize) {
                 let mutation = test_cloud_server::put_mut(&k, &v.repeat(50));
                 batch.push(mutation);
             }
-            cluster.kv_prewrite(batch.split_off(0), keys[0].clone(), start_ts);
+            client.kv_prewrite(batch.split_off(0), keys[0].clone(), start_ts);
             // Commit
-            let commit_ts = cluster.get_ts();
-            cluster.kv_commit(keys.split_off(0), start_ts, commit_ts);
+            let commit_ts = client.get_ts();
+            client.kv_commit(keys.split_off(0), start_ts, commit_ts);
             j = limit;
         }
     }
 }
 
 pub fn backup(
-    cluster: &ServerCluster,
+    client: &mut ClusterClient,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     begin_ts: TimeStamp,
@@ -230,10 +234,10 @@ pub fn backup(
     req.end_version = backup_ts.into_inner();
     req.set_storage_backend(make_local_backend(path));
     req.set_is_raw_kv(false);
-    let stores = cluster.get_stores();
+    let stores = client.get_stores();
     let mut resps = vec![];
     for store_id in stores {
-        let channel = cluster.get_client_channel(store_id);
+        let channel = client.get_client_channel(store_id);
         let client = BackupClient::new(channel);
         let mut stream = client.backup(&req).unwrap();
         loop {

@@ -99,7 +99,7 @@ impl Engine {
         }
         let l0_builder = self.build_l0_table(m, task.start.as_slice(), task.end.as_slice());
         if l0_builder.is_empty() {
-            return Ok(cs)
+            return Ok(cs);
         }
         let (tx, rx) = tikv_util::mpsc::bounded(1);
         self.persist_l0_table(l0_builder, tx, task.id_ver);

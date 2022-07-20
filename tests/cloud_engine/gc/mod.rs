@@ -20,14 +20,15 @@ fn test_local_file_gc() {
         cfg.raft_store.local_file_gc_tick_interval = ReadableDuration::millis(300);
     });
     let kv = cluster.get_kvengine(node_id);
-    let new_file_id = cluster.get_ts().into_inner();
+    let mut client = cluster.new_client();
+    let new_file_id = client.get_ts().into_inner();
     let new_file_path = new_filename(new_file_id, kv.opts.local_dir.as_path());
     fs::write(&new_file_path, "abc").unwrap();
     let new_tmp_file_path = kv.opts.local_dir.join(new_tmp_filename(new_file_id, 1));
     fs::write(&new_tmp_file_path, "def").unwrap();
     cluster.wait_pd_region_count(1);
-    cluster.put_kv(0..1000, gen_key, gen_val);
-    cluster.split(&gen_key(500));
+    client.put_kv(0..1000, gen_key, gen_val);
+    client.split(&gen_key(500));
     let shard_ids = kv.get_all_shard_id_vers();
     assert_eq!(shard_ids.len(), 2);
     let mut all_files = HashSet::default();
@@ -79,8 +80,9 @@ fn test_raft_log_gc() {
         cfg.rocksdb.writecf.write_buffer_size = ReadableSize::kb(16);
     });
     cluster.wait_region_replicated(&[], 3);
+    let mut client = cluster.new_client();
 
-    let region_id = cluster.get_region_id(&[]);
+    let region_id = client.get_region_id(&[]);
     let before_stats = node_ids
         .iter()
         .map(|id| {
@@ -93,12 +95,9 @@ fn test_raft_log_gc() {
 
     // Trigger switching and flushing memtable.
     for i in 0..50 {
-        cluster.put_kv(i * 20..(i + 1) * 20, gen_key, gen_val);
+        client.put_kv(i * 20..(i + 1) * 20, gen_key, gen_val);
     }
-    let shard_stats = node_ids
-        .iter()
-        .map(|id| cluster.get_kvengine(*id).get_shard_stat(region_id))
-        .collect::<Vec<_>>();
+    let shard_stats = get_shard_stats(&cluster, region_id);
     assert!(
         shard_stats
             .iter()
@@ -135,43 +134,45 @@ fn test_raft_log_gc() {
     let curr_stats = wait_truncated(before_stats);
 
     // Trigger switching and flushing memtable.
-    let flush_memtable =
-        |cluster: &ServerCluster, node_ids: &[u16], prev_shard_stats: Vec<ShardStats>| {
-            let ctx = cluster.new_rpc_context(&[]);
-            let mut req = RaftCmdRequest::default();
-            let mut header = RaftRequestHeader::default();
-            header.set_region_id(ctx.get_region_id());
-            header.set_peer(ctx.get_peer().clone());
-            header.set_region_epoch(ctx.get_region_epoch().clone());
-            let rfengine = cluster.get_rfengine(node_ids[0]);
-            header.set_term(rfengine.get_truncated_state(region_id).unwrap().1);
-            req.set_header(header);
-            let mut custom_builder = CustomBuilder::new();
-            custom_builder.set_switch_mem_table(prev_shard_stats[0].mem_table_size);
-            req.set_custom_request(custom_builder.build());
-            cluster.send_raft_command(node_ids[0], req);
-            // Wait for memtable flushing.
-            let mut curr_shard_stats = vec![];
-            for i in 0..30 {
-                curr_shard_stats = node_ids
-                    .iter()
-                    .map(|id| cluster.get_kvengine(*id).get_shard_stat(region_id))
-                    .collect::<Vec<_>>();
-                if curr_shard_stats
-                    .iter()
-                    .all(|curr| curr.mem_table_size == 0 && curr.mem_table_count == 1)
-                {
-                    break;
-                }
-                if i == 29 {
-                    panic!("wait for memtable flush timeouts");
-                }
-                std::thread::sleep(Duration::from_millis(200));
+    let flush_memtable = |cluster: &ServerCluster, node_ids: &[u16]| {
+        let mut client = cluster.new_client();
+        let region_id = client.get_region_id(&[]);
+        let ctx = client.new_rpc_ctx(region_id);
+        ctx.get_peer().get_store_id();
+        let mut req = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(ctx.get_region_id());
+        header.set_peer(ctx.get_peer().clone());
+        header.set_region_epoch(ctx.get_region_epoch().clone());
+        let rfengine = cluster.get_rfengine(node_ids[0]);
+        header.set_term(rfengine.get_truncated_state(region_id).unwrap().1);
+        req.set_header(header);
+        let mut custom_builder = CustomBuilder::new();
+        custom_builder.set_switch_mem_table(1);
+        req.set_custom_request(custom_builder.build());
+        cluster.send_raft_command(req);
+        // Wait for memtable flushing.
+        let mut curr_shard_stats = vec![];
+        for i in 0..30 {
+            curr_shard_stats = node_ids
+                .iter()
+                .map(|id| cluster.get_kvengine(*id).get_shard_stat(region_id))
+                .collect::<Vec<_>>();
+            if curr_shard_stats
+                .iter()
+                .all(|curr| curr.mem_table_size == 0 && curr.mem_table_count == 1)
+            {
+                break;
             }
-            curr_shard_stats
-        };
+            if i == 29 {
+                panic!("wait for memtable flush timeouts");
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        curr_shard_stats
+    };
 
-    let curr_shard_stats = flush_memtable(&cluster, &node_ids, shard_stats);
+    let curr_shard_stats = flush_memtable(&cluster, &node_ids);
     let curr_stats = wait_truncated(curr_stats);
     std::thread::sleep(Duration::from_secs(1));
     // Flushing memtable will propose a ChangeSet request which won't write data to memtable,
@@ -189,10 +190,11 @@ fn test_raft_log_gc() {
     // Stop one node, and leader shouldn't truncate logs immediately.
     cluster.stop_node(node_ids[2]);
     node_ids.pop();
+    let mut client = cluster.new_client();
     for i in 1000..1010 {
-        cluster.put_kv(i..i + 1, gen_key, gen_val);
+        client.put_kv(i..i + 1, gen_key, gen_val);
     }
-    flush_memtable(&cluster, &node_ids, curr_shard_stats);
+    flush_memtable(&cluster, &node_ids);
     std::thread::sleep(Duration::from_millis(200));
     // Leader's truncated index doesn't change immediately.
     assert_eq!(
@@ -216,4 +218,12 @@ fn test_raft_log_gc() {
         curr_stats[0]
     );
     cluster.stop();
+}
+
+fn get_shard_stats(cluster: &ServerCluster, region_id: u64) -> Vec<ShardStats> {
+    let nodes = cluster.get_nodes();
+    nodes
+        .iter()
+        .map(|id| cluster.get_kvengine(*id).get_shard_stat(region_id))
+        .collect::<Vec<_>>()
 }

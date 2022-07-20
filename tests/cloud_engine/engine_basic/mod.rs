@@ -14,10 +14,11 @@ fn test_engine_auto_switch() {
     let mut cluster = ServerCluster::new(vec![node_id], |_, conf| {
         conf.rocksdb.writecf.write_buffer_size = ReadableSize::kb(256);
     });
-    cluster.put_kv(0..100, i_to_key, i_to_val);
-    cluster.put_kv(100..200, i_to_key, i_to_val);
-    cluster.put_kv(200..300, i_to_key, i_to_val);
-    let region_id = cluster.get_region_id(&[]);
+    let mut client = cluster.new_client();
+    client.put_kv(0..100, i_to_key, i_to_val);
+    client.put_kv(100..200, i_to_key, i_to_val);
+    client.put_kv(200..300, i_to_key, i_to_val);
+    let region_id = client.get_region_id(&[]);
     let engine = cluster.get_kvengine(node_id);
     let stats = engine.get_shard_stat(region_id);
     assert!(stats.mem_table_count + stats.l0_table_count > 1);
@@ -44,10 +45,10 @@ fn test_split_by_key() {
         conf.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(20);
         conf.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
     });
-
-    cluster.put_kv(0..300, i_to_key, i_to_key);
-    cluster.put_kv(300..600, i_to_key, i_to_key);
-    cluster.put_kv(600..1000, i_to_key, i_to_key);
+    let mut client = cluster.new_client();
+    client.put_kv(0..300, i_to_key, i_to_key);
+    client.put_kv(300..600, i_to_key, i_to_key);
+    client.put_kv(600..1000, i_to_key, i_to_key);
     // The split max keys should be 64 * 3 / 2 * 1024 / 100 ~= 983
     let engine = cluster.get_kvengine(node_id);
     for _ in 0..10 {
@@ -69,18 +70,21 @@ fn test_remove_and_add_peer() {
     let node_ids = vec![alloc_node_id(), alloc_node_id(), alloc_node_id()];
     let mut cluster = ServerCluster::new(node_ids.clone(), |_, _| {});
     cluster.wait_region_replicated(&[], 3);
+    let mut client = cluster.new_client();
     let split_key = i_to_key(5);
-    cluster.split(&split_key);
+    client.split(&split_key);
     // Wait for region heartbeat to update region epoch in PD.
     sleep();
-    cluster.put_kv(0..10, i_to_key, i_to_key);
+
+    client.put_kv(0..10, i_to_key, i_to_key);
     let pd = cluster.get_pd_client();
     cluster.wait_pd_region_count(2);
     pd.disable_default_operator();
     let &first_node = node_ids.first().unwrap();
     cluster.remove_node_peers(first_node);
     // After one store has removed peer, the cluster is still available.
-    cluster.put_kv(0..10, i_to_key, i_to_key);
+    let mut client = cluster.new_client();
+    client.put_kv(0..10, i_to_key, i_to_key);
     cluster.stop_node(first_node);
     thread::sleep(Duration::from_millis(100));
     cluster.start_node(first_node, |_, _| {});
@@ -95,13 +99,14 @@ fn test_increasing_put_and_split() {
     test_util::init_log_for_test();
     let node_id = alloc_node_id();
     let mut cluster = ServerCluster::new(vec![node_id], |_, _| {});
-    cluster.put_kv(0..50, i_to_key, i_to_val);
+    let mut client = cluster.new_client();
+    client.put_kv(0..50, i_to_key, i_to_val);
     for i in 1..5 {
         let split_idx = i * 10;
         let split_key = i_to_key(split_idx);
-        cluster.split(&split_key);
+        client.split(&split_key);
         for _ in 0..10 {
-            cluster.put_kv(split_idx..split_idx+5, i_to_key, i_to_val);
+            client.put_kv(split_idx..split_idx + 5, i_to_key, i_to_val);
         }
     }
     cluster.stop()

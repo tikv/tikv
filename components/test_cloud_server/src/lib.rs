@@ -1,6 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+extern crate core;
+
+pub mod client;
 pub mod cluster;
+
 pub use cluster::*;
 
 #[cfg(test)]
@@ -15,12 +19,13 @@ mod tests {
         let mut cluster = ServerCluster::new(vec![1, 2, 3], |_, _| {});
         let stores = cluster.get_stores();
         assert_eq!(stores.len(), 3);
-        cluster.put_kv(0..100, gen_key, gen_val);
-        cluster.put_kv(100..200, gen_key, gen_val);
-        cluster.put_kv(200..300, gen_key, gen_val);
+        let mut client = cluster.new_client();
+        client.put_kv(0..100, gen_key, gen_val);
+        client.put_kv(100..200, gen_key, gen_val);
+        client.put_kv(200..300, gen_key, gen_val);
         let split_keys = vec![gen_key(50), gen_key(150), gen_key(200)];
         for split_key in &split_keys {
-            cluster.split(split_key);
+            client.split(split_key);
         }
         cluster.wait_pd_region_count(4);
         cluster.get_pd_client().disable_default_operator();
