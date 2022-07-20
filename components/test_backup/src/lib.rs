@@ -371,7 +371,10 @@ impl TestSuite {
     }
 
     pub fn gen_raw_kv(&self, key_idx: u64) -> (String, String) {
-        (format!("r\x00\x00\x00key_{}", key_idx), format!("value_{}", key_idx))
+        (
+            format!("r\x00\x00\x00key_{}", key_idx),
+            format!("value_{}", key_idx),
+        )
     }
 
     pub fn raw_kv_checksum(&self, start: String, end: String, cf: CfName) -> (u64, u64, u64) {

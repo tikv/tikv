@@ -370,15 +370,8 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
 
     // Backup file should have same contents.
     // Set non-empty range to check if it's incorrectly encoded.
-    let (backup_start, backup_end) = if cur_api_ver != dst_api_ver {
-        (
-            vec![b'r', 0, 0, 0, b'r', b'a'],
-            vec![b'r', 0, 0, 0, b'r', b'z'],
-        )
-    } else {
-        (vec![b'r', b'a'], vec![b'r', b'z'])
-    };
-    println!("{:?}", (&backup_start,&backup_end));
+    let (backup_start, backup_end) = (vec![b'r', 0, 0, 0, b'a'], vec![b'r', 0, 0, 0, b'z']);
+
     let rx = target_suite.backup_raw(
         backup_start, // start
         backup_end,   // end
