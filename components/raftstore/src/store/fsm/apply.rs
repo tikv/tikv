@@ -5849,8 +5849,8 @@ mod tests {
         file.finish().unwrap();
         let src = sst_path.clone();
         let dst = file.get_import_path().save.to_str().unwrap();
-        std::fs::copy(src.clone(), dst).unwrap();
-        assert!(src.as_path().exists());
+        std::fs::copy(src, dst).unwrap();
+        assert!(sst_path.as_path().exists());
         let ingestsst = EntryBuilder::new(index_id, 1)
             .ingest_sst(&meta)
             .epoch(r1_epoch.get_conf_ver(), r1_epoch.get_version())
@@ -5859,7 +5859,7 @@ mod tests {
         obs.delay_remove_ssts.store(true, Ordering::SeqCst);
         router.schedule_task(
             1,
-            Msg::apply(apply(peer_id, 1, 1, vec![ingestsst.clone()], vec![])),
+            Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])),
         );
         fetch_apply_res(&rx);
         let apply_res = fetch_apply_res(&rx);
