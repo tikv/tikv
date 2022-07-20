@@ -487,6 +487,7 @@ mod tests {
 
     #[test]
     fn test_disk_read() {
+        test_util::init_log_for_test();
         let engine = TestEngineBuilder::new().build_without_cache().unwrap();
         for i in 0..100 {
             let owned_key = format!("{:06}", i);
