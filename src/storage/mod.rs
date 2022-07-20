@@ -37,19 +37,6 @@
 //! * the [`test_storage`](::test_storage) crate, integration tests for this module,
 //! * the [`engine_traits`](::engine_traits) crate, more detail of the engine abstraction.
 
-pub mod config;
-pub mod config_manager;
-pub mod errors;
-pub mod kv;
-pub mod lock_manager;
-pub(crate) mod metrics;
-pub mod mvcc;
-pub mod raw;
-pub mod txn;
-
-mod read_pool;
-mod types;
-
 use std::{
     borrow::Cow,
     iter,
@@ -115,6 +102,19 @@ use crate::{
         types::StorageCallbackType,
     },
 };
+
+pub mod config;
+pub mod config_manager;
+pub mod errors;
+pub mod kv;
+pub mod lock_manager;
+pub(crate) mod metrics;
+pub mod mvcc;
+pub mod raw;
+pub mod txn;
+
+mod read_pool;
+mod types;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -477,12 +477,23 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     // TODO: refactor to use `Api` parameter.
-    fn check_api_version_ranges(
+    fn check_api_version_ranges<I, K>(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
         cmd: CommandKind,
-        ranges: impl IntoIterator<Item = (Option<impl AsRef<[u8]>>, Option<impl AsRef<[u8]>>)>,
-    ) -> Result<()> {
+        ranges: I,
+        reverse: bool,
+    ) -> Result<()>
+    where
+        I: IntoIterator<Item = (Option<K>, Option<K>)>,
+        K: AsRef<[u8]>,
+    {
+        let mut ranges: Box<dyn iter::Iterator<Item = (Option<K>, Option<K>)>> =
+            Box::new(ranges.into_iter());
+        if reverse {
+            ranges = Box::new(ranges.map(|(start, end)| (end, start)));
+        }
+
         match (storage_api_version, req_api_version) {
             (ApiVersion::V1, ApiVersion::V1) => {}
             (ApiVersion::V1ttl, ApiVersion::V1) if Self::is_raw_command(cmd) => {
@@ -625,13 +636,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             false,
                         );
                         snap_store
-                        .get(&key, &mut statistics)
-                        // map storage::txn::Error -> storage::Error
-                        .map_err(Error::from)
-                        .map(|r| {
-                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                            r
-                        })
+                            .get(&key, &mut statistics)
+                            // map storage::txn::Error -> storage::Error
+                            .map_err(Error::from)
+                            .map(|r| {
+                                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                                r
+                            })
                     });
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
@@ -1105,6 +1116,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         Some(start_key.as_encoded()),
                         end_key.as_ref().map(Key::as_encoded),
                     )],
+                    reverse_scan,
                 )?;
 
                 let (mut start_key, mut end_key) = (Some(start_key), end_key);
@@ -1441,6 +1453,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             ctx.api_version,
             CommandKind::delete_range,
             [(Some(start_key.as_encoded()), Some(end_key.as_encoded()))],
+            false,
         )?;
 
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
@@ -1937,6 +1950,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             ctx.api_version,
             CommandKind::raw_delete_range,
             [(Some(&start_key), Some(&end_key))],
+            false,
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
@@ -2031,6 +2045,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     ctx.api_version,
                     CMD,
                     [(Some(&start_key), end_key.as_ref())],
+                    reverse_scan,
                 )?;
 
                 let command_duration = tikv_util::time::Instant::now();
@@ -2166,6 +2181,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     ranges
                         .iter()
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
+                    reverse_scan,
                 )?;
 
                 let command_duration = tikv_util::time::Instant::now();
@@ -2472,6 +2488,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     ranges
                         .iter()
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
+                    false,
                 )?;
                 for range in ranges.iter_mut() {
                     let start_key = F::encode_raw_key_owned(range.take_start_key(), None);
@@ -4051,7 +4068,7 @@ mod tests {
                 Some(b"cc".to_vec()),
                 None,
                 Some(b"aa".to_vec()),
-                Some(b"bb".to_vec())
+                Some(b"bb".to_vec()),
             ]
         );
     }
@@ -4510,12 +4527,12 @@ mod tests {
         };
 
         let test_data = vec![
-            (b"r\0a".to_vec(), b"aa".to_vec()),
-            (b"r\0b".to_vec(), b"bb".to_vec()),
-            (b"r\0c".to_vec(), b"cc".to_vec()),
-            (b"r\0d".to_vec(), b"dd".to_vec()),
-            (b"r\0e".to_vec(), b"ee".to_vec()),
-            (b"r\0f".to_vec(), b"ff".to_vec()),
+            (b"r\x00\x00\x00a".to_vec(), b"aa".to_vec()),
+            (b"r\x00\x00\x00b".to_vec(), b"bb".to_vec()),
+            (b"r\x00\x00\x00c".to_vec(), b"cc".to_vec()),
+            (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec()),
+            (b"r\x00\x00\x00e".to_vec(), b"ee".to_vec()),
+            (b"r\x00\x00\x00f".to_vec(), b"ff".to_vec()),
         ];
 
         // Write key-value pairs one by one
@@ -4557,12 +4574,12 @@ mod tests {
         };
 
         let test_data = vec![
-            (b"r\0a".to_vec(), b"aa".to_vec()),
-            (b"r\0b".to_vec(), b"bb".to_vec()),
-            (b"r\0c".to_vec(), b"cc".to_vec()),
-            (b"r\0d".to_vec(), b"dd".to_vec()),
-            (b"r\0e".to_vec(), b"ee".to_vec()),
-            (b"r\0f".to_vec(), b"ff".to_vec()),
+            (b"r\x00\x00\x00a".to_vec(), b"aa".to_vec()),
+            (b"r\x00\x00\x00b".to_vec(), b"bb".to_vec()),
+            (b"r\x00\x00\x00c".to_vec(), b"cc".to_vec()),
+            (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec()),
+            (b"r\x00\x00\x00e".to_vec(), b"ee".to_vec()),
+            (b"r\x00\x00\x00f".to_vec(), b"ff".to_vec()),
         ];
 
         let digest = crc64fast::Digest::new();
@@ -4582,7 +4599,7 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
-            // start key is set to b"r\0a\0", if raw_checksum does not encode the key,
+            // start key is set to b"r\x00\x00\x00a\0", if raw_checksum does not encode the key,
             // first key will be included in checksum. This is for testing issue #12950.
             if !is_first {
                 total_kvs += 1;
@@ -4593,8 +4610,8 @@ mod tests {
             rx.recv().unwrap();
         }
         let mut range = KeyRange::default();
-        range.set_start_key(b"r\0a\0".to_vec());
-        range.set_end_key(b"r\0z".to_vec());
+        range.set_start_key(b"r\x00\x00\x00a\0".to_vec());
+        range.set_end_key(b"r\x00\x00\x00z".to_vec());
         assert_eq!(
             (checksum, total_kvs, total_bytes),
             block_on(storage.raw_checksum(ctx, ChecksumAlgorithm::Crc64Xor, vec![range])).unwrap(),
@@ -4605,7 +4622,7 @@ mod tests {
     fn test_raw_v2_multi_versions() {
         // Test update on the same key to verify multi-versions implementation of RawKV V2.
         let test_data = vec![Some(b"v1"), Some(b"v2"), None, Some(b"v3")];
-        let k = b"r\0k".to_vec();
+        let k = b"r\x00\x00\x00k".to_vec();
 
         let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager)
             .build()
@@ -4683,11 +4700,11 @@ mod tests {
         };
 
         let test_data = [
-            (b"r\0a", b"001"),
-            (b"r\0b", b"002"),
-            (b"r\0c", b"003"),
-            (b"r\0d", b"004"),
-            (b"r\0e", b"005"),
+            (b"r\x00\x00\x00a", b"001"),
+            (b"r\x00\x00\x00b", b"002"),
+            (b"r\x00\x00\x00c", b"003"),
+            (b"r\x00\x00\x00d", b"004"),
+            (b"r\x00\x00\x00e", b"005"),
         ];
 
         // Write some key-value pairs to the db
@@ -4707,7 +4724,8 @@ mod tests {
 
         expect_value(
             b"004".to_vec(),
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00d".to_vec()))
+                .unwrap(),
         );
 
         // Delete "a"
@@ -4715,7 +4733,7 @@ mod tests {
             .raw_delete(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0a".to_vec(),
+                b"r\x00\x00\x00a".to_vec(),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -4723,7 +4741,8 @@ mod tests {
 
         // Assert key "a" has gone
         expect_none(
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0a".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00a".to_vec()))
+                .unwrap(),
         );
 
         // Delete all
@@ -4763,11 +4782,11 @@ mod tests {
         };
 
         let test_data = [
-            (b"r\0a", b"001"),
-            (b"r\0b", b"002"),
-            (b"r\0c", b"003"),
-            (b"r\0d", b"004"),
-            (b"r\0e", b"005"),
+            (b"r\x00\x00\x00a", b"001"),
+            (b"r\x00\x00\x00b", b"002"),
+            (b"r\x00\x00\x00c", b"003"),
+            (b"r\x00\x00\x00d", b"004"),
+            (b"r\x00\x00\x00e", b"005"),
         ];
 
         // Write some key-value pairs to the db
@@ -4787,7 +4806,8 @@ mod tests {
 
         expect_value(
             b"004".to_vec(),
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00d".to_vec()))
+                .unwrap(),
         );
 
         // Delete ["d", "e")
@@ -4795,8 +4815,8 @@ mod tests {
             .raw_delete_range(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0d".to_vec(),
-                b"r\0e".to_vec(),
+                b"r\x00\x00\x00d".to_vec(),
+                b"r\x00\x00\x00e".to_vec(),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -4805,14 +4825,17 @@ mod tests {
         // Assert key "d" has gone
         expect_value(
             b"003".to_vec(),
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0c".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00c".to_vec()))
+                .unwrap(),
         );
         expect_none(
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00d".to_vec()))
+                .unwrap(),
         );
         expect_value(
             b"005".to_vec(),
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0e".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00e".to_vec()))
+                .unwrap(),
         );
 
         // Delete ["aa", "ab")
@@ -4820,8 +4843,8 @@ mod tests {
             .raw_delete_range(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0aa".to_vec(),
-                b"r\0ab".to_vec(),
+                b"r\x00\x00\x00aa".to_vec(),
+                b"r\x00\x00\x00ab".to_vec(),
                 expect_ok_callback(tx.clone(), 2),
             )
             .unwrap();
@@ -4830,11 +4853,13 @@ mod tests {
         // Assert nothing happened
         expect_value(
             b"001".to_vec(),
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0a".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00a".to_vec()))
+                .unwrap(),
         );
         expect_value(
             b"002".to_vec(),
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0b".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00b".to_vec()))
+                .unwrap(),
         );
 
         // Delete all
@@ -4842,8 +4867,8 @@ mod tests {
             .raw_delete_range(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0a".to_vec(),
-                b"r\0z".to_vec(),
+                b"r\x00\x00\x00a".to_vec(),
+                b"r\x00\x00\x00z".to_vec(),
                 expect_ok_callback(tx, 3),
             )
             .unwrap();
@@ -4890,11 +4915,11 @@ mod tests {
         };
 
         let test_data = vec![
-            (b"r\0a".to_vec(), b"aa".to_vec(), 10),
-            (b"r\0b".to_vec(), b"bb".to_vec(), 20),
-            (b"r\0c".to_vec(), b"cc".to_vec(), 30),
-            (b"r\0d".to_vec(), b"dd".to_vec(), 0),
-            (b"r\0e".to_vec(), b"ee".to_vec(), 40),
+            (b"r\x00\x00\x00a".to_vec(), b"aa".to_vec(), 10),
+            (b"r\x00\x00\x00b".to_vec(), b"bb".to_vec(), 20),
+            (b"r\x00\x00\x00c".to_vec(), b"cc".to_vec(), 30),
+            (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec(), 0),
+            (b"r\x00\x00\x00e".to_vec(), b"ee".to_vec(), 40),
         ];
 
         let kvpairs = test_data
@@ -4966,11 +4991,11 @@ mod tests {
         };
 
         let test_data = vec![
-            (b"r\0a".to_vec(), b"aa".to_vec()),
-            (b"r\0b".to_vec(), b"bb".to_vec()),
-            (b"r\0c".to_vec(), b"cc".to_vec()),
-            (b"r\0d".to_vec(), b"dd".to_vec()),
-            (b"r\0e".to_vec(), b"ee".to_vec()),
+            (b"r\x00\x00\x00a".to_vec(), b"aa".to_vec()),
+            (b"r\x00\x00\x00b".to_vec(), b"bb".to_vec()),
+            (b"r\x00\x00\x00c".to_vec(), b"cc".to_vec()),
+            (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec()),
+            (b"r\x00\x00\x00e".to_vec(), b"ee".to_vec()),
         ];
 
         // Write key-value pairs one by one
@@ -5013,11 +5038,11 @@ mod tests {
         };
 
         let test_data = vec![
-            (b"r\0a".to_vec(), b"aa".to_vec()),
-            (b"r\0b".to_vec(), b"bb".to_vec()),
-            (b"r\0c".to_vec(), b"cc".to_vec()),
-            (b"r\0d".to_vec(), b"dd".to_vec()),
-            (b"r\0e".to_vec(), b"ee".to_vec()),
+            (b"r\x00\x00\x00a".to_vec(), b"aa".to_vec()),
+            (b"r\x00\x00\x00b".to_vec(), b"bb".to_vec()),
+            (b"r\x00\x00\x00c".to_vec(), b"cc".to_vec()),
+            (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec()),
+            (b"r\x00\x00\x00e".to_vec(), b"ee".to_vec()),
         ];
 
         // Write key-value pairs one by one
@@ -5090,11 +5115,11 @@ mod tests {
         };
 
         let test_data = vec![
-            (b"r\0a".to_vec(), b"aa".to_vec()),
-            (b"r\0b".to_vec(), b"bb".to_vec()),
-            (b"r\0c".to_vec(), b"cc".to_vec()),
-            (b"r\0d".to_vec(), b"dd".to_vec()),
-            (b"r\0e".to_vec(), b"ee".to_vec()),
+            (b"r\x00\x00\x00a".to_vec(), b"aa".to_vec()),
+            (b"r\x00\x00\x00b".to_vec(), b"bb".to_vec()),
+            (b"r\x00\x00\x00c".to_vec(), b"cc".to_vec()),
+            (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec()),
+            (b"r\x00\x00\x00e".to_vec(), b"ee".to_vec()),
         ];
 
         // Write key-value pairs in batch
@@ -5125,7 +5150,7 @@ mod tests {
             for_cas,
             &storage,
             ctx.clone(),
-            vec![b"r\0b".to_vec(), b"r\0d".to_vec()],
+            vec![b"r\x00\x00\x00b".to_vec(), b"r\x00\x00\x00d".to_vec()],
             expect_ok_callback(tx.clone(), 1),
         )
         .unwrap();
@@ -5134,21 +5159,26 @@ mod tests {
         // Assert "b" and "d" are gone
         expect_value(
             b"aa".to_vec(),
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0a".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00a".to_vec()))
+                .unwrap(),
         );
         expect_none(
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0b".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00b".to_vec()))
+                .unwrap(),
         );
         expect_value(
             b"cc".to_vec(),
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0c".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00c".to_vec()))
+                .unwrap(),
         );
         expect_none(
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00d".to_vec()))
+                .unwrap(),
         );
         expect_value(
             b"ee".to_vec(),
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0e".to_vec())).unwrap(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\x00\x00\x00e".to_vec()))
+                .unwrap(),
         );
 
         // Delete ["a", "c", "e"]
@@ -5156,7 +5186,11 @@ mod tests {
             for_cas,
             &storage,
             ctx.clone(),
-            vec![b"r\0a".to_vec(), b"r\0c".to_vec(), b"r\0e".to_vec()],
+            vec![
+                b"r\x00\x00\x00a".to_vec(),
+                b"r\x00\x00\x00c".to_vec(),
+                b"r\x00\x00\x00e".to_vec(),
+            ],
             expect_ok_callback(tx, 2),
         )
         .unwrap();
@@ -5175,7 +5209,10 @@ mod tests {
 
     fn test_raw_scan_impl<F: KvFormat>() {
         let (end_key, end_key_reverse_scan) = if let ApiVersion::V2 = F::TAG {
-            (Some(b"r\0z".to_vec()), Some(b"r\0\0".to_vec()))
+            (
+                Some(b"r\x00\x00\x00z".to_vec()),
+                Some(b"r\x00\x00\x00\0".to_vec()),
+            )
         } else {
             (None, None)
         };
@@ -5190,26 +5227,26 @@ mod tests {
         };
 
         let test_data = vec![
-            (b"r\0a".to_vec(), b"aa".to_vec()),
-            (b"r\0a1".to_vec(), b"aa11".to_vec()),
-            (b"r\0a2".to_vec(), b"aa22".to_vec()),
-            (b"r\0a3".to_vec(), b"aa33".to_vec()),
-            (b"r\0b".to_vec(), b"bb".to_vec()),
-            (b"r\0b1".to_vec(), b"bb11".to_vec()),
-            (b"r\0b2".to_vec(), b"bb22".to_vec()),
-            (b"r\0b3".to_vec(), b"bb33".to_vec()),
-            (b"r\0c".to_vec(), b"cc".to_vec()),
-            (b"r\0c1".to_vec(), b"cc11".to_vec()),
-            (b"r\0c2".to_vec(), b"cc22".to_vec()),
-            (b"r\0c3".to_vec(), b"cc33".to_vec()),
-            (b"r\0d".to_vec(), b"dd".to_vec()),
-            (b"r\0d1".to_vec(), b"dd11".to_vec()),
-            (b"r\0d2".to_vec(), b"dd22".to_vec()),
-            (b"r\0d3".to_vec(), b"dd33".to_vec()),
-            (b"r\0e".to_vec(), b"ee".to_vec()),
-            (b"r\0e1".to_vec(), b"ee11".to_vec()),
-            (b"r\0e2".to_vec(), b"ee22".to_vec()),
-            (b"r\0e3".to_vec(), b"ee33".to_vec()),
+            (b"r\x00\x00\x00a".to_vec(), b"aa".to_vec()),
+            (b"r\x00\x00\x00a1".to_vec(), b"aa11".to_vec()),
+            (b"r\x00\x00\x00a2".to_vec(), b"aa22".to_vec()),
+            (b"r\x00\x00\x00a3".to_vec(), b"aa33".to_vec()),
+            (b"r\x00\x00\x00b".to_vec(), b"bb".to_vec()),
+            (b"r\x00\x00\x00b1".to_vec(), b"bb11".to_vec()),
+            (b"r\x00\x00\x00b2".to_vec(), b"bb22".to_vec()),
+            (b"r\x00\x00\x00b3".to_vec(), b"bb33".to_vec()),
+            (b"r\x00\x00\x00c".to_vec(), b"cc".to_vec()),
+            (b"r\x00\x00\x00c1".to_vec(), b"cc11".to_vec()),
+            (b"r\x00\x00\x00c2".to_vec(), b"cc22".to_vec()),
+            (b"r\x00\x00\x00c3".to_vec(), b"cc33".to_vec()),
+            (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec()),
+            (b"r\x00\x00\x00d1".to_vec(), b"dd11".to_vec()),
+            (b"r\x00\x00\x00d2".to_vec(), b"dd22".to_vec()),
+            (b"r\x00\x00\x00d3".to_vec(), b"dd33".to_vec()),
+            (b"r\x00\x00\x00e".to_vec(), b"ee".to_vec()),
+            (b"r\x00\x00\x00e1".to_vec(), b"ee11".to_vec()),
+            (b"r\x00\x00\x00e2".to_vec(), b"ee22".to_vec()),
+            (b"r\x00\x00\x00e3".to_vec(), b"ee33".to_vec()),
         ];
 
         // Write key-value pairs in batch
@@ -5234,7 +5271,7 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0".to_vec(),
+                b"r\x00\x00\x00".to_vec(),
                 end_key.clone(),
                 20,
                 true,
@@ -5248,7 +5285,7 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0c2".to_vec(),
+                b"r\x00\x00\x00c2".to_vec(),
                 end_key.clone(),
                 20,
                 true,
@@ -5266,7 +5303,7 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0".to_vec(),
+                b"r\x00\x00\x00".to_vec(),
                 end_key.clone(),
                 20,
                 false,
@@ -5280,7 +5317,7 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0c2".to_vec(),
+                b"r\x00\x00\x00c2".to_vec(),
                 end_key,
                 20,
                 false,
@@ -5299,7 +5336,7 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0z".to_vec(),
+                b"r\x00\x00\x00z".to_vec(),
                 end_key_reverse_scan.clone(),
                 20,
                 false,
@@ -5319,7 +5356,7 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0z".to_vec(),
+                b"r\x00\x00\x00z".to_vec(),
                 end_key_reverse_scan,
                 5,
                 false,
@@ -5341,8 +5378,8 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0b2".to_vec(),
-                Some(b"r\0c2".to_vec()),
+                b"r\x00\x00\x00b2".to_vec(),
+                Some(b"r\x00\x00\x00c2".to_vec()),
                 20,
                 false,
                 false,
@@ -5361,8 +5398,8 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0b2".to_vec(),
-                Some(b"r\0b2\x00".to_vec()),
+                b"r\x00\x00\x00b2".to_vec(),
+                Some(b"r\x00\x00\x00b2\x00".to_vec()),
                 20,
                 false,
                 false,
@@ -5384,8 +5421,8 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0c2".to_vec(),
-                Some(b"r\0b2".to_vec()),
+                b"r\x00\x00\x00c2".to_vec(),
+                Some(b"r\x00\x00\x00b2".to_vec()),
                 20,
                 false,
                 true,
@@ -5403,8 +5440,8 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx.clone(),
                 "".to_string(),
-                b"r\0b2\x00".to_vec(),
-                Some(b"r\0b2".to_vec()),
+                b"r\x00\x00\x00b2\x00".to_vec(),
+                Some(b"r\x00\x00\x00b2".to_vec()),
                 20,
                 false,
                 true,
@@ -5414,12 +5451,12 @@ mod tests {
 
         // End key tests. Confirm that lower/upper bound works correctly.
         let results = vec![
-            (b"r\0c1".to_vec(), b"cc11".to_vec()),
-            (b"r\0c2".to_vec(), b"cc22".to_vec()),
-            (b"r\0c3".to_vec(), b"cc33".to_vec()),
-            (b"r\0d".to_vec(), b"dd".to_vec()),
-            (b"r\0d1".to_vec(), b"dd11".to_vec()),
-            (b"r\0d2".to_vec(), b"dd22".to_vec()),
+            (b"r\x00\x00\x00c1".to_vec(), b"cc11".to_vec()),
+            (b"r\x00\x00\x00c2".to_vec(), b"cc22".to_vec()),
+            (b"r\x00\x00\x00c3".to_vec(), b"cc33".to_vec()),
+            (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec()),
+            (b"r\x00\x00\x00d1".to_vec(), b"dd11".to_vec()),
+            (b"r\x00\x00\x00d2".to_vec(), b"dd22".to_vec()),
         ]
         .into_iter()
         .map(|(k, v)| Some((k, v)));
@@ -5430,8 +5467,8 @@ mod tests {
                     .raw_scan(
                         ctx.clone(),
                         "".to_string(),
-                        b"r\0c1".to_vec(),
-                        Some(b"r\0d3".to_vec()),
+                        b"r\x00\x00\x00c1".to_vec(),
+                        Some(b"r\x00\x00\x00d3".to_vec()),
                         20,
                         false,
                         false,
@@ -5447,8 +5484,8 @@ mod tests {
                     .raw_scan(
                         ctx.clone(),
                         "".to_string(),
-                        b"r\0d3".to_vec(),
-                        Some(b"r\0c1".to_vec()),
+                        b"r\x00\x00\x00d3".to_vec(),
+                        Some(b"r\x00\x00\x00c1".to_vec()),
                         20,
                         false,
                         true,
@@ -5482,7 +5519,7 @@ mod tests {
         ]);
         // TODO: refactor to use `Api` parameter.
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
             true
         );
 
@@ -5492,7 +5529,7 @@ mod tests {
             (b"c".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
             true
         );
 
@@ -5502,7 +5539,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
             false
         );
 
@@ -5513,7 +5550,7 @@ mod tests {
             (b"a".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
             false
         );
 
@@ -5523,7 +5560,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
             true
         );
 
@@ -5533,7 +5570,7 @@ mod tests {
             (b"a3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
             true
         );
 
@@ -5543,7 +5580,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
             false
         );
 
@@ -5553,7 +5590,7 @@ mod tests {
             (b"c3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
             false
         );
     }
@@ -5588,26 +5625,26 @@ mod tests {
         };
 
         let test_data = vec![
-            (b"r\0a".to_vec(), b"aa".to_vec()),
-            (b"r\0a1".to_vec(), b"aa11".to_vec()),
-            (b"r\0a2".to_vec(), b"aa22".to_vec()),
-            (b"r\0a3".to_vec(), b"aa33".to_vec()),
-            (b"r\0b".to_vec(), b"bb".to_vec()),
-            (b"r\0b1".to_vec(), b"bb11".to_vec()),
-            (b"r\0b2".to_vec(), b"bb22".to_vec()),
-            (b"r\0b3".to_vec(), b"bb33".to_vec()),
-            (b"r\0c".to_vec(), b"cc".to_vec()),
-            (b"r\0c1".to_vec(), b"cc11".to_vec()),
-            (b"r\0c2".to_vec(), b"cc22".to_vec()),
-            (b"r\0c3".to_vec(), b"cc33".to_vec()),
-            (b"r\0d".to_vec(), b"dd".to_vec()),
-            (b"r\0d1".to_vec(), b"dd11".to_vec()),
-            (b"r\0d2".to_vec(), b"dd22".to_vec()),
-            (b"r\0d3".to_vec(), b"dd33".to_vec()),
-            (b"r\0e".to_vec(), b"ee".to_vec()),
-            (b"r\0e1".to_vec(), b"ee11".to_vec()),
-            (b"r\0e2".to_vec(), b"ee22".to_vec()),
-            (b"r\0e3".to_vec(), b"ee33".to_vec()),
+            (b"r\x00\x00\x00a".to_vec(), b"aa".to_vec()),
+            (b"r\x00\x00\x00a1".to_vec(), b"aa11".to_vec()),
+            (b"r\x00\x00\x00a2".to_vec(), b"aa22".to_vec()),
+            (b"r\x00\x00\x00a3".to_vec(), b"aa33".to_vec()),
+            (b"r\x00\x00\x00b".to_vec(), b"bb".to_vec()),
+            (b"r\x00\x00\x00b1".to_vec(), b"bb11".to_vec()),
+            (b"r\x00\x00\x00b2".to_vec(), b"bb22".to_vec()),
+            (b"r\x00\x00\x00b3".to_vec(), b"bb33".to_vec()),
+            (b"r\x00\x00\x00c".to_vec(), b"cc".to_vec()),
+            (b"r\x00\x00\x00c1".to_vec(), b"cc11".to_vec()),
+            (b"r\x00\x00\x00c2".to_vec(), b"cc22".to_vec()),
+            (b"r\x00\x00\x00c3".to_vec(), b"cc33".to_vec()),
+            (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec()),
+            (b"r\x00\x00\x00d1".to_vec(), b"dd11".to_vec()),
+            (b"r\x00\x00\x00d2".to_vec(), b"dd22".to_vec()),
+            (b"r\x00\x00\x00d3".to_vec(), b"dd33".to_vec()),
+            (b"r\x00\x00\x00e".to_vec(), b"ee".to_vec()),
+            (b"r\x00\x00\x00e1".to_vec(), b"ee11".to_vec()),
+            (b"r\x00\x00\x00e2".to_vec(), b"ee22".to_vec()),
+            (b"r\x00\x00\x00e3".to_vec(), b"ee33".to_vec()),
         ];
 
         // Write key-value pairs in batch
@@ -5631,25 +5668,25 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"r\0a".to_vec(), b"aa".to_vec())),
-            Some((b"r\0a1".to_vec(), b"aa11".to_vec())),
-            Some((b"r\0a2".to_vec(), b"aa22".to_vec())),
-            Some((b"r\0a3".to_vec(), b"aa33".to_vec())),
-            Some((b"r\0b".to_vec(), b"bb".to_vec())),
-            Some((b"r\0b1".to_vec(), b"bb11".to_vec())),
-            Some((b"r\0b2".to_vec(), b"bb22".to_vec())),
-            Some((b"r\0b3".to_vec(), b"bb33".to_vec())),
-            Some((b"r\0c".to_vec(), b"cc".to_vec())),
-            Some((b"r\0c1".to_vec(), b"cc11".to_vec())),
-            Some((b"r\0c2".to_vec(), b"cc22".to_vec())),
-            Some((b"r\0c3".to_vec(), b"cc33".to_vec())),
-            Some((b"r\0d".to_vec(), b"dd".to_vec())),
+            Some((b"r\x00\x00\x00a".to_vec(), b"aa".to_vec())),
+            Some((b"r\x00\x00\x00a1".to_vec(), b"aa11".to_vec())),
+            Some((b"r\x00\x00\x00a2".to_vec(), b"aa22".to_vec())),
+            Some((b"r\x00\x00\x00a3".to_vec(), b"aa33".to_vec())),
+            Some((b"r\x00\x00\x00b".to_vec(), b"bb".to_vec())),
+            Some((b"r\x00\x00\x00b1".to_vec(), b"bb11".to_vec())),
+            Some((b"r\x00\x00\x00b2".to_vec(), b"bb22".to_vec())),
+            Some((b"r\x00\x00\x00b3".to_vec(), b"bb33".to_vec())),
+            Some((b"r\x00\x00\x00c".to_vec(), b"cc".to_vec())),
+            Some((b"r\x00\x00\x00c1".to_vec(), b"cc11".to_vec())),
+            Some((b"r\x00\x00\x00c2".to_vec(), b"cc22".to_vec())),
+            Some((b"r\x00\x00\x00c3".to_vec(), b"cc33".to_vec())),
+            Some((b"r\x00\x00\x00d".to_vec(), b"dd".to_vec())),
         ];
         let ranges: Vec<KeyRange> = make_ranges(vec![
-            b"r\0a".to_vec(),
-            b"r\0b".to_vec(),
-            b"r\0c".to_vec(),
-            b"r\0z".to_vec(),
+            b"r\x00\x00\x00a".to_vec(),
+            b"r\x00\x00\x00b".to_vec(),
+            b"r\x00\x00\x00c".to_vec(),
+            b"r\x00\x00\x00z".to_vec(),
         ]);
         expect_multi_values(
             results,
@@ -5665,19 +5702,19 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"r\0a".to_vec(), vec![])),
-            Some((b"r\0a1".to_vec(), vec![])),
-            Some((b"r\0a2".to_vec(), vec![])),
-            Some((b"r\0a3".to_vec(), vec![])),
-            Some((b"r\0b".to_vec(), vec![])),
-            Some((b"r\0b1".to_vec(), vec![])),
-            Some((b"r\0b2".to_vec(), vec![])),
-            Some((b"r\0b3".to_vec(), vec![])),
-            Some((b"r\0c".to_vec(), vec![])),
-            Some((b"r\0c1".to_vec(), vec![])),
-            Some((b"r\0c2".to_vec(), vec![])),
-            Some((b"r\0c3".to_vec(), vec![])),
-            Some((b"r\0d".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00a".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00a1".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00a2".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00a3".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00b".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00b1".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00b2".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00b3".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00c".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00c1".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00c2".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00c3".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00d".to_vec(), vec![])),
         ];
         expect_multi_values(
             results,
@@ -5693,15 +5730,15 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"r\0a".to_vec(), b"aa".to_vec())),
-            Some((b"r\0a1".to_vec(), b"aa11".to_vec())),
-            Some((b"r\0a2".to_vec(), b"aa22".to_vec())),
-            Some((b"r\0b".to_vec(), b"bb".to_vec())),
-            Some((b"r\0b1".to_vec(), b"bb11".to_vec())),
-            Some((b"r\0b2".to_vec(), b"bb22".to_vec())),
-            Some((b"r\0c".to_vec(), b"cc".to_vec())),
-            Some((b"r\0c1".to_vec(), b"cc11".to_vec())),
-            Some((b"r\0c2".to_vec(), b"cc22".to_vec())),
+            Some((b"r\x00\x00\x00a".to_vec(), b"aa".to_vec())),
+            Some((b"r\x00\x00\x00a1".to_vec(), b"aa11".to_vec())),
+            Some((b"r\x00\x00\x00a2".to_vec(), b"aa22".to_vec())),
+            Some((b"r\x00\x00\x00b".to_vec(), b"bb".to_vec())),
+            Some((b"r\x00\x00\x00b1".to_vec(), b"bb11".to_vec())),
+            Some((b"r\x00\x00\x00b2".to_vec(), b"bb22".to_vec())),
+            Some((b"r\x00\x00\x00c".to_vec(), b"cc".to_vec())),
+            Some((b"r\x00\x00\x00c1".to_vec(), b"cc11".to_vec())),
+            Some((b"r\x00\x00\x00c2".to_vec(), b"cc22".to_vec())),
         ];
         expect_multi_values(
             results,
@@ -5717,15 +5754,15 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"r\0a".to_vec(), vec![])),
-            Some((b"r\0a1".to_vec(), vec![])),
-            Some((b"r\0a2".to_vec(), vec![])),
-            Some((b"r\0b".to_vec(), vec![])),
-            Some((b"r\0b1".to_vec(), vec![])),
-            Some((b"r\0b2".to_vec(), vec![])),
-            Some((b"r\0c".to_vec(), vec![])),
-            Some((b"r\0c1".to_vec(), vec![])),
-            Some((b"r\0c2".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00a".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00a1".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00a2".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00b".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00b1".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00b2".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00c".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00c1".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00c2".to_vec(), vec![])),
         ];
         expect_multi_values(
             results,
@@ -5734,20 +5771,20 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"r\0a2".to_vec(), b"aa22".to_vec())),
-            Some((b"r\0a1".to_vec(), b"aa11".to_vec())),
-            Some((b"r\0a".to_vec(), b"aa".to_vec())),
-            Some((b"r\0b2".to_vec(), b"bb22".to_vec())),
-            Some((b"r\0b1".to_vec(), b"bb11".to_vec())),
-            Some((b"r\0b".to_vec(), b"bb".to_vec())),
-            Some((b"r\0c2".to_vec(), b"cc22".to_vec())),
-            Some((b"r\0c1".to_vec(), b"cc11".to_vec())),
-            Some((b"r\0c".to_vec(), b"cc".to_vec())),
+            Some((b"r\x00\x00\x00a2".to_vec(), b"aa22".to_vec())),
+            Some((b"r\x00\x00\x00a1".to_vec(), b"aa11".to_vec())),
+            Some((b"r\x00\x00\x00a".to_vec(), b"aa".to_vec())),
+            Some((b"r\x00\x00\x00b2".to_vec(), b"bb22".to_vec())),
+            Some((b"r\x00\x00\x00b1".to_vec(), b"bb11".to_vec())),
+            Some((b"r\x00\x00\x00b".to_vec(), b"bb".to_vec())),
+            Some((b"r\x00\x00\x00c2".to_vec(), b"cc22".to_vec())),
+            Some((b"r\x00\x00\x00c1".to_vec(), b"cc11".to_vec())),
+            Some((b"r\x00\x00\x00c".to_vec(), b"cc".to_vec())),
         ];
         let ranges: Vec<KeyRange> = vec![
-            (b"r\0a3".to_vec(), b"r\0a".to_vec()),
-            (b"r\0b3".to_vec(), b"r\0b".to_vec()),
-            (b"r\0c3".to_vec(), b"r\0c".to_vec()),
+            (b"r\x00\x00\x00a3".to_vec(), b"r\x00\x00\x00a".to_vec()),
+            (b"r\x00\x00\x00b3".to_vec(), b"r\x00\x00\x00b".to_vec()),
+            (b"r\x00\x00\x00c3".to_vec(), b"r\x00\x00\x00c".to_vec()),
         ]
         .into_iter()
         .map(|(s, e)| {
@@ -5764,18 +5801,18 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"r\0c2".to_vec(), b"cc22".to_vec())),
-            Some((b"r\0c1".to_vec(), b"cc11".to_vec())),
-            Some((b"r\0b2".to_vec(), b"bb22".to_vec())),
-            Some((b"r\0b1".to_vec(), b"bb11".to_vec())),
-            Some((b"r\0a2".to_vec(), b"aa22".to_vec())),
-            Some((b"r\0a1".to_vec(), b"aa11".to_vec())),
+            Some((b"r\x00\x00\x00c2".to_vec(), b"cc22".to_vec())),
+            Some((b"r\x00\x00\x00c1".to_vec(), b"cc11".to_vec())),
+            Some((b"r\x00\x00\x00b2".to_vec(), b"bb22".to_vec())),
+            Some((b"r\x00\x00\x00b1".to_vec(), b"bb11".to_vec())),
+            Some((b"r\x00\x00\x00a2".to_vec(), b"aa22".to_vec())),
+            Some((b"r\x00\x00\x00a1".to_vec(), b"aa11".to_vec())),
         ];
         let ranges: Vec<KeyRange> = make_ranges(vec![
-            b"r\0c3".to_vec(),
-            b"r\0b3".to_vec(),
-            b"r\0a3".to_vec(),
-            b"r\0".to_vec(),
+            b"r\x00\x00\x00c3".to_vec(),
+            b"r\x00\x00\x00b3".to_vec(),
+            b"r\x00\x00\x00a3".to_vec(),
+            b"r\x00\x00\x00".to_vec(),
         ]);
         expect_multi_values(
             results,
@@ -5784,20 +5821,20 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"r\0a2".to_vec(), vec![])),
-            Some((b"r\0a1".to_vec(), vec![])),
-            Some((b"r\0a".to_vec(), vec![])),
-            Some((b"r\0b2".to_vec(), vec![])),
-            Some((b"r\0b1".to_vec(), vec![])),
-            Some((b"r\0b".to_vec(), vec![])),
-            Some((b"r\0c2".to_vec(), vec![])),
-            Some((b"r\0c1".to_vec(), vec![])),
-            Some((b"r\0c".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00a2".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00a1".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00a".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00b2".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00b1".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00b".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00c2".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00c1".to_vec(), vec![])),
+            Some((b"r\x00\x00\x00c".to_vec(), vec![])),
         ];
         let ranges: Vec<KeyRange> = vec![
-            (b"r\0a3".to_vec(), b"r\0a".to_vec()),
-            (b"r\0b3".to_vec(), b"r\0b".to_vec()),
-            (b"r\0c3".to_vec(), b"r\0c".to_vec()),
+            (b"r\x00\x00\x00a3".to_vec(), b"r\x00\x00\x00a".to_vec()),
+            (b"r\x00\x00\x00b3".to_vec(), b"r\x00\x00\x00b".to_vec()),
+            (b"r\x00\x00\x00c3".to_vec(), b"r\x00\x00\x00c".to_vec()),
         ]
         .into_iter()
         .map(|(s, e)| {
@@ -5829,12 +5866,12 @@ mod tests {
         };
 
         let test_data = vec![
-            (b"r\0a".to_vec(), b"aa".to_vec(), 10),
-            (b"r\0b".to_vec(), b"bb".to_vec(), 20),
-            (b"r\0c".to_vec(), b"cc".to_vec(), 0),
-            (b"r\0d".to_vec(), b"dd".to_vec(), 10),
-            (b"r\0e".to_vec(), b"ee".to_vec(), 20),
-            (b"r\0f".to_vec(), b"ff".to_vec(), u64::MAX),
+            (b"r\x00\x00\x00a".to_vec(), b"aa".to_vec(), 10),
+            (b"r\x00\x00\x00b".to_vec(), b"bb".to_vec(), 20),
+            (b"r\x00\x00\x00c".to_vec(), b"cc".to_vec(), 0),
+            (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec(), 10),
+            (b"r\x00\x00\x00e".to_vec(), b"ee".to_vec(), 20),
+            (b"r\x00\x00\x00f".to_vec(), b"ff".to_vec(), u64::MAX),
         ];
 
         let before_written = ttl_current_ts();
@@ -5887,7 +5924,7 @@ mod tests {
             ..Default::default()
         };
 
-        let key = b"r\0key";
+        let key = b"r\x00\x00\x00key";
 
         // "v1" -> "v"
         let expected = (None, false);
@@ -6226,7 +6263,7 @@ mod tests {
                 lock_c.clone(),
                 lock_x.clone(),
                 lock_y.clone(),
-                lock_z
+                lock_z,
             ]
         );
 
@@ -6254,7 +6291,7 @@ mod tests {
                 lock_b.clone(),
                 lock_c.clone(),
                 lock_x.clone(),
-                lock_y.clone()
+                lock_y.clone(),
             ]
         );
 
@@ -6304,7 +6341,7 @@ mod tests {
                 lock_b.clone(),
                 lock_c.clone(),
                 lock_x.clone(),
-                lock_y.clone()
+                lock_y.clone(),
             ]
         );
         drop(guard);
@@ -8118,6 +8155,7 @@ mod tests {
             .unwrap();
         assert!(rx.recv().unwrap() > 10);
     }
+
     // this test shows that the scheduler take `response_policy` in `WriteResult` serious,
     // ie. call the callback at expected stage when writing to the engine
     #[test]
@@ -8499,8 +8537,8 @@ mod tests {
         use error_code::storage::*;
 
         const TIDB_KEY_CASE: &[u8] = b"t_a";
-        const TXN_KEY_CASE: &[u8] = b"x\0a";
-        const RAW_KEY_CASE: &[u8] = b"r\0a";
+        const TXN_KEY_CASE: &[u8] = b"x\x00\x00\x00a";
+        const RAW_KEY_CASE: &[u8] = b"r\x00\x00\x00a";
 
         let test_data = vec![
             // storage api_version = V1, for backward compatible.
@@ -8639,10 +8677,22 @@ mod tests {
             (Some(b"m"), Some(b"n")),
             (Some(b"m_a"), Some(b"m_z")),
         ];
-        const TXN_KEY_CASE: &[(Option<&[u8]>, Option<&[u8]>)] =
-            &[(Some(b"x\0a"), Some(b"x\0z")), (Some(b"x"), Some(b"y"))];
-        const RAW_KEY_CASE: &[(Option<&[u8]>, Option<&[u8]>)] =
-            &[(Some(b"r\0a"), Some(b"r\0z")), (Some(b"r"), Some(b"s"))];
+        const TXN_KEY_CASE: &[(Option<&[u8]>, Option<&[u8]>)] = &[
+            (Some(b"x\x00\x00a"), Some(b"x\x00\x00z")),
+            (Some(b"x\xff\xff\xff"), Some(b"y\x00\x00\x00")),
+        ];
+        const RAW_KEY_CASE: &[(Option<&[u8]>, Option<&[u8]>)] = &[
+            (Some(b"r\x00\x00a"), Some(b"r\x00\x00z")),
+            (Some(b"r\xff\xff\xff"), Some(b"s\x00\x00\x00")),
+        ];
+        const TXN_KEY_REVERSE_CASE: &[(Option<&[u8]>, Option<&[u8]>)] = &[
+            (Some(b"y\x00\x00\x00"), Some(b"x\xff\xff\xff")),
+            (Some(b"x3213"), Some(b"x3212")),
+        ];
+        const RAW_KEY_REVERSE_CASE: &[(Option<&[u8]>, Option<&[u8]>)] = &[
+            (Some(b"s\x00\x00\x00"), Some(b"r\xff\xff\xff")),
+            (Some(b"r3213"), Some(b"r3212")),
+        ];
         // The cases that should fail in API V2
         const TIDB_KEY_CASE_APIV2_ERR: &[(Option<&[u8]>, Option<&[u8]>)] = &[
             (Some(b"t_a"), Some(b"ua")),
@@ -8658,15 +8708,16 @@ mod tests {
             (None, Some(b"x\0z")),
         ];
         const RAW_KEY_CASE_APIV2_ERR: &[(Option<&[u8]>, Option<&[u8]>)] = &[
-            (Some(b"r\0a"), Some(b"sa")),
+            (Some(b"r\x00\x00\x00a"), Some(b"sa")),
             (Some(b"r"), None),
-            (None, Some(b"r\0z")),
+            (None, Some(b"r\x00\x00\x00z")),
         ];
 
         let test_case = |storage_api_version,
                          req_api_version,
                          cmd,
                          range: &[(Option<&[u8]>, Option<&[u8]>)],
+                         reverse: bool,
                          err| {
             // TODO: refactor to use `Api` parameter.
             let res = StorageApiV1::<RocksEngine, DummyLockManager>::check_api_version_ranges(
@@ -8674,12 +8725,12 @@ mod tests {
                 req_api_version,
                 cmd,
                 range.iter().cloned(),
+                reverse,
             );
             if let Some(err) = err {
-                assert!(res.is_err());
                 assert_eq!(res.unwrap_err().error_code(), err);
             } else {
-                assert!(res.is_ok());
+                res.unwrap();
             }
         };
 
@@ -8689,13 +8740,15 @@ mod tests {
             ApiVersion::V1,    // request api_version
             CommandKind::scan, // command kind
             TIDB_KEY_CASE,     // ranges
-            None,              // expected error code
+            false,
+            None, // expected error code
         );
         test_case(
             ApiVersion::V1,
             ApiVersion::V1,
             CommandKind::raw_scan,
             TIDB_KEY_CASE,
+            false,
             None,
         );
         test_case(
@@ -8703,6 +8756,7 @@ mod tests {
             ApiVersion::V1,
             CommandKind::raw_scan,
             TIDB_KEY_CASE_APIV2_ERR,
+            false,
             None,
         );
         // storage api_version = V1ttl, allow RawKV request only.
@@ -8711,6 +8765,7 @@ mod tests {
             ApiVersion::V1,
             CommandKind::raw_scan,
             RAW_KEY_CASE,
+            false,
             None,
         );
         test_case(
@@ -8718,6 +8773,7 @@ mod tests {
             ApiVersion::V1,
             CommandKind::raw_scan,
             RAW_KEY_CASE_APIV2_ERR,
+            false,
             None,
         );
         test_case(
@@ -8725,6 +8781,7 @@ mod tests {
             ApiVersion::V1,
             CommandKind::scan,
             TIDB_KEY_CASE,
+            false,
             Some(API_VERSION_NOT_MATCHED),
         );
         // storage api_version = V1, reject V2 request.
@@ -8733,6 +8790,7 @@ mod tests {
             ApiVersion::V2,
             CommandKind::scan,
             TIDB_KEY_CASE,
+            false,
             Some(API_VERSION_NOT_MATCHED),
         );
         // storage api_version = V2.
@@ -8742,6 +8800,7 @@ mod tests {
             ApiVersion::V1,
             CommandKind::scan,
             TIDB_KEY_CASE,
+            false,
             None,
         );
         test_case(
@@ -8749,6 +8808,7 @@ mod tests {
             ApiVersion::V1,
             CommandKind::raw_scan,
             TIDB_KEY_CASE,
+            false,
             Some(API_VERSION_NOT_MATCHED),
         );
         test_case(
@@ -8756,6 +8816,7 @@ mod tests {
             ApiVersion::V1,
             CommandKind::scan,
             TXN_KEY_CASE,
+            false,
             Some(INVALID_KEY_MODE),
         );
         test_case(
@@ -8763,6 +8824,7 @@ mod tests {
             ApiVersion::V1,
             CommandKind::scan,
             RAW_KEY_CASE,
+            false,
             Some(INVALID_KEY_MODE),
         );
         // V2 api validation.
@@ -8771,6 +8833,23 @@ mod tests {
             ApiVersion::V2,
             CommandKind::scan,
             TXN_KEY_CASE,
+            false,
+            None,
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V2,
+            CommandKind::scan,
+            TXN_KEY_REVERSE_CASE,
+            true,
+            None,
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V2,
+            CommandKind::scan,
+            TXN_KEY_REVERSE_CASE,
+            true,
             None,
         );
         test_case(
@@ -8778,6 +8857,15 @@ mod tests {
             ApiVersion::V2,
             CommandKind::raw_scan,
             RAW_KEY_CASE,
+            false,
+            None,
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V2,
+            CommandKind::raw_scan,
+            RAW_KEY_REVERSE_CASE,
+            true,
             None,
         );
         test_case(
@@ -8785,6 +8873,7 @@ mod tests {
             ApiVersion::V2,
             CommandKind::scan,
             RAW_KEY_CASE,
+            false,
             Some(INVALID_KEY_MODE),
         );
         test_case(
@@ -8792,6 +8881,7 @@ mod tests {
             ApiVersion::V2,
             CommandKind::raw_scan,
             TXN_KEY_CASE,
+            false,
             Some(INVALID_KEY_MODE),
         );
         test_case(
@@ -8799,6 +8889,23 @@ mod tests {
             ApiVersion::V2,
             CommandKind::scan,
             TIDB_KEY_CASE,
+            false,
+            Some(INVALID_KEY_MODE),
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V2,
+            CommandKind::scan,
+            TXN_KEY_REVERSE_CASE,
+            false,
+            Some(INVALID_KEY_MODE),
+        );
+        test_case(
+            ApiVersion::V2,
+            ApiVersion::V2,
+            CommandKind::raw_scan,
+            RAW_KEY_REVERSE_CASE,
+            false,
             Some(INVALID_KEY_MODE),
         );
 
@@ -8808,6 +8915,7 @@ mod tests {
                 ApiVersion::V1,
                 CommandKind::scan,
                 &[*range],
+                false,
                 Some(INVALID_KEY_MODE),
             );
         }
@@ -8817,6 +8925,7 @@ mod tests {
                 ApiVersion::V2,
                 CommandKind::scan,
                 &[*range],
+                false,
                 Some(INVALID_KEY_MODE),
             );
         }
@@ -8826,6 +8935,7 @@ mod tests {
                 ApiVersion::V2,
                 CommandKind::raw_scan,
                 &[*range],
+                false,
                 Some(INVALID_KEY_MODE),
             );
         }

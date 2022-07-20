@@ -18,6 +18,7 @@ pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
 pub const DEFAULT_KEY_SPACE_ID: [u8; 3] = [0, 0, 0]; // reserve 3 bytes for key space id.
 pub const DEFAULT_KEY_SPACE_ID_END: [u8; 3] = [0, 0, 1];
+pub const KEY_PREFIX_SIZE: usize = 4;
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -36,6 +37,14 @@ bitflags::bitflags! {
     }
 }
 
+fn infinite_end_of(prefix: &[u8]) -> [u8; 4] {
+    debug_assert!(prefix.len() >= KEY_PREFIX_SIZE);
+
+    let end_bytes = [prefix[0], prefix[1], prefix[2], prefix[3]];
+
+    (u32::from_be_bytes(end_bytes) + 1).to_be_bytes()
+}
+
 impl KvFormat for ApiV2 {
     const TAG: ApiVersion = ApiVersion::V2;
     #[cfg(any(test, feature = "testexport"))]
@@ -48,26 +57,31 @@ impl KvFormat for ApiV2 {
         }
 
         match key[0] {
-            RAW_KEY_PREFIX => KeyMode::Raw,
-            TXN_KEY_PREFIX => KeyMode::Txn,
+            RAW_KEY_PREFIX if key.len() >= KEY_PREFIX_SIZE => KeyMode::Raw,
+            TXN_KEY_PREFIX if key.len() >= KEY_PREFIX_SIZE => KeyMode::Txn,
             TIDB_META_KEY_PREFIX | TIDB_TABLE_KEY_PREFIX => KeyMode::TiDB,
             _ => KeyMode::Unknown,
         }
     }
 
     fn parse_range_mode(range: (Option<&[u8]>, Option<&[u8]>)) -> KeyMode {
-        match range {
-            (Some(start), Some(end))
-                if !start.is_empty()
-                    && !end.is_empty()
-                    && (start[0] == end[0] ||
-                        // Special case to represent "".."" within a key mode
-                        (end == [start[0] + 1])) =>
-            {
-                Self::parse_key_mode(start)
+        if let (Some(start), Some(end)) = range {
+            if start.is_empty() || end.is_empty() {
+                return KeyMode::Unknown;
             }
-            _ => KeyMode::Unknown,
+
+            let mode = Self::parse_key_mode(start);
+
+            if mode == KeyMode::Unknown
+                || start[0] == end[0]
+                || (mode == KeyMode::TiDB && end == [start[0] + 1])
+                || (mode != KeyMode::TiDB && end == infinite_end_of(start))
+            {
+                return mode;
+            }
         }
+
+        KeyMode::Unknown
     }
 
     fn decode_raw_value(bytes: &[u8]) -> Result<RawValue<&[u8]>> {
