@@ -404,11 +404,11 @@ fn test_stoarge_raw_batch_put_ttl_impl<F: KvFormat>() {
     };
 
     let test_data = vec![
-        (b"r\0a".to_vec(), b"aa".to_vec(), 10),
-        (b"r\0b".to_vec(), b"bb".to_vec(), 20),
-        (b"r\0c".to_vec(), b"cc".to_vec(), 30),
-        (b"r\0d".to_vec(), b"dd".to_vec(), 0),
-        (b"r\0e".to_vec(), b"ee".to_vec(), 40),
+        (b"r\x00\x00\x00a".to_vec(), b"aa".to_vec(), 10),
+        (b"r\x00\x00\x00b".to_vec(), b"bb".to_vec(), 20),
+        (b"r\x00\x00\x00c".to_vec(), b"cc".to_vec(), 30),
+        (b"r\x00\x00\x00d".to_vec(), b"dd".to_vec(), 0),
+        (b"r\x00\x00\x00e".to_vec(), b"ee".to_vec(), 40),
     ];
 
     let kvpairs = test_data

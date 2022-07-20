@@ -4965,8 +4965,8 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx,
                 "".to_string(),
-                b"r".to_vec(),
-                Some(b"rz".to_vec()),
+                b"r\x00\x00\x00".to_vec(),
+                Some(b"r\x00\x00\x01".to_vec()),
                 20,
                 false,
                 false,

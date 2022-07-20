@@ -365,12 +365,12 @@ mod tests {
         batch.set_ts(1);
         let mut pairs = vec![];
         let key1: &[u8] = if api_version == ApiVersion::V2 {
-            b"rk1"
+            b"r\x00\x00\x00k1"
         } else {
             b"k1"
         };
         let key2: &[u8] = if api_version == ApiVersion::V2 {
-            b"rk2"
+            b"r\x00\x00\x00k2"
         } else {
             b"k2"
         };
@@ -411,7 +411,7 @@ mod tests {
             }
             ApiVersion::V2 => {
                 let write_size = DATA_KEY_PREFIX_LEN
-                    + ApiV2::encode_raw_key(b"rk1", Some(TimeStamp::new(1))).len()
+                    + ApiV2::encode_raw_key(key1, Some(TimeStamp::new(1))).len()
                     + ApiV2::encode_raw_value_owned(RawValue {
                         user_value: b"short_value".to_vec(),
                         expire_ts: Some(10),
@@ -419,7 +419,7 @@ mod tests {
                     })
                     .len()
                     + DATA_KEY_PREFIX_LEN
-                    + ApiV2::encode_raw_key(b"rk2", Some(TimeStamp::new(1))).len();
+                    + ApiV2::encode_raw_key(key2, Some(TimeStamp::new(1))).len();
                 assert_eq!(write_size, w.default_bytes as usize);
             }
             _ => unreachable!(),

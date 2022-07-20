@@ -289,8 +289,8 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
     let tmp = Builder::new().tempdir().unwrap();
     let storage_path = make_unique_dir(tmp.path());
     let rx = suite.backup_raw(
-        vec![b'r', b'a'], // start
-        vec![b'r', b'z'], // end
+        b"r\x00\x00\x00a".to_vec(),
+        b"r\x00\x00\x00z".to_vec(),
         cf,
         &storage_path,
         dst_api_ver,

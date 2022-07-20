@@ -190,7 +190,8 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
         });
     let raw_scan: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = RawScanRequest::default();
-        let end_key = vec![b'r' + 1];
+        let mut end_key = start_key.clone();
+        end_key.push(0);
         req.set_context(ctx);
         req.start_key = start_key.clone();
         req.end_key = end_key.clone();
@@ -212,7 +213,8 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
         Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
             let mut req = RawBatchScanRequest::default();
             let mut key_range = KeyRange::default();
-            let end_key = vec![b'r' + 1];
+            let mut end_key = start_key.clone();
+            end_key.push(0);
             key_range.set_start_key(start_key.clone());
             key_range.set_end_key(end_key.clone());
             req.set_context(ctx);
@@ -590,10 +592,10 @@ fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool) {
     cluster.must_get(&k);
     let store_id = 1;
     if is_raw_kv {
-        k = b"r_key".to_vec(); // "r" is key prefix of RawKV.
+        k = b"r\x00\x00\x00_key".to_vec(); // "r" is key prefix of RawKV.
         raw_put::<F>(&cluster, &client, &ctx, store_id, k.clone());
     } else {
-        k = b"x_key".to_vec(); // "x" is key prefix of TxnKV.
+        k = b"x\x00\x00\x00_key".to_vec(); // "x" is key prefix of TxnKV.
         put(&cluster, &client, &ctx, store_id, k.clone());
     }
     let region_id = cluster.get_region_id(&k);
@@ -601,7 +603,7 @@ fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool) {
 }
 
 fn test_raw_delete_query<F: KvFormat>() {
-    let k = b"r_key".to_vec();
+    let mut k = b"r\x00\x00\x00_test_raw_delete_query".to_vec();
     let store_id = 1;
 
     {
@@ -623,8 +625,9 @@ fn test_raw_delete_query<F: KvFormat>() {
         // Raw DeleteRange
         let mut delete_req = RawDeleteRangeRequest::default();
         delete_req.set_context(ctx);
-        delete_req.set_start_key(k);
-        delete_req.set_end_key(vec![]);
+        delete_req.set_start_key(k.clone());
+        k.push(0);
+        delete_req.set_end_key(k);
         client.raw_delete_range(&delete_req).unwrap();
         // skip raw kv write query check
     }
