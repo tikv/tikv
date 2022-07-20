@@ -25,6 +25,7 @@ use tikv::server::snap::send_snap;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
+    cluster.cfg.rocksdb.titan.enabled = true;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
@@ -211,6 +212,7 @@ fn test_server_snap_gc() {
 /// when there are multiple snapshots which have overlapped region ranges
 /// arrive at the same raftstore.
 fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.rocksdb.titan.enabled = true;
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
 
