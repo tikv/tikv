@@ -260,9 +260,10 @@ mod parser {
         }
 
         match duration {
-            Some(Ok(duration)) => ctx
-                .handle_truncate(truncated_parse)
-                .map_or(Some(duration), |_| Some(duration)),
+            Some(Ok(duration)) => {
+                let _ = ctx.handle_truncate(truncated_parse);
+                Some(duration)
+            }
             Some(Err(err)) if err.is_overflow() => {
                 if overflow_as_null {
                     return None;
