@@ -482,7 +482,7 @@ mod tests {
 
         // put a valid key
         let mut pair = Pair::default();
-        pair.set_key(b"xk1".to_vec());
+        pair.set_key(b"x\x00\x00\x00k1".to_vec());
         pair.set_value(b"short_value".to_vec());
         let pairs = vec![pair];
         batch.set_pairs(pairs.into());

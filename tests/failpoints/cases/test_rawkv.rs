@@ -124,7 +124,7 @@ const FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP: &str = "causal_observer_flush_timestam
 #[test]
 fn test_leader_transfer() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
-    let key1 = b"rk1";
+    let key1 = b"r\x00\x00\x00k1";
     let region = suite.cluster.get_region(key1);
 
     // Disable CausalObserver::flush_timestamp to produce causality issue.

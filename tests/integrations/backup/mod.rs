@@ -429,7 +429,7 @@ fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dst_api_version: ApiVe
     }
 
     let (store_checksum, store_kvs, store_bytes) =
-        suite.storage_raw_checksum("ra".to_owned(), "rz".to_owned());
+        suite.storage_raw_checksum("r\x00\x00\x00a".to_owned(), "r\x00\x00\x00z".to_owned());
 
     assert_eq!(admin_checksum, store_checksum);
     assert_eq!(admin_total_kvs, store_kvs);
@@ -439,8 +439,8 @@ fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dst_api_version: ApiVe
     let tmp = Builder::new().tempdir().unwrap();
     let storage_path = make_unique_dir(tmp.path());
     let rx = suite.backup_raw(
-        "ra".to_owned().into_bytes(), // start
-        "rz".to_owned().into_bytes(), // end
+        "r\x00\x00\x00a".to_owned().into_bytes(), // start
+        "r\x00\x00\x00z".to_owned().into_bytes(), // end
         cf,
         &storage_path,
         dst_api_version,

@@ -262,13 +262,17 @@ mod test {
 
         let raw_storage = RawStorageImpl::new(ctx, &storage);
 
-        let keys = vec![b"r\0k1".to_vec(), b"r\0k4".to_vec(), b"r\0k8".to_vec()];
+        let keys = vec![
+            b"r\x00\x00\x00k1".to_vec(),
+            b"r\x00\x00\x00k4".to_vec(),
+            b"r\x00\x00\x00k8".to_vec(),
+        ];
         let values = vec![42, 99, 128].into_iter().map(|v| vec![v]);
         let non_existing_key = vec![b"r\0k3".to_vec()];
 
         let full_scan = Range {
-            start: b"r\x00".to_vec(),
-            end: b"r\x01".to_vec(),
+            start: b"r\x00\x00\x00".to_vec(),
+            end: b"r\x00\x00\x01".to_vec(),
         };
 
         // Batch put

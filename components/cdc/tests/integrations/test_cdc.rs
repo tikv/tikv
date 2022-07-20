@@ -220,8 +220,8 @@ fn test_cdc_rawkv_basic() {
         )))
         .unwrap();
 
-    // If tikv enable ApiV2, raw key needs to start with 'r';
-    let (k, v) = (b"rkey1".to_vec(), b"value".to_vec());
+    // If tikv enable ApiV2, raw key needs to start with 'r' + keyspace_id;
+    let (k, v) = (b"r\x00\x00\x00key1".to_vec(), b"value".to_vec());
     suite.must_kv_put(1, k, v);
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
@@ -235,7 +235,7 @@ fn test_cdc_rawkv_basic() {
     }
 
     // boundary case
-    let (k, v) = (b"r\0".to_vec(), b"value".to_vec());
+    let (k, v) = (b"r\x00\x00\x00".to_vec(), b"value".to_vec());
     suite.must_kv_put(1, k, v);
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
