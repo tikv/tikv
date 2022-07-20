@@ -14,7 +14,7 @@ use kvproto::{
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
 
-use super::{MetadataClient, StreamTask};
+use super::{keys::MetaKey, MetadataClient, StreamTask};
 use crate::{
     errors::Result,
     metadata::{
@@ -152,8 +152,19 @@ async fn test_progress() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_storage_checkpoint_of() {
+    let task_name = "simple_task";
+    let store_id: u64 = 5;
+    let key = MetaKey::storage_checkpoint_of(task_name, store_id);
+    assert_eq!(
+        &key.0,
+        "/tidb/br-stream/storage-checkpoint/simple_task/5".as_bytes()
+    );
+}
+
 #[tokio::test]
-async fn test_storage_checkpoint() -> Result<()> {
+async fn test_set_storage_checkpoint() -> Result<()> {
     let cli = test_meta_cli();
     let task = simple_task("simple_3");
     let storage_checkpoint_ts: u64 = 12345;
