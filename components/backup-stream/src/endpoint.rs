@@ -114,7 +114,7 @@ where
         concurrency_manager: ConcurrencyManager,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
-        let pool = create_tokio_runtime(config.work_threads, "backup-stream")
+        let pool = create_tokio_runtime((config.num_threads / 2).max(1), "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
 
         let meta_client = MetadataClient::new(store, store_id);
@@ -162,7 +162,7 @@ where
             observer.clone(),
             meta_client.clone(),
             pd_client.clone(),
-            config.scan_threads,
+            ((config.num_threads + 1) / 2).max(1),
         );
         pool.spawn(op_loop);
         Endpoint {
@@ -875,6 +875,8 @@ where
 /// Create a standard tokio runtime
 /// (which allows io and time reactor, involve thread memory accessor),
 fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
+    info!("create tokio runtime for backup stream"; "thread_name" => thread_name, "thread-count" => thread_count);
+
     tokio::runtime::Builder::new_multi_thread()
         .thread_name(thread_name)
         // Maybe make it more configurable?
