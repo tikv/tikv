@@ -42,17 +42,18 @@ impl EventListener for FlushListener {
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         let flush_seqno = info.largest_seqno();
         let cf = info.cf_name();
-        let flushed_max_seqno = FLUSHED_MAX_SEQUENCE_NUMBERS.get(cf).unwrap();
-        // notify store to GC relations and raft logs
-        let mut current = flushed_max_seqno.load(Ordering::SeqCst);
-        while current < flush_seqno {
-            if let Err(cur) = flushed_max_seqno.compare_exchange_weak(
-                current,
-                flush_seqno,
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            ) {
-                current = cur;
+        if let Some(flushed_max_seqno) = FLUSHED_MAX_SEQUENCE_NUMBERS.get(cf) {
+            // notify store to GC relations and raft logs
+            let mut current = flushed_max_seqno.load(Ordering::SeqCst);
+            while current < flush_seqno {
+                if let Err(cur) = flushed_max_seqno.compare_exchange_weak(
+                    current,
+                    flush_seqno,
+                    Ordering::SeqCst,
+                    Ordering::Relaxed,
+                ) {
+                    current = cur;
+                }
             }
         }
         debug!("flush completed"; "seqno" => flush_seqno);

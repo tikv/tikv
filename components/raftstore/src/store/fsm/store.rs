@@ -1011,13 +1011,17 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             raft_wb = Some(wb);
         }
         let write_begin = TiInstant::now();
+        let mut need_write = self.poll_ctx.has_ready;
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
             if let Some(wb) = raft_wb {
                 write_worker.handle_raft_write(wb);
+                need_write = true;
+            }
+            if need_write {
+                write_worker.write_to_db(false);
             }
 
             if self.poll_ctx.has_ready {
-                write_worker.write_to_db(false);
                 for mut inspector in latency_inspect {
                     inspector.record_store_write(write_begin.saturating_elapsed());
                     inspector.finish();
