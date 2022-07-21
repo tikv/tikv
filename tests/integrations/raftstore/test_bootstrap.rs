@@ -50,7 +50,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let env = cfg.build_shared_rocks_env(None, None).unwrap();
     let builder = KvEngineFactoryBuilder::new(env, &cfg, tmp_path.path().to_str().unwrap());
-    let factory = builder.build();
+    let factory = Arc::new(builder.build());
     let engine = factory.create_shared_db().unwrap();
 
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));

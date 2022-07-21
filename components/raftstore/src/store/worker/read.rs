@@ -433,7 +433,7 @@ where
 {
     store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    factory: Box<dyn TabletFactory<E> + Send>,
+    factory: Arc<dyn TabletFactory<E> + Send + Sync>,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
@@ -479,7 +479,7 @@ where
     E: KvEngine,
 {
     pub fn new(
-        factory: Box<dyn TabletFactory<E> + Send>,
+        factory: Arc<dyn TabletFactory<E> + Send + Sync>,
         store_meta: Arc<Mutex<StoreMeta>>,
         router: C,
     ) -> Self {
@@ -1041,14 +1041,14 @@ mod tests {
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let factory = if multi_rocksdb {
-            TabletFactory::clone(&TestTabletFactoryV2::new(
+            Arc::new(TestTabletFactoryV2::new(
                 path.path().to_str().unwrap(),
                 None,
                 ALL_CFS,
                 None,
             ))
         } else {
-            TabletFactory::clone(&TestTabletFactory::new(
+            Arc::new(TestTabletFactory::new(
                 path.path().to_str().unwrap(),
                 None,
                 ALL_CFS,

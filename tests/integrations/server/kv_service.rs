@@ -11,7 +11,7 @@ use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
 use engine_traits::{
-    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, TabletFactory, CF_DEFAULT,
+    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT,
     CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
@@ -994,7 +994,7 @@ fn test_double_run_node() {
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
-            TabletFactory::clone(factory.as_ref()),
+            factory.clone(),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

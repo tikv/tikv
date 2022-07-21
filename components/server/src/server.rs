@@ -81,7 +81,7 @@ use raftstore::{
 };
 use security::SecurityManager;
 use tikv::{
-    config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
+    config::{ConfigController, DBConfigManger, DBType, LogConfigManager, TiKvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
@@ -232,6 +232,7 @@ struct TiKvServer<ER: RaftEngine> {
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>, // used for rawkv apiv2
+    tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
 }
 
 struct TiKvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -352,6 +353,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             sst_worker: None,
             quota_limiter,
             causal_ts_provider,
+            tablet_factory: None,
         }
     }
 
@@ -554,7 +556,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     fn init_engines(
         &mut self,
         engines: Engines<RocksEngine, ER>,
-        factory: Box<dyn TabletFactory<RocksEngine> + Send>,
+        factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
     ) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
@@ -607,7 +609,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
     fn init_servers<F: KvFormat>(
         &mut self,
-        factory: Box<dyn TabletFactory<RocksEngine> + Send>,
+        factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
     ) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &self.config.storage.flow_control,
@@ -626,6 +628,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 &self.quota_limiter,
             ))),
         );
+
+        cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
@@ -742,7 +746,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         cfg_controller.register(
             tikv::config::Module::Storage,
             Box::new(StorageConfigManger::new(
-                self.engines.as_ref().unwrap().engine.kv_engine(),
+                self.tablet_factory.as_ref().unwrap().clone(),
                 self.config.storage.block_cache.shared,
                 ttl_scheduler,
                 flow_controller,
@@ -1634,7 +1638,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
     ) -> (
         Engines<RocksEngine, CER>,
         Arc<EnginesResourceInfo>,
-        Box<dyn TabletFactory<RocksEngine> + Send>,
+        Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
     ) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
@@ -1661,7 +1665,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);
         }
-        let factory = builder.build();
+        let factory = Arc::new(builder.build());
         let factory_clone = factory.clone();
         let kv_engine = factory
             .create_shared_db()
@@ -1672,11 +1676,12 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
-                Arc::new(factory),
+                factory.clone(),
                 DBType::Kv,
                 self.config.storage.block_cache.shared,
             )),
         );
+        self.tablet_factory = Some(factory);
         engines
             .raft
             .register_config(cfg_controller, self.config.storage.block_cache.shared);

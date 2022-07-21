@@ -77,7 +77,7 @@ pub trait Simulator {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
-        factory: Box<dyn TabletFactory<RocksEngine> + Send>,
+        factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -163,12 +163,12 @@ pub struct Cluster<T: Simulator> {
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IORateLimiter>>,
     pub engines: HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
-    pub factory_map: HashMap<u64, Box<dyn TabletFactory<RocksEngine> + Send>>,
+    pub factory_map: HashMap<u64, Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
     group_props: HashMap<u64, GroupProperties>,
     pub sst_workers: Vec<LazyWorker<String>>,
-    factories: Vec<Box<dyn TabletFactory<RocksEngine> + Send>>,
+    factories: Vec<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     pub sst_workers_map: HashMap<u64, usize>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -240,7 +240,7 @@ impl<T: Simulator> Cluster<T> {
     /// mark them as bootstrapped in `Cluster`.
     pub fn set_bootstrapped(&mut self, node_id: u64, offset: usize) {
         let engines = self.dbs[offset].clone();
-        let factory = TabletFactory::clone(self.factories[offset].as_ref());
+        let factory = self.factories[offset].clone();
         let key_mgr = self.key_managers[offset].clone();
         assert!(self.engines.insert(node_id, engines).is_none());
         assert!(self.factory_map.insert(node_id, factory).is_none());
@@ -287,7 +287,7 @@ impl<T: Simulator> Cluster<T> {
             self.create_engine(Some(router.clone()));
 
             let engines = self.dbs.last().unwrap().clone();
-            let factory = TabletFactory::clone(self.factories.last().unwrap().as_ref());
+            let factory = self.factories.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
@@ -758,7 +758,7 @@ impl<T: Simulator> Cluster<T> {
 
         self.factory_map.insert(
             node_id,
-            TabletFactory::clone(self.factories.last().unwrap().as_ref()),
+            self.factories.last().unwrap().clone(),
         );
 
         let key_mgr = self.key_managers.last().unwrap().clone();
@@ -1813,9 +1813,9 @@ impl<T: Simulator> Cluster<T> {
     pub fn get_tablet_factory(
         &self,
         node_id: u64,
-    ) -> Option<Box<dyn TabletFactory<RocksEngine> + Send>> {
+    ) -> Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>> {
         if let Some(factory) = self.factory_map.get(&node_id) {
-            return Some(TabletFactory::clone(factory.as_ref()));
+            return Some(factory.clone());
         }
         None
     }

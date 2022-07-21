@@ -54,11 +54,11 @@ fn create_tmp_engine(
     cfg: &TiKvConfig,
 ) -> (
     Engines<RocksEngine, RocksEngine>,
-    Box<dyn TabletFactory<RocksEngine> + Send>,
+    Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
 ) {
     let env = cfg.build_shared_rocks_env(None, None).unwrap();
     let builder = KvEngineFactoryBuilder::new(env, cfg, dir.path().join("db").to_str().unwrap());
-    let factory = builder.build();
+    let factory = Arc::new(builder.build());
     let engine = factory.create_shared_db().unwrap();
 
     let raft_db = Arc::new(

@@ -634,7 +634,7 @@ pub fn create_test_engine(
     Option<Arc<DataKeyManager>>,
     TempDir,
     LazyWorker<String>,
-    Box<dyn TabletFactory<RocksEngine> + Send>,
+    Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
@@ -666,9 +666,9 @@ pub fn create_test_engine(
         }));
     }
     let factory = if multi_rocks {
-        builder.buildv2().clone()
+        Arc::new(builder.buildv2()) as Arc<dyn TabletFactory<RocksEngine> + Send + Sync>
     } else {
-        builder.build().clone()
+        Arc::new(builder.build()) as Arc<dyn TabletFactory<RocksEngine> + Send + Sync>
     };
     let engine = factory.create_shared_db().unwrap();
 

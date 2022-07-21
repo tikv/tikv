@@ -197,7 +197,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
-        factory: Box<dyn TabletFactory<EK> + Send>,
+        factory: Arc<dyn TabletFactory<EK> + Send + Sync>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -473,7 +473,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
-        factory: Box<dyn TabletFactory<EK> + Send>,
+        factory: Arc<dyn TabletFactory<EK> + Send + Sync>,
     ) -> Result<()>
     where
         T: Transport + 'static,

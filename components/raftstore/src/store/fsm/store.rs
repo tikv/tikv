@@ -513,7 +513,7 @@ where
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
-    pub factory: Box<dyn TabletFactory<EK> + Send>,
+    pub factory: Arc<dyn TabletFactory<EK> + Send + Sync>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -1062,7 +1062,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     feature_gate: FeatureGate,
     write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
-    factory: Box<dyn TabletFactory<EK> + Send>,
+    factory: Arc<dyn TabletFactory<EK> + Send + Sync>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1426,7 +1426,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
-        factory: Box<dyn TabletFactory<EK> + Send>,
+        factory: Arc<dyn TabletFactory<EK> + Send + Sync>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
