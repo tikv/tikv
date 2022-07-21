@@ -438,7 +438,8 @@ where
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     delegates: LruCache<u64, Arc<ReadDelegate>>,
-    snap_cache: HashMap<u64, (ThreadReadId, Arc<E::Snapshot>)>,
+    snap_cache: HashMap<u64, Arc<E::Snapshot>>,
+    cache_read_id: ThreadReadId,
     // A channel to raftstore.
     router: C,
 }
@@ -482,11 +483,13 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         router: C,
     ) -> Self {
+        let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
             factory,
             router,
             snap_cache: HashMap::new(),
+            cache_read_id,
             store_id: Cell::new(None),
             metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
@@ -742,18 +745,23 @@ where
         create_time: &Option<ThreadReadId>,
     ) -> Option<&Arc<E::Snapshot>> {
         if let Some(ts) = create_time {
-            let snap_cache = if self.factory.is_single_engine() {
-                // In single rocksdb version, we only have one global kv rocksdb, so always use 0 to
-                // get snap from cache.
-                self.snap_cache.get(&0)
-            } else {
-                self.snap_cache.get(&region_id)
-            };
-            if let Some(snap_cache) = snap_cache {
-                if *ts == snap_cache.0 {
+            if self.cache_read_id == *ts {
+                let snap = if self.factory.is_single_engine() {
+                    // In single rocksdb version, we only have one global kv rocksdb, so always use 0 to
+                    // get snap from cache.
+                    self.snap_cache.get(&0)
+                } else {
+                    self.snap_cache.get(&region_id)
+                };
+                if let Some(snap) = snap {
                     self.metrics.local_executed_snapshot_cache_hit += 1;
-                    return Some(&snap_cache.1);
+                    return Some(snap);
                 }
+            } else {
+                // We should clear the cache when read id is changed since since all
+                // requests in a batch should have the same read id. Which means once the read id
+                // is changed, items in the cache are not needed.
+                self.snap_cache.clear();
             }
         }
         None
@@ -768,10 +776,11 @@ where
         if self.factory.is_single_engine() {
             // In single rocksdb version, we only have one global kv rocksdb, so always use 0 to
             // store snap into cache.
-            self.snap_cache.insert(0, (create_time, snap));
+            self.snap_cache.insert(0, snap);
         } else {
-            self.snap_cache.insert(region_id, (create_time, snap));
+            self.snap_cache.insert(region_id, snap);
         }
+        self.cache_read_id = create_time;
     }
 }
 
@@ -789,6 +798,7 @@ where
             metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
             snap_cache: HashMap::new(),
+            cache_read_id: self.cache_read_id.clone(),
         }
     }
 }
