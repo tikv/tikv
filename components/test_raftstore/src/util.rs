@@ -688,6 +688,7 @@ pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.rocksdb.writecf.level0_slowdown_writes_trigger = Some(10);
 }
 
 pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
