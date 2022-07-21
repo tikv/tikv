@@ -1241,6 +1241,15 @@ where
                 let uuid = req.get_header().get_uuid().to_vec();
                 resp.mut_header().set_uuid(uuid);
             }
+            {
+                // TODO(tiflash) This can be removed when we merged `post_exec`
+                // hacked by CalvinNeo.
+                let cmds = WriteCmds::new();
+                ctx.engine_store_server_helper.handle_write_raft_cmd(
+                    &cmds,
+                    RaftCmdHeader::new(self.region.get_id(), index, term),
+                );
+            }
             (resp, ApplyResult::None, EngineStoreApplyRes::None)
         } else {
             ctx.exec_log_index = index;

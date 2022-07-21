@@ -140,10 +140,6 @@ impl TiFlashObserver {
             TIFLASH_OBSERVER_PRIORITY,
             BoxQueryObserver::new(self.clone()),
         );
-        // coprocessor_host.registry.register_admin_observer(
-        //     TIFLASH_OBSERVER_PRIORITY,
-        //     BoxAdminObserver::new(self.clone()),
-        // );
         // coprocessor_host.registry.register_apply_snapshot_observer(
         //     TIFLASH_OBSERVER_PRIORITY,
         //     BoxApplySnapshotObserver::new(self.clone()),
