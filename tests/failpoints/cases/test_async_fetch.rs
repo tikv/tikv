@@ -239,7 +239,7 @@ fn test_node_async_fetch_leader_change() {
 fn test_node_gc_entry_cache() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    cluster.pd_client.disable_default_operator(); 
+    cluster.pd_client.disable_default_operator();
 
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.raft_log_reserve_max_ticks = 2;
