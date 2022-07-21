@@ -13,8 +13,8 @@ use super::*;
 
 pub const RAW_KEY_PREFIX: u8 = b'r';
 pub const RAW_KEY_PREFIX_END: u8 = RAW_KEY_PREFIX + 1;
-pub const RAW_KEYSPACE_START: &'static [u8] = &[RAW_KEY_PREFIX, 0, 0, 0];
-pub const RAW_KEYSPACE_END: &'static [u8] = &[RAW_KEY_PREFIX_END, 0, 0, 0];
+pub const RAW_KEYSPACE_START: &[u8] = &[RAW_KEY_PREFIX, 0, 0, 0];
+pub const RAW_KEYSPACE_END: &[u8] = &[RAW_KEY_PREFIX_END, 0, 0, 0];
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
