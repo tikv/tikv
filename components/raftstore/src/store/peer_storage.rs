@@ -1383,23 +1383,23 @@ where
         self.last_term = last_term;
     }
 
-    pub fn compact_to(&mut self, idx: u64) {
-        self.compact_cache_to(idx);
+    pub fn on_compact_raftlog(&mut self, idx: u64) {
+        self.compact_entry_cache(idx);
         self.cancel_generating_snap(Some(idx));
     }
 
-    pub fn compact_cache_to(&mut self, idx: u64) {
+    pub fn compact_entry_cache(&mut self, idx: u64) {
         self.cache.compact_to(idx);
     }
 
     #[inline]
-    pub fn is_cache_empty(&self) -> bool {
+    pub fn is_entry_cache_empty(&self) -> bool {
         self.cache.is_empty()
     }
 
     /// Evict entries from the cache.
-    pub fn evict_cache(&mut self, half: bool) {
-        if !self.is_cache_empty() {
+    pub fn evict_entry_cache(&mut self, half: bool) {
+        if !self.is_entry_cache_empty() {
             let cache = &mut self.cache;
             let cache_len = cache.cache.len();
             let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
@@ -1410,7 +1410,7 @@ where
     }
 
     #[inline]
-    pub fn flush_cache_metrics(&mut self) {
+    pub fn flush_entry_cache_metrics(&mut self) {
         // NOTE: memory usage of entry cache is flushed realtime.
         self.cache.flush_stats();
         self.raftlog_fetch_stats.flush_stats();
@@ -2419,7 +2419,7 @@ mod tests {
                 router,
                 store.engines.raft.clone(),
             ));
-            store.compact_cache_to(5);
+            store.compact_entry_cache(5);
             let mut e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(true));
             if e == Err(raft::Error::Store(
                 raft::StorageError::LogTemporarilyUnavailable,
@@ -3109,20 +3109,20 @@ mod tests {
 
         // compact to min(5 + 1, 7)
         store.cache.persisted = 5;
-        store.compact_to(7);
+        store.compact_entry_cache(7);
         exp_res = vec![new_entry(6, 7), new_entry(7, 8)];
         validate_cache(&store, &exp_res);
 
         // compact to min(7 + 1, 7)
         store.cache.persisted = 7;
-        store.compact_to(7);
+        store.compact_entry_cache(7);
         exp_res = vec![new_entry(7, 8)];
         validate_cache(&store, &exp_res);
         // compact all
-        store.compact_to(8);
+        store.compact_entry_cache(8);
         validate_cache(&store, &[]);
         // invalid compaction should be ignored.
-        store.compact_to(6);
+        store.compact_entry_cache(6);
     }
 
     #[test]

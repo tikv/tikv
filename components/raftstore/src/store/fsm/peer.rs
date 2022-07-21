@@ -1916,7 +1916,7 @@ where
         );
 
         if self.fsm.peer.pending_remove {
-            self.fsm.peer.mut_store().flush_cache_metrics();
+            self.fsm.peer.mut_store().flush_entry_cache_metrics();
             return;
         }
         // When having pending snapshot, if election timeout is met, it can't pass
@@ -1983,7 +1983,7 @@ where
         }
         self.fsm.peer.post_raft_group_tick();
 
-        self.fsm.peer.mut_store().flush_cache_metrics();
+        self.fsm.peer.mut_store().flush_entry_cache_metrics();
 
         // Keep ticking if there are still pending read requests or this node is within hibernate timeout.
         if res.is_none() /* hibernate_region is false */ ||
@@ -3560,7 +3560,7 @@ where
         let compact_to = state.get_index() + 1;
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
-        self.fsm.peer.mut_store().compact_to(compact_to);
+        self.fsm.peer.mut_store().on_compact_raftlog(compact_to);
     }
 
     fn on_ready_split_region(
@@ -4900,7 +4900,7 @@ where
             // snapshot generating has already been cancelled when the role becomes follower.
             return;
         }
-        if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
+        if !self.fsm.peer.get_store().is_entry_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
         fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
@@ -4963,10 +4963,10 @@ where
         self.fsm
             .peer
             .mut_store()
-            .compact_cache_to(std::cmp::min(alive_cache_idx, applied_idx) + 1);
+            .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx) + 1);
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
-            self.fsm.peer.mut_store().evict_cache(true);
-            if !self.fsm.peer.get_store().is_cache_empty() {
+            self.fsm.peer.mut_store().evict_entry_cache(true);
+            if !self.fsm.peer.get_store().is_entry_cache_empty() {
                 self.register_entry_cache_evict_tick();
             }
         }
@@ -5032,11 +5032,11 @@ where
     fn on_entry_cache_evict_tick(&mut self) {
         fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
-            self.fsm.peer.mut_store().evict_cache(true);
+            self.fsm.peer.mut_store().evict_entry_cache(true);
         }
         let mut _usage = 0;
         if memory_usage_reaches_high_water(&mut _usage)
-            && !self.fsm.peer.get_store().is_cache_empty()
+            && !self.fsm.peer.get_store().is_entry_cache_empty()
         {
             self.register_entry_cache_evict_tick();
         }

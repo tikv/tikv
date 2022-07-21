@@ -236,7 +236,7 @@ fn test_node_async_fetch_leader_change() {
 }
 
 #[test]
-fn test_node_gc_entry_cache() {
+fn test_node_compact_entry_cache() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
     cluster.pd_client.disable_default_operator();
