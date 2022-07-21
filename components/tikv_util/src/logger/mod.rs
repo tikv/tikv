@@ -467,7 +467,7 @@ where
 {
     type Ok = D::Ok;
     type Err = D::Err;
-    fn log(&self, record: &Record, logger_values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+    fn log(&self, record: &Record<'_>, logger_values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
             self.0.log(record, logger_values)
         } else {
@@ -861,7 +861,7 @@ mod tests {
                 let mut buffer = buffer.borrow_mut();
                 let output = from_utf8(&*buffer).unwrap();
                 assert_eq!(output, log);
-                buffer.clean();
+                buffer.clear();
             });
         };
 
