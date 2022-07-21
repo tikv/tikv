@@ -334,7 +334,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         storage: TiKvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
         quota_limiter: Arc<QuotaLimiter>,
-        is_quota_auto_tune: bool,
+        is_auto_analyze: bool,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
         if columns_info.is_empty() {
@@ -359,7 +359,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter,
-            is_auto_analyze: is_quota_auto_tune,
+            is_auto_analyze,
         })
     }
 
