@@ -491,17 +491,8 @@ mod tests {
         for i in 0..100 {
             let owned_key = format!("{:06}", i);
             let key = owned_key.as_bytes();
-            let owned_value = format!(
-                r#"[{:06}] Lorem ipsum dolor sit amet, consectetur adipiscing elit,
-                    sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. 
-                    Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris 
-                    nisi ut aliquip ex ea commodo consequat. 
-                    Duis aute irure dolor in reprehenderit in 
-                    voluptate velit esse cillum dolore eu fugiat nulla pariatur. 
-                    Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."#,
-                i
-            );
-            let value = owned_value.as_bytes();
+            let owned_value = [i as u8; 512];
+            let value = owned_value.as_slice();
             must_prewrite_put(&engine, key, value, key, i * 2);
             must_commit(&engine, key, i * 2, i * 2 + 1);
         }

@@ -734,7 +734,6 @@ mod test {
         }
     }
 
-    /// skip it currently. Test it at local env successfully but failed at pod.
     #[test]
     fn test_recorder() {
         use engine_rocks::{raw::DB, RocksEngine};
