@@ -19,8 +19,7 @@ use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {
-    test_cdc_basic_impl::<api_version::ApiV2>();
-    // test_kv_format_impl!(test_cdc_basic_impl<ApiV1 ApiV2>);
+    test_kv_format_impl!(test_cdc_basic_impl<ApiV1 ApiV2>);
 }
 
 fn test_cdc_basic_impl<F: KvFormat>() {
