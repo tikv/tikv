@@ -19,7 +19,8 @@ use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {
-    test_kv_format_impl!(test_cdc_basic_impl<ApiV1 ApiV2>);
+    test_cdc_basic_impl::<api_version::ApiV2>();
+    // test_kv_format_impl!(test_cdc_basic_impl<ApiV1 ApiV2>);
 }
 
 fn test_cdc_basic_impl<F: KvFormat>() {
@@ -57,7 +58,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
         )))
         .unwrap();
 
-    // If tikv enable ApiV2, txn key needs to start with 'x';
+    // If tikv enable ApiV2, txn key needs to start with 'x' + keyspace_id;
     let (k, v) = ("xkey1".to_owned(), "value".to_owned());
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();

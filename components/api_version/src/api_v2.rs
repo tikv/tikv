@@ -13,6 +13,8 @@ use super::*;
 
 pub const RAW_KEY_PREFIX: u8 = b'r';
 pub const RAW_KEY_PREFIX_END: u8 = RAW_KEY_PREFIX + 1;
+pub const RAW_KEYSPACE_START: &[u8] = &[RAW_KEY_PREFIX, 0, 0, 0];
+pub const RAW_KEYSPACE_END: &[u8] = &[RAW_KEY_PREFIX_END, 0, 0, 0];
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
@@ -35,14 +37,6 @@ bitflags::bitflags! {
         const EXPIRE_TS = 0b0000_0001;
         const DELETE_FLAG = 0b0000_0010;
     }
-}
-
-fn infinite_end_of(prefix: &[u8]) -> [u8; 4] {
-    debug_assert!(prefix.len() >= KEY_PREFIX_SIZE);
-
-    let end_bytes = [prefix[0], prefix[1], prefix[2], prefix[3]];
-
-    (u32::from_be_bytes(end_bytes) + 1).to_be_bytes()
 }
 
 impl KvFormat for ApiV2 {
@@ -75,7 +69,7 @@ impl KvFormat for ApiV2 {
             if mode == KeyMode::Unknown
                 || start[0] == end[0]
                 || (mode == KeyMode::TiDB && end == [start[0] + 1])
-                || (mode != KeyMode::TiDB && end == infinite_end_of(start))
+                || (mode != KeyMode::TiDB && end == Self::infinite_end_of(start))
             {
                 return mode;
             }
@@ -236,8 +230,8 @@ impl ApiV2 {
         MemComparableByteCodec::encoded_len(src_len) + number::U64_SIZE
     }
 
-    pub fn get_rawkv_range() -> (u8, u8) {
-        (RAW_KEY_PREFIX, RAW_KEY_PREFIX_END)
+    pub fn get_rawkv_range() -> (&'static [u8], &'static [u8]) {
+        (RAW_KEYSPACE_START, RAW_KEYSPACE_END)
     }
 
     pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp> {
@@ -259,6 +253,16 @@ impl ApiV2 {
     }
 
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
+
+    fn get_prefix(key: &[u8]) -> [u8; KEY_PREFIX_SIZE] {
+        debug_assert!(key.len() >= KEY_PREFIX_SIZE);
+
+        [key[0], key[1], key[2], key[3]]
+    }
+
+    fn infinite_end_of(key: &[u8]) -> [u8; 4] {
+        (u32::from_be_bytes(Self::get_prefix(key)) + 1).to_be_bytes()
+    }
 }
 
 // Note: `encoded_bytes` may not be `KeyMode::Raw`.
