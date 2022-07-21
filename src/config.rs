@@ -2450,17 +2450,16 @@ pub struct BackupStreamConfig {
     #[online_config(skip)]
     pub num_threads: usize,
     #[online_config(skip)]
-    pub io_threads: usize,
-    #[online_config(skip)]
     pub enable: bool,
     #[online_config(skip)]
     pub temp_path: String,
     #[online_config(skip)]
-    pub temp_file_size_limit_per_task: ReadableSize,
+    pub file_size_limit: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
+    #[serde(skip)]
     #[online_config(skip)]
     pub use_checkpoint_v3: bool,
 }
@@ -2488,12 +2487,11 @@ impl Default for BackupStreamConfig {
         Self {
             max_flush_interval: ReadableDuration::minutes(5),
             // use at most 50% of vCPU by default
-            num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
-            io_threads: 2,
+            num_threads: (cpu_num * 0.5).clamp(2.0, 12.0) as usize,
             enable: false,
             // TODO: may be use raft store directory
             temp_path: String::new(),
-            temp_file_size_limit_per_task: ReadableSize::mb(128),
+            file_size_limit: ReadableSize::mb(256),
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
             use_checkpoint_v3: true,
@@ -3101,7 +3099,7 @@ impl TiKvConfig {
 
         if self.backup_stream.temp_path.is_empty() {
             self.backup_stream.temp_path =
-                config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-tmp")?;
+                config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-temp")?;
         }
 
         self.rocksdb.validate()?;
