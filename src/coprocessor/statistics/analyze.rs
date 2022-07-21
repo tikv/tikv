@@ -314,6 +314,10 @@ struct RowSampleBuilder<S: Snapshot> {
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: Arc<QuotaLimiter>,
+<<<<<<< HEAD
+=======
+    is_auto_analyze: bool,
+>>>>>>> dc7c48d17... components, src: avoid cpu quota limitation contamination  (#13085)
 }
 
 impl<S: Snapshot> RowSampleBuilder<S> {
@@ -322,6 +326,10 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         storage: TiKvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
         quota_limiter: Arc<QuotaLimiter>,
+<<<<<<< HEAD
+=======
+        is_auto_analyze: bool,
+>>>>>>> dc7c48d17... components, src: avoid cpu quota limitation contamination  (#13085)
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
         if columns_info.is_empty() {
@@ -346,6 +354,10 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter,
+<<<<<<< HEAD
+=======
+            is_auto_analyze,
+>>>>>>> dc7c48d17... components, src: avoid cpu quota limitation contamination  (#13085)
         })
     }
 
@@ -377,7 +389,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 time_slice_start = Instant::now();
             }
 
-            let mut sample = self.quota_limiter.new_sample();
+            let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             {
                 let _guard = sample.observe_cpu();
                 let result = self.data.next_batch(BATCH_MAX_SIZE);
@@ -431,7 +443,18 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             }
 
             // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
+<<<<<<< HEAD
             let quota_delay = self.quota_limiter.async_consume(sample).await;
+=======
+            let quota_delay = {
+                if !self.is_auto_analyze {
+                    self.quota_limiter.consume_sample(sample, true).await
+                } else {
+                    self.quota_limiter.consume_sample(sample, false).await
+                }
+            };
+
+>>>>>>> dc7c48d17... components, src: avoid cpu quota limitation contamination  (#13085)
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::analyze_full_sampling)
