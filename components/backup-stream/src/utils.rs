@@ -526,12 +526,10 @@ impl ReadThroughputRecorder {
         //        When the proc think we don't touch the block device (even in fact we didn't).
         //  NOTE: In the real-world, we would accept the zero `bytes_read` value since the cache did exists.
         #[cfg(test)]
-        {
-            if bytes_read == 0 {
-                // use println here so we can get this message even log doesn't enabled.
-                println!("ejecting in test since no read recorded in procfs");
-                return None;
-            }
+        if bytes_read == 0 {
+            // use println here so we can get this message even log doesn't enabled.
+            println!("ejecting in test since no read recorded in procfs");
+            return None;
         }
         Some(bytes_read)
     }
@@ -593,6 +591,8 @@ mod test {
         time::Duration,
     };
 
+    use engine_rocks::raw::DBOptions;
+    use engine_traits::WriteOptions;
     use futures::executor::block_on;
 
     use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
@@ -744,7 +744,6 @@ mod test {
         let p = TempDir::new("test_db").unwrap();
         let mut opt = DBOptions::default();
         opt.create_if_missing(true);
-        opt.enable_multi_write_batch(true);
         let db = DB::open(opt.clone(), p.path().as_os_str().to_str().unwrap()).unwrap();
         let engine = RocksEngine::from_db(Arc::new(db));
         let mut wb = engine.write_batch();
