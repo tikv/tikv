@@ -235,6 +235,7 @@ fn test_node_async_fetch_leader_change() {
     }
 }
 
+// Test the case that entry cache is reserved for the newly added peer.
 #[test]
 fn test_node_compact_entry_cache() {
     let count = 5;
@@ -247,15 +248,15 @@ fn test_node_compact_entry_cache() {
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k0", b"v0");
-    // change one peer to learner
     cluster.pd_client.must_remove_peer(1, new_peer(5, 5));
-
+    
     // pause snapshot applied
     fail::cfg("before_region_gen_snap", "pause").unwrap();
     fail::cfg("worker_async_fetch_raft_log", "pause").unwrap();
+    // change one peer to learner
     cluster.pd_client.add_peer(1, new_learner_peer(5, 5));
 
-    // cause log lag and pause async fetch to check if entry cache is kept for the learner
+    // cause log lag and pause async fetch to check if entry cache is reserved for the learner
     for i in 1..6 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
@@ -266,6 +267,6 @@ fn test_node_compact_entry_cache() {
     fail::remove("before_region_gen_snap");
     cluster.pd_client.must_have_peer(1, new_learner_peer(5, 5));
 
-    // if entry cache is not kept, the learner will not be able to catch up.
+    // if entry cache is not reserved, the learner will not be able to catch up.
     must_get_equal(&cluster.get_engine(5), b"5", b"5");
 }
