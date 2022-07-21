@@ -526,10 +526,12 @@ impl ReadThroughputRecorder {
         //        When the proc think we don't touch the block device (even in fact we didn't).
         //  NOTE: In the real-world, we would accept the zero `bytes_read` value since the cache did exists.
         #[cfg(test)]
-        if bytes_read == 0 {
-            // use println here so we can get this message even log doesn't enabled.
-            println!("ejecting in test since no read recorded in procfs");
-            return None;
+        {
+            if bytes_read == 0 {
+                // use println here so we can get this message even log doesn't enabled.
+                println!("ejecting in test since no read recorded in procfs");
+                return None;
+            }
         }
         Some(bytes_read)
     }
