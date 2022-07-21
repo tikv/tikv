@@ -756,10 +756,8 @@ impl<T: Simulator> Cluster<T> {
         bootstrap_store(&engines, self.id(), node_id).unwrap();
         self.engines.insert(node_id, engines);
 
-        self.factory_map.insert(
-            node_id,
-            self.factories.last().unwrap().clone(),
-        );
+        self.factory_map
+            .insert(node_id, self.factories.last().unwrap().clone());
 
         let key_mgr = self.key_managers.last().unwrap().clone();
         self.key_managers_map.insert(node_id, key_mgr);

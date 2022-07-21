@@ -1046,14 +1046,14 @@ mod tests {
                 None,
                 ALL_CFS,
                 None,
-            ))
+            )) as Arc<dyn TabletFactory<KvTestEngine> + Send + Sync>
         } else {
             Arc::new(TestTabletFactory::new(
                 path.path().to_str().unwrap(),
                 None,
                 ALL_CFS,
                 None,
-            ))
+            )) as Arc<dyn TabletFactory<KvTestEngine> + Send + Sync>
         };
         let _ = factory.create_shared_db();
         let (ch, rx, _) = MockRouter::new();

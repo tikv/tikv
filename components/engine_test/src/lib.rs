@@ -209,7 +209,10 @@ pub mod kv {
             Ok(())
         }
 
-        fn set_shared_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
+        fn set_shared_block_cache_capacity(
+            &self,
+            capacity: u64,
+        ) -> std::result::Result<(), String> {
             if let Ok(db) = self.root_db.lock() {
                 let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
                 opt.set_block_cache_capacity(capacity)?;

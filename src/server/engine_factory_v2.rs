@@ -256,7 +256,7 @@ mod tests {
         }
         let factory = builder.build();
         let shared_db = factory.create_shared_db().unwrap();
-        let tablet = factory.create_tablet(1, 10);
+        let tablet = TabletFactory::create_tablet(&factory, 1, 10);
         assert!(tablet.is_ok());
         let tablet = tablet.unwrap();
         let tablet2 = factory.open_tablet(1, 10).unwrap();

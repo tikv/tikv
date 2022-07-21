@@ -70,10 +70,7 @@ fn create_tmp_engine(
         )
         .unwrap(),
     );
-    (
-        Engines::new(engine, RocksEngine::from_db(raft_db)),
-        factory.clone(),
-    )
+    (Engines::new(engine, RocksEngine::from_db(raft_db)), factory)
 }
 
 fn start_raftstore(

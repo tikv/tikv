@@ -11,8 +11,8 @@ use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
 use engine_traits::{
-    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE,
+    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
 };
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
