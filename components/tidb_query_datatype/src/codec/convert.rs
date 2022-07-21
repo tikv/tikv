@@ -828,7 +828,17 @@ impl ConvertTo<f64> for Bytes {
 }
 
 pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
-    if !ctx.cfg.flag.contains(Flag::IN_SELECT_STMT) {
+    get_valid_int_prefix_helper(ctx, s, false)
+}
+
+// As TiDB code(getValidIntPrefix()), cast expr needs to give error/warning when input string
+// is like float.
+pub fn get_valid_int_prefix_helper<'a>(
+    ctx: &mut EvalContext,
+    s: &'a str,
+    is_cast_func: bool,
+) -> Result<Cow<'a, str>> {
+    if !is_cast_func {
         let vs = get_valid_float_prefix(ctx, s)?;
         Ok(float_str_to_int_string(ctx, vs))
     } else {
@@ -855,50 +865,64 @@ pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow
 }
 
 pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a str> {
-    let mut saw_dot = false;
-    let mut saw_digit = false;
-    let mut valid_len = 0;
-    let mut e_idx = 0;
-    for (i, c) in s.chars().enumerate() {
-        if c == '+' || c == '-' {
-            if i != 0 && (e_idx == 0 || i != e_idx + 1) {
-                // "1e+1" is valid.
-                break;
-            }
-        } else if c == '.' {
-            if saw_dot || e_idx > 0 {
-                // "1.1." or "1e1.1"
-                break;
-            }
-            saw_dot = true;
-            if saw_digit {
-                // "123." is valid.
-                valid_len = i + 1;
-            }
-        } else if c == 'e' || c == 'E' {
-            if !saw_digit {
-                // "+.e"
-                break;
-            }
-            if e_idx != 0 {
-                // "1e5e"
-                break;
-            }
-            e_idx = i
-        } else if !('0'..='9').contains(&c) {
-            break;
-        } else {
-            saw_digit = true;
-            valid_len = i + 1;
-        }
-    }
-    if valid_len == 0 || valid_len < s.len() {
-        ctx.handle_truncate_err(Error::truncated_wrong_val("INTEGER", s))?;
-    }
-    if valid_len == 0 {
+    get_valid_float_prefix_helper(ctx, s, false)
+}
+
+// As TiDB code(getValidFloatPrefix()), cast expr should not give error/warning when input is
+// empty.
+pub fn get_valid_float_prefix_helper<'a>(
+    ctx: &mut EvalContext,
+    s: &'a str,
+    is_cast_func: bool,
+) -> Result<&'a str> {
+    if is_cast_func && s.is_empty() {
         Ok("0")
     } else {
-        Ok(&s[..valid_len])
+        let mut saw_dot = false;
+        let mut saw_digit = false;
+        let mut valid_len = 0;
+        let mut e_idx = 0;
+        for (i, c) in s.chars().enumerate() {
+            if c == '+' || c == '-' {
+                if i != 0 && (e_idx == 0 || i != e_idx + 1) {
+                    // "1e+1" is valid.
+                    break;
+                }
+            } else if c == '.' {
+                if saw_dot || e_idx > 0 {
+                    // "1.1." or "1e1.1"
+                    break;
+                }
+                saw_dot = true;
+                if saw_digit {
+                    // "123." is valid.
+                    valid_len = i + 1;
+                }
+            } else if c == 'e' || c == 'E' {
+                if !saw_digit {
+                    // "+.e"
+                    break;
+                }
+                if e_idx != 0 {
+                    // "1e5e"
+                    break;
+                }
+                e_idx = i
+            } else if !('0'..='9').contains(&c) {
+                break;
+            } else {
+                saw_digit = true;
+                valid_len = i + 1;
+            }
+        }
+        if valid_len == 0 || valid_len < s.len() {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("INTEGER", s))?;
+        }
+        if valid_len == 0 {
+            Ok("0")
+        } else {
+            Ok(&s[..valid_len])
+        }
     }
 }
 
@@ -1984,28 +2008,48 @@ mod tests {
     fn test_get_valid_float_prefix() {
         let cases = vec![
             ("-100", "-100"),
+            ("1.", "1."),
+            (".1", ".1"),
+            ("123.23E-10", "123.23E-10"),
+        ];
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
+            Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING,
+        )));
+        for (i, o) in cases {
+            assert_eq!(super::get_valid_float_prefix(&mut ctx, i).unwrap(), o);
+        }
+        assert_eq!(ctx.take_warnings().warnings.len(), 0);
+
+        let warning_cases = vec![
             ("1abc", "1"),
             ("-1-1", "-1"),
             ("+1+1", "+1"),
             ("123..34", "123."),
-            ("123.23E-10", "123.23E-10"),
             ("1.1e1.3", "1.1e1"),
             ("11e1.3", "11e1"),
             ("1.1e-13a", "1.1e-13"),
-            ("1.", "1."),
-            (".1", ".1"),
-            ("", "0"),
             ("123e+", "123"),
             ("123.e", "123."),
             ("1-1-", "1"),
             ("11-1-", "11"),
             ("-1-1-", "-1"),
+            ("", "0"),
         ];
-
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
-        for (i, o) in cases {
+        let warning_cnt = warning_cases.len();
+        for (i, o) in warning_cases.clone() {
             assert_eq!(super::get_valid_float_prefix(&mut ctx, i).unwrap(), o);
         }
+        assert_eq!(ctx.take_warnings().warnings.len(), warning_cnt);
+
+        // Test is cast expr.
+        for (i, o) in warning_cases.clone() {
+            assert_eq!(
+                super::get_valid_float_prefix_helper(&mut ctx, i, true).unwrap(),
+                o
+            );
+        }
+        assert_eq!(ctx.take_warnings().warnings.len(), warning_cnt - 1);
     }
 
     #[test]
@@ -2093,11 +2137,8 @@ mod tests {
         }
         assert_eq!(ctx.take_warnings().warnings.len(), 0);
 
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
-            Flag::IN_SELECT_STMT | Flag::IGNORE_TRUNCATE | Flag::OVERFLOW_AS_WARNING,
-        )));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
-            ("+0.0", "+0"),
             ("100", "100"),
             ("+100", "+100"),
             ("-100", "-100"),
@@ -2108,10 +2149,18 @@ mod tests {
         ];
 
         for (i, e) in cases {
-            let o = super::get_valid_int_prefix(&mut ctx, i);
+            let o = super::get_valid_int_prefix_helper(&mut ctx, i, true);
             assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
         }
         assert_eq!(ctx.take_warnings().warnings.len(), 0);
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
+        let cases = vec![("+0.0", "+0"), ("0.5", "0"), ("+0.5", "+0")];
+        for (i, e) in cases {
+            let o = super::get_valid_int_prefix_helper(&mut ctx, i, true);
+            assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
+        }
+        assert_eq!(ctx.take_warnings().warnings.len(), 3);
     }
 
     #[test]

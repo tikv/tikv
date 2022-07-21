@@ -56,6 +56,11 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 16).unwrap()
     )
     .unwrap();
+    pub static ref INCREMENTAL_SCAN_DISK_READ: Counter = register_counter!(
+        "tikv_log_backup_initial_scan_disk_read",
+        "The total count of disk read bytes."
+    )
+    .unwrap();
     pub static ref INCREMENTAL_SCAN_SIZE: Histogram = register_histogram!(
         "tikv_stream_incremental_scan_bytes",
         "The size of scanning.",
