@@ -4926,25 +4926,25 @@ where
         //                  ^                                       ^
         //                  |-----------------threshold------------ |
         //              first_index                         replicated_index
-        // `alive_replicated_idx` is the smallest `replicated_index` of healthy up nodes.
-        // `alive_replicated_idx` is only used to gc cache.
+        // `alive_cache_idx` is the smallest `replicated_index` of healthy up nodes.
+        // `alive_cache_idx` is only used to gc cache.
         let applied_idx = self.fsm.peer.get_store().applied_index();
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let first_idx = self.fsm.peer.get_store().first_index();
         let last_idx = self.fsm.peer.get_store().last_index();
 
-        let (mut replicated_idx, mut alive_replicated_idx) = (last_idx, last_idx);
+        let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
                 if *last_heartbeat > cache_alive_limit {
-                    if alive_replicated_idx > p.matched && p.matched >= truncated_idx {
-                        alive_replicated_idx = p.matched;
+                    if alive_cache_idx > p.matched && p.matched >= truncated_idx {
+                        alive_cache_idx = p.matched;
                     } else if p.matched == 0 {
                         // the new peer is still applying snapshot, do not compact cache now
-                        alive_replicated_idx = 0;
+                        alive_cache_idx = 0;
                     }
                 }
             }
@@ -4963,7 +4963,7 @@ where
         self.fsm
             .peer
             .mut_store()
-            .compact_cache_to(alive_replicated_idx + 1);
+            .compact_cache_to(std::cmp::min(alive_cache_idx, applied_idx) + 1);
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_cache(true);
             if !self.fsm.peer.get_store().is_cache_empty() {
