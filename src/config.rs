@@ -375,6 +375,13 @@ macro_rules! cf_config {
                     return Err("format-version larger than 5 is unsupported".into());
                 }
                 self.titan.validate()?;
+                if self.level0_slowdown_writes_trigger.unwrap() / 2 < self.level0_file_num_compaction_trigger - 1 {
+                    return Err(format!(
+                        "level0-slowdown-writes-trigger {} be at least 2 times of (level0-file-num-compaction-trigger {} - 1)",
+                        self.level0_slowdown_writes_trigger.unwrap(),
+                        self.level0_file_num_compaction_trigger,
+                    ).into());
+                }
                 Ok(())
             }
         }
@@ -635,7 +642,7 @@ impl Default for DefaultCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: None,
+            level0_slowdown_writes_trigger: Some(20),
             level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
@@ -747,7 +754,7 @@ impl Default for WriteCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: None,
+            level0_slowdown_writes_trigger: Some(20),
             level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
@@ -845,7 +852,7 @@ impl Default for LockCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(128),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 1,
-            level0_slowdown_writes_trigger: None,
+            level0_slowdown_writes_trigger: Some(2),
             level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
@@ -921,7 +928,7 @@ impl Default for RaftCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(128),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 1,
-            level0_slowdown_writes_trigger: None,
+            level0_slowdown_writes_trigger: Some(2),
             level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
@@ -1288,7 +1295,7 @@ impl Default for RaftDefaultCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: None,
+            level0_slowdown_writes_trigger: Some(20),
             level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
@@ -5772,5 +5779,26 @@ mod tests {
             cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
             Some(ReadableSize::gb(1))
         );
+    }
+
+    #[test]
+    fn test_dbconfig_validation() {
+        let mut cfg = DefaultCfConfig::default();
+        assert!(cfg.validate().is_ok());
+        cfg.level0_file_num_compaction_trigger = 4;
+        cfg.level0_slowdown_writes_trigger = Some(4);
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = RaftCfConfig::default();
+        assert!(cfg.validate().is_ok());
+        cfg.level0_file_num_compaction_trigger = 4;
+        cfg.level0_slowdown_writes_trigger = Some(4);
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = WriteCfConfig::default();
+        assert!(cfg.validate().is_ok());
+        cfg.level0_file_num_compaction_trigger = 4;
+        cfg.level0_slowdown_writes_trigger = Some(4);
+        assert!(cfg.validate().is_err());
     }
 }
