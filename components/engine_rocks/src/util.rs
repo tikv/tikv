@@ -87,11 +87,9 @@ pub fn new_engine_opt(
 }
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
-    let handle = r2e!(
-        db.cf_handle(cf)
-            .ok_or_else(|| format!("cf {} not found", cf))
-    )?;
-    Ok(handle)
+    db.cf_handle(cf)
+        .ok_or_else(|| format!("cf {} not found", cf))
+        .map_err(r2e)
 }
 
 pub fn range_to_rocks_range<'a>(range: &Range<'a>) -> RocksRange<'a> {

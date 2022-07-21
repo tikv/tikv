@@ -99,12 +99,13 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
         let opt: RocksWriteOptions = opts.into();
         if self.index > 0 {
-            r2e!(
-                self.get_db()
-                    .multi_batch_write(self.as_inner(), &opt.into_raw())
-            )
+            self.get_db()
+                .multi_batch_write(self.as_inner(), &opt.into_raw())
+                .map_err(r2e)
         } else {
-            r2e!(self.get_db().write_opt(&self.wbs[0], &opt.into_raw()))
+            self.get_db()
+                .write_opt(&self.wbs[0], &opt.into_raw())
+                .map_err(r2e)
         }
     }
 
@@ -152,9 +153,9 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
 
     fn pop_save_point(&mut self) -> Result<()> {
         if let Some(x) = self.save_points.pop() {
-            return r2e!(self.wbs[x].pop_save_point());
+            return self.wbs[x].pop_save_point().map_err(r2e);
         }
-        r2e!(Err("no save point"))
+        Err(r2e("no save point"))
     }
 
     fn rollback_to_save_point(&mut self) -> Result<()> {
@@ -163,9 +164,9 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
                 self.wbs[i].clear();
             }
             self.index = x;
-            return r2e!(self.wbs[x].rollback_to_save_point());
+            return self.wbs[x].rollback_to_save_point().map_err(r2e);
         }
-        r2e!(Err("no save point"))
+        Err(r2e("no save point"))
     }
 
     fn merge(&mut self, other: Self) -> Result<()> {
@@ -180,35 +181,39 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
 impl Mutable for RocksWriteBatchVec {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.check_switch_batch();
-        r2e!(self.wbs[self.index].put(key, value))
+        self.wbs[self.index].put(key, value).map_err(r2e)
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         self.check_switch_batch();
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
-        r2e!(self.wbs[self.index].put_cf(handle, key, value))
+        self.wbs[self.index].put_cf(handle, key, value).map_err(r2e)
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<()> {
         self.check_switch_batch();
-        r2e!(self.wbs[self.index].delete(key))
+        self.wbs[self.index].delete(key).map_err(r2e)
     }
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         self.check_switch_batch();
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
-        r2e!(self.wbs[self.index].delete_cf(handle, key))
+        self.wbs[self.index].delete_cf(handle, key).map_err(r2e)
     }
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         self.check_switch_batch();
-        r2e!(self.wbs[self.index].delete_range(begin_key, end_key))
+        self.wbs[self.index]
+            .delete_range(begin_key, end_key)
+            .map_err(r2e)
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         self.check_switch_batch();
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
-        r2e!(self.wbs[self.index].delete_range_cf(handle, begin_key, end_key))
+        self.wbs[self.index]
+            .delete_range_cf(handle, begin_key, end_key)
+            .map_err(r2e)
     }
 }
 

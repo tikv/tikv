@@ -82,7 +82,7 @@ impl KvEngine for RocksEngine {
     }
 
     fn sync(&self) -> Result<()> {
-        r2e!(self.db.sync_wal())
+        self.db.sync_wal().map_err(r2e)
     }
 
     fn flush_metrics(&self, instance: &str) {
@@ -149,7 +149,7 @@ impl Peekable for RocksEngine {
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
-        let v = r2e!(self.db.get_opt(key, &opt.into_raw()))?;
+        let v = self.db.get_opt(key, &opt.into_raw()).map_err(r2e)?;
         Ok(v.map(RocksDBVector::from_raw))
     }
 
@@ -161,37 +161,42 @@ impl Peekable for RocksEngine {
     ) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let handle = get_cf_handle(&self.db, cf)?;
-        let v = r2e!(self.db.get_cf_opt(handle, key, &opt.into_raw()))?;
+        let v = self
+            .db
+            .get_cf_opt(handle, key, &opt.into_raw())
+            .map_err(r2e)?;
         Ok(v.map(RocksDBVector::from_raw))
     }
 }
 
 impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        r2e!(self.db.put(key, value))
+        self.db.put(key, value).map_err(r2e)
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.db, cf)?;
-        r2e!(self.db.put_cf(handle, key, value))
+        self.db.put_cf(handle, key, value).map_err(r2e)
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        r2e!(self.db.delete(key))
+        self.db.delete(key).map_err(r2e)
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.db, cf)?;
-        r2e!(self.db.delete_cf(handle, key))
+        self.db.delete_cf(handle, key).map_err(r2e)
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        r2e!(self.db.delete_range(begin_key, end_key))
+        self.db.delete_range(begin_key, end_key).map_err(r2e)
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.db, cf)?;
-        r2e!(self.db.delete_range_cf(handle, begin_key, end_key))
+        self.db
+            .delete_range_cf(handle, begin_key, end_key)
+            .map_err(r2e)
     }
 }
 

@@ -80,7 +80,7 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
     }
 
     fn set_block_cache_capacity(&self, capacity: u64) -> Result<()> {
-        r2e!(self.0.set_block_cache_capacity(capacity))
+        self.0.set_block_cache_capacity(capacity).map_err(r2e)
     }
 
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {

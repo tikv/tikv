@@ -57,10 +57,9 @@ impl RocksEngine {
         let cf = util::get_cf_handle(self.as_inner(), cf)?;
         // FIXME: extra allocation
         let ranges: Vec<_> = ranges.iter().map(util::range_to_rocks_range).collect();
-        r2e!(
-            self.as_inner()
-                .get_properties_of_tables_in_range(cf, &ranges)
-        )
+        self.as_inner()
+            .get_properties_of_tables_in_range(cf, &ranges)
+            .map_err(r2e)
     }
 
     pub fn get_range_properties_cf(

@@ -13,12 +13,15 @@ pub(crate) fn get_env(
     limiter: Option<Arc<file_system::IORateLimiter>>,
 ) -> engine_traits::Result<Arc<Env>> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
-    Ok(Arc::new(r2e!(Env::new_file_system_inspected_env(
-        base_env,
-        WrappedFileSystemInspector {
-            inspector: EngineFileSystemInspector::from_limiter(limiter),
-        },
-    ))?))
+    Ok(Arc::new(
+        Env::new_file_system_inspected_env(
+            base_env,
+            WrappedFileSystemInspector {
+                inspector: EngineFileSystemInspector::from_limiter(limiter),
+            },
+        )
+        .map_err(r2e)?,
+    ))
 }
 
 pub struct WrappedFileSystemInspector<T: FileSystemInspector> {
@@ -27,11 +30,11 @@ pub struct WrappedFileSystemInspector<T: FileSystemInspector> {
 
 impl<T: FileSystemInspector> DBFileSystemInspector for WrappedFileSystemInspector<T> {
     fn read(&self, len: usize) -> Result<usize, String> {
-        e2r!(self.inspector.read(len))
+        self.inspector.read(len).map_err(e2r)
     }
 
     fn write(&self, len: usize) -> Result<usize, String> {
-        e2r!(self.inspector.write(len))
+        self.inspector.write(len).map_err(e2r)
     }
 }
 

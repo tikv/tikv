@@ -128,12 +128,12 @@ impl RocksEngine {
 
 impl MiscExt for RocksEngine {
     fn flush(&self, sync: bool) -> Result<()> {
-        r2e!(self.as_inner().flush(sync))
+        self.as_inner().flush(sync).map_err(r2e)
     }
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        r2e!(self.as_inner().flush_cf(handle, sync))
+        self.as_inner().flush_cf(handle, sync).map_err(r2e)
     }
 
     fn delete_ranges_cf(
@@ -152,12 +152,9 @@ impl MiscExt for RocksEngine {
                     if r.start_key >= r.end_key {
                         continue;
                     }
-                    r2e!(self.as_inner().delete_files_in_range_cf(
-                        handle,
-                        r.start_key,
-                        r.end_key,
-                        false,
-                    ))?;
+                    self.as_inner()
+                        .delete_files_in_range_cf(handle, r.start_key, r.end_key, false)
+                        .map_err(r2e)?;
                 }
             }
             DeleteStrategy::DeleteBlobs => {
@@ -167,12 +164,9 @@ impl MiscExt for RocksEngine {
                         if r.start_key >= r.end_key {
                             continue;
                         }
-                        r2e!(self.as_inner().delete_blob_files_in_range_cf(
-                            handle,
-                            r.start_key,
-                            r.end_key,
-                            false,
-                        ))?;
+                        self.as_inner()
+                            .delete_blob_files_in_range_cf(handle, r.start_key, r.end_key, false)
+                            .map_err(r2e)?;
                     }
                 }
             }
@@ -242,11 +236,8 @@ impl MiscExt for RocksEngine {
 
         for cf in db.cf_names() {
             let handle = util::get_cf_handle(db, cf)?;
-            r2e!(db.delete_files_in_ranges_cf(
-                handle,
-                &delete_ranges,
-                /* include_end */ false
-            ))?;
+            db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)
+                .map_err(r2e)?;
         }
 
         Ok(())
@@ -257,7 +248,7 @@ impl MiscExt for RocksEngine {
     }
 
     fn sync_wal(&self) -> Result<()> {
-        r2e!(self.as_inner().sync_wal())
+        self.as_inner().sync_wal().map_err(r2e)
     }
 
     fn exists(path: &str) -> bool {

@@ -79,7 +79,7 @@ impl Peekable for RocksSnapshot {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        let v = r2e!(self.db.get_opt(key, &opt))?;
+        let v = self.db.get_opt(key, &opt).map_err(r2e)?;
         Ok(v.map(RocksDBVector::from_raw))
     }
 
@@ -95,7 +95,7 @@ impl Peekable for RocksSnapshot {
             opt.set_snapshot(&self.snap);
         }
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
-        let v = r2e!(self.db.get_cf_opt(handle, key, &opt))?;
+        let v = self.db.get_cf_opt(handle, key, &opt).map_err(r2e)?;
         Ok(v.map(RocksDBVector::from_raw))
     }
 }

@@ -18,10 +18,10 @@ pub(crate) fn get_env(
 ) -> engine_traits::Result<Arc<Env>> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
     if let Some(manager) = key_manager {
-        Ok(Arc::new(r2e!(Env::new_key_managed_encrypted_env(
-            base_env,
-            WrappedEncryptionKeyManager { manager },
-        ))?))
+        Ok(Arc::new(
+            Env::new_key_managed_encrypted_env(base_env, WrappedEncryptionKeyManager { manager })
+                .map_err(r2e)?,
+        ))
     } else {
         Ok(base_env)
     }

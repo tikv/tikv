@@ -130,7 +130,8 @@ impl CompactExt for RocksEngine {
         opts.set_max_subcompactions(max_subcompactions as i32);
         opts.set_output_file_size_limit(output_file_size_limit);
 
-        r2e!(db.compact_files_cf(handle, &opts, &files, output_level))
+        db.compact_files_cf(handle, &opts, &files, output_level)
+            .map_err(r2e)
     }
 }
 

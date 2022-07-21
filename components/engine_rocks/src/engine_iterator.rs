@@ -23,35 +23,37 @@ impl RocksEngineIterator {
 
 impl engine_traits::Iterator for RocksEngineIterator {
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
-        r2e!(self.0.seek(rocksdb::SeekKey::Key(key)))
+        self.0.seek(rocksdb::SeekKey::Key(key)).map_err(r2e)
     }
 
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
-        r2e!(self.0.seek_for_prev(rocksdb::SeekKey::Key(key)))
+        self.0
+            .seek_for_prev(rocksdb::SeekKey::Key(key))
+            .map_err(r2e)
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
-        r2e!(self.0.seek(rocksdb::SeekKey::Start))
+        self.0.seek(rocksdb::SeekKey::Start).map_err(r2e)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
-        r2e!(self.0.seek(rocksdb::SeekKey::End))
+        self.0.seek(rocksdb::SeekKey::End).map_err(r2e)
     }
 
     fn prev(&mut self) -> Result<bool> {
         #[cfg(not(feature = "nortcheck"))]
         if !self.valid()? {
-            r2e!(Err("Iterator invalid"))?
+            return Err(r2e("Iterator invalid"));
         }
-        r2e!(self.0.prev())
+        self.0.prev().map_err(r2e)
     }
 
     fn next(&mut self) -> Result<bool> {
         #[cfg(not(feature = "nortcheck"))]
         if !self.valid()? {
-            r2e!(Err("Iterator invalid"))?
+            return Err(r2e("Iterator invalid"));
         }
-        r2e!(self.0.next())
+        self.0.next().map_err(r2e)
     }
 
     fn key(&self) -> &[u8] {
@@ -67,6 +69,6 @@ impl engine_traits::Iterator for RocksEngineIterator {
     }
 
     fn valid(&self) -> Result<bool> {
-        r2e!(self.0.valid())
+        self.0.valid().map_err(r2e)
     }
 }
