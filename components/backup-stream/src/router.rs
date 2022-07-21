@@ -569,11 +569,11 @@ impl RouterInner {
         task_name: &str,
         global_checkpoint: u64,
         store_id: u64,
-    ) -> Result<()> {
-        let t = self.get_task_info(task_name).await?;
-        t.update_global_checkpoint(global_checkpoint, store_id)
-            .await?;
-        Ok(())
+    ) -> Result<bool> {
+        self.get_task_info(task_name)
+            .await?
+            .update_global_checkpoint(global_checkpoint, store_id)
+            .await
     }
 
     /// tick aims to flush log/meta to extern storage periodically.
@@ -747,7 +747,7 @@ pub struct StreamTaskInfo {
     /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
     files: SlotMap<TempFileKey, DataFile>,
     /// flushing_files contains files pending flush.
-    flushing_files: RwLock<Vec<(TempFileKey, Slot<DataFile>)>>,
+    flushing_files: RwLock<Vec<(TempFileKey, Slot<DataFile>, DataFileInfo)>>,
     /// last_flush_ts represents last time this task flushed to storage.
     last_flush_time: AtomicPtr<Instant>,
     /// flush_interval represents the tick interval of flush, setting by users.
@@ -774,6 +774,7 @@ impl Drop for StreamTaskInfo {
             .flushing_files
             .get_mut()
             .drain(..)
+            .map(|(a, b, _)| (a, b))
             .chain(self.files.get_mut().drain())
             .map(|(_, f)| f.into_inner().local_path)
             .map(std::fs::remove_file)
@@ -880,7 +881,7 @@ impl StreamTaskInfo {
     pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfo> {
         let w = self.flushing_files.read().await;
         // Let's flush all files first...
-        futures::future::join_all(w.iter().map(|(_, f)| async move {
+        futures::future::join_all(w.iter().map(|(_, f, _)| async move {
             let file = &mut f.lock().await.inner;
             file.flush().await?;
             file.get_ref().sync_all().await?;
@@ -893,10 +894,8 @@ impl StreamTaskInfo {
 
         let mut metadata = MetadataInfo::with_capacity(w.len());
         metadata.set_store_id(store_id);
-        for (file_key, data_file) in w.iter() {
-            let mut data_file = data_file.lock().await;
-            let file_meta = data_file.generate_metadata(file_key, store_id)?;
-            metadata.push(file_meta)
+        for (_, _, file_meta) in w.iter() {
+            metadata.push(file_meta.to_owned())
         }
         Ok(metadata)
     }
@@ -930,22 +929,27 @@ impl StreamTaskInfo {
     }
 
     /// move need-flushing files to flushing_files.
-    pub async fn move_to_flushing_files(&self) -> &Self {
+    pub async fn move_to_flushing_files(&self, store_id: u64) -> Result<&Self> {
         // if flushing_files is not empty, which represents this flush is a retry operation.
         if !self.flushing_files.read().await.is_empty() {
-            return self;
+            return Ok(self);
         }
 
         let mut w = self.files.write().await;
         let mut fw = self.flushing_files.write().await;
         for (k, v) in w.drain() {
-            fw.push((k, v));
+            // we should generate file metadata(calculate sha256) when moving file.
+            // because sha256 calculation is a unsafe move operation.
+            // we cannot re-calculate it in retry.
+            // TODO refactor move_to_flushing_files and generate_metadata
+            let file_meta = v.lock().await.generate_metadata(&k, store_id)?;
+            fw.push((k, v, file_meta));
         }
-        self
+        Ok(self)
     }
 
     pub async fn clear_flushing_files(&self) {
-        for (_, v) in self.flushing_files.write().await.drain(..) {
+        for (_, v, _) in self.flushing_files.write().await.drain(..) {
             let data_file = v.lock().await;
             debug!("removing data file"; "size" => %data_file.file_size, "name" => %data_file.local_path.display());
             self.total_size
@@ -1000,7 +1004,7 @@ impl StreamTaskInfo {
         for batch_files in files.chunks(FLUSH_LOG_CONCURRENT_BATCH_COUNT) {
             let futs = batch_files
                 .iter()
-                .map(|(_, v)| Self::flush_log_file_to(storage.clone(), v));
+                .map(|(_, v, _)| Self::flush_log_file_to(storage.clone(), v));
             futures::future::try_join_all(futs).await?;
         }
 
@@ -1046,8 +1050,8 @@ impl StreamTaskInfo {
 
             // generate meta data and prepare to flush to storage
             let mut metadata_info = self
-                .move_to_flushing_files()
-                .await
+                .move_to_flushing_files(store_id)
+                .await?
                 .generate_metadata(store_id)
                 .await?;
             metadata_info.min_resolved_ts = metadata_info
@@ -1118,7 +1122,7 @@ impl StreamTaskInfo {
         &self,
         global_checkpoint: u64,
         store_id: u64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let last_global_checkpoint = self.global_checkpoint_ts.load(Ordering::SeqCst);
         if last_global_checkpoint < global_checkpoint {
             let r = self.global_checkpoint_ts.compare_exchange(
@@ -1129,9 +1133,10 @@ impl StreamTaskInfo {
             );
             if r.is_ok() {
                 self.flush_global_checkpoint(store_id).await?;
+                return Ok(true);
             }
         }
-        Ok(())
+        Ok(false)
     }
 }
 
@@ -1580,8 +1585,8 @@ mod tests {
         let end_ts = TimeStamp::physical_now();
         let files = router.tasks.lock().await.get("dummy").unwrap().clone();
         let meta = files
-            .move_to_flushing_files()
-            .await
+            .move_to_flushing_files(1)
+            .await?
             .generate_metadata(1)
             .await?;
         assert_eq!(meta.files.len(), 3, "test file len = {}", meta.files.len());
@@ -1596,6 +1601,25 @@ mod tests {
             start_ts,
             end_ts
         );
+
+        // in some case when flush failed to write files to storage.
+        // we may run `generate_metadata` again with same files.
+        let another_meta = files
+            .move_to_flushing_files(1)
+            .await?
+            .generate_metadata(1)
+            .await?;
+
+        assert_eq!(meta.files.len(), another_meta.files.len());
+        for i in 0..meta.files.len() {
+            let file1 = meta.files.get(i).unwrap();
+            let file2 = another_meta.files.get(i).unwrap();
+            // we have to make sure two times sha256 of file must be the same.
+            assert_eq!(file1.sha256, file2.sha256);
+            assert_eq!(file1.start_key, file2.start_key);
+            assert_eq!(file1.end_key, file2.end_key);
+        }
+
         files.flush_log().await?;
         files.flush_meta(meta).await?;
         files.clear_flushing_files().await;
@@ -1840,8 +1864,8 @@ mod tests {
         router
             .get_task_info("cleanup_test")
             .await?
-            .move_to_flushing_files()
-            .await;
+            .move_to_flushing_files(1)
+            .await?;
         write_simple_data(&router).await;
         let mut w = walkdir::WalkDir::new(&tmp).into_iter();
         assert!(w.next().is_some(), "the temp files doesn't created");
@@ -1991,7 +2015,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_global_checkpoint() {
+    async fn test_update_global_checkpoint() -> Result<()> {
         // create local storage
         let tmp_dir = tempfile::tempdir().unwrap();
         let backend = external_storage_export::make_local_backend(tmp_dir.path());
@@ -2016,18 +2040,18 @@ mod tests {
         // test no need to update global checkpoint
         let store_id = 3;
         let mut global_checkpoint = 10000;
-        let r = task
+        let is_updated = task
             .update_global_checkpoint(global_checkpoint, store_id)
-            .await;
-        assert_eq!(r.is_ok(), true);
+            .await?;
+        assert_eq!(is_updated, false);
         assert_eq!(task.global_checkpoint_ts.load(Ordering::SeqCst), 10001);
 
         // test update global checkpoint
         global_checkpoint = 10002;
-        let r = task
+        let is_updated = task
             .update_global_checkpoint(global_checkpoint, store_id)
-            .await;
-        assert_eq!(r.is_ok(), true);
+            .await?;
+        assert_eq!(is_updated, true);
         assert_eq!(
             task.global_checkpoint_ts.load(Ordering::SeqCst),
             global_checkpoint
@@ -2044,5 +2068,6 @@ mod tests {
         ts.copy_from_slice(&buff);
         let ts = u64::from_le_bytes(ts);
         assert_eq!(ts, global_checkpoint);
+        Ok(())
     }
 }
