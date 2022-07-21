@@ -235,7 +235,7 @@ fn test_node_async_fetch_leader_change() {
     }
 }
 
-// Test the case that entry cache is reserved for the newly added peer.
+// Test the case whether entry cache is reserved for the newly added peer.
 #[test]
 fn test_node_compact_entry_cache() {
     let count = 5;
@@ -249,7 +249,7 @@ fn test_node_compact_entry_cache() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k0", b"v0");
     cluster.pd_client.must_remove_peer(1, new_peer(5, 5));
-    
+
     // pause snapshot applied
     fail::cfg("before_region_gen_snap", "pause").unwrap();
     fail::cfg("worker_async_fetch_raft_log", "pause").unwrap();

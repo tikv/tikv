@@ -4960,10 +4960,13 @@ where
             );
             REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
         }
+
+        // leader may call `get_term()` on the latest replicated index, so compact
+        // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
         self.fsm
             .peer
             .mut_store()
-            .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx) + 1);
+            .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx + 1));
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
             if !self.fsm.peer.get_store().is_entry_cache_empty() {
