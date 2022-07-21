@@ -25,6 +25,10 @@ pub fn update_task_status(status: TaskStatus, task: &str) {
     }
 }
 
+pub fn remove_task_status_metric(task: &str) -> Result<()> {
+    TASK_STATUS.remove_label_values(&[task])
+}
+
 lazy_static! {
     pub static ref INTERNAL_ACTOR_MESSAGE_HANDLE_DURATION: HistogramVec = register_histogram_vec!(
         "tikv_log_backup_interal_actor_acting_duration_sec",
@@ -52,6 +56,11 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 16).unwrap()
     )
     .unwrap();
+    pub static ref INCREMENTAL_SCAN_DISK_READ: Counter = register_counter!(
+        "tikv_log_backup_initial_scan_disk_read",
+        "The total count of disk read bytes."
+    )
+    .unwrap();
     pub static ref INCREMENTAL_SCAN_SIZE: Histogram = register_histogram!(
         "tikv_stream_incremental_scan_bytes",
         "The size of scanning.",
@@ -63,13 +72,13 @@ lazy_static! {
         "The total kv size skipped by the streaming",
     )
     .unwrap();
-    pub static ref STREAM_ERROR: CounterVec = register_counter_vec!(
+    pub static ref STREAM_ERROR: IntCounterVec = register_int_counter_vec!(
         "tikv_stream_errors",
         "The errors during stream backup.",
         &["type"]
     )
     .unwrap();
-    pub static ref STREAM_FATAL_ERROR: CounterVec = register_counter_vec!(
+    pub static ref STREAM_FATAL_ERROR: IntCounterVec = register_int_counter_vec!(
         "tikv_log_backup_fatal_errors",
         "The errors during stream backup.",
         &["type"]
@@ -129,16 +138,21 @@ lazy_static! {
         "When gt 0, this node enabled streaming."
     )
     .unwrap();
-    pub static ref TRACK_REGION: IntCounterVec = register_int_counter_vec!(
+    pub static ref TRACK_REGION: IntGauge = register_int_gauge!(
         "tikv_stream_observed_region",
         "the region being observed by the current store.",
-        &["type"],
     )
     .unwrap();
     static ref TASK_STATUS: IntGaugeVec = register_int_gauge_vec!(
         "tikv_log_backup_task_status",
         "The status of tasks",
         &["task"]
+    )
+    .unwrap();
+    pub static ref PENDING_INITIAL_SCAN_LEN: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_pending_initial_scan",
+        "The pending initial scan",
+        &["stage"]
     )
     .unwrap();
 }

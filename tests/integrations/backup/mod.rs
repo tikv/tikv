@@ -21,11 +21,11 @@ fn assert_same_file_name(s1: String, s2: String) {
     let tokens1: Vec<&str> = s1.split('_').collect();
     let tokens2: Vec<&str> = s2.split('_').collect();
     assert_eq!(tokens1.len(), tokens2.len());
-    // 2_1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693105_write.sst
-    // 2_1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693199_write.sst
+    // 2/1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693105_write.sst
+    // 2/1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693199_write.sst
     // should be equal
     for i in 0..tokens1.len() {
-        if i != 4 {
+        if i != 3 {
             assert_eq!(tokens1[i], tokens2[i]);
         }
     }
@@ -52,6 +52,10 @@ fn assert_same_files(mut files1: Vec<kvproto::brpb::File>, mut files2: Vec<kvpro
         assert_ne!(f1.cipher_iv, f2.cipher_iv);
         f1.cipher_iv = "".to_string().into_bytes();
         f2.cipher_iv = "".to_string().into_bytes();
+        // After RocksDB 6.12, each SST file writer writes its own session id to the generated file. The SHA will not never be the same.
+        // Detail: https://github.com/facebook/rocksdb/pull/6983
+        f1.sha256.clear();
+        f2.sha256.clear();
         assert_eq!(f1, f2);
     }
 }

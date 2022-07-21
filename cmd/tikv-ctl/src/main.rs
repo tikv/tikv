@@ -41,6 +41,7 @@ use kvproto::{
 };
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
+use raft_log_engine::ManagedFileSystem;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
@@ -61,7 +62,9 @@ fn main() {
     let cfg = cfg_path.map_or_else(
         || {
             let mut cfg = TiKvConfig::default();
-            cfg.log.level = tikv_util::logger::get_level_by_string("warn").unwrap();
+            cfg.log.level = tikv_util::logger::get_level_by_string("warn")
+                .unwrap()
+                .into();
             cfg
         },
         |path| {
@@ -99,9 +102,18 @@ fn main() {
             match args[0].as_str() {
                 "ldb" => run_ldb_command(args, &cfg),
                 "sst_dump" => run_sst_dump_command(args, &cfg),
-                "raft-engine-ctl" => run_raft_engine_ctl_command(args),
                 _ => Opt::clap().print_help().unwrap(),
             }
+        }
+        Cmd::RaftEngineCtl { args } => {
+            let key_manager =
+                data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                    .expect("data_key_manager_from_config should success");
+            let file_system = Arc::new(ManagedFileSystem::new(
+                key_manager.map(|m| Arc::new(m)),
+                None,
+            ));
+            raft_engine_ctl::run_command(args, file_system);
         }
         Cmd::BadSsts { manifest, pd } => {
             let data_dir = opt.data_dir.as_deref();
@@ -184,6 +196,19 @@ fn main() {
                 DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
             }
         },
+        Cmd::CleanupEncryptionMeta {} => {
+            let key_manager =
+                match data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                    .expect("data_key_manager_from_config should success")
+                {
+                    Some(mgr) => mgr,
+                    None => {
+                        println!("Encryption is disabled");
+                        return;
+                    }
+                };
+            key_manager.retain_encrypted_files(|fname| Path::new(fname).exists())
+        }
         Cmd::CompactCluster {
             db,
             cf,
@@ -660,10 +685,6 @@ fn run_ldb_command(args: Vec<String>, cfg: &TiKvConfig) {
 fn run_sst_dump_command(args: Vec<String>, cfg: &TiKvConfig) {
     let opts = cfg.rocksdb.build_opt();
     engine_rocks::raw::run_sst_dump_tool(&args, &opts);
-}
-
-fn run_raft_engine_ctl_command(args: Vec<String>) {
-    raft_engine_ctl::run_command(args);
 }
 
 fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TiKvConfig) {

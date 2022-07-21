@@ -401,9 +401,13 @@ pub enum CasualMessage<EK: KvEngine> {
     CompactionDeclinedBytes {
         bytes: u64,
     },
-    /// Half split the target region.
+    /// Half split the target region with the given key range.
+    /// If the key range is not provided, the region's start key
+    /// and end key will be used by default.
     HalfSplitRegion {
         region_epoch: RegionEpoch,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
         policy: CheckPolicy,
         source: &'static str,
         cb: Callback<EK::Snapshot>,
@@ -628,6 +632,17 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
         }
+    }
+}
+
+impl<EK: KvEngine> PeerMsg<EK> {
+    /// For some specific kind of messages, it's actually acceptable if failed to send it by
+    /// `significant_send`. This function determine if the current message is acceptable to fail.
+    pub fn is_send_failure_ignorable(&self) -> bool {
+        matches!(
+            self,
+            PeerMsg::SignificantMsg(SignificantMsg::CaptureChange { .. })
+        )
     }
 }
 

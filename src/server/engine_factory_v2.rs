@@ -7,19 +7,32 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{RaftEngine, Result, TabletAccessor, TabletFactory};
+use engine_traits::{
+    CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+};
 
 use crate::server::engine_factory::KvEngineFactory;
 
 const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
 
 #[derive(Clone)]
-pub struct KvEngineFactoryV2<ER: RaftEngine> {
-    inner: KvEngineFactory<ER>,
+pub struct KvEngineFactoryV2 {
+    inner: KvEngineFactory,
     registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
 }
 
-impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
+// Extract tablet id and tablet suffix from the path.
+fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
+    let (mut tablet_id, mut tablet_suffix) = (0, 1);
+    if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
+        let mut split = s.split('_');
+        tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+    }
+    (tablet_id, tablet_suffix)
+}
+
+impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     fn create_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
         let mut reg = self.registry.lock().unwrap();
         if let Some(db) = reg.get(&(id, suffix)) {
@@ -74,12 +87,7 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
                 path.to_str().unwrap_or_default()
             ));
         }
-        let (mut tablet_id, mut tablet_suffix) = (0, 1);
-        if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
-            let mut split = s.split('_');
-            tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
-        }
+        let (tablet_id, tablet_suffix) = get_id_and_suffix_from_path(path);
         self.create_tablet(tablet_id, tablet_suffix)
     }
 
@@ -144,15 +152,26 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactoryV2<ER> {
 
         let db_path = self.tablet_path(id, suffix);
         std::fs::rename(path, &db_path)?;
-        self.open_tablet_raw(db_path.as_path(), false)
+        let new_engine = self.open_tablet_raw(db_path.as_path(), false);
+        if new_engine.is_ok() {
+            let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
+            self.registry.lock().unwrap().remove(&(old_id, old_suffix));
+        }
+        new_engine
     }
 
-    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
-        Box::new(std::clone::Clone::clone(self))
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
+        let reg = self.registry.lock().unwrap();
+        // pick up any tablet and set the shared block cache capacity
+        if let Some(((_id, _suffix), tablet)) = (*reg).iter().next() {
+            let opt = tablet.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+            opt.set_block_cache_capacity(capacity)?;
+        }
+        Ok(())
     }
 }
 
-impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactoryV2<ER> {
+impl TabletAccessor<RocksEngine> for KvEngineFactoryV2 {
     #[inline]
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
         let reg = self.registry.lock().unwrap();
@@ -169,7 +188,7 @@ impl<ER: RaftEngine> TabletAccessor<RocksEngine> for KvEngineFactoryV2<ER> {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::TabletFactory;
+    use engine_traits::{TabletFactory, CF_WRITE};
 
     use super::*;
     use crate::{config::TiKvConfig, server::KvEngineFactoryBuilder};
@@ -189,8 +208,8 @@ mod tests {
         };
     }
 
-    impl<ER: RaftEngine> KvEngineFactoryV2<ER> {
-        pub fn new(inner: KvEngineFactory<ER>) -> Self {
+    impl KvEngineFactoryV2 {
+        pub fn new(inner: KvEngineFactory) -> Self {
             KvEngineFactoryV2 {
                 inner,
                 registry: Arc::new(Mutex::new(HashMap::default())),
@@ -201,10 +220,15 @@ mod tests {
     #[test]
     fn test_kvengine_factory() {
         let cfg = TEST_CONFIG.clone();
+        assert!(cfg.storage.block_cache.shared);
+        let cache = cfg.storage.block_cache.build_shared_cache();
         let dir = test_util::temp_dir("test_kvengine_factory", false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let builder = KvEngineFactoryBuilder::<RocksEngine>::new(env, &cfg, dir.path());
+        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        if let Some(cache) = cache {
+            builder = builder.block_cache(cache);
+        }
         let factory = builder.build();
         let shared_db = factory.create_shared_db().unwrap();
         let tablet = TabletFactory::create_tablet(&factory, 1, 10);
@@ -229,15 +253,25 @@ mod tests {
         assert_eq!(count, 1);
         assert!(factory.is_single_engine());
         assert!(shared_db.is_single_engine());
+        factory
+            .set_shared_block_cache_capacity(1024 * 1024)
+            .unwrap();
+        let opt = shared_db.get_options_cf(CF_DEFAULT).unwrap();
+        assert_eq!(opt.get_block_cache_capacity(), 1024 * 1024);
     }
 
     #[test]
     fn test_kvengine_factory_v2() {
         let cfg = TEST_CONFIG.clone();
+        assert!(cfg.storage.block_cache.shared);
+        let cache = cfg.storage.block_cache.build_shared_cache();
         let dir = test_util::temp_dir("test_kvengine_factory_v2", false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let builder = KvEngineFactoryBuilder::<RocksEngine>::new(env, &cfg, dir.path());
+        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        if let Some(cache) = cache {
+            builder = builder.block_cache(cache);
+        }
         let inner_factory = builder.build();
         let factory = KvEngineFactoryV2::new(inner_factory);
         let tablet = factory.create_tablet(1, 10);
@@ -252,6 +286,11 @@ mod tests {
         let tablet_path = factory.tablet_path(1, 10);
         let result = factory.open_tablet_raw(&tablet_path, false);
         assert!(result.is_err());
+        factory
+            .set_shared_block_cache_capacity(1024 * 1024)
+            .unwrap();
+        let opt = tablet.get_options_cf(CF_WRITE).unwrap();
+        assert_eq!(opt.get_block_cache_capacity(), 1024 * 1024);
 
         assert!(factory.exists(1, 10));
         assert!(!factory.exists(1, 11));
@@ -261,6 +300,11 @@ mod tests {
         assert!(!factory.is_tombstoned(1, 10));
         assert!(factory.load_tablet(&tablet_path, 1, 10).is_err());
         assert!(factory.load_tablet(&tablet_path, 1, 20).is_ok());
+        // After we load it as with the new id or suffix, we should be unable to get it with
+        // the old id and suffix in the cache.
+        assert!(factory.open_tablet_cache(1, 10).is_none());
+        assert!(factory.open_tablet_cache(1, 20).is_some());
+
         factory.mark_tombstone(1, 20);
         assert!(factory.is_tombstoned(1, 20));
         factory.destroy_tablet(1, 20).unwrap();
@@ -275,7 +319,7 @@ mod tests {
         let dir = test_util::temp_dir("test_get_live_tablets", false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let builder = KvEngineFactoryBuilder::<RocksEngine>::new(env, &cfg, dir.path());
+        let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
         let inner_factory = builder.build();
         let factory = KvEngineFactoryV2::new(inner_factory);
         factory.create_tablet(1, 10).unwrap();
