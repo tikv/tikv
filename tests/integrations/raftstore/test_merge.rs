@@ -24,6 +24,7 @@ use txn_types::{Key, PessimisticLock};
 #[test]
 fn test_node_base_merge() {
     let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.rocksdb.titan.enabled = true;
     configure_for_merge(&mut cluster);
 
     cluster.run();
