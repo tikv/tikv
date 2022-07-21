@@ -92,8 +92,8 @@ impl<S: Snapshot> EventLoader<S> {
         let region_id = region.get_id();
         let scanner = ScannerBuilder::new(snapshot, to_ts)
             .range(
-                Some(Key::from_encoded_slice(&region.start_key)),
-                Some(Key::from_encoded_slice(&region.end_key)),
+                (!region.start_key.is_empty()).then(|| Key::from_encoded_slice(&region.start_key)),
+                (!region.end_key.is_empty()).then(|| Key::from_encoded_slice(&region.end_key)),
             )
             .hint_min_ts(Some(from_ts))
             .fill_cache(false)
@@ -123,7 +123,7 @@ impl<S: Snapshot> EventLoader<S> {
 
     /// Drain the internal buffer, converting them to the [`ApplyEvents`],
     /// and tracking the locks at the same time.
-    fn omit_entries_to(
+    fn emit_entries_to(
         &mut self,
         result: &mut ApplyEvents,
         resolver: &mut TwoPhaseResolver,
@@ -178,19 +178,22 @@ impl<S: Snapshot> EventLoader<S> {
 /// The context for loading incremental data between range.
 /// Like [`cdc::Initializer`], but supports initialize over range.
 /// Note: maybe we can merge those two structures?
+/// Note': maybe extract more fields to trait so it would be easier to test.
 #[derive(Clone)]
 pub struct InitialDataLoader<E, R, RT> {
-    pub(crate) router: RT,
-    pub(crate) regions: R,
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     pub(crate) sink: Router,
     pub(crate) tracing: SubscriptionTracer,
     pub(crate) scheduler: Scheduler<Task>,
+    // Note: this is only for `init_range`, maybe make it an argument?
+    pub(crate) regions: R,
+    // Note: Maybe move those fields about initial scanning into some trait?
+    pub(crate) router: RT,
     pub(crate) quota: PendingMemoryQuota,
-    pub(crate) handle: Handle,
     pub(crate) limit: Limiter,
 
+    pub(crate) handle: Handle,
     _engine: PhantomData<E>,
 }
 
@@ -381,14 +384,12 @@ where
                 "{:?}", msg
             ))));
             let mut events = ApplyEvents::with_capacity(1024, region.id);
-            let stat = event_loader.fill_entries()?;
-            let disk_read = self.with_resolver(region, |r| {
-                let (result, byte_size) = utils::with_record_read_throughput(|| {
-                    event_loader.omit_entries_to(&mut events, r)
-                });
-                result?;
-                Result::Ok(byte_size)
-            })?;
+            // Note: the call of `fill_entries` is the only step which would read the disk.
+            //       we only need to record the disk throughput of this.
+            let (stat, disk_read) =
+                utils::with_record_read_throughput(|| event_loader.fill_entries());
+            let stat = stat?;
+            self.with_resolver(region, |r| event_loader.emit_entries_to(&mut events, r))?;
             if events.is_empty() {
                 metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
                 return Ok(stats.stat);
@@ -402,6 +403,7 @@ where
             self.limit.blocking_consume(disk_read as _);
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
+            metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
             join_handles.push(tokio::spawn(async move {
                 utils::handle_on_event_result(&sched, sink.on_events(events).await);
@@ -468,5 +470,49 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kvproto::metapb::*;
+    use tikv::storage::{txn::tests::*, Engine, TestEngineBuilder};
+    use txn_types::TimeStamp;
+
+    use super::EventLoader;
+    use crate::{
+        router::ApplyEvents, subscription_track::TwoPhaseResolver,
+        utils::with_record_read_throughput,
+    };
+
+    #[test]
+    fn test_disk_read() {
+        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        for i in 0..100 {
+            let owned_key = format!("{:06}", i);
+            let key = owned_key.as_bytes();
+            let owned_value = [i as u8; 512];
+            let value = owned_value.as_slice();
+            must_prewrite_put(&engine, key, value, key, i * 2);
+            must_commit(&engine, key, i * 2, i * 2 + 1);
+        }
+        // let compact the memtable to disk so we can see the disk read.
+        engine.get_rocksdb().as_inner().compact_range(None, None);
+
+        let mut r = Region::new();
+        r.set_id(42);
+        r.set_start_key(b"".to_vec());
+        r.set_end_key(b"".to_vec());
+        let snap = engine.snapshot_on_kv_engine(b"", b"").unwrap();
+        let mut loader =
+            EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
+
+        let (r, data_load) = with_record_read_throughput(|| loader.fill_entries());
+        r.unwrap();
+        let mut events = ApplyEvents::with_capacity(1024, 42);
+        let mut res = TwoPhaseResolver::new(42, None);
+        loader.emit_entries_to(&mut events, &mut res).unwrap();
+        assert_ne!(events.len(), 0);
+        assert_ne!(data_load, 0);
     }
 }
