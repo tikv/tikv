@@ -1,6 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryFrom, hash::Hash, mem::size_of, mem::size_of_val, sync::Arc};
+use std::{
+    convert::TryFrom,
+    hash::Hash,
+    mem::{size_of, size_of_val},
+    sync::Arc,
+};
 
 use collections::HashMap;
 use tidb_query_aggr::*;
