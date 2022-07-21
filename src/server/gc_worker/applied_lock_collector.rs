@@ -541,7 +541,7 @@ mod tests {
     fn make_raft_cmd(requests: Vec<RaftRequest>) -> Cmd {
         let mut req = RaftCmdRequest::default();
         req.set_requests(requests.into());
-        Cmd::new(0, req, RaftCmdResponse::default())
+        Cmd::new(0, 0, req, RaftCmdResponse::default())
     }
 
     fn new_test_collector() -> (AppliedLockCollector, CoprocessorHost<KvTestEngine>) {

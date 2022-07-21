@@ -164,15 +164,26 @@ impl SubscriptionTracer {
         let region_id = region.get_id();
         let remove_result = self.0.get_mut(&region_id);
         match remove_result {
-            Some(mut o) if if_cond(o.value(), region) => {
-                if o.state != SubscriptionState::Removal {
-                    TRACK_REGION.dec();
+            Some(mut o) => {
+                // If the state is 'removal', we should act as if the region subscription
+                // has been removed: the callback should not be called because somebody may
+                // use this method to check whether a key exists:
+                // ```
+                // let mut present = false;
+                // deregister_region_if(42, |..| { present = true; });
+                // ```
+                // At that time, if we call the callback with stale value, the called may get false positive.
+                if o.state == SubscriptionState::Removal {
+                    return false;
                 }
-                o.value_mut().stop();
-                info!("stop listen stream from store"; "observer" => ?o.value(), "region_id"=> %region_id);
-                true
+                if if_cond(o.value(), region) {
+                    TRACK_REGION.dec();
+                    o.value_mut().stop();
+                    info!("stop listen stream from store"; "observer" => ?o.value(), "region_id"=> %region_id);
+                    return true;
+                }
+                false
             }
-            Some(_) => false,
             None => {
                 warn!("trying to deregister region not registered"; "region_id" => %region_id);
                 false
