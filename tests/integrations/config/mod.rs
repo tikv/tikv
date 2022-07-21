@@ -64,7 +64,7 @@ fn read_file_in_project_dir(path: &str) -> String {
 fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
     value.log_rotation_timespan = ReadableDuration::days(1);
-    value.log.level = Level::Critical;
+    value.log.level = Level::Critical.into();
     value.log.file.filename = "foo".to_owned();
     value.log.format = LogFormat::Json;
     value.log.file.max_size = 1;
@@ -748,7 +748,7 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     value.backup_stream = BackupStreamConfig {
-        num_threads: 8,
+        num_threads: 12,
         ..Default::default()
     };
     value.import = ImportConfig {
@@ -891,12 +891,12 @@ fn test_block_cache_backward_compatible() {
 fn test_log_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-log-compatible.toml");
     let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
-    assert_eq!(cfg.log.level, slog::Level::Info);
+    assert_eq!(cfg.log.level, slog::Level::Info.into());
     assert_eq!(cfg.log.file.filename, "");
     assert_eq!(cfg.log.format, LogFormat::Text);
     assert_eq!(cfg.log.file.max_size, 300);
     cfg.logger_compatible_adjust();
-    assert_eq!(cfg.log.level, slog::Level::Critical);
+    assert_eq!(cfg.log.level, slog::Level::Critical.into());
     assert_eq!(cfg.log.file.filename, "foo");
     assert_eq!(cfg.log.format, LogFormat::Json);
     assert_eq!(cfg.log.file.max_size, 1024);
