@@ -548,12 +548,6 @@ impl RaftEngine for RaftLogEngine {
         self.0.purge_expired_files().map_err(transfer_error)
     }
 
-    fn has_builtin_entry_cache(&self) -> bool {
-        false
-    }
-
-    fn gc_entry_cache(&self, _raft_group_id: u64, _to: u64) {}
-
     /// Flush current cache stats.
     fn flush_stats(&self) -> Option<CacheStats> {
         None
