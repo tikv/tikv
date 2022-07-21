@@ -194,7 +194,11 @@ impl Dicts {
 
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
-        let iv = Iv::new_ctr();
+        let iv = if method != EncryptionMethod::Plaintext {
+            Iv::new_ctr()
+        } else {
+            Iv::Empty
+        };
         let file = FileInfo {
             iv: iv.as_slice().to_vec(),
             key_id: self.current_key_id.load(Ordering::SeqCst),
