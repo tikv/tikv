@@ -247,7 +247,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         Ok(())
     }
 
-    fn set_shared_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
         if let Ok(db) = self.inner.root_db.lock() {
             let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
             opt.set_block_cache_capacity(capacity)?;
