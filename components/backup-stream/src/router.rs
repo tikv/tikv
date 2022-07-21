@@ -569,11 +569,11 @@ impl RouterInner {
         task_name: &str,
         global_checkpoint: u64,
         store_id: u64,
-    ) -> Result<()> {
-        let t = self.get_task_info(task_name).await?;
-        t.update_global_checkpoint(global_checkpoint, store_id)
-            .await?;
-        Ok(())
+    ) -> Result<bool> {
+        self.get_task_info(task_name)
+            .await?
+            .update_global_checkpoint(global_checkpoint, store_id)
+            .await
     }
 
     /// tick aims to flush log/meta to extern storage periodically.
@@ -1122,7 +1122,7 @@ impl StreamTaskInfo {
         &self,
         global_checkpoint: u64,
         store_id: u64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let last_global_checkpoint = self.global_checkpoint_ts.load(Ordering::SeqCst);
         if last_global_checkpoint < global_checkpoint {
             let r = self.global_checkpoint_ts.compare_exchange(
@@ -1133,9 +1133,10 @@ impl StreamTaskInfo {
             );
             if r.is_ok() {
                 self.flush_global_checkpoint(store_id).await?;
+                return Ok(true);
             }
         }
-        Ok(())
+        Ok(false)
     }
 }
 
@@ -2014,7 +2015,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_global_checkpoint() {
+    async fn test_update_global_checkpoint() -> Result<()> {
         // create local storage
         let tmp_dir = tempfile::tempdir().unwrap();
         let backend = external_storage_export::make_local_backend(tmp_dir.path());
@@ -2039,18 +2040,18 @@ mod tests {
         // test no need to update global checkpoint
         let store_id = 3;
         let mut global_checkpoint = 10000;
-        let r = task
+        let is_updated = task
             .update_global_checkpoint(global_checkpoint, store_id)
-            .await;
-        assert_eq!(r.is_ok(), true);
+            .await?;
+        assert_eq!(is_updated, false);
         assert_eq!(task.global_checkpoint_ts.load(Ordering::SeqCst), 10001);
 
         // test update global checkpoint
         global_checkpoint = 10002;
-        let r = task
+        let is_updated = task
             .update_global_checkpoint(global_checkpoint, store_id)
-            .await;
-        assert_eq!(r.is_ok(), true);
+            .await?;
+        assert_eq!(is_updated, true);
         assert_eq!(
             task.global_checkpoint_ts.load(Ordering::SeqCst),
             global_checkpoint
@@ -2067,5 +2068,6 @@ mod tests {
         ts.copy_from_slice(&buff);
         let ts = u64::from_le_bytes(ts);
         assert_eq!(ts, global_checkpoint);
+        Ok(())
     }
 }

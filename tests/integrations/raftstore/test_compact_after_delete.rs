@@ -36,6 +36,7 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.region_compact_min_tombstones = 500;
     cluster.cfg.raft_store.region_compact_tombstones_percent = 50;
     cluster.cfg.raft_store.region_compact_check_step = 1;
+    cluster.cfg.rocksdb.titan.enabled = true;
     cluster.run();
 
     for i in 0..1000 {
