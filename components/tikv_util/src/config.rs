@@ -958,7 +958,10 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
             // data_path may not mounted on a normal device on container
-            if !fs_info.fsname.starts_with("/dev") {
+            // /proc/mounts may contain host's device, which is not accessible in container.
+            if Path::new("/.dockerenv").exists()
+                && (!fs_info.fsname.starts_with("/dev") || !fs_info.fsname.exists())
+            {
                 return;
             }
 
