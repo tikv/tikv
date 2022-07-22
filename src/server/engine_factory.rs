@@ -100,6 +100,7 @@ impl KvEngineFactoryBuilder {
         KvEngineFactoryV2 {
             inner: factory,
             registry: Arc::new(Mutex::new(HashMap::default())),
+            registry_latest: Arc::new(Mutex::new(HashMap::default())),
         }
     }
 }
