@@ -24,6 +24,7 @@ use crate::{
 pub const MAX_HEIGHT: usize = 14;
 const HEIGHT_INCREASE: u32 = u32::MAX / 4;
 const RAND_SEED: u32 = 410958445;
+const AVG_NODE_SIZE: usize = 56;
 
 pub struct WriteBatch {
     pub(crate) entries: Vec<WriteBatchEntry>,
@@ -283,8 +284,9 @@ impl SkipListCore {
                 self.put_with_hint(&batch.buf, entry, &mut hint);
             }
         }
+        let data_size = batch.buf.len() + batch.entries.len() * AVG_NODE_SIZE;
         self.user_data_size
-            .fetch_add(batch.buf.len() as u64, Ordering::AcqRel);
+            .fetch_add(data_size as u64, Ordering::AcqRel);
         if batch_max_ts > data_max_ts {
             self.data_max_ts.store(batch_max_ts, Ordering::Release);
         }
@@ -1255,5 +1257,22 @@ mod tests {
         assert!(v.is_empty());
         let v = l.get_with_hint(&key, 2, &mut h);
         assert_eq!(v.get_value(), key.as_slice());
+    }
+
+    #[test]
+    fn test_arena_size() {
+        let l = SkipList::new(None);
+        let mut wb = WriteBatch::new();
+        for i in 0u64..10000000 {
+            let key = format!("{:08}", i);
+            wb.put(key.as_bytes(), 0, &[], 1, &[1]);
+            l.put_batch_impl(&mut wb, None, 0);
+            wb.reset();
+            if l.size() > 8 * 1024 * 1024 {
+                break;
+            }
+        }
+        assert!(l.size() > l.arena.size() as u64);
+        assert!(l.size() * 9 / 10 < l.arena.size() as u64);
     }
 }

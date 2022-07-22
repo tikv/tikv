@@ -44,7 +44,7 @@ impl Default for Options {
             remote_compactor_addr: Default::default(),
             recovery_concurrency: Default::default(),
             preparation_concurrency: Default::default(),
-            max_mem_table_size: 128 << 20,
+            max_mem_table_size: 96 << 20,
         }
     }
 }
