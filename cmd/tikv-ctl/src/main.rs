@@ -674,7 +674,8 @@ fn run_sst_dump_command(args: Vec<String>, cfg: &TiKvConfig) {
     engine_rocks::raw::run_sst_dump_tool(&args, &opts);
 }
 
-fn run_raft_engine_ctl_command(args: Vec<String>) {
+fn run_raft_engine_ctl_command(mut args: Vec<String>) {
+    args.remove(0);
     raft_engine_ctl::run_command(args);
 }
 
