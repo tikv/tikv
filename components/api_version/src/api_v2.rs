@@ -13,11 +13,14 @@ use super::*;
 
 pub const RAW_KEY_PREFIX: u8 = b'r';
 pub const RAW_KEY_PREFIX_END: u8 = RAW_KEY_PREFIX + 1;
+pub const RAW_KEYSPACE_START: &[u8] = &[RAW_KEY_PREFIX, 0, 0, 0];
+pub const RAW_KEYSPACE_END: &[u8] = &[RAW_KEY_PREFIX_END, 0, 0, 0];
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
 pub const DEFAULT_KEY_SPACE_ID: [u8; 3] = [0, 0, 0]; // reserve 3 bytes for key space id.
 pub const DEFAULT_KEY_SPACE_ID_END: [u8; 3] = [0, 0, 1];
+pub const KEY_PREFIX_SIZE: usize = 4;
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -48,26 +51,31 @@ impl KvFormat for ApiV2 {
         }
 
         match key[0] {
-            RAW_KEY_PREFIX => KeyMode::Raw,
-            TXN_KEY_PREFIX => KeyMode::Txn,
+            RAW_KEY_PREFIX if key.len() >= KEY_PREFIX_SIZE => KeyMode::Raw,
+            TXN_KEY_PREFIX if key.len() >= KEY_PREFIX_SIZE => KeyMode::Txn,
             TIDB_META_KEY_PREFIX | TIDB_TABLE_KEY_PREFIX => KeyMode::TiDB,
             _ => KeyMode::Unknown,
         }
     }
 
     fn parse_range_mode(range: (Option<&[u8]>, Option<&[u8]>)) -> KeyMode {
-        match range {
-            (Some(start), Some(end))
-                if !start.is_empty()
-                    && !end.is_empty()
-                    && (start[0] == end[0] ||
-                        // Special case to represent "".."" within a key mode
-                        (end == [start[0] + 1])) =>
-            {
-                Self::parse_key_mode(start)
+        if let (Some(start), Some(end)) = range {
+            if start.is_empty() || end.is_empty() {
+                return KeyMode::Unknown;
             }
-            _ => KeyMode::Unknown,
+
+            let mode = Self::parse_key_mode(start);
+
+            if mode == KeyMode::Unknown
+                || start[0] == end[0]
+                || (mode == KeyMode::TiDB && end == [start[0] + 1])
+                || (mode != KeyMode::TiDB && end == Self::infinite_end_of(start))
+            {
+                return mode;
+            }
         }
+
+        KeyMode::Unknown
     }
 
     fn decode_raw_value(bytes: &[u8]) -> Result<RawValue<&[u8]>> {
@@ -222,8 +230,8 @@ impl ApiV2 {
         MemComparableByteCodec::encoded_len(src_len) + number::U64_SIZE
     }
 
-    pub fn get_rawkv_range() -> (u8, u8) {
-        (RAW_KEY_PREFIX, RAW_KEY_PREFIX_END)
+    pub fn get_rawkv_range() -> (&'static [u8], &'static [u8]) {
+        (RAW_KEYSPACE_START, RAW_KEYSPACE_END)
     }
 
     pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp> {
@@ -245,6 +253,16 @@ impl ApiV2 {
     }
 
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
+
+    fn get_prefix(key: &[u8]) -> [u8; KEY_PREFIX_SIZE] {
+        debug_assert!(key.len() >= KEY_PREFIX_SIZE);
+
+        [key[0], key[1], key[2], key[3]]
+    }
+
+    fn infinite_end_of(key: &[u8]) -> [u8; 4] {
+        (u32::from_be_bytes(Self::get_prefix(key)) + 1).to_be_bytes()
+    }
 }
 
 // Note: `encoded_bytes` may not be `KeyMode::Raw`.

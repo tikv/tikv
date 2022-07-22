@@ -124,7 +124,7 @@ const FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP: &str = "causal_observer_flush_timestam
 #[test]
 fn test_leader_transfer() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
-    let key1 = b"rk1";
+    let key1 = b"r\x00\x00\x00k1";
     let region = suite.cluster.get_region(key1);
 
     // Disable CausalObserver::flush_timestamp to produce causality issue.
@@ -180,7 +180,14 @@ fn test_leader_transfer() {
 #[test]
 fn test_region_merge() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
-    let keys = vec![b"rk0", b"rk1", b"rk2", b"rk3", b"rk4", b"rk5"];
+    let keys = vec![
+        b"r\x00\x00\x00k0",
+        b"r\x00\x00\x00k1",
+        b"r\x00\x00\x00k2",
+        b"r\x00\x00\x00k3",
+        b"r\x00\x00\x00k4",
+        b"r\x00\x00\x00k5",
+    ];
 
     suite.must_raw_put(keys[1], b"v1");
     suite.must_raw_put(keys[3], b"v3");

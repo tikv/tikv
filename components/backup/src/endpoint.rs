@@ -1798,8 +1798,8 @@ pub mod tests {
         let (tx, _) = unbounded();
         let tmp1 = make_unique_dir(tmp.path());
         req.set_storage_backend(make_local_backend(&tmp1));
-        req.set_start_key(b"r".to_vec());
-        req.set_end_key(b"s".to_vec());
+        req.set_start_key(b"r\xff\xff\xff".to_vec());
+        req.set_end_key(b"s\x00\x00\x00".to_vec());
         req.set_is_raw_kv(true);
         req.set_dst_api_version(ApiVersion::V2);
         let (task, _) = Task::new(req, tx).unwrap();
