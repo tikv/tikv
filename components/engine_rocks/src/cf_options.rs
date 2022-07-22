@@ -5,7 +5,7 @@ use rocksdb::ColumnFamilyOptions as RawCFOptions;
 use tikv_util::box_err;
 
 use crate::{
-    db_options::RocksTitanDBOptions, engine::RocksEngine,
+    db_options::RocksTitanDBOptions, engine::RocksEngine, r2e,
     sst_partitioner::RocksSstPartitionerFactory, util,
 };
 
@@ -79,8 +79,8 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
         self.0.get_block_cache_capacity()
     }
 
-    fn set_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
-        self.0.set_block_cache_capacity(capacity)
+    fn set_block_cache_capacity(&self, capacity: u64) -> Result<()> {
+        self.0.set_block_cache_capacity(capacity).map_err(r2e)
     }
 
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {

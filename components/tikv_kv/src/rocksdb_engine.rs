@@ -15,7 +15,7 @@ use engine_rocks::{
     RocksEngineIterator,
 };
 use engine_traits::{
-    CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
+    CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
 use file_system::IORateLimiter;
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
@@ -287,14 +287,9 @@ impl Snapshot for Arc<RocksSnapshot> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter> {
-        trace!("RocksSnapshot: create iterator");
-        Ok(self.iterator_opt(iter_opt)?)
-    }
-
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
+    fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
         trace!("RocksSnapshot: create cf iterator");
-        Ok(self.iterator_cf_opt(cf, iter_opt)?)
+        Ok(self.iterator_opt(cf, iter_opt)?)
     }
 
     fn ext(&self) -> DummySnapshotExt {
@@ -312,19 +307,19 @@ impl EngineIterator for RocksEngineIterator {
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Iterator::seek(self, key.as_encoded().as_slice().into()).map_err(Error::from)
+        Iterator::seek(self, key.as_encoded()).map_err(Error::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Iterator::seek_for_prev(self, key.as_encoded().as_slice().into()).map_err(Error::from)
+        Iterator::seek_for_prev(self, key.as_encoded()).map_err(Error::from)
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
-        Iterator::seek(self, SeekKey::Start).map_err(Error::from)
+        Iterator::seek_to_first(self).map_err(Error::from)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
-        Iterator::seek(self, SeekKey::End).map_err(Error::from)
+        Iterator::seek_to_last(self).map_err(Error::from)
     }
 
     fn valid(&self) -> Result<bool> {
