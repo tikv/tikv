@@ -453,7 +453,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             let mut chunk = Chunk::default();
 
-            let mut sample = self.quota_limiter.new_sample();
+            let mut sample = self.quota_limiter.new_sample(true);
             let (drained, record_len) = {
                 let _guard = sample.observe_cpu();
                 self.internal_handle_request(
