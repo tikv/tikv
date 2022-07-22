@@ -50,7 +50,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     for cf in engine_2.cf_names() {
         engine_2
             .c()
-            .scan_cf(cf, b"", &[0xFF], false, |k, v| {
+            .scan(cf, b"", &[0xFF], false, |k, v| {
                 existing_kvs.push((k.to_vec(), v.to_vec()));
                 Ok(true)
             })
