@@ -21,6 +21,7 @@ pub(crate) mod resolve_lock_lite;
 pub(crate) mod resolve_lock_readphase;
 pub(crate) mod rollback;
 pub(crate) mod txn_heart_beat;
+pub(crate) mod wake_up_legacy_pessimistic_lock_waits;
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
 pub use atomic_store::RawAtomicStore;
@@ -51,12 +52,12 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use kvproto::kvrpcpb::*;
-use txn_types::{Key, OldValues, TimeStamp, Value, Write};
+use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::{LockManager, WaitTimeout};
 use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader};
-use crate::storage::txn::commands::acquire_pessimistic_lock::PessimisticLockKeyContext;
+use crate::storage::txn::commands::wake_up_legacy_pessimistic_lock_waits::WakeUpLegacyPessimisticLockWaits;
 use crate::storage::txn::latch;
 use crate::storage::txn::scheduler::PartialPessimisticLockRequestSharedState;
 use crate::storage::txn::{ProcessResult, Result};
@@ -95,6 +96,7 @@ pub enum Command {
     MvccByStartTs(MvccByStartTs),
     RawCompareAndSwap(RawCompareAndSwap),
     RawAtomicStore(RawAtomicStore),
+    WakeUpLegacyPessimisticLockWaits(WakeUpLegacyPessimisticLockWaits),
 }
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
@@ -203,6 +205,11 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             })
             .collect();
 
+        let allow_lock_with_conflict = match req.get_wait_lock_mode() {
+            PessimisticWaitLockMode::RetryFirst => false,
+            PessimisticWaitLockMode::LockFirst => true,
+        };
+
         AcquirePessimisticLock::new_normal(
             keys,
             req.take_primary_lock(),
@@ -213,8 +220,8 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.get_return_values(),
             req.get_min_commit_ts().into(),
-            OldValues::default(),
             req.get_check_existence(),
+            allow_lock_with_conflict,
             req.take_context(),
         )
     }
@@ -395,6 +402,7 @@ pub struct WriteResultLockInfo {
     pub index_in_request: usize,
     pub key: Key,
     pub should_not_exist: bool,
+    pub allow_lock_with_conflict: bool,
     pub last_found_lock: LockInfo,
     pub lock_hash: u64,
     pub hash_for_latch: u64,
@@ -416,6 +424,7 @@ impl WriteResultLockInfo {
         index_in_request: usize,
         key: Key,
         should_not_exist: bool,
+        allow_lock_with_conflict: bool,
         last_found_lock: LockInfo,
         term: Option<NonZeroU64>,
         parameters: PessimisticLockParameters,
@@ -427,6 +436,7 @@ impl WriteResultLockInfo {
             index_in_request,
             key,
             should_not_exist,
+            allow_lock_with_conflict,
             last_found_lock,
             lock_hash,
             hash_for_latch,
@@ -435,6 +445,10 @@ impl WriteResultLockInfo {
             parameters,
             req_states: None,
         }
+    }
+
+    pub fn can_lock_on_wake_up(&self) -> bool {
+        self.allow_lock_with_conflict
     }
 }
 
@@ -517,6 +531,10 @@ pub trait CommandExt: Display {
         false
     }
 
+    fn is_sync_cmd(&self) -> bool {
+        false
+    }
+
     fn write_bytes(&self) -> usize;
 
     fn gen_lock(&self) -> latch::Lock;
@@ -584,6 +602,7 @@ impl Command {
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
+            Command::WakeUpLegacyPessimisticLockWaits(t) => t,
         }
     }
 
@@ -607,6 +626,7 @@ impl Command {
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
+            Command::WakeUpLegacyPessimisticLockWaits(t) => t,
         }
     }
 
@@ -648,8 +668,23 @@ impl Command {
         }
     }
 
+    #[must_use]
+    pub(crate) fn process_sync(
+        self,
+        sync_cmd_ctx: SyncCommandContext<'_>,
+    ) -> Option<ReleasedLocks> {
+        match self {
+            Command::WakeUpLegacyPessimisticLockWaits(t) => t.process_sync(sync_cmd_ctx),
+            _ => panic!("unsupported sync command"),
+        }
+    }
+
     pub fn readonly(&self) -> bool {
         self.command_ext().readonly()
+    }
+
+    pub fn is_sync_cmd(&self) -> bool {
+        self.command_ext().is_sync_cmd()
     }
 
     pub fn incr_cmd_metric(&self) {
@@ -720,6 +755,17 @@ pub trait ReadCommand<S: Snapshot>: CommandExt {
 /// Commands that need to modify the database during execution will implement this trait.
 pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
+}
+
+pub struct SyncCommandContext<'a> {
+    pub latch: &'a mut latch::Lock,
+    pub on_finished: &'a mut Option<Box<dyn FnOnce() + Send>>,
+}
+
+/// System commands that's executed synchronously in scheduler pool.
+pub trait SyncCommand: CommandExt {
+    #[must_use]
+    fn process_sync(self, sync_cmd_ctx: SyncCommandContext<'_>) -> Option<ReleasedLocks>;
 }
 
 #[cfg(test)]

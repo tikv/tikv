@@ -4,7 +4,7 @@ use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
 use crate::storage::lock_manager::{
-    DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken, WaitTimeout,
+    DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockDigest, LockWaitToken, WaitTimeout,
 };
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
 use crate::storage::txn::Error as TxnError;
@@ -39,6 +39,7 @@ use raft::StateRole;
 use tikv_util::config::ReadableDuration;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio::task::spawn_local;
+use txn_types::Key;
 
 struct DelayInner {
     timer: Compat01As03<tokio_timer::Delay>,
@@ -105,6 +106,9 @@ pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 
 #[allow(clippy::large_enum_variant)]
 pub enum Task {
+    SetKeyWakeUpDelayCallback {
+        cb: Box<dyn Fn(&Key) + Send>,
+    },
     WaitFor {
         token: LockWaitToken,
         region_id: u64,
@@ -116,6 +120,9 @@ pub enum Task {
         timeout: WaitTimeout,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         diag_ctx: DiagnosticContext,
+    },
+    RecordLegacyWakingUpKeys {
+        events: Vec<KeyWakeUpEvent>,
     },
     RemoveLockWait {
         token: LockWaitToken,
@@ -160,6 +167,9 @@ impl Debug for Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Task::SetKeyWakeUpDelayCallback { .. } => {
+                write!(f, "setting key wake up delay callback")
+            }
             Task::WaitFor {
                 token,
                 start_ts,
@@ -175,6 +185,9 @@ impl Display for Task {
                     wait_info.len() - 1,
                     token
                 )
+            }
+            Task::RecordLegacyWakingUpKeys { events } => {
+                write!(f, "recording legacy waking up keys {:?}", events)
             }
             Task::RemoveLockWait { token } => {
                 write!(f, "waking up txns waiting for token {:?}", token)
@@ -423,8 +436,12 @@ struct WaitTable {
     region_waiters: HashMap<u64, (RegionState, HashSet<LockWaitToken>)>,
     waiter_pool: HashMap<LockWaitToken, Waiter>,
     waiter_count: Arc<AtomicUsize>,
+
+    legacy_wakeup_in_progress: HashMap<Key, Delay>,
+
     on_waiter_cancel_by_region_error:
         Option<Box<dyn Fn(LockWaitToken, Vec<KeyLockWaitInfo>) + Send>>,
+    wake_up_key_delay_callback: Option<Box<dyn Fn(&Key) + Send>>,
 }
 
 impl WaitTable {
@@ -434,7 +451,9 @@ impl WaitTable {
             region_waiters: HashMap::default(),
             waiter_pool: HashMap::default(),
             waiter_count,
+            legacy_wakeup_in_progress: HashMap::default(),
             on_waiter_cancel_by_region_error: None,
+            wake_up_key_delay_callback: None,
         }
     }
 
@@ -443,6 +462,10 @@ impl WaitTable {
         cb: Option<Box<dyn Fn(LockWaitToken, Vec<KeyLockWaitInfo>) + Send>>,
     ) {
         self.on_waiter_cancel_by_region_error = cb;
+    }
+
+    fn set_wake_up_key_delay_callback(&mut self, cb: Option<Box<dyn Fn(&Key) + Send>>) {
+        self.wake_up_key_delay_callback = cb;
     }
 
     #[cfg(test)]
@@ -693,6 +716,14 @@ impl Scheduler {
         });
     }
 
+    pub fn set_key_wake_up_delay_callback(&self, cb: Box<dyn Fn(&Key) + Send>) {
+        self.notify_scheduler(Task::SetKeyWakeUpDelayCallback { cb });
+    }
+
+    pub fn record_legacy_waking_up_keys(&self, events: Vec<KeyWakeUpEvent>) {
+        self.notify_scheduler(Task::RecordLegacyWakingUpKeys { events });
+    }
+
     pub fn remove_lock_wait(&self, token: LockWaitToken) {
         self.notify_scheduler(Task::RemoveLockWait { token });
     }
@@ -786,6 +817,35 @@ impl WaiterManager {
         });
         if self.wait_table.borrow_mut().add_waiter(token, waiter) {
             spawn_local(f);
+        }
+    }
+
+    fn handle_record_legacy_waking_up_keys(&mut self, events: Vec<KeyWakeUpEvent>) {
+        let deadline = Instant::now() + self.wake_up_delay_duration.0;
+        for event in events {
+            self.wait_table
+                .borrow_mut()
+                .legacy_wakeup_in_progress
+                .entry(event.key)
+                .and_modify(|delay| {
+                    delay.reset(deadline);
+                })
+                .or_insert_with_key(|key| {
+                    let delay = Delay::new(deadline);
+                    let delay1 = delay.clone();
+                    let key = key.clone();
+                    let wait_table = self.wait_table.clone();
+                    spawn_local(async move {
+                        delay1.await;
+                        let mut wait_table = wait_table.borrow_mut();
+                        if wait_table.legacy_wakeup_in_progress.remove(&key).is_some() {
+                            if let Some(cb) = &wait_table.wake_up_key_delay_callback {
+                                cb(&key)
+                            }
+                        }
+                    });
+                    delay
+                });
         }
     }
 
@@ -894,6 +954,11 @@ impl WaiterManager {
 impl FutureRunnable<Task> for WaiterManager {
     fn run(&mut self, task: Task) {
         match task {
+            Task::SetKeyWakeUpDelayCallback { cb } => {
+                self.wait_table
+                    .borrow_mut()
+                    .set_wake_up_key_delay_callback(Some(cb));
+            }
             Task::WaitFor {
                 token,
                 region_id,
@@ -917,6 +982,9 @@ impl FutureRunnable<Task> for WaiterManager {
                 );
                 self.handle_wait_for(token, waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
+            }
+            Task::RecordLegacyWakingUpKeys { events } => {
+                self.handle_record_legacy_waking_up_keys(events);
             }
             Task::RemoveLockWait { token } => {
                 self.handle_remove_lock_wait(token);

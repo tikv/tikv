@@ -8,7 +8,7 @@ use crate::storage::mvcc::{
 };
 use crate::storage::txn::commands::{
     Command, CommandExt, ReaderWithStats, ReleasedLocks, ResolveLockReadPhase, ResponsePolicy,
-    TypedCommand, WriteCommand, WriteContext, WriteResult,
+    WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::{cleanup, commit, Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot};

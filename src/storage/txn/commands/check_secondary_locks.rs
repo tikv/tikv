@@ -8,8 +8,7 @@ use crate::storage::txn::commands::ReaderWithStats;
 use crate::storage::txn::{
     actions::check_txn_status::{collapse_prev_rollback, make_rollback},
     commands::{
-        Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
-        WriteContext, WriteResult,
+        CommandExt, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext, WriteResult,
     },
     Result,
 };

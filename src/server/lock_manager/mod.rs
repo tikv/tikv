@@ -28,7 +28,9 @@ use crate::storage::{
 use raftstore::coprocessor::CoprocessorHost;
 
 use crate::server::lock_manager::waiter_manager::Waiter;
-use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockWaitToken};
+use crate::storage::lock_manager::{
+    DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockWaitToken,
+};
 use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_traits::KvEngine;
@@ -249,6 +251,10 @@ impl LockManager {
 }
 
 impl LockManagerTrait for LockManager {
+    fn set_key_wake_up_delay_callback(&self, cb: Box<dyn Fn(&txn_types::Key) + Send>) {
+        self.waiter_mgr_scheduler.set_key_wake_up_delay_callback(cb);
+    }
+
     fn allocate_token(&self) -> LockWaitToken {
         LockWaitToken(Some(self.token_allocator.fetch_add(1, Ordering::SeqCst)))
     }
@@ -294,6 +300,11 @@ impl LockManagerTrait for LockManager {
             cancel_callback,
             diag_ctx,
         );
+    }
+
+    fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>) {
+        self.waiter_mgr_scheduler
+            .record_legacy_waking_up_keys(wake_up_events);
     }
 
     fn remove_lock_wait(&self, token: LockWaitToken) {

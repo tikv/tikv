@@ -8,14 +8,17 @@ use std::num::NonZeroU64;
 use std::usize;
 
 use crate::storage::txn::commands::{ReleasedLocks, WriteResultLockInfo};
+use collections::HashMap;
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
-use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use txn_types::Key;
 
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
 const WAITING_LIST_MAX_CAPACITY: usize = 16;
+
+pub(super) type LockWaitQueueMap =
+    std::collections::HashMap<Key, VecDeque<WriteResultLockInfo>, RandomState>;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
@@ -28,7 +31,7 @@ struct Latch {
     // store hash value of the key and command ID which requires this key.
     pub waiting: VecDeque<Option<(u64, u64)>>,
     // TODO: Filter by the known hash to make it perhaps faster.
-    pub lock_waiting: HashMap<Key, VecDeque<WriteResultLockInfo>, RandomState>,
+    pub lock_waiting: HashMap<u64, LockWaitQueueMap>,
 }
 
 impl Latch {
@@ -36,7 +39,7 @@ impl Latch {
     pub fn new() -> Latch {
         Latch {
             waiting: VecDeque::new(),
-            lock_waiting: HashMap::new(),
+            lock_waiting: HashMap::default(),
         }
     }
 
@@ -54,10 +57,10 @@ impl Latch {
     /// If the element which would be removed does not appear at the front of the queue, it will leave
     /// a hole in the queue. So we must remove consecutive hole when remove the head of the
     /// queue to make the queue not too long.
-    pub fn pop_front(&mut self, key_hash: u64) -> Option<(u64, u64)> {
+    pub fn pop_front(&mut self, key_hash: u64, ignore_cid: Option<u64>) -> Option<(u64, u64)> {
         if let Some(item) = self.waiting.pop_front() {
-            if let Some((k, _)) = item.as_ref() {
-                if *k == key_hash {
+            if let Some((k, cid)) = item.as_ref() {
+                if *k == key_hash && Some(*cid) != ignore_cid {
                     self.maybe_shrink();
                     return item;
                 }
@@ -66,8 +69,8 @@ impl Latch {
             // FIXME: remove this clippy attribute once https://github.com/rust-lang/rust-clippy/issues/6784 is fixed.
             #[allow(clippy::manual_flatten)]
             for it in self.waiting.iter_mut() {
-                if let Some((v, _)) = it {
-                    if *v == key_hash {
+                if let Some((v, cid)) = it {
+                    if *v == key_hash && Some(*cid) != ignore_cid {
                         return it.take();
                     }
                 }
@@ -100,60 +103,19 @@ impl Latch {
             self.waiting.shrink_to_fit();
         }
     }
-
-    fn push_lock_waiting(&mut self, lock_info: WriteResultLockInfo) {
-        let key = lock_info.key.clone();
-        self.lock_waiting
-            .entry(key)
-            .or_insert_with(VecDeque::new)
-            .push_back(lock_info);
-    }
-
-    fn pop_lock_waiting(
-        &mut self,
-        key: &Key,
-        _term: Option<NonZeroU64>,
-    ) -> Option<WriteResultLockInfo> {
-        let (result, delete_entry) = if let Some(v) = self.lock_waiting.get_mut(key) {
-            let mut result = None;
-            while let Some(lock_info) = v.pop_front() {
-                // TODO: Early cancel entries with mismatching term.
-                let lock_info: WriteResultLockInfo = lock_info;
-                if lock_info
-                    .req_states
-                    .as_ref()
-                    .unwrap()
-                    .finished
-                    .load(Ordering::Acquire)
-                {
-                    // Drop already-finished entry, which might have been canceled by error.
-                    continue;
-                }
-                result = Some(lock_info);
-                break;
-            }
-            (result, v.is_empty())
-        } else {
-            (None, false)
-        };
-
-        if delete_entry {
-            self.lock_waiting.remove(key);
-        }
-
-        result
-    }
 }
 
-/// Lock required for a command.
+/// Lock required for a command. It also represents the logical ownership of the latches it has
+/// acquired, carrying the necessary information that moves along with the ownership.
 pub struct Lock {
     /// The hash value of the keys that a command must acquire before being able to be processed.
     pub required_hashes: Vec<u64>,
 
+    ///  The lock wait queues of the latch slots that's acquired.
+    pub lock_wait_queues: HashMap<u64, LockWaitQueueMap>,
+
     /// The number of latches that the command has acquired.
     pub owned_count: usize,
-
-    pub additional_lock_waits: Option<VecDeque<WriteResultLockInfo>>,
 }
 
 impl Lock {
@@ -176,28 +138,20 @@ impl Lock {
         required_hashes.dedup();
         Lock {
             required_hashes,
+            lock_wait_queues: HashMap::default(),
             owned_count: 0,
-            additional_lock_waits: None,
         }
     }
 
-    pub fn new_already_acquired(required_hashes: Vec<u64>) -> Self {
+    pub fn new_already_acquired(
+        required_hashes: Vec<u64>,
+        lock_wait_queues: HashMap<u64, LockWaitQueueMap>,
+    ) -> Self {
         let owned_count = required_hashes.len();
         Self {
             required_hashes,
+            lock_wait_queues,
             owned_count,
-            additional_lock_waits: None,
-        }
-    }
-
-    pub fn new_with_additional_lock_waits(
-        required_hashes: Vec<u64>,
-        additional_lock_waits: VecDeque<WriteResultLockInfo>,
-    ) -> Self {
-        Self {
-            required_hashes,
-            owned_count: 0,
-            additional_lock_waits: Some(additional_lock_waits),
         }
     }
 
@@ -208,6 +162,12 @@ impl Lock {
 
     pub fn is_write_lock(&self) -> bool {
         !self.required_hashes.is_empty()
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        assert!(self.lock_wait_queues.is_empty());
     }
 }
 
@@ -243,11 +203,10 @@ impl Latches {
             match latch.get_first_req_by_hash(key_hash) {
                 Some(cid) => {
                     if cid == who {
-                        Self::add_lock_waits(
-                            key_hash,
-                            lock.additional_lock_waits.as_mut(),
-                            &mut latch,
-                        );
+                        if let Some(q) = latch.lock_waiting.remove(&key_hash) {
+                            let replaced = lock.lock_wait_queues.insert(key_hash, q);
+                            assert!(replaced.is_none());
+                        }
                         acquired_count += 1;
                     } else {
                         latch.wait_for_wake(key_hash, who);
@@ -255,8 +214,11 @@ impl Latches {
                     }
                 }
                 None => {
-                    Self::add_lock_waits(key_hash, lock.additional_lock_waits.as_mut(), &mut latch);
                     latch.wait_for_wake(key_hash, who);
+                    if let Some(q) = latch.lock_waiting.remove(&key_hash) {
+                        let replaced = lock.lock_wait_queues.insert(key_hash, q);
+                        assert!(replaced.is_none());
+                    }
                     acquired_count += 1;
                 }
             }
@@ -265,35 +227,29 @@ impl Latches {
         lock.acquired()
     }
 
-    fn add_lock_waits(
-        current_hash: u64,
-        sorted_lock_waits: Option<&mut VecDeque<WriteResultLockInfo>>,
-        latch_slot: &mut Latch,
-    ) {
-        if let Some(lock_waits) = sorted_lock_waits {
-            while let Some(front) = lock_waits.front() {
-                assert_ge!(front.hash_for_latch, current_hash);
-                if front.hash_for_latch != current_hash {
-                    return;
-                }
-
-                let front = lock_waits.pop_front().unwrap();
-                latch_slot.push_lock_waiting(front);
-            }
-        }
-    }
-
-    /// Releases all latches owned by the `lock` of command with ID `who`, returns the wakeup list.
+    /// Releases all latches owned by the `lock` of command with ID `who`, returns:
+    /// * The cids to wake up
+    /// * The latch hashes to be inherited by the next awakened pessimistic lock command, if any
+    /// * The lock info of the next awakened pessimistic lock command, if any
+    /// * The `LockWaitQueueMap`s inherited along with the latch hashes.
     ///
     /// Preconditions: the caller must ensure the command is at the front of the latches.
     pub fn release(
         &self,
-        lock: &Lock,
+        mut lock: Lock,
         who: u64,
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         released_locks: Option<ReleasedLocks>,
         new_cid_for_holding_latches: Option<u64>,
-    ) -> (Vec<u64>, Vec<u64>, Vec<WriteResultLockInfo>) {
+    ) -> (
+        Vec<u64>,
+        Vec<u64>,
+        Vec<WriteResultLockInfo>,
+        HashMap<u64, LockWaitQueueMap>,
+    ) {
+        // It's not allowed that a command releases locks and acquire locks at the same time.
+        assert!(!(wait_for_locks.is_some() && released_locks.is_some()));
+
         let mut wait_for_locks = if let Some(mut v) = wait_for_locks {
             v.sort_unstable_by_key(|x| x.hash_for_latch);
             v.into_iter().peekable()
@@ -311,39 +267,104 @@ impl Latches {
         let mut latch_keep_list: Vec<u64> = vec![];
         let mut txn_lock_wakeup_list = vec![];
         for &key_hash in &lock.required_hashes[..lock.owned_count] {
-            let mut latch = self.lock_latch(key_hash);
-            let (v, front) = latch.pop_front(key_hash).unwrap();
-            assert_eq!(front, who);
-            assert_eq!(v, key_hash);
+            let mut queues = lock.lock_wait_queues.remove(&key_hash);
 
             while let Some(next_lock) = wait_for_locks.next_if(|v| v.hash_for_latch <= key_hash) {
                 assert_eq!(next_lock.hash_for_latch, key_hash);
-                latch.push_lock_waiting(next_lock);
+                Self::push_lock_waiting(&mut queues, next_lock);
             }
 
             let mut has_awakened_lock = false;
             while let Some(next_lock) = released_locks.next_if(|v| v.hash_for_latch <= key_hash) {
                 assert_eq!(next_lock.hash_for_latch, key_hash);
                 // TODO: Pass term here
-                if let Some(lock_wait) = latch.pop_lock_waiting(&next_lock.key, None) {
+                if let Some(lock_wait) = Self::pop_lock_waiting(&mut queues, &next_lock.key, None) {
                     txn_lock_wakeup_list.push(lock_wait);
                     has_awakened_lock = true;
                 }
             }
 
+            let mut latch = self.lock_latch(key_hash);
+            let (v, front) = latch
+                .pop_front(key_hash, new_cid_for_holding_latches)
+                .unwrap();
+            assert_eq!(front, who);
+            assert_eq!(v, key_hash);
+
             // If we are waking up some blocked pessimistic lock requests, do not wake up next queueing command.
             if !has_awakened_lock {
+                // Put back the queue to latch
+                if let Some(queues) = queues {
+                    if !queues.is_empty() {
+                        assert!(latch.lock_waiting.insert(key_hash, queues).is_none());
+                    }
+                }
                 if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
                     cmd_wakeup_list.push(wakeup);
                 }
             } else {
+                // Return the queue.
+                if let Some(queues) = queues {
+                    if !queues.is_empty() {
+                        assert!(lock.lock_wait_queues.insert(key_hash, queues).is_none());
+                    }
+                }
                 latch_keep_list.push(key_hash);
-                // TODO: This is incorrect if there are two different hashes that have the same modulus so that they are in the same slot. Fix it.
                 latch.push_preemptive(key_hash, new_cid_for_holding_latches.unwrap());
             }
         }
         assert!(wait_for_locks.peek().is_none());
-        (cmd_wakeup_list, latch_keep_list, txn_lock_wakeup_list)
+        assert!(latch_keep_list.len() >= lock.lock_wait_queues.len());
+        (
+            cmd_wakeup_list,
+            latch_keep_list,
+            txn_lock_wakeup_list,
+            std::mem::take(&mut lock.lock_wait_queues),
+        )
+    }
+
+    fn push_lock_waiting(queues: &mut Option<LockWaitQueueMap>, lock_info: WriteResultLockInfo) {
+        let key = lock_info.key.clone();
+        queues
+            .get_or_insert_with(LockWaitQueueMap::new)
+            .entry(key)
+            .or_insert_with(VecDeque::new)
+            .push_back(lock_info);
+    }
+
+    fn pop_lock_waiting(
+        queues: &mut Option<LockWaitQueueMap>,
+        key: &Key,
+        _term: Option<NonZeroU64>,
+    ) -> Option<WriteResultLockInfo> {
+        let queue = queues.as_mut()?.get_mut(key)?;
+        let mut result = None;
+        while let Some(lock_info) = queue.pop_front() {
+            // TODO: Early cancel entries with mismatching term.
+            let lock_info: WriteResultLockInfo = lock_info;
+            if lock_info
+                .req_states
+                .as_ref()
+                .unwrap()
+                .finished
+                .load(Ordering::Acquire)
+            {
+                // Drop already-finished entry, which might have been canceled by error.
+                continue;
+            }
+            result = Some(lock_info);
+            break;
+        }
+
+        if queue.is_empty() {
+            let queue_map = queues.as_mut().unwrap();
+            queue_map.remove(key);
+            if queue_map.is_empty() {
+                *queues = None;
+            }
+        }
+
+        result
     }
 
     #[inline]
@@ -376,7 +397,7 @@ mod tests {
         assert_eq!(acquired_b, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a, None, None, None).0;
+        let wakeup = latches.release(lock_a, cid_a, None, None, None).0;
         assert_eq!(wakeup[0], cid_b);
 
         // b acquire lock success
@@ -411,7 +432,7 @@ mod tests {
         assert_eq!(acquired_c, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a, None, None, None).0;
+        let wakeup = latches.release(lock_a, cid_a, None, None, None).0;
         assert_eq!(wakeup[0], cid_c);
 
         // c acquire lock failed again, cause b occupied slot 4
@@ -419,7 +440,7 @@ mod tests {
         assert_eq!(acquired_c, false);
 
         // b release lock, and get wakeup list
-        let wakeup = latches.release(&lock_b, cid_b, None, None, None).0;
+        let wakeup = latches.release(lock_b, cid_b, None, None, None).0;
         assert_eq!(wakeup[0], cid_c);
 
         // finally c acquire lock success
@@ -460,7 +481,7 @@ mod tests {
         assert_eq!(acquired_d, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a, None, None, None).0;
+        let wakeup = latches.release(lock_a, cid_a, None, None, None).0;
         assert_eq!(wakeup[0], cid_c);
 
         // c acquire lock success
@@ -468,7 +489,7 @@ mod tests {
         assert_eq!(acquired_c, true);
 
         // b release lock, and get wakeup list
-        let wakeup = latches.release(&lock_b, cid_b, None, None, None).0;
+        let wakeup = latches.release(lock_b, cid_b, None, None, None).0;
         assert_eq!(wakeup[0], cid_d);
 
         // finally d acquire lock success

@@ -5,8 +5,8 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{MvccTxn, SnapshotReader};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
-    WriteCommand, WriteContext, WriteResult,
+    CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
+    WriteResult,
 };
 use crate::storage::txn::{cleanup, Result};
 use crate::storage::{ProcessResult, Snapshot};

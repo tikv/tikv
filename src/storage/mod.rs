@@ -110,7 +110,7 @@ use std::{
 use tikv_kv::SnapshotExt;
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, RawMutation, TimeStamp, TsSet, Value};
 
 use causal_ts;
 
@@ -2873,6 +2873,7 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
 pub mod test_util {
     use super::*;
     use crate::storage::txn::commands;
+    use crate::storage::txn::commands::acquire_pessimistic_lock::PessimisticLockCmdInner;
     use std::sync::Mutex;
     use std::{
         fmt::Debug,
@@ -3013,6 +3014,25 @@ pub mod test_util {
 
     type PessimisticLockCommand = TypedCommand<Result<PessimisticLockResults>>;
 
+    impl PessimisticLockCommand {
+        fn allow_with_conflict(mut self, v: bool) -> Self {
+            if let Command::AcquirePessimisticLock(commands::AcquirePessimisticLock {
+                inner:
+                    PessimisticLockCmdInner::SingleRequest {
+                        allow_lock_with_conflict,
+                        ..
+                    },
+                ..
+            }) = &mut self.cmd
+            {
+                *allow_lock_with_conflict = v;
+            } else {
+                panic!("¿");
+            }
+            self
+        }
+    }
+
     pub fn new_acquire_pessimistic_lock_command(
         keys: Vec<(Key, bool)>,
         start_ts: impl Into<TimeStamp>,
@@ -3052,8 +3072,8 @@ pub mod test_util {
             None,
             return_values,
             for_update_ts.next(),
-            OldValues::default(),
             check_existence,
+            false,
             Context::default(),
         )
     }
@@ -3157,7 +3177,9 @@ mod tests {
 
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
-    use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockWaitToken};
+    use crate::storage::lock_manager::{
+        DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockWaitToken,
+    };
     use crate::storage::mvcc::LockType;
     use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
     use crate::storage::txn::tests::must_rollback;
@@ -6824,7 +6846,6 @@ mod tests {
         }
     }
 
-    #[ignore]
     #[test]
     fn test_pessimistic_lock() {
         test_pessimistic_lock_impl(false);
@@ -7516,9 +7537,11 @@ mod tests {
             cancel_callback: Box<dyn FnOnce(Error) + Send>,
             diag_ctx: DiagnosticContext,
         },
-
         RemoveLockWait {
             token: LockWaitToken,
+        },
+        OnKeysWakeUp {
+            events: Vec<KeyWakeUpEvent>,
         },
     }
 
@@ -7544,6 +7567,8 @@ mod tests {
     }
 
     impl LockManager for ProxyLockMgr {
+        fn set_key_wake_up_delay_callback(&self, _cb: Box<dyn Fn(&Key) + Send>) {}
+
         fn allocate_token(&self) -> LockWaitToken {
             LockWaitToken(Some(1))
         }
@@ -7573,6 +7598,14 @@ mod tests {
                     timeout,
                     cancel_callback,
                     diag_ctx,
+                })
+                .unwrap();
+        }
+
+        fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>) {
+            self.tx
+                .send(Msg::OnKeysWakeUp {
+                    events: wake_up_events,
                 })
                 .unwrap();
         }
@@ -7632,7 +7665,7 @@ mod tests {
                     Some(WaitTimeout::Millis(100)),
                     false,
                     21.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     Context::default(),
                 ),
@@ -8304,7 +8337,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     Default::default(),
                 ),
@@ -8326,7 +8359,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     Default::default(),
                 ),
@@ -8549,7 +8582,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
-                OldValues::default(),
+                false,
                 false,
                 Context::default(),
             ),
@@ -8574,7 +8607,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
-                OldValues::default(),
+                false,
                 false,
                 Context::default(),
             ),

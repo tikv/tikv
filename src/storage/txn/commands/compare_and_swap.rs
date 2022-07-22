@@ -5,7 +5,7 @@ use crate::storage::kv::{Modify, WriteData};
 use crate::storage::lock_manager::LockManager;
 use crate::storage::raw;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    CommandExt, ResponsePolicy, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
@@ -98,6 +98,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::txn::commands::TypedCommand;
     use crate::storage::{Engine, Statistics, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;

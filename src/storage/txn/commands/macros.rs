@@ -47,14 +47,14 @@ macro_rules! command {
             pub fn new(
                 $($arg: $arg_ty,)*
                 ctx: crate::storage::Context,
-            ) -> TypedCommand<$cmd_ty> {
+            ) -> $crate::storage::txn::commands::TypedCommand<$cmd_ty> {
                 let execution_duration_limit = if ctx.max_execution_duration_ms == 0 {
                     crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT
                 } else {
                     ::std::time::Duration::from_millis(ctx.max_execution_duration_ms)
                 };
                 let deadline = ::tikv_util::deadline::Deadline::from_now(execution_duration_limit);
-                Command::$cmd($cmd {
+                $crate::storage::txn::commands::Command::$cmd($cmd {
                         ctx,
                         deadline,
                         $($arg,)*

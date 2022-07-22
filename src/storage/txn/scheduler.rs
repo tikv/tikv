@@ -21,10 +21,8 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use std::collections::{HashSet, VecDeque};
 use std::iter::Iterator;
 use std::marker::PhantomData;
-use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -36,7 +34,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::compat::Future01CompatExt;
-use kvproto::kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp};
+use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
@@ -56,11 +54,12 @@ use crate::storage::lock_manager::{
     self, DiagnosticContext, LockDigest, LockManager, LockWaitToken, WaitTimeout,
 };
 use crate::storage::metrics::{self, *};
-use crate::storage::txn::commands::acquire_pessimistic_lock::ResumedPessimisticLockItem;
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::commands::{
-    self, CallbackWithArcError, PessimisticLockKeyCallback, ReleasedLocks, ResponsePolicy,
-    WriteContext, WriteResult, WriteResultLockInfo,
+    self, CallbackWithArcError, ReleasedLocks, ResponsePolicy, SyncCommandContext, WriteContext,
+    WriteResult, WriteResultLockInfo,
 };
+use crate::storage::txn::latch::LockWaitQueueMap;
 use crate::storage::txn::sched_pool::tls_collect_query;
 use crate::storage::txn::{
     commands::Command,
@@ -321,7 +320,10 @@ impl<L: LockManager> SchedulerInner<L> {
     ///
     /// Returns a deadline error if the deadline is exceeded. Returns the `Task` if
     /// all latches are acquired, returns `None` otherwise.
-    fn acquire_lock_on_wakeup(&self, cid: u64) -> Result<Option<Task>, StorageError> {
+    fn acquire_lock_on_wakeup(
+        &self,
+        cid: u64,
+    ) -> Result<Option<(Task, MutexGuard<'_, HashMap<u64, TaskContext>>)>, StorageError> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests blocking
@@ -336,7 +338,10 @@ impl<L: LockManager> SchedulerInner<L> {
         }
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
-            return Ok(tctx.task.take());
+            match tctx.task.take() {
+                Some(task) => return Ok(Some((task, task_slot))),
+                None => return Ok(None),
+            }
         }
         Ok(None)
     }
@@ -452,7 +457,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Releases all the latches held by a command.
     fn release_latches(
         &self,
-        lock: &Lock,
+        lock: Lock,
         cid: u64,
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         released_locks: Option<ReleasedLocks>,
@@ -464,13 +469,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             None
         };
-        let (cmd_wakeup_list, latch_keep_list, txn_lock_wakeup_list) = self.inner.latches.release(
-            lock,
-            cid,
-            wait_for_locks,
-            released_locks,
-            next_cid_for_holding_latches,
-        );
+        let (cmd_wakeup_list, latch_keep_list, txn_lock_wakeup_list, queues) =
+            self.inner.latches.release(
+                lock,
+                cid,
+                wait_for_locks,
+                released_locks,
+                next_cid_for_holding_latches,
+            );
         for wcid in cmd_wakeup_list {
             self.try_to_wake_up(wcid);
         }
@@ -482,6 +488,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 next_cid_for_holding_latches.unwrap(),
                 txn_lock_wakeup_list,
                 latch_keep_list,
+                queues,
             );
         }
         STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM_STATIC
@@ -516,8 +523,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
             let task = tctx.task.take().unwrap();
-            drop(task_slot);
-            self.execute(task);
+            self.execute(task, task_slot);
             return;
         }
         // Check deadline in background.
@@ -550,9 +556,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
         match self.inner.acquire_lock_on_wakeup(cid) {
-            Ok(Some(task)) => {
+            Ok(Some((task, task_slot))) => {
                 fail_point!("txn_scheduler_try_to_wake_up");
-                self.execute(task);
+                self.execute(task, task_slot);
             }
             Ok(None) => {}
             Err(err) => {
@@ -575,15 +581,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         cid: u64,
         mut awakened_locks_info: Vec<WriteResultLockInfo>,
         latches: Vec<u64>,
+        lock_wait_queues: HashMap<u64, LockWaitQueueMap>,
     ) {
         let start_time = Instant::now();
 
-        let mut key_callbacks: Vec<_> = awakened_locks_info
+        let key_callbacks: Vec<_> = awakened_locks_info
             .iter_mut()
             .map(|i| i.key_cb.take().unwrap())
             .collect();
 
-        let latches = Lock::new_already_acquired(latches);
+        let latches = Lock::new_already_acquired(latches, lock_wait_queues);
         let cmd = commands::AcquirePessimisticLock::new_resumed_from_lock_info(awakened_locks_info);
 
         // TODO: Make flow control take effect on this thing.
@@ -609,7 +616,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Executes the task in the sched pool.
-    fn execute(&self, mut task: Task) {
+    fn execute(&self, mut task: Task, task_slot: MutexGuard<'_, HashMap<u64, TaskContext>>) {
+        if task.cmd.is_sync_cmd() {
+            self.process_sync(task, task_slot);
+            return;
+        }
+
+        // Release the mutex.
+        drop(task_slot);
+
         let sched = self.clone();
         self.get_sched_pool(task.cmd.priority())
             .pool
@@ -684,7 +699,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             cb.execute(pr);
         }
 
-        self.release_latches(&tctx.lock, cid, None, None, tctx.tag);
+        self.release_latches(tctx.lock, cid, None, None, tctx.tag);
     }
 
     /// Event handler for the success of read.
@@ -703,7 +718,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             tctx.cb.unwrap().execute(pr);
         }
 
-        self.release_latches(&tctx.lock, cid, None, None, tag);
+        self.release_latches(tctx.lock, cid, None, None, tag);
     }
 
     /// Event handler for the success of write.
@@ -765,7 +780,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             assert!((pipelined && wait_for_locks.is_none()) || async_apply_prewrite);
         }
-        self.release_latches(&tctx.lock, cid, wait_for_locks, released_locks, tag);
+        self.release_latches(tctx.lock, cid, wait_for_locks, released_locks, tag);
     }
 
     /// Event handler for the request of waiting for lock
@@ -961,7 +976,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             mut to_be_write,
             rows,
             pr,
-            released_locks,
+            mut released_locks,
             lock_guards,
             response_policy,
         } = match deadline
@@ -1029,7 +1044,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     if lock_req_ctx.shared_states.finished.load(Ordering::Acquire) {
                         lock_info_list = None;
                     } else {
-                        let lock_info_len = l.len();
                         let mut key_callback_count = 0;
                         for lock_info in l {
                             assert!(lock_info.key_cb.is_none());
@@ -1065,6 +1079,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             None
         };
+
+        if let Some(released_locks) = released_locks.as_mut() {
+            scheduler.on_release_locks_pre_persist(cid, released_locks);
+        }
 
         if to_be_write.modifies.is_empty() {
             scheduler.on_write_finished(
@@ -1323,6 +1341,32 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
+    fn process_sync(&self, task: Task, mut task_slot: MutexGuard<'_, HashMap<u64, TaskContext>>) {
+        let cid = task.cid;
+        let tag = task.cmd.tag();
+        let priority = task.cmd.priority();
+        let mut on_finished_cb = None;
+        let released_locks = task.cmd.process_sync(SyncCommandContext {
+            latch: &mut task_slot.get_mut(&cid).unwrap().lock,
+            on_finished: &mut on_finished_cb,
+        });
+
+        let sched = self.clone();
+        self.get_sched_pool(priority)
+            .pool
+            .spawn(async move {
+                let tctx = sched.inner.dequeue_task_context(cid);
+                sched.release_latches(tctx.lock, cid, None, released_locks, tag);
+                if let Some(cb) = on_finished_cb {
+                    cb();
+                }
+                if let Some(cb) = tctx.cb {
+                    cb.execute(ProcessResult::Res);
+                }
+            })
+            .unwrap();
+    }
+
     /// Returns whether it succeeds to write pessimistic locks to the in-memory lock table.
     fn try_write_in_memory_pessimistic_locks(
         &self,
@@ -1389,6 +1433,63 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             PessimisticLockMode::Pipelined
         } else {
             PessimisticLockMode::Sync
+        }
+    }
+
+    fn on_release_locks_pre_persist(&self, cid: u64, released_locks: &mut ReleasedLocks) {
+        let mut wake_up_events = vec![];
+        let mut legacy_wakeup_list = vec![];
+
+        {
+            let mut slot = self.inner.get_task_slot(cid);
+            let wait_queues = &mut slot.get_mut(&cid).unwrap().lock.lock_wait_queues;
+            released_locks.0 = std::mem::take(&mut released_locks.0)
+                .into_iter()
+                .filter_map(|released_lock| {
+                    let key_queue_map = wait_queues.get_mut(&released_lock.hash_for_latch)?;
+                    let queue = key_queue_map.get_mut(&released_lock.key)?;
+                    if queue.is_empty() {
+                        // Unreachable, but keep it for safety.
+                        key_queue_map.remove(&released_lock.key);
+                        return None;
+                    }
+
+                    let front = queue.front().unwrap();
+                    wake_up_events.push(lock_manager::KeyWakeUpEvent {
+                        key: released_lock.key.clone(),
+                        released_start_ts: released_lock.start_ts,
+                        awakened_start_ts: front.parameters.start_ts,
+                        awakened_allow_resuming: front.allow_lock_with_conflict,
+                    });
+
+                    if front.allow_lock_with_conflict {
+                        Some(released_lock)
+                    } else {
+                        let lock_info = queue.pop_front().unwrap();
+                        if queue.is_empty() {
+                            key_queue_map.remove(&released_lock.key);
+                        }
+                        legacy_wakeup_list.push((lock_info, released_lock));
+                        None
+                    }
+                })
+                .collect();
+            // Release lock of the task slot.
+        }
+
+        self.inner.lock_mgr.on_keys_wakeup(wake_up_events);
+        for (mut lock_info, released_lock) in legacy_wakeup_list {
+            let cb = lock_info.key_cb.unwrap();
+            let e = StorageError::from(Error::from(MvccError::from(
+                MvccErrorInner::WriteConflict {
+                    start_ts: lock_info.parameters.start_ts,
+                    conflict_start_ts: released_lock.start_ts,
+                    conflict_commit_ts: released_lock.commit_ts,
+                    key: released_lock.key.into_raw().unwrap(),
+                    primary: lock_info.last_found_lock.take_primary_lock(),
+                },
+            )));
+            cb(Err(Arc::new(e)));
         }
     }
 
@@ -1673,7 +1774,7 @@ mod tests {
     use raftstore::store::{ReadStats, WriteStats};
     use tikv_util::config::ReadableSize;
     use tikv_util::future::paired_future_callback;
-    use txn_types::{Key, OldValues};
+    use txn_types::Key;
 
     #[derive(Clone)]
     struct DummyReporter;
@@ -1709,7 +1810,7 @@ mod tests {
                 Some(WaitTimeout::Default),
                 false,
                 TimeStamp::default(),
-                OldValues::default(),
+                false,
                 false,
                 Context::default(),
             )
@@ -1790,7 +1891,7 @@ mod tests {
             if id != 0 {
                 assert!(latches.acquire(&mut lock, id));
             }
-            let unlocked = latches.release(&lock, id, None, None, None).0;
+            let unlocked = latches.release(lock, id, None, None, None).0;
             if id as u64 == max_id {
                 assert!(unlocked.is_empty());
             } else {
@@ -1845,7 +1946,7 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
-        scheduler.release_latches(&lock, cid, None, None, CommandKind::prewrite);
+        scheduler.release_latches(lock, cid, None, None, CommandKind::prewrite);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
@@ -2027,7 +2128,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         // When releasing the lock, the queuing tasks should be all waken up without stack overflow.
-        scheduler.release_latches(&lock, cid, None, None, CommandKind::prewrite);
+        scheduler.release_latches(lock, cid, None, None, CommandKind::prewrite);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();

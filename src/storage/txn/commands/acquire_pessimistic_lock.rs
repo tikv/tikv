@@ -10,15 +10,14 @@ use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
 };
 use crate::storage::txn::commands::{
-    Command, CommandExt, PessimisticLockKeyCallback, PessimisticLockParameters, ReaderWithStats,
-    ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
+    CommandExt, PessimisticLockParameters, ReaderWithStats, ResponsePolicy, TypedCommand,
+    WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
 };
 use crate::storage::txn::scheduler::PartialPessimisticLockRequestSharedState;
 use crate::storage::txn::{acquire_pessimistic_lock, Error, Result};
 use crate::storage::types::PessimisticLockKeyResult;
 use crate::storage::{PessimisticLockResults, ProcessResult, Result as StorageResult, Snapshot};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashSet;
 use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -35,7 +34,6 @@ pub struct ResumedPessimisticLockItem {
     pub should_not_exist: bool,
     pub params: PessimisticLockParameters,
     pub lock_key_ctx: PessimisticLockKeyContext,
-    pub awakened_with_primary_index: Option<usize>,
     pub req_states: Arc<PartialPessimisticLockRequestSharedState>,
 }
 
@@ -237,10 +235,11 @@ impl AcquirePessimisticLock {
                     written_rows += 1;
                 }
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
-                    let mut lock_info = WriteResultLockInfo::new(
+                    let lock_info = WriteResultLockInfo::new(
                         lock_key_ctx.index_in_request,
                         key.clone(),
                         *should_not_exist,
+                        allow_lock_with_conflict,
                         lock_info,
                         term,
                         params.clone(),
@@ -303,13 +302,12 @@ impl AcquirePessimisticLock {
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
 
-        for (index, item) in items.into_iter().enumerate() {
+        for item in items.into_iter() {
             let ResumedPessimisticLockItem {
                 key,
                 should_not_exist,
                 params,
                 lock_key_ctx,
-                awakened_with_primary_index,
                 req_states,
             } = item;
 
@@ -369,6 +367,7 @@ impl AcquirePessimisticLock {
                         lock_key_ctx.index_in_request,
                         key,
                         should_not_exist,
+                        true,
                         lock_info,
                         snapshot.ext().get_term(),
                         params,
@@ -431,8 +430,8 @@ impl AcquirePessimisticLock {
         wait_timeout: Option<WaitTimeout>,
         return_values: bool,
         min_commit_ts: TimeStamp,
-        _old_values: OldValues, // TODO: Remove it
         check_existence: bool,
+        allow_lock_with_conflict: bool,
         ctx: kvproto::kvrpcpb::Context,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
         let params = PessimisticLockParameters {
@@ -449,7 +448,7 @@ impl AcquirePessimisticLock {
         let inner = PessimisticLockCmdInner::SingleRequest {
             params,
             keys,
-            allow_lock_with_conflict: true,
+            allow_lock_with_conflict,
         };
         Self::new(inner, is_first_lock, ctx)
     }
@@ -490,7 +489,7 @@ impl AcquirePessimisticLock {
     pub fn new_resumed_from_lock_info(
         lock_info: Vec<WriteResultLockInfo>,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
-        let mut items: Vec<_> = lock_info
+        let items: Vec<_> = lock_info
             .into_iter()
             .map(|item| {
                 assert!(item.key_cb.is_none());
@@ -504,7 +503,6 @@ impl AcquirePessimisticLock {
                     should_not_exist: item.should_not_exist,
                     params: item.parameters,
                     lock_key_ctx,
-                    awakened_with_primary_index: None,
                     req_states: item.req_states.unwrap(),
                 }
             })
@@ -513,7 +511,7 @@ impl AcquirePessimisticLock {
     }
 
     pub fn new_resumed(
-        mut items: Vec<ResumedPessimisticLockItem>,
+        items: Vec<ResumedPessimisticLockItem>,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
         assert!(!items.is_empty());
         let ctx = items[0].params.pb_ctx.clone();

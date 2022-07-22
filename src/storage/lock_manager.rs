@@ -84,9 +84,19 @@ impl LockWaitToken {
     }
 }
 
+#[derive(Debug)]
+pub struct KeyWakeUpEvent {
+    pub key: Key,
+    pub released_start_ts: TimeStamp,
+    pub awakened_start_ts: TimeStamp,
+    pub awakened_allow_resuming: bool,
+}
+
 /// `LockManager` manages transactions waiting for locks held by other transactions.
 /// It has responsibility to handle deadlocks between transactions.
 pub trait LockManager: Clone + Send + 'static {
+    fn set_key_wake_up_delay_callback(&self, cb: Box<dyn Fn(&Key) + Send>);
+
     fn allocate_token(&self) -> LockWaitToken;
     /// Transaction with `start_ts` waits for `lock` released.
     ///
@@ -112,6 +122,8 @@ pub trait LockManager: Clone + Send + 'static {
         unimplemented!()
     }
 
+    fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>);
+
     /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
     fn remove_lock_wait(&self, token: LockWaitToken);
 
@@ -130,6 +142,8 @@ pub trait LockManager: Clone + Send + 'static {
 pub struct DummyLockManager;
 
 impl LockManager for DummyLockManager {
+    fn set_key_wake_up_delay_callback(&self, _cb: Box<dyn Fn(&Key) + Send>) {}
+
     fn allocate_token(&self) -> LockWaitToken {
         LockWaitToken(None)
     }
@@ -148,6 +162,8 @@ impl LockManager for DummyLockManager {
         _diag_ctx: DiagnosticContext,
     ) {
     }
+
+    fn on_keys_wakeup(&self, _wake_up_events: Vec<KeyWakeUpEvent>) {}
 
     fn remove_lock_wait(&self, _token: LockWaitToken) {}
 

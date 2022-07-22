@@ -2,9 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use crate::storage::mvcc::MvccReader;
-use crate::storage::txn::commands::{
-    find_mvcc_infos_by_key, Command, CommandExt, ReadCommand, TypedCommand,
-};
+use crate::storage::txn::commands::{find_mvcc_infos_by_key, CommandExt, ReadCommand};
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::MvccInfo;
 use crate::storage::{Snapshot, Statistics};

@@ -225,6 +225,7 @@ make_auto_flush_static_metric! {
         raw_compare_and_swap,
         raw_atomic_store,
         raw_checksum,
+        wake_up_legacy_pessimistic_lock_wait,
     }
 
     pub label_enum CommandStageKind {

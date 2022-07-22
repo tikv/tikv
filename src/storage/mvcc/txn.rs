@@ -43,7 +43,12 @@ pub struct ReleasedLock {
 }
 
 impl ReleasedLock {
-    fn new(start_ts: TimeStamp, commit_ts: Option<TimeStamp>, key: Key, pessimistic: bool) -> Self {
+    pub fn new(
+        start_ts: TimeStamp,
+        commit_ts: Option<TimeStamp>,
+        key: Key,
+        pessimistic: bool,
+    ) -> Self {
         let hash = key.gen_hash();
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
