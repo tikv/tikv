@@ -972,8 +972,7 @@ impl StreamTaskInfo {
         let stat = reader.metadata().await?;
         let reader = UnpinReader(Box::new(limiter.limit(reader.compat())));
         let filepath = &data_file.storage_path;
-        // Once we cannot get the stat of the file, use 4K I/O.
-        let est_len = stat.len().max(4096);
+        let est_len = stat.len();
 
         let ret = storage.write(filepath, reader, est_len).await;
         match ret {
