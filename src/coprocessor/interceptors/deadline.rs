@@ -57,10 +57,12 @@ mod tests {
             }
         }
 
-        let res = check_deadline(work(5), Deadline::from_now(Duration::from_millis(500))).await;
-        res.unwrap();
+        check_deadline(work(5), Deadline::from_now(Duration::from_millis(500)))
+            .await
+            .unwrap();
 
-        let res = check_deadline(work(100), Deadline::from_now(Duration::from_millis(500))).await;
-        assert!(res.is_err());
+        check_deadline(work(100), Deadline::from_now(Duration::from_millis(500)))
+            .await
+            .unwrap_err();
     }
 }

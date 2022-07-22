@@ -391,12 +391,14 @@ mod tests {
         defer!(GLOBAL_MEM_SIZE.set(0));
 
         let mut locks = PeerPessimisticLocks::default();
-        let res = locks.insert(vec![(Key::from_raw(b"k1"), lock(&[0; 512000]))]);
-        res.unwrap();
+        locks
+            .insert(vec![(Key::from_raw(b"k1"), lock(&[0; 512000]))])
+            .unwrap();
 
         // Exceeding the region limit
-        let res = locks.insert(vec![(Key::from_raw(b"k2"), lock(&[0; 32000]))]);
-        assert!(res.is_err());
+        locks
+            .insert(vec![(Key::from_raw(b"k2"), lock(&[0; 32000]))])
+            .unwrap_err();
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
 
         // Not exceeding the region limit, but exceeding the global limit

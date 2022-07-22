@@ -964,8 +964,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             }
 
             // test with real path
-            let ret = check_data_dir(&data_path, "/proc/mounts");
-            ret.unwrap();
+            check_data_dir(&data_path, "/proc/mounts").unwrap();
 
             // test with device mapper
             // get real_path's rotational info
@@ -1925,25 +1924,20 @@ mod tests {
     #[test]
     fn test_check_data_dir_empty() {
         // test invalid data_path
-        let ret = check_data_dir_empty("/sys/invalid", "txt");
-        ret.unwrap();
+        check_data_dir_empty("/sys/invalid", "txt").unwrap();
         // test empty data_path
         let tmp_path = Builder::new()
             .prefix("test-get-file-count")
             .tempdir()
             .unwrap()
             .into_path();
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        ret.unwrap();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "txt").unwrap();
         // test non-empty data_path
         let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
         create_file(&tmp_file, b"");
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
-        assert!(ret.is_err());
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_err());
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
-        ret.unwrap();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "").unwrap_err();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "txt").unwrap_err();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "xt").unwrap();
     }
 
     #[test]

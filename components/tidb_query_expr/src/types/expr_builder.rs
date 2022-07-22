@@ -582,39 +582,34 @@ mod tests {
             .push_child(ExprDefBuilder::constant_int(1))
             .push_child(ExprDefBuilder::constant_real(3.0))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        exp.unwrap();
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap();
 
         // Incorrect return type
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsTime, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::constant_int(1))
             .push_child(ExprDefBuilder::constant_real(3.0))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
 
         // Incorrect number of arguments
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsTime, FieldTypeTp::VarChar)
             .push_child(ExprDefBuilder::constant_int(1))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
 
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsTime, FieldTypeTp::VarChar)
             .push_child(ExprDefBuilder::constant_int(1))
             .push_child(ExprDefBuilder::constant_real(3.0))
             .push_child(ExprDefBuilder::constant_real(1.0))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
 
         // Incorrect argument type
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsTime, FieldTypeTp::VarChar)
             .push_child(ExprDefBuilder::constant_int(1))
             .push_child(ExprDefBuilder::constant_int(5))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
     }
 
     #[test]
@@ -624,16 +619,14 @@ mod tests {
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
                 .push_child(ExprDefBuilder::constant_int(1))
                 .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        exp.unwrap();
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap();
 
         let node =
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
                 .push_child(ExprDefBuilder::constant_int(1))
                 .push_child(ExprDefBuilder::constant_int(5))
                 .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        exp.unwrap();
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap();
 
         let node =
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
@@ -641,40 +634,35 @@ mod tests {
                 .push_child(ExprDefBuilder::constant_int(5))
                 .push_child(ExprDefBuilder::constant_int(4))
                 .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        exp.unwrap();
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap();
 
         // Incorrect return type
         let node =
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::constant_int(1))
                 .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
 
         // Incorrect argument type
         let node =
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
                 .push_child(ExprDefBuilder::constant_real(1.0))
                 .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
 
         let node =
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
                 .push_child(ExprDefBuilder::constant_int(1))
                 .push_child(ExprDefBuilder::constant_real(1.0))
                 .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
 
         let node =
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
                 .push_child(ExprDefBuilder::constant_real(3.0))
                 .push_child(ExprDefBuilder::constant_real(1.0))
                 .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
 
         let node =
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
@@ -682,8 +670,7 @@ mod tests {
                 .push_child(ExprDefBuilder::constant_real(1.0))
                 .push_child(ExprDefBuilder::constant_int(1))
                 .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
     }
 
     #[test]
@@ -693,23 +680,20 @@ mod tests {
             .push_child(ExprDefBuilder::constant_real(3.0))
             .push_child(ExprDefBuilder::constant_real(5.0))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        exp.unwrap();
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap();
 
         // Insufficient arguments
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsJson, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::constant_real(3.0))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
 
         // Incorrect return type
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsJson, FieldTypeTp::Double)
             .push_child(ExprDefBuilder::constant_real(3.0))
             .push_child(ExprDefBuilder::constant_real(5.0))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
 
         // Incorrect types
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsJson, FieldTypeTp::LongLong)
@@ -717,8 +701,7 @@ mod tests {
             .push_child(ExprDefBuilder::constant_real(5.0))
             .push_child(ExprDefBuilder::constant_int(42))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
     }
 
     #[test]
@@ -728,22 +711,19 @@ mod tests {
             .push_child(ExprDefBuilder::constant_real(3.0))
             .push_child(ExprDefBuilder::constant_int(5))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        exp.unwrap();
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap();
 
         // Insufficient arguments
         let node =
             ExprDefBuilder::scalar_func(ScalarFuncSig::CastRealAsInt, FieldTypeTp::Double).build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
 
         // Incorrect return type
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastRealAsInt, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::constant_real(3.0))
             .push_child(ExprDefBuilder::constant_int(5))
             .build();
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
-        assert!(exp.is_err());
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0).unwrap_err();
     }
 
     #[test]
