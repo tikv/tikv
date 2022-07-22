@@ -3202,28 +3202,6 @@ impl TiKvConfig {
         fill_cf_opts!(self.rocksdb.lockcf, flow_control_cfg);
         fill_cf_opts!(self.rocksdb.raftcf, flow_control_cfg);
 
-        macro_rules! validate_after_fill {
-            ($cf_opts:expr) => {
-                let v = $cf_opts.level0_slowdown_writes_trigger.unwrap();
-                if v / 2 <= $cf_opts.level0_file_num_compaction_trigger - 1 {
-                    return Err(format!(
-                        "level0-slowdown-writes-trigger {} be at least 2 times of (level0-file-num-compaction-trigger {} - 1)",
-                        v,
-                        $cf_opts.level0_file_num_compaction_trigger,
-                    ).into());
-                }
-            };
-        }
-
-        // This validation is to ensure the proper relationship between
-        // sllevel0_slowdown_writes_trigger and level0_file_num_compaction_trigger.
-        // Details can be found in PR#13091.
-        validate_after_fill!(self.raftdb.defaultcf);
-        validate_after_fill!(self.rocksdb.defaultcf);
-        validate_after_fill!(self.rocksdb.writecf);
-        validate_after_fill!(self.rocksdb.lockcf);
-        validate_after_fill!(self.rocksdb.raftcf);
-
         if let Some(memory_usage_limit) = self.memory_usage_limit {
             let total = SysQuota::memory_limit_in_bytes();
             if memory_usage_limit.0 > total {

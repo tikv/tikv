@@ -308,35 +308,9 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    fn adjust_some_configs(&mut self) {
-        macro_rules! adjust_cf_cfgs {
-            ($cf_opts:expr) => {
-                if let Some(v) = $cf_opts.level0_slowdown_writes_trigger {
-                    if v / 2 <= $cf_opts.level0_file_num_compaction_trigger - 1 {
-                        $cf_opts.level0_slowdown_writes_trigger =
-                            Some(($cf_opts.level0_file_num_compaction_trigger - 1) * 2);
-                    }
-                } else {
-                    $cf_opts.level0_slowdown_writes_trigger =
-                        Some(($cf_opts.level0_file_num_compaction_trigger - 1) * 2);
-                }
-            };
-        }
-
-        // This adjustment is to ensure the proper relationship between
-        // sllevel0_slowdown_writes_trigger and level0_file_num_compaction_trigger.
-        // Details can be found in PR#13091.
-        adjust_cf_cfgs!(self.cfg.raftdb.defaultcf);
-        adjust_cf_cfgs!(self.cfg.rocksdb.defaultcf);
-        adjust_cf_cfgs!(self.cfg.rocksdb.writecf);
-        adjust_cf_cfgs!(self.cfg.rocksdb.lockcf);
-        adjust_cf_cfgs!(self.cfg.rocksdb.raftcf);
-    }
-
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
     // initialize first region in all stores, then start the cluster.
     pub fn run(&mut self) {
-        self.adjust_some_configs();
         self.create_engines();
         self.bootstrap_region().unwrap();
         self.start().unwrap();
