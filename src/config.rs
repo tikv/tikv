@@ -5773,39 +5773,4 @@ mod tests {
             Some(ReadableSize::gb(1))
         );
     }
-
-    #[test]
-    fn test_dbconfig_validation() {
-        let mut cfg = TiKvConfig::default();
-        assert!(cfg.validate().is_ok());
-
-        assert!(cfg.raftdb.defaultcf.validate().is_ok());
-        cfg.raftdb.defaultcf.level0_file_num_compaction_trigger = 4;
-        cfg.raftdb.defaultcf.level0_slowdown_writes_trigger = Some(4);
-        assert!(cfg.validate().is_err());
-
-        let mut cfg = TiKvConfig::default();
-        assert!(cfg.rocksdb.defaultcf.validate().is_ok());
-        cfg.rocksdb.defaultcf.level0_file_num_compaction_trigger = 4;
-        cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = Some(4);
-        assert!(cfg.validate().is_err());
-
-        let mut cfg = TiKvConfig::default();
-        assert!(cfg.rocksdb.writecf.validate().is_ok());
-        cfg.rocksdb.writecf.level0_file_num_compaction_trigger = 4;
-        cfg.rocksdb.writecf.level0_slowdown_writes_trigger = Some(4);
-        assert!(cfg.validate().is_err());
-
-        let mut cfg = TiKvConfig::default();
-        assert!(cfg.rocksdb.lockcf.validate().is_ok());
-        cfg.rocksdb.lockcf.level0_file_num_compaction_trigger = 4;
-        cfg.rocksdb.lockcf.level0_slowdown_writes_trigger = Some(4);
-        assert!(cfg.validate().is_err());
-
-        let mut cfg = TiKvConfig::default();
-        assert!(cfg.rocksdb.raftcf.validate().is_ok());
-        cfg.rocksdb.raftcf.level0_file_num_compaction_trigger = 4;
-        cfg.rocksdb.raftcf.level0_slowdown_writes_trigger = Some(4);
-        assert!(cfg.validate().is_err());
-    }
 }
