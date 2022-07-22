@@ -70,9 +70,7 @@ mod tests {
 
     #[test]
     fn test_inspected_compact() {
-        // NOTICE: Specific to RocksDB version.
-        let amplification_bytes = 2560;
-        let value_size = amplification_bytes * 2;
+        let value_size = 1024;
         let temp_dir = Builder::new()
             .prefix("test_inspected_compact")
             .tempdir()
@@ -83,16 +81,15 @@ mod tests {
 
         db.put(&data_key(b"a1"), &value).unwrap();
         db.put(&data_key(b"a2"), &value).unwrap();
-        assert_eq!(stats.fetch(IOType::Flush, IOOp::Write), 0);
         db.flush(true /*sync*/).unwrap();
         assert!(stats.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
-        assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 2 + amplification_bytes);
+        assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 3);
         stats.reset();
         db.put(&data_key(b"a2"), &value).unwrap();
         db.put(&data_key(b"a3"), &value).unwrap();
         db.flush(true /*sync*/).unwrap();
         assert!(stats.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
-        assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 2 + amplification_bytes);
+        assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 3);
         stats.reset();
         db.c()
             .compact_range(
@@ -103,14 +100,8 @@ mod tests {
             )
             .unwrap();
         assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Read) > value_size * 4);
-        assert!(
-            stats.fetch(IOType::LevelZeroCompaction, IOOp::Read)
-                < value_size * 4 + amplification_bytes
-        );
+        assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Read) < value_size * 5);
         assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Write) > value_size * 3);
-        assert!(
-            stats.fetch(IOType::LevelZeroCompaction, IOOp::Write)
-                < value_size * 3 + amplification_bytes
-        );
+        assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Write) < value_size * 4);
     }
 }
