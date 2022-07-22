@@ -375,13 +375,13 @@ macro_rules! cf_config {
                     return Err("format-version larger than 5 is unsupported".into());
                 }
                 self.titan.validate()?;
-                if self.level0_slowdown_writes_trigger.unwrap() / 2 < self.level0_file_num_compaction_trigger - 1 {
-                    return Err(format!(
-                        "level0-slowdown-writes-trigger {} be at least 2 times of (level0-file-num-compaction-trigger {} - 1)",
-                        self.level0_slowdown_writes_trigger.unwrap(),
-                        self.level0_file_num_compaction_trigger,
-                    ).into());
-                }
+                // if self.level0_slowdown_writes_trigger.unwrap() / 2 < self.level0_file_num_compaction_trigger - 1 {
+                //     return Err(format!(
+                //         "level0-slowdown-writes-trigger {} be at least 2 times of (level0-file-num-compaction-trigger {} - 1)",
+                //         self.level0_slowdown_writes_trigger.unwrap(),
+                //         self.level0_file_num_compaction_trigger,
+                //     ).into());
+                // }
                 Ok(())
             }
         }
@@ -642,7 +642,7 @@ impl Default for DefaultCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: Some(20),
+            level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
@@ -754,7 +754,7 @@ impl Default for WriteCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: Some(20),
+            level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
@@ -852,7 +852,7 @@ impl Default for LockCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(128),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 1,
-            level0_slowdown_writes_trigger: Some(2),
+            level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
@@ -928,7 +928,7 @@ impl Default for RaftCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(128),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 1,
-            level0_slowdown_writes_trigger: Some(2),
+            level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
@@ -1295,7 +1295,7 @@ impl Default for RaftDefaultCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: Some(20),
+            level0_slowdown_writes_trigger: None,
             level0_stop_writes_trigger: None,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
@@ -3208,6 +3208,28 @@ impl TiKvConfig {
         fill_cf_opts!(self.rocksdb.writecf, flow_control_cfg);
         fill_cf_opts!(self.rocksdb.lockcf, flow_control_cfg);
         fill_cf_opts!(self.rocksdb.raftcf, flow_control_cfg);
+
+        macro_rules! validate_after_fill {
+            ($cf_opts:expr) => {
+                let v = $cf_opts.level0_slowdown_writes_trigger.unwrap();
+                if v / 2 <= $cf_opts.level0_file_num_compaction_trigger - 1 {
+                    return Err(format!(
+                        "level0-slowdown-writes-trigger {} be at least 2 times of (level0-file-num-compaction-trigger {} - 1)",
+                        v,
+                        $cf_opts.level0_file_num_compaction_trigger,
+                    ).into());
+                }
+            };
+        }
+
+        // This validation is to ensure the proper relationship between
+        // sllevel0_slowdown_writes_trigger and level0_file_num_compaction_trigger.
+        // Details can be found in PR#13091.
+        validate_after_fill!(self.raftdb.defaultcf);
+        validate_after_fill!(self.rocksdb.defaultcf);
+        validate_after_fill!(self.rocksdb.writecf);
+        validate_after_fill!(self.rocksdb.lockcf);
+        validate_after_fill!(self.rocksdb.raftcf);
 
         if let Some(memory_usage_limit) = self.memory_usage_limit {
             let total = SysQuota::memory_limit_in_bytes();
@@ -5783,22 +5805,36 @@ mod tests {
 
     #[test]
     fn test_dbconfig_validation() {
-        let mut cfg = DefaultCfConfig::default();
+        let mut cfg = TiKvConfig::default();
         assert!(cfg.validate().is_ok());
-        cfg.level0_file_num_compaction_trigger = 4;
-        cfg.level0_slowdown_writes_trigger = Some(4);
+
+        assert!(cfg.raftdb.defaultcf.validate().is_ok());
+        cfg.raftdb.defaultcf.level0_file_num_compaction_trigger = 4;
+        cfg.raftdb.defaultcf.level0_slowdown_writes_trigger = Some(4);
         assert!(cfg.validate().is_err());
 
-        let mut cfg = RaftCfConfig::default();
-        assert!(cfg.validate().is_ok());
-        cfg.level0_file_num_compaction_trigger = 4;
-        cfg.level0_slowdown_writes_trigger = Some(4);
+        let mut cfg = TiKvConfig::default();
+        assert!(cfg.rocksdb.defaultcf.validate().is_ok());
+        cfg.rocksdb.defaultcf.level0_file_num_compaction_trigger = 4;
+        cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger = Some(4);
         assert!(cfg.validate().is_err());
 
-        let mut cfg = WriteCfConfig::default();
-        assert!(cfg.validate().is_ok());
-        cfg.level0_file_num_compaction_trigger = 4;
-        cfg.level0_slowdown_writes_trigger = Some(4);
+        let mut cfg = TiKvConfig::default();
+        assert!(cfg.rocksdb.writecf.validate().is_ok());
+        cfg.rocksdb.writecf.level0_file_num_compaction_trigger = 4;
+        cfg.rocksdb.writecf.level0_slowdown_writes_trigger = Some(4);
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = TiKvConfig::default();
+        assert!(cfg.rocksdb.lockcf.validate().is_ok());
+        cfg.rocksdb.lockcf.level0_file_num_compaction_trigger = 4;
+        cfg.rocksdb.lockcf.level0_slowdown_writes_trigger = Some(4);
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = TiKvConfig::default();
+        assert!(cfg.rocksdb.raftcf.validate().is_ok());
+        cfg.rocksdb.raftcf.level0_file_num_compaction_trigger = 4;
+        cfg.rocksdb.raftcf.level0_slowdown_writes_trigger = Some(4);
         assert!(cfg.validate().is_err());
     }
 }
