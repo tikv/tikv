@@ -344,7 +344,7 @@ fn cast_string_as_int(
             } else {
                 // FIXME: if the err get_valid_int_prefix returned is overflow err,
                 //  it should be ERR_TRUNCATE_WRONG_VALUE but not others.
-                let valid_int_prefix = get_valid_int_prefix(ctx, val)?;
+                let valid_int_prefix = get_valid_int_prefix_helper(ctx, val, true)?;
                 let parse_res = if !is_str_neg {
                     valid_int_prefix.parse::<u64>().map(|x| x as i64)
                 } else {
@@ -2343,6 +2343,7 @@ mod tests {
                 vec![ERR_TRUNCATE_WRONG_VALUE],
                 Cond::Unsigned,
             ),
+            ("0.5", 0_i64, vec![ERR_TRUNCATE_WRONG_VALUE], Cond::None),
         ];
 
         for (input, expected, mut err_code, cond) in cs {

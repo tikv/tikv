@@ -325,7 +325,7 @@ struct RowSampleBuilder<S: Snapshot> {
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: Arc<QuotaLimiter>,
-    is_quota_auto_tune: bool,
+    is_auto_analyze: bool,
 }
 
 impl<S: Snapshot> RowSampleBuilder<S> {
@@ -334,7 +334,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         storage: TiKvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
         quota_limiter: Arc<QuotaLimiter>,
-        is_quota_auto_tune: bool,
+        is_auto_analyze: bool,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
         if columns_info.is_empty() {
@@ -359,7 +359,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter,
-            is_quota_auto_tune,
+            is_auto_analyze,
         })
     }
 
@@ -391,7 +391,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 time_slice_start = Instant::now();
             }
 
-            let mut sample = self.quota_limiter.new_sample();
+            let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             {
                 let _guard = sample.observe_cpu();
                 let result = self.data.next_batch(BATCH_MAX_SIZE);
@@ -446,7 +446,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
 
             // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
             let quota_delay = {
-                if !self.is_quota_auto_tune {
+                if !self.is_auto_analyze {
                     self.quota_limiter.consume_sample(sample, true).await
                 } else {
                     self.quota_limiter.consume_sample(sample, false).await
