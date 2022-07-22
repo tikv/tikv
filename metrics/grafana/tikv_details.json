@@ -6261,8 +6261,12 @@
           "steppedLine": false,
           "targets": [
             {
+<<<<<<< HEAD
               "exemplar": true,
               "expr": "sum(rate(tikv_thread_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"tso_worker\"}[1m])) by (instance)",
+=======
+              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"unified_read_po.*\"}[1m])) by (instance)",
+>>>>>>> b1952dcaf... metrics: fix a expression error of unified read pool cpu (#13087)
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
