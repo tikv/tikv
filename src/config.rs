@@ -375,13 +375,6 @@ macro_rules! cf_config {
                     return Err("format-version larger than 5 is unsupported".into());
                 }
                 self.titan.validate()?;
-                // if self.level0_slowdown_writes_trigger.unwrap() / 2 < self.level0_file_num_compaction_trigger - 1 {
-                //     return Err(format!(
-                //         "level0-slowdown-writes-trigger {} be at least 2 times of (level0-file-num-compaction-trigger {} - 1)",
-                //         self.level0_slowdown_writes_trigger.unwrap(),
-                //         self.level0_file_num_compaction_trigger,
-                //     ).into());
-                // }
                 Ok(())
             }
         }
