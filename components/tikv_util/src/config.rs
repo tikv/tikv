@@ -960,7 +960,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             // data_path may not mounted on a normal device on container
             // /proc/mounts may contain host's device, which is not accessible in container.
             if Path::new("/.dockerenv").exists()
-                && (!fs_info.fsname.starts_with("/dev") || !fs_info.fsname.exists())
+                && (!fs_info.fsname.starts_with("/dev") || !Path::new(&fs_info.fsname).exists())
             {
                 return;
             }
