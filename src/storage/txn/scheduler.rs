@@ -155,10 +155,10 @@ impl TaskContext {
             owned: AtomicBool::new(false),
             write_bytes,
             tag,
-            latch_timer: Instant::now_coarse(),
+            latch_timer: Instant::now(),
             _cmd_timer: CmdTimer {
                 tag,
-                begin: Instant::now_coarse(),
+                begin: Instant::now(),
             },
         }
     }
@@ -701,7 +701,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             fail_point!("scheduler_async_snapshot_finish");
             SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-            let timer = Instant::now_coarse();
+            let timer = Instant::now();
 
             let region_id = task.cmd.ctx().get_region_id();
             let ts = task.cmd.ts();
@@ -775,7 +775,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let ts = task.cmd.ts();
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;

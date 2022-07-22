@@ -61,6 +61,13 @@ pub mod tests {
         fn get_ts(&self) -> Result<TimeStamp> {
             Ok(self.ts.fetch_add(1, Ordering::Relaxed).into())
         }
+
+        // This is used for unit test. Add 100 from current.
+        // Do not modify this value as several test cases depend on it.
+        fn flush(&self) -> Result<()> {
+            self.ts.fetch_add(100, Ordering::Relaxed);
+            Ok(())
+        }
     }
 
     #[derive(Clone, Default)]

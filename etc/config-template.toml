@@ -803,6 +803,56 @@
 ## for the same CF.
 # compaction-guard-max-output-file-size = "128M"
 
+## Available versions:
+##
+## 0 -- This version can be read by all TiKV releases. Doesn't support changing
+## checksum type (default is CRC32).
+##
+## 1 -- Can be read by all TiKV releases. Supports non-default checksum, like
+## xxHash. It is written by RocksDB when BlockBasedTableOptions::checksum is
+## something other than kCRC32c. (version 0 is silently upconverted)
+##
+## 2 -- Can be read by all TiKV releases. Changes the way we encode compressed
+## blocks with LZ4, BZip2 and Zlib compression.
+##
+## 3 -- Can be read by TiKV's versions since 2.1. Changes the way we encode the
+## keys in index blocks.
+## This option only affects newly written tables. When reading existing tables,
+## the information about version is read from the footer.
+##
+## 4 -- Can be read by TiKV's versions since 3.0. Changes the way we encode the
+## values in index blocks.
+## This option only affects newly written tables. When reading existing tables,
+## the information about version is read from the footer.
+##
+# format-version = 2
+
+## If enabled, prepopulate warm/hot blocks (data, uncompressed dict, index and
+## filter blocks) which are already in memory into block cache at the time of
+## flush. On a flush, the block that is in memory (in memtables) get flushed
+## to the device. If using Direct IO, additional IO is incurred to read this
+## data back into memory again, which is avoided by enabling this option. This
+## further helps if the workload exhibits high temporal locality, where most
+## of the reads go to recently written data. This also helps in case of
+## Distributed FileSystem.
+##
+##   disabled:   kDisabled
+##   flush-only: kFlushOnly
+##
+# prepopulate-block-cache = "disabled"
+
+## Use the specified checksum type. Newly created table files will be
+## protected with this checksum type. Old table files will still be readable,
+## even though they have different checksum type.
+##
+##   no:       kNoChecksum
+##   crc32c:   kCRC32c
+##   xxhash:   kxxHash
+##   xxhash64: kxxHash64
+##   xxh3:     kXXH3 (supported since TiKV 6.2)
+##
+# checksum = "crc32c"
+
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
@@ -887,6 +937,9 @@
 # enable-compaction-guard = true
 # compaction-guard-min-output-file-size = "8M"
 # compaction-guard-max-output-file-size = "128M"
+# format-version = 2
+# prepopulate-block-cache = "disabled"
+# checksum = "crc32c"
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -908,6 +961,9 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
 # enable-compaction-guard = false
+# format-version = 2
+# prepopulate-block-cache = "disabled"
+# checksum = "crc32c"
 
 [raftdb]
 # max-background-jobs = 4
@@ -967,6 +1023,9 @@
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
 # enable-compaction-guard = false
+# format-version = 2
+# prepopulate-block-cache = "disabled"
+# checksum = "crc32c"
 
 [raft-engine]
 ## Determines whether to use Raft Engine to store raft logs. When it is
@@ -1042,8 +1101,9 @@
 ## Configurations for encryption at rest. Experimental.
 [security.encryption]
 ## Encryption method to use for data files.
-## Possible values are "plaintext", "aes128-ctr", "aes192-ctr" and "aes256-ctr". Value other than
-## "plaintext" means encryption is enabled, in which case master key must be specified.
+## Possible values are "plaintext", "aes128-ctr", "aes192-ctr", "aes256-ctr" and "sm4-ctr".
+## Value other than "plaintext" means encryption is enabled, in which case
+## master key must be specified.
 # data-encryption-method = "plaintext"
 
 ## Specifies how often TiKV rotates data encryption key.
@@ -1129,7 +1189,7 @@
 
 [log-backup] 
 ## Number of threads to perform backup stream tasks.
-## The default value is set to min(CPU_NUM * 0.5, 8).
+## The default value is CPU_NUM * 0.5, and limited to [2, 12].
 # num-threads = 8
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.

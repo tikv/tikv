@@ -54,7 +54,7 @@ fn url_for(base: &Path) -> url::Url {
     u
 }
 
-const STORAGE_NAME: &str = "local";
+pub const STORAGE_NAME: &str = "local";
 
 #[async_trait]
 impl ExternalStorage for LocalStorage {
@@ -100,12 +100,11 @@ impl ExternalStorage for LocalStorage {
                     }
                 })?;
         }
-        // Sanitize check, do not save file if it is already exist.
+
+        // Because s3 could support writing(put_object) a existed object.
+        // For the interface consistent with s3, local storage need also support write a existed file.
         if fs::metadata(self.base.join(name)).await.is_ok() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("[{}] is already exists in {}", name, self.base.display()),
-            ));
+            info!("[{}] is already exists in {}", name, self.base.display());
         }
         let tmp_path = self.tmp_path(Path::new(name));
         let mut tmp_f = File::create(&tmp_path).await?;
@@ -214,5 +213,30 @@ mod tests {
     #[test]
     fn test_url_of_backend() {
         assert_eq!(url_for(Path::new("/tmp/a")).to_string(), "local:///tmp/a");
+    }
+
+    #[tokio::test]
+    async fn test_write_existed_file() {
+        let temp_dir = Builder::new().tempdir().unwrap();
+        let path = temp_dir.path();
+        let ls = LocalStorage::new(path).unwrap();
+
+        let filename = "existed.file";
+        let buf1: &[u8] = b"pingcap";
+        let buf2: &[u8] = b"tikv";
+        let r = ls
+            .write(filename, UnpinReader(Box::new(buf1)), buf1.len() as _)
+            .await;
+        assert!(r.is_ok());
+        let r = ls
+            .write(filename, UnpinReader(Box::new(buf2)), buf2.len() as _)
+            .await;
+        assert!(r.is_ok());
+
+        let mut read_buff: Vec<u8> = Vec::new();
+        let r = ls.read(filename).read_to_end(&mut read_buff).await;
+        assert!(r.is_ok());
+        assert_eq!(read_buff.len(), 4);
+        assert_eq!(&read_buff, buf2);
     }
 }
