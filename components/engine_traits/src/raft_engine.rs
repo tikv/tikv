@@ -119,14 +119,6 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     /// which needs to be compacted ASAP.
     fn purge_expired_files(&self) -> Result<Vec<u64>>;
 
-    /// The `RaftEngine` has a builtin entry cache or not.
-    fn has_builtin_entry_cache(&self) -> bool {
-        false
-    }
-
-    /// GC the builtin entry cache.
-    fn gc_entry_cache(&self, _raft_group_id: u64, _to: u64) {}
-
     fn flush_metrics(&self, _instance: &str) {}
     fn flush_stats(&self) -> Option<CacheStats> {
         None
