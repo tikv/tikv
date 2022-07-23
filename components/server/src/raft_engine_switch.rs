@@ -7,7 +7,7 @@ use std::sync::{
 
 use crossbeam::channel::{unbounded, Receiver};
 use engine_rocks::{self, RocksEngine};
-use engine_traits::{Iterable, Iterator, RaftEngine, RaftEngineReadOnly, RaftLogBatch, SeekKey};
+use engine_traits::{Iterable, Iterator, RaftEngine, RaftEngineReadOnly, RaftLogBatch, CF_DEFAULT};
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -36,8 +36,8 @@ pub fn dump_raftdb_to_raft_engine(source: &RocksEngine, target: &RaftLogEngine, 
     info!("Start to scan raft log from RocksEngine and dump into RaftLogEngine");
     let consumed_time = tikv_util::time::Instant::now();
     // Seek all region id from raftdb and send them to workers.
-    let mut it = source.iterator().unwrap();
-    let mut valid = it.seek(SeekKey::Key(keys::REGION_RAFT_MIN_KEY)).unwrap();
+    let mut it = source.iterator(CF_DEFAULT).unwrap();
+    let mut valid = it.seek(keys::REGION_RAFT_MIN_KEY).unwrap();
     while valid {
         match keys::decode_raft_key(it.key()) {
             Err(e) => {
@@ -47,7 +47,7 @@ pub fn dump_raftdb_to_raft_engine(source: &RocksEngine, target: &RaftLogEngine, 
                 tx.send(id).unwrap();
                 count_region += 1;
                 let next_key = keys::raft_log_prefix(id + 1);
-                valid = it.seek(SeekKey::Key(&next_key)).unwrap();
+                valid = it.seek(&next_key).unwrap();
             }
         }
     }
@@ -115,7 +115,7 @@ fn check_raft_engine_is_empty(engine: &RaftLogEngine) {
 fn check_raft_db_is_empty(engine: &RocksEngine) {
     let mut count = 0;
     engine
-        .scan(b"", &[0xFF, 0xFF], false, |_, _| {
+        .scan(CF_DEFAULT, b"", &[0xFF, 0xFF], false, |_, _| {
             count += 1;
             Ok(false)
         })
@@ -138,6 +138,7 @@ fn run_dump_raftdb_worker(
         let mut entries = vec![];
         old_engine
             .scan(
+                CF_DEFAULT,
                 &keys::raft_log_prefix(id),
                 &keys::raft_log_prefix(id + 1),
                 false,

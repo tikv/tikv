@@ -240,7 +240,9 @@ impl<E: KvEngine> Initializer<E> {
             let (raw_key_prefix, raw_key_prefix_end) = ApiV2::get_rawkv_range();
             iter_opt.set_lower_bound(&[raw_key_prefix], DATA_KEY_PREFIX_LEN);
             iter_opt.set_upper_bound(&[raw_key_prefix_end], DATA_KEY_PREFIX_LEN);
-            let mut iter = RawMvccSnapshot::from_snapshot(snap).iter(iter_opt).unwrap();
+            let mut iter = RawMvccSnapshot::from_snapshot(snap)
+                .iter(CF_DEFAULT, iter_opt)
+                .unwrap();
 
             iter.seek_to_first()?;
             Scanner::RawKvScanner(iter)

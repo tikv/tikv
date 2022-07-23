@@ -15,7 +15,7 @@ use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
     name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
-    Iterator, KvEngine, SeekKey, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter,
+    Iterator, KvEngine, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter,
     SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
@@ -554,7 +554,7 @@ impl SstImporter {
                 // must iterate if we perform key rewrite
                 return Ok(None);
             }
-            if !iter.seek(SeekKey::Start)? {
+            if !iter.seek_to_first()? {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
                 return Ok(Some(meta.get_range().clone()));
             }
@@ -566,7 +566,7 @@ impl SstImporter {
             let start_key = start_key.to_vec();
 
             // seek to end and fetch the last (inclusive) key of the SST.
-            iter.seek(SeekKey::End)?;
+            iter.seek_to_last()?;
             let last_key = keys::origin_key(iter.key());
             if is_after_end_bound(last_key, &range_end) {
                 // SST's end is after the range to consume
@@ -606,8 +606,8 @@ impl SstImporter {
         let mut first_key = None;
 
         match range_start {
-            Bound::Unbounded => iter.seek(SeekKey::Start)?,
-            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s)))?,
+            Bound::Unbounded => iter.seek_to_first()?,
+            Bound::Included(s) => iter.seek(&keys::data_key(&s))?,
             Bound::Excluded(_) => unreachable!(),
         };
         // SST writer must not be opened in gRPC threads, because it may be
@@ -789,7 +789,7 @@ mod tests {
 
     use engine_traits::{
         collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
-        SeekKey, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+        SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
     };
     use file_system::File;
     use openssl::hash::{Hasher, MessageDigest};
@@ -1333,7 +1333,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1392,7 +1392,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), Some(env));
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1440,7 +1440,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1485,7 +1485,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1529,7 +1529,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1605,8 +1605,8 @@ mod tests {
             assert_eq!(meta_info.total_kvs, 4);
 
             // verifies the DB content is correct.
-            let mut iter = db.iterator_cf(cf).unwrap();
-            iter.seek(SeekKey::Start).unwrap();
+            let mut iter = db.iterator(cf).unwrap();
+            iter.seek_to_first().unwrap();
             assert_eq!(
                 collect(iter),
                 vec![
@@ -1670,7 +1670,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1714,7 +1714,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1746,8 +1746,8 @@ mod tests {
             db,
         );
         match &result {
-            Err(Error::EngineTraits(TraitError::Engine(msg))) if msg.starts_with("Corruption:") => {
-            }
+            Err(Error::EngineTraits(TraitError::Engine(s)))
+                if s.state().starts_with("Corruption:") => {}
             _ => panic!("unexpected download result: {:?}", result),
         }
     }
@@ -1849,7 +1849,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1907,7 +1907,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1962,7 +1962,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
