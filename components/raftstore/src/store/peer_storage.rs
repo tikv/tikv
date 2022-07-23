@@ -6,7 +6,7 @@ use std::{
     cmp,
     collections::VecDeque,
     error, mem,
-    ops::Range,
+    ops::{Deref, DerefMut, Range},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, TryRecvError},
@@ -183,11 +183,11 @@ impl EntryCache {
         ents.extend_from_slice(second);
     }
 
-    fn append(&mut self, tag: &str, entries: &[Entry]) {
+    fn append(&mut self, region_id: u64, peer_id: u64, entries: &[Entry]) {
         if !entries.is_empty() {
             let mut mem_size_change = 0;
             let old_capacity = self.cache.capacity();
-            mem_size_change += self.append_impl(tag, entries);
+            mem_size_change += self.append_impl(region_id, peer_id, entries);
             let new_capacity = self.cache.capacity();
             mem_size_change += Self::get_cache_vec_mem_size_change(new_capacity, old_capacity);
             mem_size_change += self.shrink_if_necessary();
@@ -195,7 +195,7 @@ impl EntryCache {
         }
     }
 
-    fn append_impl(&mut self, tag: &str, entries: &[Entry]) -> i64 {
+    fn append_impl(&mut self, region_id: u64, peer_id: u64, entries: &[Entry]) -> i64 {
         let mut mem_size_change = 0;
 
         if let Some(cache_last_index) = self.cache.back().map(|e| e.get_index()) {
@@ -218,8 +218,8 @@ impl EntryCache {
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
-                    "{} unexpected hole: {} < {}",
-                    tag, cache_last_index, first_index
+                    "[region {}] {} unexpected hole: {} < {}",
+                    region_id, peer_id, cache_last_index, first_index
                 );
             }
         }
@@ -414,6 +414,443 @@ impl Drop for EntryCache {
         let mem_size_change = self.get_total_mem_size();
         self.flush_mem_size_change(-mem_size_change);
         self.flush_stats();
+    }
+}
+
+/// A subset of `PeerStorage` that focus on accessing log entries.
+pub struct EntryStorage<ER> {
+    region_id: u64,
+    peer_id: u64,
+    raft_engine: ER,
+    cache: EntryCache,
+    raft_state: RaftLocalState,
+    apply_state: RaftApplyState,
+    last_term: u64,
+    raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    raftlog_fetch_stats: AsyncFetchStats,
+    async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
+}
+
+impl<ER: RaftEngine> EntryStorage<ER> {
+    pub fn new(
+        region_id: u64,
+        peer_id: u64,
+        raft_engine: ER,
+        raft_state: RaftLocalState,
+        apply_state: RaftApplyState,
+        last_term: u64,
+        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    ) -> Self {
+        EntryStorage {
+            region_id,
+            peer_id,
+            raft_engine,
+            cache: EntryCache::default(),
+            raft_state,
+            apply_state,
+            last_term,
+            raftlog_fetch_scheduler,
+            raftlog_fetch_stats: AsyncFetchStats::default(),
+            async_fetch_results: RefCell::new(HashMap::default()),
+        }
+    }
+
+    fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
+        if low > high {
+            return Err(storage_error(format!(
+                "low: {} is greater that high: {}",
+                low, high
+            )));
+        } else if low <= self.truncated_index() {
+            return Err(RaftError::Store(StorageError::Compacted));
+        } else if high > self.last_index() + 1 {
+            return Err(storage_error(format!(
+                "entries' high {} is out of bound lastindex {}",
+                high,
+                self.last_index()
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn clean_async_fetch_res(&mut self, low: u64) {
+        self.async_fetch_results.borrow_mut().remove(&low);
+    }
+
+    // Update the async fetch result.
+    // None indicates cleanning the fetched result.
+    pub fn update_async_fetch_res(&mut self, low: u64, res: Option<Box<RaftlogFetchResult>>) {
+        // If it's in fetching, don't clean the async fetch result.
+        if self.async_fetch_results.borrow().get(&low) == Some(&RaftlogFetchState::Fetching)
+            && res.is_none()
+        {
+            return;
+        }
+
+        match res {
+            Some(res) => {
+                if let Some(RaftlogFetchState::Fetched(prev)) = self
+                    .async_fetch_results
+                    .borrow_mut()
+                    .insert(low, RaftlogFetchState::Fetched(res))
+                {
+                    info!(
+                        "unconsumed async fetch res";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer_id,
+                        "res" => ?prev,
+                        "low" => low,
+                    );
+                }
+            }
+            None => {
+                let prev = self.async_fetch_results.borrow_mut().remove(&low);
+                if prev.is_some() {
+                    self.raftlog_fetch_stats.fetch_unused.update(|m| m + 1);
+                }
+            }
+        }
+    }
+
+    fn async_fetch(
+        &self,
+        region_id: u64,
+        low: u64,
+        high: u64,
+        max_size: u64,
+        context: GetEntriesContext,
+        buf: &mut Vec<Entry>,
+    ) -> raft::Result<usize> {
+        if let Some(RaftlogFetchState::Fetching) = self.async_fetch_results.borrow().get(&low) {
+            // already an async fetch in flight
+            return Err(raft::Error::Store(
+                raft::StorageError::LogTemporarilyUnavailable,
+            ));
+        }
+
+        let tried_cnt = if let Some(RaftlogFetchState::Fetched(res)) =
+            self.async_fetch_results.borrow_mut().remove(&low)
+        {
+            assert_eq!(res.low, low);
+            let mut ents = res.ents?;
+            let first = ents.first().map(|e| e.index).unwrap();
+            assert_eq!(first, res.low);
+            let last = ents.last().map(|e| e.index).unwrap();
+
+            if last + 1 >= high {
+                // async fetch res covers [low, high)
+                ents.truncate((high - first) as usize);
+                assert_eq!(ents.last().map(|e| e.index).unwrap(), high - 1);
+                if max_size < res.max_size {
+                    limit_size(&mut ents, Some(max_size));
+                }
+                let count = ents.len();
+                buf.append(&mut ents);
+                fail_point!("on_async_fetch_return");
+                return Ok(count);
+            } else if res.hit_size_limit && max_size <= res.max_size {
+                // async fetch res doesn't cover [low, high) due to hit size limit
+                if max_size < res.max_size {
+                    limit_size(&mut ents, Some(max_size));
+                };
+                let count = ents.len();
+                buf.append(&mut ents);
+                return Ok(count);
+            } else if last + RAFT_LOG_MULTI_GET_CNT > high - 1
+                && res.tried_cnt + 1 == MAX_ASYNC_FETCH_TRY_CNT
+            {
+                let mut fetched_size = ents.iter().fold(0, |acc, e| acc + e.compute_size() as u64);
+                if max_size <= fetched_size {
+                    limit_size(&mut ents, Some(max_size));
+                    let count = ents.len();
+                    buf.append(&mut ents);
+                    return Ok(count);
+                }
+
+                // the count of left entries isn't too large, fetch the remaining entries synchronously one by one
+                for idx in last + 1..high {
+                    let ent = self.raft_engine.get_entry(region_id, idx)?;
+                    match ent {
+                        None => {
+                            return Err(raft::Error::Store(raft::StorageError::Unavailable));
+                        }
+                        Some(ent) => {
+                            let size = ent.compute_size() as u64;
+                            if fetched_size + size > max_size {
+                                break;
+                            } else {
+                                fetched_size += size;
+                                ents.push(ent);
+                            }
+                        }
+                    }
+                }
+                let count = ents.len();
+                buf.append(&mut ents);
+                return Ok(count);
+            }
+            info!(
+                "async fetch invalid";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer_id,
+                "first" => first,
+                "last" => last,
+                "low" => low,
+                "high" => high,
+                "max_size" => max_size,
+                "res_max_size" => res.max_size,
+            );
+            // low index or max size is changed, the result is not fit for the current range, so refetch again.
+            self.raftlog_fetch_stats.fetch_invalid.update(|m| m + 1);
+            res.tried_cnt + 1
+        } else {
+            1
+        };
+
+        // the first/second try: get [low, high) asynchronously
+        // the third try:
+        //  - if term and low are matched: use result of [low, persisted) and get [persisted, high) synchronously
+        //  - else: get [low, high) synchronously
+        if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
+            // even the larger range is invalid again, fallback to fetch in sync way
+            self.raftlog_fetch_stats.fallback_fetch.update(|m| m + 1);
+            let count = self.raft_engine.fetch_entries_to(
+                region_id,
+                low,
+                high,
+                Some(max_size as usize),
+                buf,
+            )?;
+            return Ok(count);
+        }
+
+        self.raftlog_fetch_stats.async_fetch.update(|m| m + 1);
+        self.async_fetch_results
+            .borrow_mut()
+            .insert(low, RaftlogFetchState::Fetching);
+        self.raftlog_fetch_scheduler
+            .schedule(RaftlogFetchTask::PeerStorage {
+                region_id,
+                context,
+                low,
+                high,
+                max_size: (max_size as usize),
+                tried_cnt,
+                term: self.hard_state().get_term(),
+            })
+            .unwrap();
+        Err(raft::Error::Store(
+            raft::StorageError::LogTemporarilyUnavailable,
+        ))
+    }
+
+    pub fn entries(
+        &self,
+        low: u64,
+        high: u64,
+        max_size: u64,
+        context: GetEntriesContext,
+    ) -> raft::Result<Vec<Entry>> {
+        self.check_range(low, high)?;
+        let mut ents =
+            Vec::with_capacity(std::cmp::min((high - low) as usize, MAX_INIT_ENTRY_COUNT));
+        if low == high {
+            return Ok(ents);
+        }
+        let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
+        if high <= cache_low {
+            self.cache.miss.update(|m| m + 1);
+            return if context.can_async() {
+                self.async_fetch(self.region_id, low, high, max_size, context, &mut ents)?;
+                Ok(ents)
+            } else {
+                self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
+                self.raft_engine.fetch_entries_to(
+                    self.region_id,
+                    low,
+                    high,
+                    Some(max_size as usize),
+                    &mut ents,
+                )?;
+                Ok(ents)
+            };
+        }
+        let begin_idx = if low < cache_low {
+            self.cache.miss.update(|m| m + 1);
+            let fetched_count = if context.can_async() {
+                self.async_fetch(self.region_id, low, cache_low, max_size, context, &mut ents)?
+            } else {
+                self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
+                self.raft_engine.fetch_entries_to(
+                    self.region_id,
+                    low,
+                    cache_low,
+                    Some(max_size as usize),
+                    &mut ents,
+                )?
+            };
+            if fetched_count < (cache_low - low) as usize {
+                // Less entries are fetched than expected.
+                return Ok(ents);
+            }
+            cache_low
+        } else {
+            low
+        };
+        self.cache.hit.update(|h| h + 1);
+        let fetched_size = ents.iter().fold(0, |acc, e| acc + e.compute_size());
+        self.cache
+            .fetch_entries_to(begin_idx, high, fetched_size as u64, max_size, &mut ents);
+        Ok(ents)
+    }
+
+    pub fn term(&self, idx: u64) -> raft::Result<u64> {
+        if idx == self.truncated_index() {
+            return Ok(self.truncated_term());
+        }
+        self.check_range(idx, idx + 1)?;
+        if self.truncated_term() == self.last_term || idx == self.last_index() {
+            return Ok(self.last_term);
+        }
+        if let Some(e) = self.cache.entry(idx) {
+            Ok(e.get_term())
+        } else {
+            Ok(self
+                .raft_engine
+                .get_entry(self.region_id, idx)
+                .unwrap()
+                .unwrap()
+                .get_term())
+        }
+    }
+
+    #[inline]
+    pub fn first_index(&self) -> u64 {
+        first_index(&self.apply_state)
+    }
+
+    #[inline]
+    pub fn last_index(&self) -> u64 {
+        last_index(&self.raft_state)
+    }
+
+    #[inline]
+    pub fn last_term(&self) -> u64 {
+        self.last_term
+    }
+
+    #[inline]
+    pub fn raft_state(&self) -> &RaftLocalState {
+        &self.raft_state
+    }
+
+    #[inline]
+    pub fn applied_index(&self) -> u64 {
+        self.apply_state.get_applied_index()
+    }
+
+    #[inline]
+    pub fn set_applied_state(&mut self, apply_state: RaftApplyState) {
+        self.apply_state = apply_state;
+    }
+
+    #[inline]
+    pub fn apply_state(&self) -> &RaftApplyState {
+        &self.apply_state
+    }
+
+    #[inline]
+    pub fn commit_index(&self) -> u64 {
+        self.raft_state.get_hard_state().get_commit()
+    }
+
+    #[inline]
+    pub fn set_commit_index(&mut self, commit: u64) {
+        assert!(commit >= self.commit_index());
+        self.raft_state.mut_hard_state().set_commit(commit);
+    }
+
+    #[inline]
+    pub fn hard_state(&self) -> &HardState {
+        self.raft_state.get_hard_state()
+    }
+
+    #[inline]
+    pub fn truncated_index(&self) -> u64 {
+        self.apply_state.get_truncated_state().get_index()
+    }
+
+    #[inline]
+    pub fn truncated_term(&self) -> u64 {
+        self.apply_state.get_truncated_state().get_term()
+    }
+
+    // Append the given entries to the raft log using previous last index or self.last_index.
+    pub fn append<EK: KvEngine>(&mut self, entries: Vec<Entry>, task: &mut WriteTask<EK, ER>) {
+        if entries.is_empty() {
+            return;
+        }
+        debug!(
+            "append entries";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer_id,
+            "count" => entries.len(),
+        );
+        let prev_last_index = self.raft_state.get_last_index();
+
+        let (last_index, last_term) = {
+            let e = entries.last().unwrap();
+            (e.get_index(), e.get_term())
+        };
+
+        self.cache.append(self.region_id, self.peer_id, &entries);
+
+        task.entries = entries;
+        // Delete any previously appended log entries which never committed.
+        task.cut_logs = Some((last_index + 1, prev_last_index + 1));
+
+        self.raft_state.set_last_index(last_index);
+        self.last_term = last_term;
+    }
+
+    pub fn compact_entry_cache(&mut self, idx: u64) {
+        self.cache.compact_to(idx);
+    }
+
+    #[inline]
+    pub fn is_entry_cache_empty(&self) -> bool {
+        self.cache.is_empty()
+    }
+
+    /// Evict entries from the cache.
+    pub fn evict_entry_cache(&mut self, half: bool) {
+        if !self.is_entry_cache_empty() {
+            let cache = &mut self.cache;
+            let cache_len = cache.cache.len();
+            let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
+            let idx = cache.cache[drain_to].index;
+            let mem_size_change = cache.compact_to(idx + 1);
+            RAFT_ENTRIES_EVICT_BYTES.inc_by(mem_size_change);
+        }
+    }
+
+    #[inline]
+    pub fn flush_entry_cache_metrics(&mut self) {
+        // NOTE: memory usage of entry cache is flushed realtime.
+        self.cache.flush_stats();
+        self.raftlog_fetch_stats.flush_stats();
+    }
+
+    pub fn raft_engine(&self) -> &ER {
+        &self.raft_engine
+    }
+
+    pub fn update_cache_persisted(&mut self, persisted: u64) {
+        self.cache.update_persisted(persisted);
+    }
+
+    pub fn trace_cached_entries(&mut self, entries: CachedEntries) {
+        self.cache.trace_cached_entries(entries);
     }
 }
 
@@ -642,21 +1079,14 @@ where
 
     peer_id: u64,
     region: metapb::Region,
-    raft_state: RaftLocalState,
-    apply_state: RaftApplyState,
     applied_index_term: u64,
-    last_term: u64,
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     snap_tried_cnt: RefCell<usize>,
 
-    cache: EntryCache,
-
-    raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-    raftlog_fetch_stats: AsyncFetchStats,
-    async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
+    entry_storage: EntryStorage<ER>,
 
     pub tag: String,
 }
@@ -711,6 +1141,22 @@ impl AsyncFetchStats {
     }
 }
 
+impl<EK: KvEngine, ER: RaftEngine> Deref for PeerStorage<EK, ER> {
+    type Target = EntryStorage<ER>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.entry_storage
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> DerefMut for PeerStorage<EK, ER> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entry_storage
+    }
+}
+
 impl<EK, ER> Storage for PeerStorage<EK, ER>
 where
     EK: KvEngine,
@@ -728,19 +1174,20 @@ where
         context: GetEntriesContext,
     ) -> raft::Result<Vec<Entry>> {
         let max_size = max_size.into();
-        self.entries(low, high, max_size.unwrap_or(u64::MAX), context)
+        self.entry_storage
+            .entries(low, high, max_size.unwrap_or(u64::MAX), context)
     }
 
     fn term(&self, idx: u64) -> raft::Result<u64> {
-        self.term(idx)
+        self.entry_storage.term(idx)
     }
 
     fn first_index(&self) -> raft::Result<u64> {
-        Ok(self.first_index())
+        Ok(self.entry_storage.first_index())
     }
 
     fn last_index(&self) -> raft::Result<u64> {
-        Ok(self.last_index())
+        Ok(self.entry_storage.last_index())
     }
 
     fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
@@ -774,24 +1221,27 @@ where
         }
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
         let applied_index_term = init_applied_index_term(&engines, region, &apply_state)?;
+        let entry_storage = EntryStorage::new(
+            region.id,
+            peer_id,
+            engines.raft.clone(),
+            raft_state,
+            apply_state,
+            last_term,
+            raftlog_fetch_scheduler,
+        );
 
         Ok(PeerStorage {
             engines,
             peer_id,
             region: region.clone(),
-            raft_state,
-            apply_state,
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(None),
             region_scheduler,
-            raftlog_fetch_scheduler,
             snap_tried_cnt: RefCell::new(0),
             tag,
             applied_index_term,
-            last_term,
-            cache: EntryCache::default(),
-            async_fetch_results: RefCell::new(HashMap::default()),
-            raftlog_fetch_stats: AsyncFetchStats::default(),
+            entry_storage,
         })
     }
 
@@ -818,346 +1268,14 @@ where
         ))
     }
 
-    fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
-        if low > high {
-            return Err(storage_error(format!(
-                "low: {} is greater that high: {}",
-                low, high
-            )));
-        } else if low <= self.truncated_index() {
-            return Err(RaftError::Store(StorageError::Compacted));
-        } else if high > self.last_index() + 1 {
-            return Err(storage_error(format!(
-                "entries' high {} is out of bound lastindex {}",
-                high,
-                self.last_index()
-            )));
-        }
-        Ok(())
-    }
-
-    pub fn clean_async_fetch_res(&mut self, low: u64) {
-        self.async_fetch_results.borrow_mut().remove(&low);
-    }
-
-    // Update the async fetch result.
-    // None indicates cleanning the fetched result.
-    pub fn update_async_fetch_res(&mut self, low: u64, res: Option<Box<RaftlogFetchResult>>) {
-        // If it's in fetching, don't clean the async fetch result.
-        if self.async_fetch_results.borrow().get(&low) == Some(&RaftlogFetchState::Fetching)
-            && res.is_none()
-        {
-            return;
-        }
-
-        match res {
-            Some(res) => {
-                if let Some(RaftlogFetchState::Fetched(prev)) = self
-                    .async_fetch_results
-                    .borrow_mut()
-                    .insert(low, RaftlogFetchState::Fetched(res))
-                {
-                    info!(
-                        "unconsumed async fetch res";
-                        "region_id" => self.region.get_id(),
-                        "peer_id" => self.peer_id,
-                        "res" => ?prev,
-                        "low" => low,
-                    );
-                }
-            }
-            None => {
-                let prev = self.async_fetch_results.borrow_mut().remove(&low);
-                if prev.is_some() {
-                    self.raftlog_fetch_stats.fetch_unused.update(|m| m + 1);
-                }
-            }
-        }
-    }
-
-    fn async_fetch(
-        &self,
-        region_id: u64,
-        low: u64,
-        high: u64,
-        max_size: u64,
-        context: GetEntriesContext,
-        buf: &mut Vec<Entry>,
-    ) -> raft::Result<usize> {
-        if let Some(RaftlogFetchState::Fetching) = self.async_fetch_results.borrow().get(&low) {
-            // already an async fetch in flight
-            return Err(raft::Error::Store(
-                raft::StorageError::LogTemporarilyUnavailable,
-            ));
-        }
-
-        let tried_cnt = if let Some(RaftlogFetchState::Fetched(res)) =
-            self.async_fetch_results.borrow_mut().remove(&low)
-        {
-            assert_eq!(res.low, low);
-            let mut ents = res.ents?;
-            let first = ents.first().map(|e| e.index).unwrap();
-            assert_eq!(first, res.low);
-            let last = ents.last().map(|e| e.index).unwrap();
-
-            if last + 1 >= high {
-                // async fetch res covers [low, high)
-                ents.truncate((high - first) as usize);
-                assert_eq!(ents.last().map(|e| e.index).unwrap(), high - 1);
-                if max_size < res.max_size {
-                    limit_size(&mut ents, Some(max_size));
-                }
-                let count = ents.len();
-                buf.append(&mut ents);
-                fail_point!("on_async_fetch_return");
-                return Ok(count);
-            } else if res.hit_size_limit && max_size <= res.max_size {
-                // async fetch res doesn't cover [low, high) due to hit size limit
-                if max_size < res.max_size {
-                    limit_size(&mut ents, Some(max_size));
-                };
-                let count = ents.len();
-                buf.append(&mut ents);
-                return Ok(count);
-            } else if last + RAFT_LOG_MULTI_GET_CNT > high - 1
-                && res.tried_cnt + 1 == MAX_ASYNC_FETCH_TRY_CNT
-            {
-                let mut fetched_size = ents.iter().fold(0, |acc, e| acc + e.compute_size() as u64);
-                if max_size <= fetched_size {
-                    limit_size(&mut ents, Some(max_size));
-                    let count = ents.len();
-                    buf.append(&mut ents);
-                    return Ok(count);
-                }
-
-                // the count of left entries isn't too large, fetch the remaining entries synchronously one by one
-                for idx in last + 1..high {
-                    let ent = self.engines.raft.get_entry(region_id, idx)?;
-                    match ent {
-                        None => {
-                            return Err(raft::Error::Store(raft::StorageError::Unavailable));
-                        }
-                        Some(ent) => {
-                            let size = ent.compute_size() as u64;
-                            if fetched_size + size > max_size {
-                                break;
-                            } else {
-                                fetched_size += size;
-                                ents.push(ent);
-                            }
-                        }
-                    }
-                }
-                let count = ents.len();
-                buf.append(&mut ents);
-                return Ok(count);
-            }
-            info!(
-                "async fetch invalid";
-                "region_id" => self.region.get_id(),
-                "peer_id" => self.peer_id,
-                "first" => first,
-                "last" => last,
-                "low" => low,
-                "high" => high,
-                "max_size" => max_size,
-                "res_max_size" => res.max_size,
-            );
-            // low index or max size is changed, the result is not fit for the current range, so refetch again.
-            self.raftlog_fetch_stats.fetch_invalid.update(|m| m + 1);
-            res.tried_cnt + 1
-        } else {
-            1
-        };
-
-        // the first/second try: get [low, high) asynchronously
-        // the third try:
-        //  - if term and low are matched: use result of [low, persisted) and get [persisted, high) synchronously
-        //  - else: get [low, high) synchronously
-        if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
-            // even the larger range is invalid again, fallback to fetch in sync way
-            self.raftlog_fetch_stats.fallback_fetch.update(|m| m + 1);
-            let count = self.engines.raft.fetch_entries_to(
-                region_id,
-                low,
-                high,
-                Some(max_size as usize),
-                buf,
-            )?;
-            return Ok(count);
-        }
-
-        self.raftlog_fetch_stats.async_fetch.update(|m| m + 1);
-        self.async_fetch_results
-            .borrow_mut()
-            .insert(low, RaftlogFetchState::Fetching);
-        self.raftlog_fetch_scheduler
-            .schedule(RaftlogFetchTask::PeerStorage {
-                region_id,
-                context,
-                low,
-                high,
-                max_size: (max_size as usize),
-                tried_cnt,
-                term: self.hard_state().get_term(),
-            })
-            .unwrap();
-        Err(raft::Error::Store(
-            raft::StorageError::LogTemporarilyUnavailable,
-        ))
-    }
-
-    pub fn entries(
-        &self,
-        low: u64,
-        high: u64,
-        max_size: u64,
-        context: GetEntriesContext,
-    ) -> raft::Result<Vec<Entry>> {
-        self.check_range(low, high)?;
-        let mut ents =
-            Vec::with_capacity(std::cmp::min((high - low) as usize, MAX_INIT_ENTRY_COUNT));
-        if low == high {
-            return Ok(ents);
-        }
-        let region_id = self.get_region_id();
-        let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
-        if high <= cache_low {
-            self.cache.miss.update(|m| m + 1);
-            return if context.can_async() {
-                self.async_fetch(region_id, low, high, max_size, context, &mut ents)?;
-                Ok(ents)
-            } else {
-                self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
-                self.engines.raft.fetch_entries_to(
-                    region_id,
-                    low,
-                    high,
-                    Some(max_size as usize),
-                    &mut ents,
-                )?;
-                Ok(ents)
-            };
-        }
-        let begin_idx = if low < cache_low {
-            self.cache.miss.update(|m| m + 1);
-            let fetched_count = if context.can_async() {
-                self.async_fetch(region_id, low, cache_low, max_size, context, &mut ents)?
-            } else {
-                self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
-                self.engines.raft.fetch_entries_to(
-                    region_id,
-                    low,
-                    cache_low,
-                    Some(max_size as usize),
-                    &mut ents,
-                )?
-            };
-            if fetched_count < (cache_low - low) as usize {
-                // Less entries are fetched than expected.
-                return Ok(ents);
-            }
-            cache_low
-        } else {
-            low
-        };
-        self.cache.hit.update(|h| h + 1);
-        let fetched_size = ents.iter().fold(0, |acc, e| acc + e.compute_size());
-        self.cache
-            .fetch_entries_to(begin_idx, high, fetched_size as u64, max_size, &mut ents);
-        Ok(ents)
-    }
-
-    pub fn term(&self, idx: u64) -> raft::Result<u64> {
-        if idx == self.truncated_index() {
-            return Ok(self.truncated_term());
-        }
-        self.check_range(idx, idx + 1)?;
-        if self.truncated_term() == self.last_term || idx == self.last_index() {
-            return Ok(self.last_term);
-        }
-        if let Some(e) = self.cache.entry(idx) {
-            Ok(e.get_term())
-        } else {
-            Ok(self
-                .engines
-                .raft
-                .get_entry(self.get_region_id(), idx)
-                .unwrap()
-                .unwrap()
-                .get_term())
-        }
-    }
-
-    #[inline]
-    pub fn first_index(&self) -> u64 {
-        first_index(&self.apply_state)
-    }
-
-    #[inline]
-    pub fn last_index(&self) -> u64 {
-        last_index(&self.raft_state)
-    }
-
-    #[inline]
-    pub fn last_term(&self) -> u64 {
-        self.last_term
-    }
-
-    #[inline]
-    pub fn raft_state(&self) -> &RaftLocalState {
-        &self.raft_state
-    }
-
-    #[inline]
-    pub fn applied_index(&self) -> u64 {
-        self.apply_state.get_applied_index()
-    }
-
-    #[inline]
-    pub fn set_applied_state(&mut self, apply_state: RaftApplyState) {
-        self.apply_state = apply_state;
-    }
-
     #[inline]
     pub fn set_applied_term(&mut self, applied_index_term: u64) {
         self.applied_index_term = applied_index_term;
     }
 
     #[inline]
-    pub fn apply_state(&self) -> &RaftApplyState {
-        &self.apply_state
-    }
-
-    #[inline]
     pub fn applied_index_term(&self) -> u64 {
         self.applied_index_term
-    }
-
-    #[inline]
-    pub fn commit_index(&self) -> u64 {
-        self.raft_state.get_hard_state().get_commit()
-    }
-
-    #[inline]
-    pub fn set_commit_index(&mut self, commit: u64) {
-        assert!(commit >= self.commit_index());
-        self.raft_state.mut_hard_state().set_commit(commit);
-    }
-
-    #[inline]
-    pub fn hard_state(&self) -> &HardState {
-        self.raft_state.get_hard_state()
-    }
-
-    #[inline]
-    pub fn truncated_index(&self) -> u64 {
-        self.apply_state.get_truncated_state().get_index()
-    }
-
-    #[inline]
-    pub fn truncated_term(&self) -> u64 {
-        self.apply_state.get_truncated_state().get_term()
     }
 
     #[inline]
@@ -1354,66 +1472,9 @@ where
         self.gen_snap_task.get_mut().take()
     }
 
-    // Append the given entries to the raft log using previous last index or self.last_index.
-    pub fn append(&mut self, entries: Vec<Entry>, task: &mut WriteTask<EK, ER>) {
-        if entries.is_empty() {
-            return;
-        }
-        let region_id = self.get_region_id();
-        debug!(
-            "append entries";
-            "region_id" => region_id,
-            "peer_id" => self.peer_id,
-            "count" => entries.len(),
-        );
-        let prev_last_index = self.raft_state.get_last_index();
-
-        let (last_index, last_term) = {
-            let e = entries.last().unwrap();
-            (e.get_index(), e.get_term())
-        };
-
-        self.cache.append(&self.tag, &entries);
-
-        task.entries = entries;
-        // Delete any previously appended log entries which never committed.
-        task.cut_logs = Some((last_index + 1, prev_last_index + 1));
-
-        self.raft_state.set_last_index(last_index);
-        self.last_term = last_term;
-    }
-
     pub fn on_compact_raftlog(&mut self, idx: u64) {
-        self.compact_entry_cache(idx);
+        self.entry_storage.compact_entry_cache(idx);
         self.cancel_generating_snap(Some(idx));
-    }
-
-    pub fn compact_entry_cache(&mut self, idx: u64) {
-        self.cache.compact_to(idx);
-    }
-
-    #[inline]
-    pub fn is_entry_cache_empty(&self) -> bool {
-        self.cache.is_empty()
-    }
-
-    /// Evict entries from the cache.
-    pub fn evict_entry_cache(&mut self, half: bool) {
-        if !self.is_entry_cache_empty() {
-            let cache = &mut self.cache;
-            let cache_len = cache.cache.len();
-            let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
-            let idx = cache.cache[drain_to].index;
-            let mem_size_change = cache.compact_to(idx + 1);
-            RAFT_ENTRIES_EVICT_BYTES.inc_by(mem_size_change);
-        }
-    }
-
-    #[inline]
-    pub fn flush_entry_cache_metrics(&mut self) {
-        // NOTE: memory usage of entry cache is flushed realtime.
-        self.cache.flush_stats();
-        self.raftlog_fetch_stats.flush_stats();
     }
 
     // Apply the peer with given snapshot.
@@ -1454,7 +1515,7 @@ where
 
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
-            let first_index = self.first_index();
+            let first_index = self.entry_storage.first_index();
             // It's possible that logs between `last_compacted_idx` and `first_index` are
             // being deleted in raftlog_gc worker. But it's OK as:
             // 1. If the peer accepts a new snapshot, it must start with an index larger than
@@ -1575,8 +1636,8 @@ where
         Ok(())
     }
 
-    pub fn get_raft_engine(&self) -> ER {
-        self.engines.raft.clone()
+    pub fn raft_engine(&self) -> &ER {
+        self.entry_storage.raft_engine()
     }
 
     /// Check whether the storage has finished applying snapshot.
@@ -1728,7 +1789,7 @@ where
         let mut res = HandleReadyResult::SendIOTask;
         if !ready.snapshot().is_empty() {
             fail_point!("raft_before_apply_snap");
-            let last_first_index = self.first_index();
+            let last_first_index = self.first_index().unwrap();
             let snap_region =
                 self.apply_snapshot(ready.snapshot(), &mut write_task, &destroy_regions)?;
 
@@ -1777,10 +1838,6 @@ where
         Ok((res, write_task))
     }
 
-    pub fn update_cache_persisted(&mut self, persisted: u64) {
-        self.cache.update_persisted(persisted);
-    }
-
     pub fn persist_snapshot(&mut self, res: &PersistSnapshotResult) {
         // cleanup data before scheduling apply task
         if self.is_initialized() {
@@ -1820,10 +1877,6 @@ where
         // in `StoreMeta::regions` (will be updated soon).
         // See comments in `apply_snapshot` for more details.
         self.set_region(res.region.clone());
-    }
-
-    pub fn trace_cached_entries(&mut self, entries: CachedEntries) {
-        self.cache.trace_cached_entries(entries);
     }
 }
 
@@ -2711,10 +2764,9 @@ mod tests {
             let sched = worker.scheduler();
             let (dummy_scheduler, _) = dummy_scheduler();
             let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
-            let res = store
-                .term(idx)
-                .map_err(From::from)
-                .and_then(|term| compact_raft_log(&store.tag, &mut store.apply_state, idx, term));
+            let res = store.term(idx).map_err(From::from).and_then(|term| {
+                compact_raft_log(&store.tag, &mut store.entry_storage.apply_state, idx, term)
+            });
             // TODO check exact error type after refactoring error.
             if res.is_err() ^ werr.is_err() {
                 panic!("#{}: want {:?}, got {:?}", i, werr, res);
@@ -2845,7 +2897,7 @@ mod tests {
             .unwrap();
         write_to_db_for_test(&s.engines, write_task);
         let term = s.term(7).unwrap();
-        compact_raft_log(&s.tag, &mut s.apply_state, 7, term).unwrap();
+        compact_raft_log(&s.tag, &mut s.entry_storage.apply_state, 7, term).unwrap();
         let mut kv_wb = s.engines.kv.write_batch();
         s.save_apply_state_to(&mut kv_wb).unwrap();
         kv_wb.write().unwrap();
@@ -2997,7 +3049,7 @@ mod tests {
             let (dummy_scheduler, _) = dummy_scheduler();
             let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
             append_ents(&mut store, &entries);
-            let li = store.last_index();
+            let li = store.last_index().unwrap();
             let actual_entries = store
                 .entries(4, li + 1, u64::max_value(), GetEntriesContext::empty(false))
                 .unwrap();
@@ -3037,7 +3089,7 @@ mod tests {
             .entries(4, 8, 0, GetEntriesContext::empty(false))
             .unwrap();
         assert_eq!(res, vec![new_entry(4, 4)]);
-        let mut size = ents[1..].iter().map(|e| u64::from(e.compute_size())).sum();
+        let mut size: u64 = ents[1..].iter().map(|e| u64::from(e.compute_size())).sum();
         res = store
             .entries(4, 8, size, GetEntriesContext::empty(false))
             .unwrap();
@@ -3139,23 +3191,25 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap(), 896);
 
         cache.append(
-            "",
+            0,
+            0,
             &[new_padded_entry(101, 1, 1), new_padded_entry(102, 1, 2)],
         );
         assert_eq!(rx.try_recv().unwrap(), 3);
 
         // Test size change for one overlapped entry.
-        cache.append("", &[new_padded_entry(102, 2, 3)]);
+        cache.append(0, 0, &[new_padded_entry(102, 2, 3)]);
         assert_eq!(rx.try_recv().unwrap(), 1);
 
         // Test size change for all overlapped entries.
         cache.append(
-            "",
+            0,
+            0,
             &[new_padded_entry(101, 3, 4), new_padded_entry(102, 3, 5)],
         );
         assert_eq!(rx.try_recv().unwrap(), 5);
 
-        cache.append("", &[new_padded_entry(103, 3, 6)]);
+        cache.append(0, 0, &[new_padded_entry(103, 3, 6)]);
         assert_eq!(rx.try_recv().unwrap(), 6);
 
         // Test trace a dangle entry.
@@ -3169,7 +3223,7 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap(), 0);
 
         // Test compare `cached_last` with `trunc_to_idx` in `EntryCache::append_impl`.
-        cache.append("", &[new_padded_entry(103, 4, 7)]);
+        cache.append(0, 0, &[new_padded_entry(103, 4, 7)]);
         assert_eq!(rx.try_recv().unwrap(), 1);
 
         // Test compact one traced dangle entry and one entry in cache.
@@ -3200,7 +3254,7 @@ mod tests {
             new_entry(5, 4),
             new_entry(6, 6),
         ];
-        cache.append("", &ents);
+        cache.append(0, 0, &ents);
         assert!(cache.entry(1).is_none());
         assert!(cache.entry(2).is_none());
         for e in &ents {
@@ -3256,7 +3310,7 @@ mod tests {
 
         let td2 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let mut s2 = new_storage(sched.clone(), dummy_scheduler.clone(), &td2);
-        assert_eq!(s2.first_index(), s2.applied_index() + 1);
+        assert_eq!(s2.first_index(), Ok(s2.applied_index() + 1));
         let mut write_task = WriteTask::new(s2.get_region_id(), s2.peer_id, 1);
         let snap_region = s2.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
         let mut snap_data = RaftSnapshotData::default();
@@ -3267,7 +3321,7 @@ mod tests {
         assert_eq!(s2.raft_state.get_last_index(), 6);
         assert_eq!(s2.apply_state.get_truncated_state().get_index(), 6);
         assert_eq!(s2.apply_state.get_truncated_state().get_term(), 6);
-        assert_eq!(s2.first_index(), s2.applied_index() + 1);
+        assert_eq!(s2.first_index(), Ok(s2.applied_index() + 1));
         validate_cache(&s2, &[]);
 
         let td3 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
