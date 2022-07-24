@@ -64,6 +64,7 @@ impl RaftEngineReadOnly for RocksEngine {
         let start_key = keys::raft_log_key(region_id, low);
         let end_key = keys::raft_log_key(region_id, high);
         self.scan(
+            CF_DEFAULT,
             &start_key,
             &end_key,
             true, // fill_cache
@@ -108,6 +109,7 @@ impl RaftEngineReadOnly for RocksEngine {
         let start_key = keys::raft_log_key(region_id, 0);
         let end_key = keys::raft_log_key(region_id, u64::MAX);
         self.scan(
+            CF_DEFAULT,
             &start_key,
             &end_key,
             false, // fill_cache
@@ -123,7 +125,7 @@ impl RaftEngineReadOnly for RocksEngine {
 
     fn is_empty(&self) -> Result<bool> {
         let mut is_empty = true;
-        self.scan_cf(CF_DEFAULT, b"", b"", false, |_, _| {
+        self.scan(CF_DEFAULT, b"", b"", false, |_, _| {
             is_empty = false;
             Ok(false)
         })?;
@@ -158,6 +160,7 @@ impl RaftEngineDebug for RocksEngine {
         let start_key = keys::raft_log_key(raft_group_id, 0);
         let end_key = keys::raft_log_key(raft_group_id, u64::MAX);
         self.scan(
+            CF_DEFAULT,
             &start_key,
             &end_key,
             false, // fill_cache
@@ -181,7 +184,7 @@ impl RocksEngine {
         if from == 0 {
             let start_key = keys::raft_log_key(raft_group_id, 0);
             let prefix = keys::raft_log_prefix(raft_group_id);
-            match self.seek(&start_key)? {
+            match self.seek(CF_DEFAULT, &start_key)? {
                 Some((k, _)) if k.starts_with(&prefix) => from = box_try!(keys::raft_log_index(&k)),
                 // No need to gc.
                 _ => return Ok(0),
@@ -252,7 +255,7 @@ impl RaftEngine for RocksEngine {
             let seek_key = keys::raft_log_key(raft_group_id, 0);
             let prefix = keys::raft_log_prefix(raft_group_id);
             fail::fail_point!("engine_rocks_raft_engine_clean_seek", |_| Ok(()));
-            if let Some((key, _)) = self.seek(&seek_key)? {
+            if let Some((key, _)) = self.seek(CF_DEFAULT, &seek_key)? {
                 if !key.starts_with(&prefix) {
                     // No raft logs for the raft group.
                     return Ok(());
@@ -312,10 +315,6 @@ impl RaftEngine for RocksEngine {
         Ok(vec![])
     }
 
-    fn has_builtin_entry_cache(&self) -> bool {
-        false
-    }
-
     fn flush_metrics(&self, instance: &str) {
         KvEngine::flush_metrics(self, instance)
     }
@@ -347,7 +346,7 @@ impl RaftEngine for RocksEngine {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut err = None;
-        self.scan(start_key, end_key, false, |key, _| {
+        self.scan(CF_DEFAULT, start_key, end_key, false, |key, _| {
             let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);

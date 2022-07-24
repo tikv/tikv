@@ -1452,10 +1452,7 @@ mod tests {
             fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> Result<Option<Value>> {
                 unimplemented!()
             }
-            fn iter(&self, _: IterOptions) -> Result<Self::Iter> {
-                unimplemented!()
-            }
-            fn iter_cf(&self, _: CfName, _: IterOptions) -> Result<Self::Iter> {
+            fn iter(&self, _: CfName, _: IterOptions) -> Result<Self::Iter> {
                 unimplemented!()
             }
             fn ext(&self) -> MockSnapshotExt {

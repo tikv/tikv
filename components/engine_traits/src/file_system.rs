@@ -4,9 +4,11 @@ use std::sync::Arc;
 
 use file_system::{get_io_rate_limiter, get_io_type, IOOp, IORateLimiter};
 
+use crate::Result;
+
 pub trait FileSystemInspector: Sync + Send {
-    fn read(&self, len: usize) -> Result<usize, String>;
-    fn write(&self, len: usize) -> Result<usize, String>;
+    fn read(&self, len: usize) -> Result<usize>;
+    fn write(&self, len: usize) -> Result<usize>;
 }
 
 pub struct EngineFileSystemInspector {
@@ -33,7 +35,7 @@ impl Default for EngineFileSystemInspector {
 }
 
 impl FileSystemInspector for EngineFileSystemInspector {
-    fn read(&self, len: usize) -> Result<usize, String> {
+    fn read(&self, len: usize) -> Result<usize> {
         if let Some(limiter) = &self.limiter {
             let io_type = get_io_type();
             Ok(limiter.request(io_type, IOOp::Read, len))
@@ -42,7 +44,7 @@ impl FileSystemInspector for EngineFileSystemInspector {
         }
     }
 
-    fn write(&self, len: usize) -> Result<usize, String> {
+    fn write(&self, len: usize) -> Result<usize> {
         if let Some(limiter) = &self.limiter {
             let io_type = get_io_type();
             Ok(limiter.request(io_type, IOOp::Write, len))

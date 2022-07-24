@@ -37,8 +37,8 @@ use engine_rocks::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, TabletAccessor,
-    TabletErrorCollector, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as _, DBOptionsExt,
+    TabletAccessor, TabletErrorCollector, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::IORateLimiter;
 use keys::region_raft_prefix_len;
@@ -1597,14 +1597,11 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
         let mut error_collector = TabletErrorCollector::new();
         self.tablet_accessor
             .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
-                let r = db.get_options_cf(cf);
-                if let Ok(opt) = r {
-                    let r = opt.set_block_cache_capacity(size.0);
-                    if let Err(r) = r {
-                        error_collector.add_result(region_id, suffix, Err(r.into()));
-                    }
-                } else if let Err(r) = r {
-                    error_collector.add_result(region_id, suffix, Err(r));
+                let r = db
+                    .get_options_cf(cf)
+                    .and_then(|opt| opt.set_block_cache_capacity(size.0));
+                if r.is_err() {
+                    error_collector.add_result(region_id, suffix, r);
                 }
             });
         // Write config to metric
@@ -1618,10 +1615,10 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
         let mut error_collector = TabletErrorCollector::new();
         self.tablet_accessor
             .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
-                let mut opt = db.as_inner().get_db_options();
+                let mut opt = db.get_db_options();
                 let r = opt.set_rate_bytes_per_sec(rate_bytes_per_sec);
-                if let Err(r) = r {
-                    error_collector.add_result(region_id, suffix, Err(r.into()));
+                if r.is_err() {
+                    error_collector.add_result(region_id, suffix, r);
                 }
             });
         error_collector.take_result()
@@ -1634,20 +1631,24 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
         let mut error_collector = TabletErrorCollector::new();
         self.tablet_accessor
             .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
-                let mut opt = db.as_inner().get_db_options();
-                let r = opt.set_auto_tuned(rate_limiter_auto_tuned);
-                if let Err(r) = r {
-                    error_collector.add_result(region_id, suffix, Err(r.into()));
+                let mut opt = db.get_db_options();
+                let r = opt.set_rate_limiter_auto_tuned(rate_limiter_auto_tuned);
+                if r.is_err() {
+                    error_collector.add_result(region_id, suffix, r);
                 } else {
                     // double check the new state
-                    let new_auto_tuned = opt.get_auto_tuned();
+                    let new_auto_tuned = opt.get_rate_limiter_auto_tuned();
                     if new_auto_tuned.is_none()
                         || new_auto_tuned.unwrap() != rate_limiter_auto_tuned
                     {
                         error_collector.add_result(
                             region_id,
                             suffix,
-                            Err("fail to set rate_limiter_auto_tuned".to_string().into()),
+                            Err(engine_traits::Status::with_error(
+                                engine_traits::Code::IoError,
+                                "fail to set rate_limiter_auto_tuned",
+                            )
+                            .into()),
                         );
                     }
                 }
@@ -4929,7 +4930,7 @@ mod tests {
         cfg.quota.foreground_write_bandwidth = ReadableSize::mb(256);
         assert_eq!(cfg_controller.get_current(), cfg);
 
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(125));
@@ -4939,7 +4940,7 @@ mod tests {
             .unwrap();
         cfg.quota.foreground_read_bandwidth = ReadableSize::mb(512);
         assert_eq!(cfg_controller.get_current(), cfg);
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(500));
@@ -4956,7 +4957,7 @@ mod tests {
         cfg.quota.background_write_bandwidth = ReadableSize::mb(256);
         assert_eq!(cfg_controller.get_current(), cfg);
 
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(false);
         sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         assert_eq!(should_delay, Duration::from_millis(125));
@@ -4966,7 +4967,7 @@ mod tests {
             .unwrap();
         cfg.quota.background_read_bandwidth = ReadableSize::mb(512);
         assert_eq!(cfg_controller.get_current(), cfg);
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(false);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         assert_eq!(should_delay, Duration::from_millis(500));
@@ -4976,12 +4977,12 @@ mod tests {
             .unwrap();
         cfg.quota.max_delay_duration = ReadableDuration::millis(50);
         assert_eq!(cfg_controller.get_current(), cfg);
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(50));
 
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(false);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         assert_eq!(should_delay, Duration::from_millis(50));

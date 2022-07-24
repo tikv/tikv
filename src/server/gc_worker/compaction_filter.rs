@@ -467,7 +467,10 @@ impl WriteCompactionFilter {
             let _io_type_guard = WithIOType::new(IOType::Gc);
             fail_point!("write_compaction_filter_flush_write_batch", true, |_| {
                 Err(engine_traits::Error::Engine(
-                    "Ingested fail point".to_string(),
+                    engine_traits::Status::with_error(
+                        engine_traits::Code::IoError,
+                        "Ingested fail point",
+                    ),
                 ))
             });
             wb.write_opt(wopts)

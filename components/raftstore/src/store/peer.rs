@@ -2778,7 +2778,7 @@ where
                 .trace_cached_entries(apply.entries[0].clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
-                self.mut_store().evict_cache(false);
+                self.mut_store().evict_entry_cache(false);
             }
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
@@ -3156,7 +3156,7 @@ where
 
         if !self.is_leader() {
             self.mut_store()
-                .compact_cache_to(apply_state.applied_index + 1);
+                .compact_entry_cache(apply_state.applied_index + 1);
         }
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;

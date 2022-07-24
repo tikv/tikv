@@ -191,7 +191,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         new_engine
     }
 
-    fn set_shared_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
         let reg = self.registry.lock().unwrap();
         // pick up any tablet and set the shared block cache capacity
         if let Some(((_id, _suffix), tablet)) = (*reg).iter().next() {

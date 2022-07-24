@@ -232,7 +232,11 @@ mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter_opt = IterOptions::default();
         iter_opt.set_max_skippable_internal_keys(1);
-        let mut iter = Cursor::new(snapshot.iter(iter_opt).unwrap(), ScanMode::Forward, false);
+        let mut iter = Cursor::new(
+            snapshot.iter(CF_DEFAULT, iter_opt).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
 
         let mut statistics = CfStatistics::default();
         let res = iter.seek(&Key::from_raw(b"foo"), &mut statistics);
@@ -258,7 +262,7 @@ mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter = Cursor::new(
-            snapshot.iter(IterOptions::default()).unwrap(),
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Forward,
             false,
         );

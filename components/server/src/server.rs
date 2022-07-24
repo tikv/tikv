@@ -1304,20 +1304,17 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         };
 
         // Determine the base cpu quota
-        let base_cpu_quota = {
+        let base_cpu_quota =
             // if cpu quota is not specified, start from optimistic case
             if quota_limiter.cputime_limiter(false).is_infinite() {
-                let quota = 1000_f64
+                1000_f64
                     * f64::max(
                         BACKGROUND_REQUEST_CORE_LOWER_BOUND,
                         SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_DEFAULT_RATIO,
-                    );
-                quota_limiter.set_cpu_time_limit(quota as usize, false);
-                quota
+                    )
             } else {
                 quota_limiter.cputime_limiter(false) / 1000_f64
-            }
-        };
+            };
 
         // Calculate the celling and floor quota
         let celling_quota = f64::min(
@@ -1334,7 +1331,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL,
             move || {
                 if quota_limiter.auto_tune_enabled() {
-                    let old_quota = quota_limiter.cputime_limiter(false) / 1000_f64;
+                    let cputime_limit = quota_limiter.cputime_limiter(false);
+                    let old_quota = if cputime_limit.is_infinite() {
+                        base_cpu_quota
+                    } else {
+                        cputime_limit / 1000_f64
+                    };
                     let cpu_usage = match proc_stats.cpu_usage() {
                         Ok(r) => r,
                         Err(_e) => 0.0,

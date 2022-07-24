@@ -107,7 +107,7 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
     for cf in ALL_CFS {
         engine
             .kv
-            .scan_cf(cf, &start_key, &end_key, false, |k, v| {
+            .scan(cf, &start_key, &end_key, false, |k, v| {
                 panic!(
                     "[region {}] unexpected ({:?}, {:?}) in cf {:?}",
                     id, k, v, cf

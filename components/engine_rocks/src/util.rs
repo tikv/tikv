@@ -10,6 +10,7 @@ use crate::{
     cf_options::RocksColumnFamilyOptions,
     db_options::RocksDBOptions,
     engine::RocksEngine,
+    r2e,
     raw_util::{new_engine as new_engine_raw, new_engine_opt as new_engine_opt_raw, CFOptions},
     rocks_metrics_defs::*,
 };
@@ -86,10 +87,9 @@ pub fn new_engine_opt(
 }
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
-    let handle = db
-        .cf_handle(cf)
-        .ok_or_else(|| Error::Engine(format!("cf {} not found", cf)))?;
-    Ok(handle)
+    db.cf_handle(cf)
+        .ok_or_else(|| format!("cf {} not found", cf))
+        .map_err(r2e)
 }
 
 pub fn range_to_rocks_range<'a>(range: &Range<'a>) -> RocksRange<'a> {
