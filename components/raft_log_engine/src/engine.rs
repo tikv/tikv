@@ -194,6 +194,24 @@ impl FileSystem for ManagedFileSystem {
         self.base_file_system.delete(path)
     }
 
+    fn rename<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
+        if let Some(ref manager) = self.key_manager {
+            let src_str = src_path.as_ref().to_str().unwrap();
+            let dst_str = dst_path.as_ref().to_str().unwrap();
+            manager.link_file(src_str, dst_str)?;
+            let r = self
+                .base_file_system
+                .rename(src_path.as_ref(), dst_path.as_ref());
+            let p = if r.is_ok() { src_str } else { dst_str };
+            if let Err(e) = manager.delete_file(p) {
+                warn!("fail to remove encryption metadata during rename"; "e" => ?e);
+            }
+            r
+        } else {
+            self.base_file_system.rename(src_path, dst_path)
+        }
+    }
+
     fn exists_metadata<P: AsRef<Path>>(&self, path: P) -> bool {
         if let Some(ref manager) = self.key_manager {
             if let Ok(info) = manager.get_file(path.as_ref().to_str().unwrap()) {
