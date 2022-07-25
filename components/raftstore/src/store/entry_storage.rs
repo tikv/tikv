@@ -361,9 +361,10 @@ impl Drop for EntryCache {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum RaftlogFetchState {
-    Fetching,
+    // The Instant records the start time of the fetching.
+    Fetching(Instant),
     Fetched(Box<RaftlogFetchResult>),
 }
 

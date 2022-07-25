@@ -109,6 +109,12 @@ use crate::{
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
+/// Base threshold for long uncommitted proposal.
+///
+/// In some cases, such as rolling upgrade, some regions' commit log duration can be
+/// 12 seconds. Before #13078 is merged, the commit log duration can be 2.8 minutes.
+/// So maybe 20s is a relatively reasonable threshold.
+const LONG_UNCOMMITTED_BASE_THRESHOLD: Duration = Duration::from_secs(20);
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
@@ -190,6 +196,11 @@ impl<S: Snapshot> ProposalQueue<S> {
             }
         }
         None
+    }
+
+    #[inline]
+    fn oldest(&self) -> Option<&Proposal<S>> {
+        self.queue.front()
     }
 
     fn push(&mut self, p: Proposal<S>) {
@@ -725,6 +736,8 @@ where
     #[getset(get = "pub")]
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
+    /// Threshold of long uncommitted proposals.
+    long_uncommitted_threshold: Duration,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -927,6 +940,7 @@ where
             raft_max_inflight_msgs: cfg.raft_max_inflight_msgs,
             proposals: ProposalQueue::new(tag.clone()),
             pending_reads: Default::default(),
+            long_uncommitted_threshold: LONG_UNCOMMITTED_BASE_THRESHOLD,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -2784,6 +2798,55 @@ where
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
+    }
+
+    /// Check long uncommitted proposals and log some info to help find why.
+    pub fn check_long_uncommitted_proposals<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        if self.has_long_uncommitted_proposals(ctx) {
+            self.log_for_long_uncommitted_proposals()
+        }
+    }
+
+    /// Try to log enough info to help find why there exists long uncommitted proposals.
+    fn log_for_long_uncommitted_proposals(&mut self) {
+        let status = self.raft_group.status();
+        let mut buffer: Vec<(u64, u64, u64)> = Vec::new();
+        if let Some(prs) = status.progress {
+            for (id, p) in prs.iter() {
+                buffer.push((*id, p.commit_group_id, p.matched));
+            }
+        }
+        warn!(
+            "found long uncommitted proposals";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+            "progress" => ?buffer,
+            "cache_first_index" => ?self.get_store().get_entry_cache_first_index(),
+        );
+    }
+
+    /// Check if there is long uncommitted proposal.
+    fn has_long_uncommitted_proposals<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
+        let mut has_long_uncommitted = false;
+        if let Some(propose_time) = self.proposals.oldest().and_then(|p| p.propose_time) {
+            // Each time a proposal is pushed, the current_time is refreshed.
+            // So the current_time should not be none.
+            debug_assert!(ctx.current_time.is_some());
+            let current_time = *ctx.current_time.get_or_insert_with(monotonic_raw_now);
+            let elapsed = match (current_time - propose_time).to_std() {
+                Ok(elapsed) => elapsed,
+                Err(_) => return false,
+            };
+            if elapsed >= self.long_uncommitted_threshold {
+                has_long_uncommitted = true;
+                self.long_uncommitted_threshold += LONG_UNCOMMITTED_BASE_THRESHOLD;
+            } else if elapsed < LONG_UNCOMMITTED_BASE_THRESHOLD {
+                self.long_uncommitted_threshold = LONG_UNCOMMITTED_BASE_THRESHOLD;
+            }
+        } else {
+            self.long_uncommitted_threshold = LONG_UNCOMMITTED_BASE_THRESHOLD
+        }
+        return has_long_uncommitted;
     }
 
     fn on_persist_snapshot<T>(

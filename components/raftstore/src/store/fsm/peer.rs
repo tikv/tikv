@@ -1930,6 +1930,8 @@ where
             return;
         }
 
+        self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
+
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
 
         self.check_force_leader();
