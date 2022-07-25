@@ -163,7 +163,7 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
     Ok(())
 }
 
-fn init_applied_index_term<EK: KvEngine, ER: RaftEngine>(
+fn init_applied_term<EK: KvEngine, ER: RaftEngine>(
     engines: &Engines<EK, ER>,
     region: &Region,
     apply_state: &RaftApplyState,
@@ -325,7 +325,6 @@ where
 
     peer_id: u64,
     region: metapb::Region,
-    applied_index_term: u64,
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
@@ -416,7 +415,7 @@ where
             return Err(box_err!("{} validate state fail: {:?}", tag, e));
         }
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
-        let applied_index_term = init_applied_index_term(&engines, region, &apply_state)?;
+        let applied_term = init_applied_term(&engines, region, &apply_state)?;
         let entry_storage = EntryStorage::new(
             region.id,
             peer_id,
@@ -424,6 +423,7 @@ where
             raft_state,
             apply_state,
             last_term,
+            applied_term,
             raftlog_fetch_scheduler,
         );
 
@@ -436,7 +436,6 @@ where
             region_scheduler,
             snap_tried_cnt: RefCell::new(0),
             tag,
-            applied_index_term,
             entry_storage,
         })
     }
@@ -462,16 +461,6 @@ where
             hard_state,
             util::conf_state_from_region(self.region()),
         ))
-    }
-
-    #[inline]
-    pub fn set_applied_term(&mut self, applied_index_term: u64) {
-        self.applied_index_term = applied_index_term;
-    }
-
-    #[inline]
-    pub fn applied_index_term(&self) -> u64 {
-        self.applied_index_term
     }
 
     #[inline]
@@ -735,7 +724,8 @@ where
         self.raft_state_mut().set_last_index(last_index);
         self.set_last_term(snap.get_metadata().get_term());
         self.apply_state_mut().set_applied_index(last_index);
-        self.applied_index_term = self.last_term();
+        let last_term = self.last_term();
+        self.set_applied_term(last_term);
 
         // The snapshot only contains log which index > applied index, so
         // here the truncate state's (index, term) is in snapshot metadata.
@@ -1116,7 +1106,7 @@ pub fn do_snapshot<E>(
     engine: &E,
     kv_snap: E::Snapshot,
     region_id: u64,
-    last_applied_index_term: u64,
+    last_applied_term: u64,
     last_applied_state: RaftApplyState,
     for_balance: bool,
     allow_multi_files_snapshot: bool,
@@ -1145,7 +1135,7 @@ where
 
     let key = SnapKey::new(
         region_id,
-        last_applied_index_term,
+        last_applied_term,
         apply_state.get_applied_index(),
     );
 

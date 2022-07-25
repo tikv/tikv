@@ -417,6 +417,7 @@ pub struct EntryStorage<ER> {
     raft_state: RaftLocalState,
     apply_state: RaftApplyState,
     last_term: u64,
+    applied_term: u64,
     raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     raftlog_fetch_stats: AsyncFetchStats,
     async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
@@ -430,6 +431,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         raft_state: RaftLocalState,
         apply_state: RaftApplyState,
         last_term: u64,
+        applied_term: u64,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     ) -> Self {
         EntryStorage {
@@ -440,6 +442,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
             raft_state,
             apply_state,
             last_term,
+            applied_term,
             raftlog_fetch_scheduler,
             raftlog_fetch_stats: AsyncFetchStats::default(),
             async_fetch_results: RefCell::new(HashMap::default()),
@@ -733,6 +736,16 @@ impl<ER: RaftEngine> EntryStorage<ER> {
     #[inline]
     pub fn set_last_term(&mut self, term: u64) {
         self.last_term = term;
+    }
+
+    #[inline]
+    pub fn set_applied_term(&mut self, applied_term: u64) {
+        self.applied_term = applied_term;
+    }
+
+    #[inline]
+    pub fn applied_term(&self) -> u64 {
+        self.applied_term
     }
 
     #[inline]

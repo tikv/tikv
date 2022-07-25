@@ -2194,8 +2194,8 @@ where
         // TODO: It may cause read index to wait a long time.
 
         // There may be some values that are not applied by this leader yet but the old leader,
-        // if applied_index_term isn't equal to current term.
-        self.get_store().applied_index_term() == self.term()
+        // if applied_term isn't equal to current term.
+        self.get_store().applied_term() == self.term()
             // There may be stale read if the old leader splits really slow,
             // the new region may already elected a new leader while
             // the old leader still think it owns the split range.
@@ -3136,7 +3136,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         apply_state: RaftApplyState,
-        applied_index_term: u64,
+        applied_term: u64,
         apply_metrics: &ApplyMetrics,
     ) -> bool {
         let mut has_ready = false;
@@ -3159,9 +3159,9 @@ where
                 .compact_entry_cache(apply_state.applied_index + 1);
         }
 
-        let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
+        let progress_to_be_updated = self.mut_store().applied_term() != applied_term;
         self.mut_store().set_applied_state(apply_state);
-        self.mut_store().set_applied_term(applied_index_term);
+        self.mut_store().set_applied_term(applied_term);
 
         self.peer_stat.written_keys += apply_metrics.written_keys;
         self.peer_stat.written_bytes += apply_metrics.written_bytes;
@@ -3183,13 +3183,13 @@ where
 
         self.read_progress.update_applied(applied_index);
 
-        // Only leaders need to update applied_index_term.
+        // Only leaders need to update applied_term.
         if progress_to_be_updated && self.is_leader() {
-            if applied_index_term == self.term() {
+            if applied_term == self.term() {
                 ctx.coprocessor_host
                     .on_applied_current_term(StateRole::Leader, self.region());
             }
-            let progress = ReadProgress::applied_index_term(applied_index_term);
+            let progress = ReadProgress::applied_term(applied_term);
             let mut meta = ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id).unwrap();
             self.maybe_update_read_progress(reader, progress);
@@ -4223,7 +4223,7 @@ where
             return Err(box_err!(
                 "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
-                self.get_store().applied_index_term(),
+                self.get_store().applied_term(),
                 self.term()
             ));
         }
@@ -4437,11 +4437,11 @@ where
         // Actually, according to the implementation of conf change in raft-rs, this check must be
         // passed if the previous check that `pending_conf_index` should be less than or equal to
         // `self.get_store().applied_index()` is passed.
-        if self.get_store().applied_index_term() != self.term() {
+        if self.get_store().applied_term() != self.term() {
             return Err(box_err!(
                 "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
-                self.get_store().applied_index_term(),
+                self.get_store().applied_term(),
                 self.term()
             ));
         }
@@ -4908,7 +4908,7 @@ where
                 let res = self.raft_group.raft.check_group_commit_consistent();
                 if Some(true) != res {
                     let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
-                    if self.get_store().applied_index_term() >= self.term() {
+                    if self.get_store().applied_term() >= self.term() {
                         let progress = self.raft_group.raft.prs();
                         for (id, p) in progress.iter() {
                             if !progress.conf().voters().contains(*id) {
@@ -5347,7 +5347,7 @@ where
     ER: RaftEngine,
 {
     fn has_applied_to_current_term(&mut self) -> bool {
-        self.get_store().applied_index_term() == self.term()
+        self.get_store().applied_term() == self.term()
     }
 
     fn inspect_lease(&mut self) -> LeaseState {
