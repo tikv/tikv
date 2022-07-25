@@ -13,10 +13,7 @@ use crossbeam_utils::CachePadded;
 use parking_lot::Mutex;
 use strum::EnumCount;
 use thread_local::ThreadLocal;
-use tikv_util::{
-    sys::thread::{self, Pid},
-    warn,
-};
+use tikv_util::sys::thread::{self, Pid};
 
 use crate::{IOBytes, IOType};
 
@@ -50,54 +47,46 @@ impl ThreadID {
         }
     }
 
-    fn fetch_io_bytes(&mut self) -> Option<IOBytes> {
+    fn fetch_io_bytes(&mut self) -> Result<IOBytes, String> {
         if self.proc_reader.is_none() {
             let path = PathBuf::from("/proc")
                 .join(format!("{}", self.pid))
                 .join("task")
                 .join(format!("{}", self.tid))
                 .join("io");
-            match File::open(path) {
-                Ok(file) => {
-                    self.proc_reader = Some(BufReader::new(file));
-                }
-                Err(e) => {
-                    warn!("failed to open proc file: {}", e);
-                }
-            }
+            self.proc_reader = Some(BufReader::new(
+                File::open(path).map_err(|e| format!("open: {}", e))?,
+            ));
         }
-        if let Some(ref mut reader) = self.proc_reader {
-            reader
-                .seek(std::io::SeekFrom::Start(0))
-                .map_err(|e| {
-                    warn!("failed to seek proc file: {}", e);
-                })
-                .ok()?;
-            let mut io_bytes = IOBytes::default();
-            for line in reader.lines() {
-                let line = line
-                    .map_err(|e| {
-                        // ESRCH 3 No such process
-                        if e.raw_os_error() != Some(3) {
-                            warn!("failed to read proc file: {}", e);
-                        }
-                    })
-                    .ok()?;
-                if line.len() > 11 {
-                    let mut s = line.split_whitespace();
-                    if let (Some(field), Some(value)) = (s.next(), s.next()) {
-                        if field.starts_with("read_bytes") {
-                            io_bytes.read = u64::from_str(value).ok()?;
-                        } else if field.starts_with("write_bytes") {
-                            io_bytes.write = u64::from_str(value).ok()?;
+        let reader = self.proc_reader.as_mut().unwrap();
+        reader
+            .seek(std::io::SeekFrom::Start(0))
+            .map_err(|e| format!("seek: {}", e))?;
+        let mut io_bytes = IOBytes::default();
+        for line in reader.lines() {
+            match line {
+                // ESRCH 3 No such process
+                Err(e) if e.raw_os_error() != Some(3) => {
+                    return Err(format!("read: {}", e));
+                }
+                Ok(line) => {
+                    if line.len() > 11 {
+                        let mut s = line.split_whitespace();
+                        if let (Some(field), Some(value)) = (s.next(), s.next()) {
+                            if field.starts_with("read_bytes") {
+                                io_bytes.read = u64::from_str(value)
+                                    .map_err(|e| format!("parse read_bytes: {}", e))?;
+                            } else if field.starts_with("write_bytes") {
+                                io_bytes.write = u64::from_str(value)
+                                    .map_err(|e| format!("parse write_bytes: {}", e))?;
+                            }
                         }
                     }
                 }
+                _ => (),
             }
-            Some(io_bytes)
-        } else {
-            None
         }
+        Ok(io_bytes)
     }
 }
 
@@ -140,7 +129,7 @@ impl AtomicIOBytes {
 /// Flushes the local I/O stats to global I/O stats.
 #[inline]
 fn flush_thread_io(sentinel: &mut LocalIOStats) {
-    if let Some(io_bytes) = sentinel.id.fetch_io_bytes() {
+    if let Ok(io_bytes) = sentinel.id.fetch_io_bytes() {
         GLOBAL_IO_STATS[sentinel.io_type as usize]
             .fetch_add(io_bytes - sentinel.last_flushed, Ordering::Relaxed);
         sentinel.last_flushed = io_bytes;
@@ -148,6 +137,9 @@ fn flush_thread_io(sentinel: &mut LocalIOStats) {
 }
 
 pub fn init() -> Result<(), String> {
+    ThreadID::current()
+        .fetch_io_bytes()
+        .map_err(|e| format!("failed to fetch I/O bytes from proc: {}", e))?;
     Ok(())
 }
 
