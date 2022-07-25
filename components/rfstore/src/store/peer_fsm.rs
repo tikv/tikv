@@ -2,6 +2,7 @@
 
 use std::{
     cmp,
+    collections::VecDeque,
     ops::{Deref, DerefMut},
     sync::{atomic::AtomicU64, Arc},
     u64,
@@ -34,10 +35,10 @@ use crate::{
         msg::Callback,
         notify_req_region_removed,
         peer::Peer,
-        util as _util, ApplyMsg, CasualMessage, Config, CustomBuilder, Engines, MsgApplyResult,
-        PdTask, PeerMsg, PersistReady, RaftContext, SignificantMsg, SnapState, StoreMsg, Ticker,
-        PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_RAFT_LOG_GC, PEER_TICK_SPLIT_CHECK,
-        PEER_TICK_SWITCH_MEM_TABLE_CHECK,
+        util as _util, ApplyMetrics, ApplyMsg, CasualMessage, Config, CustomBuilder, Engines,
+        MsgApplyResult, PdTask, PeerMsg, PersistReady, RaftApplyState, RaftContext, SignificantMsg,
+        SnapState, StoreMsg, Ticker, PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_RAFT_LOG_GC,
+        PEER_TICK_SPLIT_CHECK, PEER_TICK_SWITCH_MEM_TABLE_CHECK,
     },
     DiscardReason, Error, RaftStoreRouter, Result,
 };
@@ -992,7 +993,23 @@ impl<'a> PeerMsgHandler<'a> {
             return;
         }
         if change.has_snapshot() {
-            self.peer.mut_store().snap_state = SnapState::Relax;
+            if self.peer.mut_store().is_applying_snapshot() {
+                self.peer.mut_store().snap_state = SnapState::Relax;
+                let apply_state = RaftApplyState::new(
+                    self.peer.mut_store().snapshot_index(),
+                    self.peer.mut_store().snapshot_term(),
+                );
+                let apply_result = MsgApplyResult {
+                    results: VecDeque::new(),
+                    apply_state,
+                    metrics: ApplyMetrics::default(),
+                };
+                if self.peer.raft_group.raft.raft_log.persisted >= apply_state.applied_index {
+                    self.fsm.peer.post_apply(self.ctx, &apply_result);
+                } else {
+                    self.peer.mut_store().on_persist_apply_result = Some(apply_result);
+                }
+            }
         }
         if change.has_snapshot() || change.has_initial_flush() {
             self.peer.mut_store().initial_flushed = true;
@@ -1011,6 +1028,9 @@ impl<'a> PeerMsgHandler<'a> {
             return;
         }
         self.peer.raft_group.on_persist_ready(ready.ready_number);
+        if let Some(apply_result) = self.peer.mut_store().on_persist_apply_result.take() {
+            self.fsm.peer.post_apply(self.ctx, &apply_result);
+        }
     }
 
     pub(crate) fn on_prepared_change_set(&mut self, res: kvengine::Result<kvengine::ChangeSet>) {

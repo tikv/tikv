@@ -19,6 +19,11 @@ name = "cloud_engine"
 path = "cloud_engine/mod.rs"
 required-features = ["testexport"]
 
+[[test]]
+name = "random"
+path = "random/mod.rs"
+required-features = ["testexport"]
+
 [[bench]]
 name = "raftstore"
 harness = false

@@ -347,7 +347,7 @@ impl PdCluster {
     fn new(cluster_id: u64) -> PdCluster {
         let mut meta = metapb::Cluster::default();
         meta.set_id(cluster_id);
-        meta.set_max_peer_count(5);
+        meta.set_max_peer_count(3);
 
         PdCluster {
             meta,

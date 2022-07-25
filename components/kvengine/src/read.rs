@@ -164,7 +164,7 @@ impl SnapAccessCore {
         for l0 in &self.data.l0_tbls {
             if let Some(tbl) = &l0.get_cf(cf) {
                 let v = tbl.get(key, version, key_hash);
-                path.l0 += 1;
+                path.l0 = path.l0.saturating_add(1);
                 if v.is_valid() {
                     return v;
                 }

@@ -55,7 +55,7 @@ tokio = { version = "1.5", features = ["full"] }
 txn_types = { path = "../txn_types", default-features = false }
 # xorf = { version = "0.8", features = ["serde"] }
 xorf = { git = "https://github.com/youjiali1995/xorf", branch = "0.8.0-custom-serde", features = ["serde"] }
-zstd-sys = "1.6.3+zstd.1.5.2"
+zstd-sys = "1.6.3"
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"

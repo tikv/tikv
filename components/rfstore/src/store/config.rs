@@ -177,6 +177,16 @@ impl Config {
         cfg.async_io = old.store_io_pool_size > 0;
         cfg.local_file_gc_tick_interval = old.local_file_gc_tick_interval;
         cfg.local_file_gc_timeout = old.local_file_gc_timeout;
+
+        if cfg.raft_base_tick_interval.as_millis() < 100 {
+            // It is a test config, adjust the fields not included in the old.
+            cfg.update_safe_ts_interval.0 = cfg.raft_base_tick_interval.0 * 60;
+            cfg.switch_mem_table_check_tick_interval.0 = cfg.raft_base_tick_interval.0 * 60;
+            if cfg.local_file_gc_timeout.0 > cfg.raft_base_tick_interval.0 * 60 * 30 {
+                cfg.local_file_gc_timeout.0 = cfg.raft_base_tick_interval.0 * 60 * 30;
+                cfg.local_file_gc_tick_interval.0 = cfg.raft_base_tick_interval.0 * 60 * 10;
+            }
+        }
         cfg
     }
 }

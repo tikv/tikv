@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::max,
     collections::{HashMap, HashSet},
     fmt::{Debug, Display, Formatter},
     iter::{FromIterator, Iterator},
@@ -312,6 +311,8 @@ impl EngineCore {
         let parent_snap = guard.as_ref().unwrap().clone();
         let mut mem_tbls = vec![];
         let data = shard.get_data();
+        // A newly split shard's meta_sequence is an in-mem state until initial flush.
+        let data_sequence = shard.get_meta_sequence();
         for mem_tbl in &data.mem_tbls.as_slice()[1..] {
             debug!(
                 "trigger initial flush check mem table version {}, size {}, parent base {} parent write {}",
@@ -321,18 +322,12 @@ impl EngineCore {
                 parent_snap.data_sequence,
             );
             if mem_tbl.get_version() > parent_snap.base_version + parent_snap.data_sequence
+                && mem_tbl.get_version() <= shard.base_version + data_sequence
                 && mem_tbl.has_data_in_range(&shard.start, &shard.end)
             {
                 mem_tbls.push(mem_tbl.clone());
             }
         }
-        // A newly split shard's meta_sequence is an in-mem state until initial flush.
-        // It is possible that the mem-table has switched after split, we should use the larger
-        // one to pass the ShardTaskManager's duplication check.
-        let mem_data_sequence = mem_tbls
-            .first()
-            .map_or(0, |t| t.get_version().saturating_sub(shard.base_version));
-        let data_sequence = max(shard.get_meta_sequence(), mem_data_sequence);
         self.flush_tx
             .send(FlushMsg::Task(FlushTask::new_initial(
                 shard,

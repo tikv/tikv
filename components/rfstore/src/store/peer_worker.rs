@@ -236,6 +236,7 @@ impl RaftWorker {
                 let mut resp = RaftCmdResponse::default();
                 let mut err = errorpb::Error::default();
                 err.set_message(format!("region {} is missing", region_id));
+                err.mut_region_not_found().set_region_id(region_id);
                 resp.mut_header().set_error(err);
                 cmd.callback.invoke_with_response(resp);
             }

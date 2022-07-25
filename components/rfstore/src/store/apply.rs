@@ -1275,6 +1275,11 @@ impl Applier {
             let cs_pb = cs.change_set.clone();
             let is_ingest_files = cs.has_ingest_files();
             let result = if cs.has_snapshot() {
+                let snap = cs.get_snapshot();
+                self.apply_state.applied_index = snap.get_data_sequence();
+                let term_val =
+                    kvengine::get_shard_property(TERM_KEY, snap.get_properties()).unwrap();
+                self.apply_state.applied_index_term = term_val.as_slice().get_u64_le();
                 ctx.engine.ingest(cs, false).map(|()| cs_pb)
             } else {
                 ctx.engine.apply_change_set(cs).map(|()| cs_pb)
@@ -1678,7 +1683,9 @@ impl ApplyContext {
             };
             let region_id = applier.region.get_id();
             let msg = PeerMsg::ApplyResult(apply_res);
-            router.peer_sender.send((region_id, msg)).unwrap();
+            if let Err(err) = router.peer_sender.send((region_id, msg)) {
+                warn!("send apply result error {:?}", err);
+            }
         }
     }
 }

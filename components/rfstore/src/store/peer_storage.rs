@@ -19,8 +19,8 @@ use super::util::raft_state_key;
 use crate::{
     errors::*,
     store::{
-        get_preprocess_cmd, region_state_key, Engines, RaftApplyState, RaftContext, RaftState,
-        RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY, TERM_KEY,
+        get_preprocess_cmd, region_state_key, Engines, MsgApplyResult, RaftApplyState, RaftContext,
+        RaftState, RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY, TERM_KEY,
     },
 };
 
@@ -80,6 +80,7 @@ pub(crate) struct PeerStorage {
 
     pub(crate) initial_flushed: bool,
     pub(crate) shard_meta: Option<kvengine::ShardMeta>,
+    pub(crate) on_persist_apply_result: Option<MsgApplyResult>,
 }
 
 impl raft::Storage for PeerStorage {
@@ -220,6 +221,7 @@ impl PeerStorage {
             snap_state: SnapState::Relax,
             initial_flushed,
             shard_meta,
+            on_persist_apply_result: None,
         })
     }
 
@@ -461,8 +463,6 @@ impl PeerStorage {
         let last_term = snap.get_metadata().get_term();
         self.raft_state.last_index = last_index;
         self.last_term = last_term;
-        self.apply_state.applied_index = last_index;
-        self.apply_state.applied_index_term = last_term;
         ctx.raft_wb.set_state(
             region.get_id(),
             KV_ENGINE_META_KEY,

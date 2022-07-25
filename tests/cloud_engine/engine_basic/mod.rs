@@ -58,9 +58,9 @@ fn test_split_by_key() {
         sleep();
     }
     let shard_stats = engine.get_all_shard_stats();
-    assert!(shard_stats.len() > 1);
+    assert!(shard_stats.len() > 1, "{:?}", &shard_stats);
     let total_size: u64 = shard_stats.iter().map(|s| s.total_size).sum();
-    assert!(total_size < 64 * 1024);
+    assert!(total_size < 96 * 1024, "{:?}", &shard_stats);
     cluster.stop();
 }
 
