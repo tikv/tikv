@@ -2,6 +2,7 @@
 
 pub mod cmd_resp;
 pub mod config;
+pub mod entry_storage;
 pub mod fsm;
 pub mod memory;
 pub mod metrics;
@@ -37,6 +38,7 @@ pub use self::{
     },
     compaction_guard::CompactionGuardGeneratorFactory,
     config::Config,
+    entry_storage::{EntryStorage, RaftlogFetchResult, MAX_INIT_ENTRY_COUNT},
     fsm::{check_sst_for_ingestion, DestroyPeerJob, RaftRouter, StoreInfo},
     hibernate_state::{GroupState, HibernateState},
     memory::*,
@@ -49,9 +51,8 @@ pub use self::{
     peer::{AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy},
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
-        write_peer_state, EntryStorage, PeerStorage, RaftlogFetchResult, SnapState,
-        INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, MAX_INIT_ENTRY_COUNT, RAFT_INIT_LOG_INDEX,
-        RAFT_INIT_LOG_TERM,
+        write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+        RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
     read_queue::ReadIndexContext,
     region_snapshot::{RegionIterator, RegionSnapshot},

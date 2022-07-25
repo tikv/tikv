@@ -77,13 +77,14 @@ use crate::{
     },
     store::{
         cmd_resp,
+        entry_storage::{self, CachedEntries},
         fsm::RaftPollerBuilder,
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
         msg::{Callback, PeerMsg, ReadResponse, SignificantMsg},
         peer::Peer,
-        peer_storage::{self, write_initial_apply_state, write_peer_state, CachedEntries},
+        peer_storage::{write_initial_apply_state, write_peer_state},
         util,
         util::{
             admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
@@ -2469,7 +2470,7 @@ where
 
         let prepare_merge = req.get_prepare_merge();
         let index = prepare_merge.get_min_index();
-        let first_index = peer_storage::first_index(&self.apply_state);
+        let first_index = entry_storage::first_index(&self.apply_state);
         if index < first_index {
             // We filter `CompactLog` command before.
             panic!(
@@ -2713,7 +2714,7 @@ where
 
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::default();
-        let first_index = peer_storage::first_index(&self.apply_state);
+        let first_index = entry_storage::first_index(&self.apply_state);
         if compact_index <= first_index {
             debug!(
                 "compact index <= first index, no need to compact";
