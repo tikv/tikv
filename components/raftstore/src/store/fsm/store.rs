@@ -456,6 +456,7 @@ where
 {
     pub cfg: Config,
     pub store: metapb::Store,
+    pub start_time: Timespec,
     pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
@@ -711,7 +712,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::StoreUnreachable { store_id } => {
                     self.on_store_unreachable(store_id);
                 }
-                StoreMsg::Start { store } => self.start(store),
+                StoreMsg::Start { store, start_time } => self.start(store, start_time),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
@@ -722,7 +723,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     inspector.record_store_wait(send_time.saturating_elapsed());
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
-                StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
+                StoreMsg::UnsafeRecoveryReport(report) => store_heartbeat_pd(self.ctx, Some(report)),
                 StoreMsg::UnsafeRecoveryCreatePeer { syncer, create } => {
                     self.on_unsafe_recovery_create_peer(create);
                     drop(syncer);
@@ -732,7 +733,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         }
     }
 
-    fn start(&mut self, store: metapb::Store) {
+    fn start(&mut self, store: metapb::Store, start_time: Timespec) {
         if self.fsm.store.start_time.is_some() {
             panic!(
                 "[store {}] unable to start again with meta {:?}",
@@ -740,7 +741,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             );
         }
         self.fsm.store.id = store.get_id();
-        self.fsm.store.start_time = Some(time::get_time());
+        self.fsm.store.start_time = Some(start_time);
         self.register_cleanup_import_sst_tick();
         self.register_compact_check_tick();
         self.register_pd_store_heartbeat_tick();
@@ -768,7 +769,36 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
     fn flush_events(&mut self) {
         self.flush_ticks();
         self.poll_ctx.raft_metrics.flush();
+        let prev_is_store_busy = self
+            .poll_ctx
+            .global_stat
+            .stat
+            .is_store_busy
+            .load(Ordering::Relaxed);
+        let prev_is_apply_busy = self
+            .poll_ctx
+            .global_stat
+            .stat
+            .is_apply_busy
+            .load(Ordering::Relaxed);
         self.poll_ctx.store_stat.flush();
+        if prev_is_store_busy
+            != self
+                .poll_ctx
+                .global_stat
+                .stat
+                .is_store_busy
+                .load(Ordering::Relaxed)
+            || prev_is_apply_busy
+                != self
+                    .poll_ctx
+                    .global_stat
+                    .stat
+                    .is_apply_busy
+                    .load(Ordering::Relaxed)
+        {
+            store_heartbeat_pd(&mut self.poll_ctx, None);
+        }
 
         MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
     }
@@ -976,13 +1006,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         }
         dur = self.timer.saturating_elapsed();
         if self.poll_ctx.has_ready {
-            if !self.poll_ctx.store_stat.is_busy {
+            if !self.poll_ctx.store_stat.is_store_busy.as_ref().unwrap_or(&false) {
                 let election_timeout = Duration::from_millis(
                     self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
                         * self.poll_ctx.cfg.raft_election_timeout_ticks as u64,
                 );
                 if dur >= election_timeout {
-                    self.poll_ctx.store_stat.is_busy = true;
+                    self.poll_ctx.store_stat.is_store_busy = Some(true);
                 }
             }
 
@@ -1039,6 +1069,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
+    start_time: Timespec,
     pd_scheduler: Scheduler<PdTask<EK, ER>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
@@ -1258,6 +1289,7 @@ where
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
+            start_time: self.start_time.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
@@ -1329,6 +1361,7 @@ where
         RaftPollerBuilder {
             cfg: self.cfg.clone(),
             store: self.store.clone(),
+            start_time: self.start_time.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
@@ -1518,6 +1551,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
+            start_time: time::get_time(),
             engines,
             router: self.router.clone(),
             split_check_scheduler,
@@ -1600,6 +1634,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
 
         let tag = format!("raftstore-{}", store.get_id());
+        let start_time = builder.start_time;
         self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
@@ -1619,6 +1654,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         self.router
             .send_control(StoreMsg::Start {
                 store: store.clone(),
+                start_time,
             })
             .unwrap();
 
@@ -1717,6 +1753,100 @@ enum CheckMsgStatus {
     NewPeer,
     // Try to create the peer which is the first one of this region on local store.
     NewPeerFirst,
+}
+
+fn store_heartbeat_pd<EK: KvEngine, ER: RaftEngine, T: Transport>(
+    ctx: &mut PollContext<EK, ER, T>,
+    report: Option<pdpb::StoreReport>,
+) {
+    let mut stats = StoreStats::default();
+
+    stats.set_store_id(ctx.store_id());
+    {
+        let meta = ctx.store_meta.lock().unwrap();
+        stats.set_region_count(meta.regions.len() as u32);
+    }
+
+    let snap_stats = ctx.snap_mgr.stats();
+    stats.set_sending_snap_count(snap_stats.sending_count as u32);
+    stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
+    STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+        .with_label_values(&["sending"])
+        .set(snap_stats.sending_count as i64);
+    STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+        .with_label_values(&["receiving"])
+        .set(snap_stats.receiving_count as i64);
+
+    stats.set_start_time(ctx.start_time.sec as u32);
+
+    // report store write flow to pd
+    stats.set_bytes_written(
+        ctx.global_stat
+            .stat
+            .engine_total_bytes_written
+            .swap(0, Ordering::Relaxed),
+    );
+    stats.set_keys_written(
+        ctx.global_stat
+            .stat
+            .engine_total_keys_written
+            .swap(0, Ordering::Relaxed),
+    );
+
+    let is_store_busy = ctx.global_stat.stat.is_store_busy.load(Ordering::Relaxed);
+    stats.set_is_busy(is_store_busy);
+    STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
+        .with_label_values(&["store"])
+        .set(if is_store_busy { 1 } else { 0 });
+    let is_apply_busy = ctx.global_stat.stat.is_apply_busy.load(Ordering::Relaxed);
+    stats.set_is_apply_busy(is_apply_busy);
+    STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
+        .with_label_values(&["apply"])
+        .set(if is_apply_busy { 1 } else { 0 });
+
+    let mut query_stats = QueryStats::default();
+    query_stats.set_put(
+        ctx.global_stat
+            .stat
+            .engine_total_query_put
+            .swap(0, Ordering::Relaxed),
+    );
+    query_stats.set_delete(
+        ctx.global_stat
+            .stat
+            .engine_total_query_delete
+            .swap(0, Ordering::Relaxed),
+    );
+    query_stats.set_delete_range(
+        ctx.global_stat
+            .stat
+            .engine_total_query_delete_range
+            .swap(0, Ordering::Relaxed),
+    );
+    stats.set_query_stats(query_stats);
+
+    let store_info = StoreInfo {
+        kv_engine: ctx.engines.kv.clone(),
+        raft_engine: ctx.engines.raft.clone(),
+        capacity: ctx.cfg.capacity.0,
+    };
+
+    let task = PdTask::StoreHeartbeat {
+        stats,
+        store_info,
+        report,
+        dr_autosync_status: ctx
+            .global_replication_state
+            .lock()
+            .unwrap()
+            .store_dr_autosync_status(),
+    };
+    if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        error!("notify pd failed";
+            "store_id" => ctx.store_id(),
+            "err" => ?e
+        );
+    }
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
@@ -2284,107 +2414,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
-    fn store_heartbeat_pd(&mut self, report: Option<pdpb::StoreReport>) {
-        let mut stats = StoreStats::default();
-
-        stats.set_store_id(self.ctx.store_id());
-        {
-            let meta = self.ctx.store_meta.lock().unwrap();
-            stats.set_region_count(meta.regions.len() as u32);
-
-            if !meta.damaged_ranges.is_empty() {
-                let damaged_regions_id = meta.get_all_damaged_region_ids().into_iter().collect();
-                stats.set_damaged_regions_id(damaged_regions_id);
-            }
-        }
-
-        let snap_stats = self.ctx.snap_mgr.stats();
-        stats.set_sending_snap_count(snap_stats.sending_count as u32);
-        stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
-        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
-            .with_label_values(&["sending"])
-            .set(snap_stats.sending_count as i64);
-        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
-            .with_label_values(&["receiving"])
-            .set(snap_stats.receiving_count as i64);
-
-        stats.set_start_time(self.fsm.store.start_time.unwrap().sec as u32);
-
-        // report store write flow to pd
-        stats.set_bytes_written(
-            self.ctx
-                .global_stat
-                .stat
-                .engine_total_bytes_written
-                .swap(0, Ordering::SeqCst),
-        );
-        stats.set_keys_written(
-            self.ctx
-                .global_stat
-                .stat
-                .engine_total_keys_written
-                .swap(0, Ordering::SeqCst),
-        );
-
-        stats.set_is_busy(
-            self.ctx
-                .global_stat
-                .stat
-                .is_busy
-                .swap(false, Ordering::SeqCst),
-        );
-
-        let mut query_stats = QueryStats::default();
-        query_stats.set_put(
-            self.ctx
-                .global_stat
-                .stat
-                .engine_total_query_put
-                .swap(0, Ordering::SeqCst),
-        );
-        query_stats.set_delete(
-            self.ctx
-                .global_stat
-                .stat
-                .engine_total_query_delete
-                .swap(0, Ordering::SeqCst),
-        );
-        query_stats.set_delete_range(
-            self.ctx
-                .global_stat
-                .stat
-                .engine_total_query_delete_range
-                .swap(0, Ordering::SeqCst),
-        );
-        stats.set_query_stats(query_stats);
-
-        let store_info = StoreInfo {
-            kv_engine: self.ctx.engines.kv.clone(),
-            raft_engine: self.ctx.engines.raft.clone(),
-            capacity: self.ctx.cfg.capacity.0,
-        };
-
-        let task = PdTask::StoreHeartbeat {
-            stats,
-            store_info,
-            report,
-            dr_autosync_status: self
-                .ctx
-                .global_replication_state
-                .lock()
-                .unwrap()
-                .store_dr_autosync_status(),
-        };
-        if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-            error!("notify pd failed";
-                "store_id" => self.fsm.store.id,
-                "err" => ?e
-            );
-        }
-    }
-
     fn on_pd_store_heartbeat_tick(&mut self) {
-        self.store_heartbeat_pd(None);
+        store_heartbeat_pd(&mut self.ctx, None);
         self.register_pd_store_heartbeat_tick();
     }
 

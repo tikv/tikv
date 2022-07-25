@@ -3272,6 +3272,8 @@ pub struct ApplyMetrics {
     pub written_bytes: u64,
     pub written_keys: u64,
     pub lock_cf_written_bytes: u64,
+
+    pub is_apply_busy: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -3723,6 +3725,7 @@ where
             match msg {
                 Msg::Apply { start, mut apply } => {
                     let apply_wait = start.saturating_elapsed();
+                    self.delegate.metrics.is_apply_busy = Some(apply_wait.as_secs_f64() > 0.2);
                     apply_ctx.apply_wait.observe(apply_wait.as_secs_f64());
                     for tracker in apply
                         .cbs

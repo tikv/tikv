@@ -28,7 +28,8 @@ pub struct StoreStat {
     pub engine_total_query_put: AtomicU64,
     pub engine_total_query_delete: AtomicU64,
     pub engine_total_query_delete_range: AtomicU64,
-    pub is_busy: AtomicBool,
+    pub is_store_busy: AtomicBool,
+    pub is_apply_busy: AtomicBool,
 }
 
 #[derive(Clone, Default)]
@@ -44,7 +45,8 @@ impl GlobalStoreStat {
             engine_total_bytes_written: 0,
             engine_total_keys_written: 0,
             engine_total_query_stats: QueryStats::default(),
-            is_busy: false,
+            is_store_busy: None,
+            is_apply_busy: None,
 
             global: self.clone(),
         }
@@ -56,7 +58,8 @@ pub struct LocalStoreStat {
     pub engine_total_bytes_written: u64,
     pub engine_total_keys_written: u64,
     pub engine_total_query_stats: QueryStats,
-    pub is_busy: bool,
+    pub is_store_busy: Option<bool>,
+    pub is_apply_busy: Option<bool>,
 
     global: GlobalStoreStat,
 }
@@ -115,9 +118,11 @@ impl LocalStoreStat {
                 .fetch_add(delete_range_query_num, Ordering::Relaxed);
             self.engine_total_query_stats.0.set_delete_range(0);
         }
-        if self.is_busy {
-            self.global.stat.is_busy.store(true, Ordering::Relaxed);
-            self.is_busy = false;
+        if let Some(v) = self.is_store_busy {
+            self.global.stat.is_store_busy.store(v, Ordering::Relaxed);
+        }
+        if let Some(v) = self.is_apply_busy {
+            self.global.stat.is_apply_busy.store(v, Ordering::Relaxed);
         }
     }
 }

@@ -36,6 +36,7 @@ use crate::store::{
     worker::{Bucket, BucketRange},
     RaftlogFetchResult, SnapKey,
 };
+use time::Timespec;
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
@@ -671,6 +672,7 @@ where
     Tick(StoreTick),
     Start {
         store: metapb::Store,
+        start_time: Timespec,
     },
 
     /// Asks the store to update replication mode.
@@ -716,7 +718,7 @@ where
                 start_key, end_key
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
-            StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            StoreMsg::Start { ref store, .. } => write!(fmt, "Start store {:?}", store),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
