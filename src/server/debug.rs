@@ -17,8 +17,8 @@ use engine_rocks::{
 };
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, MvccProperties, Peekable,
-    RaftEngine, Range, RangePropertiesExt, SeekKey, SyncMutable, WriteBatch, WriteBatchExt,
-    WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    RaftEngine, Range, RangePropertiesExt, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use kvproto::{
     debugpb::{self, Db as DBType},
@@ -155,7 +155,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
-        box_try!(db.scan_cf(cf, start_key, end_key, false, |key, _| {
+        box_try!(db.scan(cf, start_key, end_key, false, |key, _| {
             let (id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
@@ -241,7 +241,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 let mut sizes = vec![];
                 for cf in cfs {
                     let mut size = 0;
-                    box_try!(self.engines.kv.scan_cf(
+                    box_try!(self.engines.kv.scan(
                         cf.as_ref(),
                         start_key,
                         end_key,
@@ -273,7 +273,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         MvccInfoIterator::new(
             |cf, opts| {
                 let kv = &self.engines.kv;
-                kv.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e))
+                kv.iterator_opt(cf, opts).map_err(|e| box_err!(e))
             },
             if start.is_empty() { None } else { Some(start) },
             if end.is_empty() { None } else { Some(end) },
@@ -298,7 +298,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         };
         let iter_opt =
             IterOptions::new(Some(KeyBuilder::from_vec(start.to_vec(), 0, 0)), end, false);
-        let mut iter = box_try!(db.iterator_cf_opt(cf, iter_opt));
+        let mut iter = box_try!(db.iterator_opt(cf, iter_opt));
         if !iter.seek_to_first().unwrap() {
             return Ok(vec![]);
         }
@@ -496,8 +496,8 @@ impl<ER: RaftEngine> Debugger<ER> {
             Some(KeyBuilder::from_vec(to, 0, 0)),
             false,
         );
-        let mut iter = box_try!(self.engines.kv.iterator_cf_opt(CF_RAFT, readopts));
-        iter.seek(SeekKey::from(from.as_ref())).unwrap();
+        let mut iter = box_try!(self.engines.kv.iterator_opt(CF_RAFT, readopts));
+        iter.seek(&from).unwrap();
 
         let fake_snap_worker = Worker::new("fake-snap-worker").lazy_build("fake-snap");
         let fake_raftlog_fetch_worker =
@@ -659,7 +659,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                     }
                 }
             } else {
-                box_try!(self.engines.kv.scan_cf(
+                box_try!(self.engines.kv.scan(
                     CF_RAFT,
                     keys::REGION_META_MIN_KEY,
                     keys::REGION_META_MAX_KEY,
@@ -759,7 +759,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             return Err(box_err!("Bad region: {:?}", region));
         }
 
-        box_try!(self.engines.kv.scan_cf(
+        box_try!(self.engines.kv.scan(
             CF_RAFT,
             keys::REGION_META_MIN_KEY,
             keys::REGION_META_MAX_KEY,
@@ -1061,8 +1061,8 @@ impl MvccChecker {
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
             );
-            let mut iter = box_try!(db.c().iterator_cf_opt(cf, readopts));
-            iter.seek(SeekKey::Start).unwrap();
+            let mut iter = box_try!(db.c().iterator_opt(cf, readopts));
+            iter.seek_to_first().unwrap();
             Ok(iter)
         };
 

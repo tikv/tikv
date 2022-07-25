@@ -11,7 +11,8 @@ use engine_rocks::{
     RocksEventListener,
 };
 use engine_traits::{
-    CompactionJobInfo, Result, TabletAccessor, TabletFactory, CF_DEFAULT, CF_WRITE,
+    CFOptionsExt, ColumnFamilyOptions, CompactionJobInfo, Result, TabletAccessor, TabletFactory,
+    CF_DEFAULT, CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
@@ -245,8 +246,13 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
         Ok(())
     }
-    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
-        Box::new(std::clone::Clone::clone(self))
+
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
+        if let Ok(db) = self.inner.root_db.lock() {
+            let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+            opt.set_block_cache_capacity(capacity)?;
+        }
+        Ok(())
     }
 }
 

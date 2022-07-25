@@ -8,8 +8,8 @@ use std::{
 
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatchVec};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, Mutable, SeekKey, WriteBatch, WriteBatchExt, CF_DEFAULT,
-    CF_LOCK, CF_WRITE,
+    IterOptions, Iterable, Iterator, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
 use tikv_util::sys::thread::StdThreadBuildWrapper;
 use txn_types::{Key, TimeStamp, Write, WriteRef};
@@ -71,8 +71,8 @@ impl ResetToVersionWorker {
             .lock()
             .expect("failed to lock `state` in `ResetToVersionWorker::new`") =
             ResetToVersionState::RemovingWrite { scanned: 0 };
-        write_iter.seek(SeekKey::Start).unwrap();
-        lock_iter.seek(SeekKey::Start).unwrap();
+        write_iter.seek_to_first().unwrap();
+        lock_iter.seek_to_first().unwrap();
         Self {
             write_iter,
             lock_iter,
@@ -207,9 +207,9 @@ impl ResetToVersionManager {
         let readopts = IterOptions::new(None, None, false);
         let write_iter = self
             .engine
-            .iterator_cf_opt(CF_WRITE, readopts.clone())
+            .iterator_opt(CF_WRITE, readopts.clone())
             .unwrap();
-        let lock_iter = self.engine.iterator_cf_opt(CF_LOCK, readopts).unwrap();
+        let lock_iter = self.engine.iterator_opt(CF_LOCK, readopts).unwrap();
         let mut worker = ResetToVersionWorker::new(write_iter, lock_iter, ts, self.state.clone());
         let mut wb = self.engine.write_batch();
         let props = tikv_util::thread_group::current_properties();
@@ -352,9 +352,9 @@ mod tests {
         let readopts = IterOptions::new(None, None, false);
         let mut write_iter = fake_engine
             .c()
-            .iterator_cf_opt(CF_WRITE, readopts.clone())
+            .iterator_opt(CF_WRITE, readopts.clone())
             .unwrap();
-        write_iter.seek(SeekKey::Start).unwrap();
+        write_iter.seek_to_first().unwrap();
         let mut remaining_writes = vec![];
         while write_iter.valid().unwrap() {
             let write = WriteRef::parse(write_iter.value()).unwrap().to_owned();
@@ -364,9 +364,9 @@ mod tests {
         }
         let mut default_iter = fake_engine
             .c()
-            .iterator_cf_opt(CF_DEFAULT, readopts.clone())
+            .iterator_opt(CF_DEFAULT, readopts.clone())
             .unwrap();
-        default_iter.seek(SeekKey::Start).unwrap();
+        default_iter.seek_to_first().unwrap();
         let mut remaining_defaults = vec![];
         while default_iter.valid().unwrap() {
             let key = default_iter.key().to_vec();
@@ -375,8 +375,8 @@ mod tests {
             remaining_defaults.push((key, value));
         }
 
-        let mut lock_iter = fake_engine.c().iterator_cf_opt(CF_LOCK, readopts).unwrap();
-        lock_iter.seek(SeekKey::Start).unwrap();
+        let mut lock_iter = fake_engine.c().iterator_opt(CF_LOCK, readopts).unwrap();
+        lock_iter.seek_to_first().unwrap();
         let mut remaining_locks = vec![];
         while lock_iter.valid().unwrap() {
             let lock = Lock::parse(lock_iter.value()).unwrap().to_owned();

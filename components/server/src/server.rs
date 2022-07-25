@@ -81,7 +81,7 @@ use raftstore::{
 };
 use security::SecurityManager;
 use tikv::{
-    config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
+    config::{ConfigController, DBConfigManger, DBType, LogConfigManager, TiKvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
@@ -232,6 +232,7 @@ struct TiKvServer<ER: RaftEngine> {
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>, // used for rawkv apiv2
+    tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
 }
 
 struct TiKvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -352,6 +353,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             sst_worker: None,
             quota_limiter,
             causal_ts_provider,
+            tablet_factory: None,
         }
     }
 
@@ -620,6 +622,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             ))),
         );
 
+        cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
+
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
         let cdc_scheduler = cdc_worker.scheduler();
@@ -735,7 +739,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         cfg_controller.register(
             tikv::config::Module::Storage,
             Box::new(StorageConfigManger::new(
-                self.engines.as_ref().unwrap().engine.kv_engine(),
+                self.tablet_factory.as_ref().unwrap().clone(),
                 self.config.storage.block_cache.shared,
                 ttl_scheduler,
                 flow_controller,
@@ -1292,20 +1296,17 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         };
 
         // Determine the base cpu quota
-        let base_cpu_quota = {
+        let base_cpu_quota =
             // if cpu quota is not specified, start from optimistic case
             if quota_limiter.cputime_limiter(false).is_infinite() {
-                let quota = 1000_f64
+                1000_f64
                     * f64::max(
                         BACKGROUND_REQUEST_CORE_LOWER_BOUND,
                         SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_DEFAULT_RATIO,
-                    );
-                quota_limiter.set_cpu_time_limit(quota as usize, false);
-                quota
+                    )
             } else {
                 quota_limiter.cputime_limiter(false) / 1000_f64
-            }
-        };
+            };
 
         // Calculate the celling and floor quota
         let celling_quota = f64::min(
@@ -1322,7 +1323,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL,
             move || {
                 if quota_limiter.auto_tune_enabled() {
-                    let old_quota = quota_limiter.cputime_limiter(false) / 1000_f64;
+                    let cputime_limit = quota_limiter.cputime_limiter(false);
+                    let old_quota = if cputime_limit.is_infinite() {
+                        base_cpu_quota
+                    } else {
+                        cputime_limit / 1000_f64
+                    };
                     let cpu_usage = match proc_stats.cpu_usage() {
                         Ok(r) => r,
                         Err(_e) => 0.0,
@@ -1649,7 +1655,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);
         }
-        let factory = builder.build();
+        let factory = Arc::new(builder.build());
         let kv_engine = factory
             .create_shared_db()
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
@@ -1659,11 +1665,12 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
             Box::new(DBConfigManger::new(
-                Arc::new(factory),
+                factory.clone(),
                 DBType::Kv,
                 self.config.storage.block_cache.shared,
             )),
         );
+        self.tablet_factory = Some(factory);
         engines
             .raft
             .register_config(cfg_controller, self.config.storage.block_cache.shared);

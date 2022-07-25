@@ -7,7 +7,9 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{Result, TabletAccessor, TabletFactory};
+use engine_traits::{
+    CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+};
 
 use crate::server::engine_factory::KvEngineFactory;
 
@@ -158,8 +160,14 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         new_engine
     }
 
-    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
-        Box::new(std::clone::Clone::clone(self))
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
+        let reg = self.registry.lock().unwrap();
+        // pick up any tablet and set the shared block cache capacity
+        if let Some(((_id, _suffix), tablet)) = (*reg).iter().next() {
+            let opt = tablet.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+            opt.set_block_cache_capacity(capacity)?;
+        }
+        Ok(())
     }
 }
 
@@ -180,7 +188,7 @@ impl TabletAccessor<RocksEngine> for KvEngineFactoryV2 {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::TabletFactory;
+    use engine_traits::{TabletFactory, CF_WRITE};
 
     use super::*;
     use crate::{config::TiKvConfig, server::KvEngineFactoryBuilder};
@@ -212,10 +220,15 @@ mod tests {
     #[test]
     fn test_kvengine_factory() {
         let cfg = TEST_CONFIG.clone();
+        assert!(cfg.storage.block_cache.shared);
+        let cache = cfg.storage.block_cache.build_shared_cache();
         let dir = test_util::temp_dir("test_kvengine_factory", false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        if let Some(cache) = cache {
+            builder = builder.block_cache(cache);
+        }
         let factory = builder.build();
         let shared_db = factory.create_shared_db().unwrap();
         let tablet = TabletFactory::create_tablet(&factory, 1, 10);
@@ -240,15 +253,25 @@ mod tests {
         assert_eq!(count, 1);
         assert!(factory.is_single_engine());
         assert!(shared_db.is_single_engine());
+        factory
+            .set_shared_block_cache_capacity(1024 * 1024)
+            .unwrap();
+        let opt = shared_db.get_options_cf(CF_DEFAULT).unwrap();
+        assert_eq!(opt.get_block_cache_capacity(), 1024 * 1024);
     }
 
     #[test]
     fn test_kvengine_factory_v2() {
         let cfg = TEST_CONFIG.clone();
+        assert!(cfg.storage.block_cache.shared);
+        let cache = cfg.storage.block_cache.build_shared_cache();
         let dir = test_util::temp_dir("test_kvengine_factory_v2", false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        if let Some(cache) = cache {
+            builder = builder.block_cache(cache);
+        }
         let inner_factory = builder.build();
         let factory = KvEngineFactoryV2::new(inner_factory);
         let tablet = factory.create_tablet(1, 10);
@@ -263,6 +286,11 @@ mod tests {
         let tablet_path = factory.tablet_path(1, 10);
         let result = factory.open_tablet_raw(&tablet_path, false);
         assert!(result.is_err());
+        factory
+            .set_shared_block_cache_capacity(1024 * 1024)
+            .unwrap();
+        let opt = tablet.get_options_cf(CF_WRITE).unwrap();
+        assert_eq!(opt.get_block_cache_capacity(), 1024 * 1024);
 
         assert!(factory.exists(1, 10));
         assert!(!factory.exists(1, 11));

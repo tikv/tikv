@@ -198,10 +198,10 @@ impl BackupWriterBuilder {
         }
     }
 
-    pub fn build(&self, start_key: Vec<u8>) -> Result<BackupWriter> {
+    pub fn build(&self, start_key: Vec<u8>, storage_name: &str) -> Result<BackupWriter> {
         let key = file_system::sha256(&start_key).ok().map(hex::encode);
         let store_id = self.store_id;
-        let name = backup_file_name(store_id, &self.region, key);
+        let name = backup_file_name(store_id, &self.region, key, storage_name);
         BackupWriter::new(
             self.db.clone(),
             &name,
@@ -458,7 +458,7 @@ mod tests {
         }
         for (cf, kv) in kvs {
             let mut map = BTreeMap::new();
-            db.scan_cf(
+            db.scan(
                 cf,
                 keys::DATA_MIN_KEY,
                 keys::DATA_MAX_KEY,

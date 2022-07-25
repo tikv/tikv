@@ -304,7 +304,7 @@ where
             for cf in DATA_CFS {
                 for (start, end) in TIDB_RANGES_COMPLEMENT {
                     let mut unexpected_data_key = None;
-                    snapshot.scan_cf(
+                    snapshot.scan(
                         cf,
                         &keys::data_key(start),
                         &keys::data_key(end),

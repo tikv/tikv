@@ -5,6 +5,7 @@ use kvproto::metapb::Region;
 const PREFIX: &str = "/tidb/br-stream";
 const PATH_INFO: &str = "/info";
 const PATH_NEXT_BACKUP_TS: &str = "/checkpoint";
+const PATH_STORAGE_CHECKPOINT: &str = "/storage-checkpoint";
 const PATH_RANGES: &str = "/ranges";
 const PATH_PAUSE: &str = "/pause";
 const PATH_LAST_ERROR: &str = "/last-error";
@@ -23,6 +24,8 @@ const TASKS_PREFIX: &str = "/tidb/br-stream/info/";
 /// <PREFIX>/checkpoint/<task_name>/<store_id(u64,be)>/<region_id(u64,be)> -> <next_backup_ts(u64,be)>
 /// For the status of tasks:
 /// <PREFIX>/pause/<task_name> -> ""
+/// For the storage checkpoint ts of tasks:
+/// <PREFIX>/storage-checkpoint/<task_name>/<store_id(u64,be)> -> <ts(u64,be)>
 /// ```
 #[derive(Clone)]
 pub struct MetaKey(pub Vec<u8>);
@@ -124,6 +127,17 @@ impl MetaKey {
                 name,
                 region.id,
                 region.get_region_epoch().get_version()
+            )
+            .into_bytes(),
+        )
+    }
+
+    /// defines the key of storage checkpoint-ts of task in a store.
+    pub fn storage_checkpoint_of(name: &str, store_id: u64) -> Self {
+        Self(
+            format!(
+                "{}{}/{}/{}",
+                PREFIX, PATH_STORAGE_CHECKPOINT, name, store_id
             )
             .into_bytes(),
         )

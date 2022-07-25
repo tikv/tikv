@@ -812,10 +812,7 @@ mod tests {
         fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
-        fn iter(&self, _: IterOptions) -> EngineResult<Self::Iter> {
-            Ok(MockRangeSnapshotIter::default())
-        }
-        fn iter_cf(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
+        fn iter(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
             Ok(MockRangeSnapshotIter::default())
         }
         fn lower_bound(&self) -> Option<&[u8]> {
