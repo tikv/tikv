@@ -477,16 +477,24 @@ where
     pub readers: HashMap<u64, ReadDelegate<E>>,
 }
 
+impl<E> StoreMeta<E>
+where
+    E: KvEngine,
+{
+    pub fn new() -> StoreMeta<E> {
+        StoreMeta {
+            store_id: None,
+            readers: HashMap::new(),
+        }
+    }
+}
+
 impl<C, E> LocalReader<C, E>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
-    pub fn new(
-        factory: Arc<dyn TabletFactory<E> + Send + Sync>,
-        store_meta: Arc<Mutex<StoreMeta<E>>>,
-        router: C,
-    ) -> Self {
+    pub fn new(store_meta: Arc<Mutex<StoreMeta<E>>>, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
@@ -813,17 +821,155 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc::*, thread};
+    use std::{borrow::Borrow, sync::mpsc::*, thread};
 
     use crossbeam::channel::TrySendError;
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
+    use engine_test::kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2};
     use engine_traits::ALL_CFS;
     use kvproto::raft_cmdpb::*;
+    use raftstore::store::util::Lease;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
+    use time::Duration;
 
     use super::*;
 
+    struct MockRouter {
+        p_router: SyncSender<RaftCommand<KvTestSnapshot>>,
+        c_router: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
+    }
+
+    impl MockRouter {
+        #[allow(clippy::type_complexity)]
+        fn new() -> (
+            MockRouter,
+            Receiver<RaftCommand<KvTestSnapshot>>,
+            Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        ) {
+            let (p_ch, p_rx) = sync_channel(1);
+            let (c_ch, c_rx) = sync_channel(1);
+            (
+                MockRouter {
+                    p_router: p_ch,
+                    c_router: c_ch,
+                },
+                p_rx,
+                c_rx,
+            )
+        }
+    }
+
+    impl ProposalRouter<KvTestSnapshot> for MockRouter {
+        fn send(
+            &self,
+            cmd: RaftCommand<KvTestSnapshot>,
+        ) -> std::result::Result<(), TrySendError<RaftCommand<KvTestSnapshot>>> {
+            ProposalRouter::send(&self.p_router, cmd)
+        }
+    }
+
+    impl CasualRouter<KvTestEngine> for MockRouter {
+        fn send(&self, region_id: u64, msg: CasualMessage<KvTestEngine>) -> Result<()> {
+            CasualRouter::send(&self.c_router, region_id, msg)
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn new_reader_and_factory(
+        path: &str,
+        store_id: u64,
+        store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
+    ) -> (
+        TempDir,
+        LocalReader<MockRouter, KvTestEngine>,
+        Receiver<RaftCommand<KvTestSnapshot>>,
+        Arc<dyn TabletFactory<KvTestEngine> + Send + Sync>,
+    ) {
+        let path = Builder::new().prefix(path).tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db = engine_test::kv::new_engine(path_str, None, ALL_CFS, None).unwrap();
+        let (ch, rx, _) = MockRouter::new();
+        let mut reader = LocalReader::new(store_meta, ch);
+        reader.store_id = Cell::new(Some(store_id));
+
+        let factory = Arc::new(TestTabletFactoryV2::new(path_str, None, ALL_CFS, None));
+
+        (path, reader, rx, factory)
+    }
+
     #[test]
-    fn it_works() {}
+    fn test_read_delegate_cache_update() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new()));
+        let (_tmp, mut reader, _, factory) =
+            new_reader_and_factory("test-local-reader", store_id, store_meta.clone());
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        let tablet = factory.create_tablet(1, 0).unwrap();
+        {
+            let mut meta = store_meta.lock().unwrap();
+            let read_delegate = ReadDelegate::<KvTestEngine> {
+                tag: String::new(),
+                region: Arc::new(region.clone()),
+                peer_id: 1,
+                term: 1,
+                applied_index_term: 1,
+                leader_lease: None,
+                last_valid_ts: Timespec::new(0, 0),
+                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+                txn_ext: Arc::new(TxnExt::default()),
+                track_ver: TrackVer::new(),
+                read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
+                pending_remove: false,
+                bucket_meta: None,
+                cached_tablet: CachedTablet::new(Some(tablet)),
+            };
+            meta.readers.insert(1, read_delegate);
+        }
+
+        let d = reader.get_delegate(1).unwrap();
+        assert_eq!(&*d.borrow().region, &region);
+        assert_eq!(d.borrow().term, 1);
+        assert_eq!(d.borrow().applied_index_term, 1);
+        assert!(d.borrow().leader_lease.is_none());
+        drop(d);
+
+        {
+            region.mut_region_epoch().set_version(10);
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers
+                .get_mut(&1)
+                .unwrap()
+                .update(Progress::region(region.clone()));
+        }
+        assert_eq!(&*reader.get_delegate(1).unwrap().borrow().region, &region);
+
+        {
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers.get_mut(&1).unwrap().update(Progress::term(2));
+        }
+        assert_eq!(reader.get_delegate(1).unwrap().borrow().term, 2);
+
+        {
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers
+                .get_mut(&1)
+                .unwrap()
+                .update(Progress::applied_index_term(2));
+        }
+        assert_eq!(
+            reader.get_delegate(1).unwrap().borrow().applied_index_term,
+            2
+        );
+
+        {
+            let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
+            let remote = lease.maybe_new_remote_lease(3).unwrap();
+            let pg = Progress::leader_lease(remote);
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers.get_mut(&1).unwrap().update(pg);
+        }
+        let d = reader.get_delegate(1).unwrap();
+        assert_eq!(d.borrow().leader_lease.clone().unwrap().term(), 3);
+    }
 }
