@@ -3831,13 +3831,35 @@ pub struct ControlFsm {
 }
 
 impl ControlFsm {
-    fn new() -> (LooseBoundedSender<ControlMsg>, Box<ControlFsm>) {
+    pub fn new() -> (LooseBoundedSender<ControlMsg>, Box<ControlFsm>) {
         let (tx, rx) = loose_bounded(std::usize::MAX);
         let fsm = Box::new(ControlFsm {
             stopped: false,
             receiver: rx,
         });
         (tx, fsm)
+    }
+
+    pub fn handle_messages(&mut self, pending_latency_inspect: &mut Vec<LatencyInspector>) {
+        // Usually there will be only 1 control message.
+        loop {
+            match self.receiver.try_recv() {
+                Ok(ControlMsg::LatencyInspect {
+                    send_time,
+                    mut inspector,
+                }) => {
+                    inspector.record_apply_wait(send_time.saturating_elapsed());
+                    pending_latency_inspect.push(inspector);
+                }
+                Err(TryRecvError::Empty) => {
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.stopped = true;
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -3887,27 +3909,11 @@ where
     }
 
     fn handle_control(&mut self, control: &mut ControlFsm) -> Option<usize> {
-        loop {
-            match control.receiver.try_recv() {
-                Ok(ControlMsg::LatencyInspect {
-                    send_time,
-                    mut inspector,
-                }) => {
-                    if self.apply_ctx.timer.is_none() {
-                        self.apply_ctx.timer = Some(Instant::now_coarse());
-                    }
-                    inspector.record_apply_wait(send_time.saturating_elapsed());
-                    self.apply_ctx.pending_latency_inspect.push(inspector);
-                }
-                Err(TryRecvError::Empty) => {
-                    return Some(0);
-                }
-                Err(TryRecvError::Disconnected) => {
-                    control.stopped = true;
-                    return Some(0);
-                }
-            }
+        control.handle_messages(&mut self.apply_ctx.pending_latency_inspect);
+        if !self.apply_ctx.pending_latency_inspect.is_empty() && self.apply_ctx.timer.is_none() {
+            self.apply_ctx.timer = Some(Instant::now_coarse());
         }
+        Some(0)
     }
 
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = ApplyFsm<EK>>) -> HandleResult {

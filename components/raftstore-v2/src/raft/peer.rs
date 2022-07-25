@@ -10,12 +10,15 @@ use slog::{o, Logger};
 use tikv_util::{box_err, config::ReadableSize};
 
 use super::storage::Storage;
-use crate::Result;
+use crate::{
+    tablet::{self, CachedTablet},
+    Result,
+};
 
 /// A peer that delegates commands between state machine and raft.
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<ER>>,
-    tablet: Option<EK>,
+    tablet: CachedTablet<EK>,
     logger: Logger,
 }
 
@@ -57,6 +60,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
 
         let tablet_index = s.region_state().get_tablet_index();
+        // Another option is always create tablet even if tablet index is 0. But this can
+        // introduce race when gc old tablet and create new peer.
         let tablet = if tablet_index != 0 {
             if !tablet_factory.exists(region_id, tablet_index) {
                 return Err(box_err!(
@@ -73,7 +78,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         Ok(Some(Peer {
             raft_group: RawNode::new(&raft_cfg, s, &logger)?,
-            tablet,
+            tablet: CachedTablet::new(tablet),
             logger,
         }))
     }
@@ -94,7 +99,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn tablet(&self) -> &Option<EK> {
+    pub fn tablet(&self) -> &CachedTablet<EK> {
         &self.tablet
     }
 

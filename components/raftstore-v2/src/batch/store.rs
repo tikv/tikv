@@ -19,6 +19,7 @@ use tikv_util::{
     timer::SteadyTimer,
 };
 
+use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, ApplySystem};
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate},
     raft::Peer,
@@ -92,10 +93,7 @@ impl<EK: KvEngine, T> StorePoller<EK, T> {
     }
 
     fn schedule_ticks(&mut self) {
-        assert_eq!(
-            PeerTick::get_all_ticks().len(),
-            self.poll_ctx.tick_batch.len()
-        );
+        assert_eq!(PeerTick::all_ticks().len(), self.poll_ctx.tick_batch.len());
         for batch in &mut self.poll_ctx.tick_batch {
             batch.schedule(&self.poll_ctx.timer);
         }
@@ -111,10 +109,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
     {
         let cfg = self.cfg_tracker.any_new().map(|c| c.clone());
         if let Some(cfg) = cfg {
-            if cfg.messages_per_tick != self.messages_per_tick() {
+            let last_messages_per_tick = self.messages_per_tick();
+            self.poll_ctx.cfg = cfg;
+            if self.poll_ctx.cfg.messages_per_tick != last_messages_per_tick {
                 self.apply_buf_capacity();
             }
-            self.poll_ctx.cfg = cfg;
+            update_cfg(&self.poll_ctx.cfg.store_batch_system);
         }
     }
 
@@ -263,6 +263,8 @@ where
 /// The system used for poll raft activities.
 pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
+    apply_router: ApplyRouter<EK>,
+    apply_system: ApplySystem<EK>,
     logger: Logger,
 }
 
@@ -280,7 +282,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         T: Transport + 'static,
     {
         let mut builder = StorePollerBuilder::new(
-            cfg,
+            cfg.clone(),
             store.get_id(),
             raft_engine,
             tablet_factory,
@@ -288,6 +290,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             self.logger.clone(),
         );
         let peers = builder.init()?;
+        self.apply_system
+            .schedule_all(peers.values().map(|pair| pair.1.peer()));
         // Choose a different name so we know what version is actually used. rs stands
         // for raft store.
         let tag = format!("rs-{}", store.get_id());
@@ -309,10 +313,15 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             router.force_send(addr, PeerMsg::Start).unwrap();
         }
         router.send_control(StoreMsg::Start { store }).unwrap();
+
+        let apply_poller_builder = ApplyPollerBuilder::new(cfg);
+        self.apply_system
+            .spawn("apply".to_owned(), apply_poller_builder);
         Ok(())
     }
 
     pub fn shutdown(&mut self) {
+        self.apply_system.shutdown();
         self.system.shutdown();
     }
 }
@@ -332,6 +341,12 @@ where
     let (store_tx, store_fsm) = StoreFsm::new(cfg, store);
     let (router, system) =
         batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
-    let system = StoreSystem { system, logger };
+    let (apply_router, apply_system) = create_apply_batch_system(cfg);
+    let system = StoreSystem {
+        system,
+        apply_router,
+        apply_system,
+        logger,
+    };
     (router, system)
 }
