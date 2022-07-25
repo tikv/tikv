@@ -1384,9 +1384,11 @@ impl Applier {
     }
 
     fn maybe_propose_switch_mem_table(&mut self, ctx: &mut ApplyContext, now: Instant) {
-        let is_leader = self.is_leader();
+        if !self.is_leader() {
+            return;
+        }
         let mem_state = self.mut_mem_table_state(&ctx.engine);
-        if is_leader && mem_state.need_switch(now) {
+        if mem_state.need_switch(now) {
             let mut custom_builder = CustomBuilder::new();
             custom_builder.set_switch_mem_table(mem_state.mem_table_size);
             let mut req = self.new_raft_cmd_request();

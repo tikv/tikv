@@ -779,6 +779,9 @@ impl<'a> PeerMsgHandler<'a> {
     // so we don't need to check anything, just send a message.
     fn on_switch_mem_table_check_tick(&mut self) {
         self.ticker.schedule(PEER_TICK_SWITCH_MEM_TABLE_CHECK);
+        if !self.peer.is_leader() {
+            return;
+        }
         let region_id = self.region_id();
         self.ctx
             .apply_msgs
