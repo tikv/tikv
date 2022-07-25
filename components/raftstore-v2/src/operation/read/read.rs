@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     fmt::{self, Display, Formatter},
     sync::{
@@ -28,7 +28,7 @@ use raftstore::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
         Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadMetrics,
-        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt, TrackVer,
+        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
     },
     Error, Result,
 };
@@ -410,7 +410,7 @@ where
     metrics: ReadMetrics,
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
-    delegates: LruCache<u64, Arc<ReadDelegate<E>>>,
+    delegates: LruCache<u64, RefCell<ReadDelegate<E>>>,
     // A channel to raftstore.
     router: C,
 }
@@ -469,7 +469,7 @@ where
     }
 }
 
-struct StoreMeta<E>
+pub struct StoreMeta<E>
 where
     E: KvEngine,
 {
@@ -534,10 +534,10 @@ where
     // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will be
     // violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
     // make the logic clear
-    fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate<E>>> {
+    fn get_delegate(&mut self, region_id: u64) -> Option<RefCell<ReadDelegate<E>>> {
         let rd = match self.delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
-            Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
+            Some(d) if !d.borrow().track_ver.any_new() => Some(RefCell::clone(d)),
             _ => {
                 debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
@@ -546,7 +546,7 @@ where
                     let meta = self.store_meta.lock().unwrap();
                     (
                         meta.readers.len(),
-                        meta.readers.get(&region_id).cloned().map(Arc::new),
+                        meta.readers.get(&region_id).cloned().map(RefCell::new),
                     )
                 };
 
@@ -555,7 +555,7 @@ where
                 self.delegates.resize(meta_len);
                 match meta_reader {
                     Some(reader) => {
-                        self.delegates.insert(region_id, Arc::clone(&reader));
+                        self.delegates.insert(region_id, RefCell::clone(&reader));
                         Some(reader)
                     }
                     None => None,
@@ -563,13 +563,13 @@ where
             }
         };
         // Return `None` if the read delegate is pending remove
-        rd.filter(|r| !r.pending_remove)
+        rd.filter(|r| !r.borrow().pending_remove)
     }
 
     fn pre_propose_raft_command(
         &mut self,
         req: &RaftCmdRequest,
-    ) -> Result<Option<(Arc<ReadDelegate<E>>, RequestPolicy)>> {
+    ) -> Result<Option<(RefCell<ReadDelegate<E>>, RequestPolicy)>> {
         // Check store id.
         if self.store_id.get().is_none() {
             let store_id = self.store_meta.lock().unwrap().store_id;
@@ -597,16 +597,16 @@ where
         fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
-        if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
+        if let Err(e) = util::check_peer_id(req, delegate.borrow().peer_id) {
             self.metrics.rejected_by_peer_id_mismatch += 1;
             return Err(e);
         }
 
         // Check term.
-        if let Err(e) = util::check_term(req, delegate.term) {
+        if let Err(e) = util::check_term(req, delegate.borrow().term) {
             debug!(
                 "check term";
-                "delegate_term" => delegate.term,
+                "delegate_term" => delegate.borrow().term,
                 "header_term" => req.get_header().get_term(),
             );
             self.metrics.rejected_by_term_mismatch += 1;
@@ -614,10 +614,10 @@ where
         }
 
         // Check region epoch.
-        if util::check_region_epoch(req, &delegate.region, false).is_err() {
+        if util::check_region_epoch(req, &delegate.borrow().region, false).is_err() {
             self.metrics.rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
-            debug!("rejected by epoch not match"; "tag" => &delegate.tag);
+            debug!("rejected by epoch not match"; "tag" => &delegate.borrow().tag);
             return Ok(None);
         }
 
@@ -649,21 +649,27 @@ where
                             // If this peer became Leader not long ago and just after the cached
                             // snapshot was created, this snapshot can not see all data of the peer.
                             Some(id) => {
-                                if id.create_time <= delegate.last_valid_ts {
+                                if id.create_time <= delegate.borrow().last_valid_ts {
                                     id.create_time = monotonic_raw_now();
                                 }
                                 id.create_time
                             }
                             None => monotonic_raw_now(),
                         };
-                        if !delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
+                        if !delegate
+                            .borrow()
+                            .is_in_leader_lease(snapshot_ts, &mut self.metrics)
+                        {
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        let response = delegate.execute(&req, &delegate.region, None);
+                        let response =
+                            delegate
+                                .borrow_mut()
+                                .execute(&req, &delegate.borrow().region, None);
                         // Try renew lease in advance
-                        delegate.maybe_renew_lease_advance(
+                        delegate.borrow().maybe_renew_lease_advance(
                             &self.router,
                             snapshot_ts,
                             &mut self.metrics,
@@ -674,19 +680,24 @@ where
                     RequestPolicy::StaleRead => {
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
                         assert!(read_ts > 0);
-                        if let Err(resp) =
-                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
+                        if let Err(resp) = delegate
+                            .borrow()
+                            .check_stale_read_safe(read_ts, &mut self.metrics)
                         {
                             cb.invoke_read(resp);
                             return;
                         }
 
                         // Getting the snapshot
-                        let response = delegate.execute(&req, &delegate.region, None);
+                        let response =
+                            delegate
+                                .borrow_mut()
+                                .execute(&req, &delegate.borrow().region, None);
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
-                        if let Err(resp) =
-                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
+                        if let Err(resp) = delegate
+                            .borrow()
+                            .check_stale_read_safe(read_ts, &mut self.metrics)
                         {
                             cb.invoke_read(resp);
                             return;
@@ -696,12 +707,12 @@ where
                     }
                     _ => unreachable!(),
                 };
-                cmd_resp::bind_term(&mut response.response, delegate.term);
+                cmd_resp::bind_term(&mut response.response, delegate.borrow().term);
                 if let Some(snap) = response.snapshot.as_mut() {
-                    snap.txn_ext = Some(delegate.txn_ext.clone());
-                    snap.bucket_meta = delegate.bucket_meta.clone();
+                    snap.txn_ext = Some(delegate.borrow().txn_ext.clone());
+                    snap.bucket_meta = delegate.borrow().bucket_meta.clone();
                 }
-                response.txn_extra_op = delegate.txn_extra_op.load();
+                response.txn_extra_op = delegate.borrow().txn_extra_op.load();
                 cb.invoke_read(response);
             }
             // Forward to raftstore.
@@ -709,7 +720,7 @@ where
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self.delegates.get(&req.get_header().get_region_id()) {
-                    cmd_resp::bind_term(&mut response, delegate.term);
+                    cmd_resp::bind_term(&mut response, delegate.borrow().term);
                 }
                 cb.invoke_read(ReadResponse {
                     response,
@@ -760,7 +771,7 @@ struct Inspector<'r, 'm, E>
 where
     E: KvEngine,
 {
-    delegate: &'r ReadDelegate<E>,
+    delegate: &'r RefCell<ReadDelegate<E>>,
     metrics: &'m mut ReadMetrics,
 }
 
@@ -769,14 +780,15 @@ where
     E: KvEngine,
 {
     fn has_applied_to_current_term(&mut self) -> bool {
-        if self.delegate.applied_index_term == self.delegate.term {
+        let delegate = self.delegate.borrow();
+        if delegate.applied_index_term == delegate.term {
             true
         } else {
             debug!(
                 "rejected by term check";
-                "tag" => &self.delegate.tag,
-                "applied_index_term" => self.delegate.applied_index_term,
-                "delegate_term" => ?self.delegate.term,
+                "tag" => &delegate.tag,
+                "applied_index_term" => delegate.applied_index_term,
+                "delegate_term" => ?delegate.term,
             );
 
             // only for metric.
@@ -786,12 +798,13 @@ where
     }
 
     fn inspect_lease(&mut self) -> LeaseState {
+        let delegate = self.delegate.borrow();
         // TODO: disable localreader if we did not enable raft's check_quorum.
-        if self.delegate.leader_lease.is_some() {
+        if delegate.leader_lease.is_some() {
             // We skip lease check, because it is postponed until `handle_read`.
             LeaseState::Valid
         } else {
-            debug!("rejected by leader lease"; "tag" => &self.delegate.tag);
+            debug!("rejected by leader lease"; "tag" => &delegate.tag);
             self.metrics.rejected_by_no_lease += 1;
             LeaseState::Expired
         }
