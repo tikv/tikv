@@ -870,4 +870,52 @@ mod test {
             keys.union(&keys2).map(|s| s.as_slice()),
         );
     }
+
+    #[test]
+    fn failed_during_refresh_region() {
+        defer! {
+            fail::remove("get_last_checkpoint_of")
+        }
+
+        let mut suite = SuiteBuilder::new_named("fail_to_refresh_region")
+            .nodes(1)
+            .use_v3()
+            .build();
+
+        suite.must_register_task(1, "fail_to_refresh_region");
+        let keys = run_async_test(suite.write_records(0, 128, 1));
+        fail::cfg(
+            "get_last_checkpoint_of",
+            "1*return(the stream handler wants to become a batch processor, and the batch processor wants to be a stream handler.)",
+        ).unwrap();
+
+        suite.must_split(b"SOLE");
+        let keys2 = run_async_test(suite.write_records(256, 128, 1));
+        suite.force_flush_files("fail_to_refresh_region");
+        suite.wait_for_flush();
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            keys.union(&keys2).map(|s| s.as_slice()),
+        );
+        let leader = suite.cluster.leader_of_region(1).unwrap().store_id;
+        let (tx, rx) = std::sync::mpsc::channel();
+        suite.endpoints[&leader]
+            .scheduler()
+            .schedule(Task::RegionCheckpointsOp(RegionCheckpointOperation::Get(
+                RegionSet::Universal,
+                Box::new(move |rs| {
+                    let _ = tx.send(rs);
+                }),
+            )))
+            .unwrap();
+
+        let regions = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(
+            regions.iter().all(|item| {
+                matches!(item, GetCheckpointResult::Ok { checkpoint, .. } if checkpoint.into_inner() > 500)
+            }),
+            "{:?}",
+            regions
+        );
+    }
 }

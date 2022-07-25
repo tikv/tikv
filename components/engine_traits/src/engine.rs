@@ -187,7 +187,7 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     fn create_shared_db(&self) -> Result<EK>;
 
     /// Destroy the tablet and its data
-    fn destroy_tablet(&self, id: u64, suffix: u64) -> crate::Result<()>;
+    fn destroy_tablet(&self, id: u64, suffix: u64) -> Result<()>;
 
     /// Check if the tablet with specified id/suffix exists
     #[inline]
@@ -204,10 +204,6 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     /// Tablets root path
     fn tablets_path(&self) -> PathBuf;
 
-    /// Clone the tablet factory instance
-    /// Here we don't use Clone traint because it will break the trait's object safty
-    fn clone(&self) -> Box<dyn TabletFactory<EK> + Send>;
-
     /// Load the tablet from path for id and suffix--for scenarios such as applying snapshot
     fn load_tablet(&self, _path: &Path, _id: u64, _suffix: u64) -> Result<EK> {
         unimplemented!();
@@ -222,11 +218,13 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     fn is_tombstoned(&self, _region_id: u64, _suffix: u64) -> bool {
         unimplemented!();
     }
+
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()>;
 }
 
 pub struct DummyFactory<EK>
 where
-    EK: Clone + Send + 'static,
+    EK: CFOptionsExt + Clone + Send + 'static,
 {
     pub engine: Option<EK>,
     pub root_path: String,
@@ -234,7 +232,7 @@ where
 
 impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
-    EK: Clone + Send + 'static,
+    EK: CFOptionsExt + Clone + Send + 'static,
 {
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
@@ -245,7 +243,7 @@ where
     fn create_shared_db(&self) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
-    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> crate::Result<()> {
+    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> Result<()> {
         Ok(())
     }
     fn exists_raw(&self, _path: &Path) -> bool {
@@ -258,22 +256,19 @@ where
         PathBuf::from(&self.root_path)
     }
 
-    fn clone(&self) -> Box<dyn TabletFactory<EK> + Send> {
-        if self.engine.is_none() {
-            return Box::<DummyFactory<EK>>::new(DummyFactory {
-                engine: None,
-                root_path: self.root_path.clone(),
-            });
-        }
-        Box::<DummyFactory<EK>>::new(DummyFactory {
-            engine: Some(self.engine.as_ref().unwrap().clone()),
-            root_path: self.root_path.clone(),
-        })
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
+        let opt = self
+            .engine
+            .as_ref()
+            .unwrap()
+            .get_options_cf(CF_DEFAULT)
+            .unwrap(); // FIXME unwrap
+        opt.set_block_cache_capacity(capacity)
     }
 }
 impl<EK> TabletAccessor<EK> for DummyFactory<EK>
 where
-    EK: Clone + Send + 'static,
+    EK: CFOptionsExt + Clone + Send + 'static,
 {
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &EK)) {
         if let Some(engine) = &self.engine {
@@ -288,14 +283,14 @@ where
 
 impl<EK> DummyFactory<EK>
 where
-    EK: Clone + Send + 'static,
+    EK: CFOptionsExt + Clone + Send + 'static,
 {
     pub fn new(engine: Option<EK>, root_path: String) -> DummyFactory<EK> {
         DummyFactory { engine, root_path }
     }
 }
 
-impl<EK: Clone + Send + 'static> Default for DummyFactory<EK> {
+impl<EK: CFOptionsExt + Clone + Send + 'static> Default for DummyFactory<EK> {
     fn default() -> Self {
         Self::new(None, "/tmp".to_string())
     }
@@ -317,8 +312,8 @@ mod tests {
     fn test_tablet_error_collector_err() {
         let mut err = TabletErrorCollector::new();
         err.add_result(1, 1, Ok(()));
-        err.add_result(1, 1, Err("this is an error1".to_string().into()));
-        err.add_result(1, 1, Err("this is an error2".to_string().into()));
+        err.add_result(1, 1, Err(Status::with_code(Code::Aborted).into()));
+        err.add_result(1, 1, Err(Status::with_code(Code::NotFound).into()));
         err.add_result(1, 1, Ok(()));
         let r = err.take_result();
         assert!(r.is_err());

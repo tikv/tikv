@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use engine_traits::{IterOptions, Iterator, KvEngine, SeekKey, CF_WRITE};
+use engine_traits::{IterOptions, Iterator, KvEngine, CF_WRITE};
 use error_code::ErrorCodeExt;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tidb_query_datatype::codec::table as table_codec;
@@ -183,10 +183,10 @@ fn last_key_of_region(db: &impl KvEngine, region: &Region) -> Result<Option<Vec<
         Some(KeyBuilder::from_vec(end_key, 0, 0)),
         false,
     );
-    let mut iter = box_try!(db.iterator_cf_opt(CF_WRITE, iter_opt));
+    let mut iter = box_try!(db.iterator_opt(CF_WRITE, iter_opt));
 
     // the last key
-    let found: Result<bool> = iter.seek(SeekKey::End).map_err(|e| box_err!(e));
+    let found: Result<bool> = iter.seek_to_last().map_err(|e| box_err!(e));
     if found? {
         let key = iter.key().to_vec();
         last_key = Some(key);

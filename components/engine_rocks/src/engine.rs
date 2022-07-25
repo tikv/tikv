@@ -3,14 +3,14 @@
 use std::{any::Any, fs, path::Path, sync::Arc};
 
 use engine_traits::{
-    Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
-    TabletAccessor,
+    IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable, TabletAccessor,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::{
     db_vector::RocksDBVector,
     options::RocksReadOptions,
+    r2e,
     rocks_metrics::{
         flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
         flush_engine_ticker_metrics,
@@ -82,7 +82,7 @@ impl KvEngine for RocksEngine {
     }
 
     fn sync(&self) -> Result<()> {
-        self.db.sync_wal().map_err(Error::Engine)
+        self.db.sync_wal().map_err(r2e)
     }
 
     fn flush_metrics(&self, instance: &str) {
@@ -133,15 +133,7 @@ impl TabletAccessor<RocksEngine> for RocksEngine {
 impl Iterable for RocksEngine {
     type Iterator = RocksEngineIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
-        let opt: RocksReadOptions = opts.into();
-        Ok(RocksEngineIterator::from_raw(DBIterator::new(
-            self.db.clone(),
-            opt.into_raw(),
-        )))
-    }
-
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         let handle = get_cf_handle(&self.db, cf)?;
         let opt: RocksReadOptions = opts.into();
         Ok(RocksEngineIterator::from_raw(DBIterator::new_cf(
@@ -157,7 +149,7 @@ impl Peekable for RocksEngine {
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
-        let v = self.db.get_opt(key, &opt.into_raw())?;
+        let v = self.db.get_opt(key, &opt.into_raw()).map_err(r2e)?;
         Ok(v.map(RocksDBVector::from_raw))
     }
 
@@ -169,41 +161,42 @@ impl Peekable for RocksEngine {
     ) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let handle = get_cf_handle(&self.db, cf)?;
-        let v = self.db.get_cf_opt(handle, key, &opt.into_raw())?;
+        let v = self
+            .db
+            .get_cf_opt(handle, key, &opt.into_raw())
+            .map_err(r2e)?;
         Ok(v.map(RocksDBVector::from_raw))
     }
 }
 
 impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.db.put(key, value).map_err(Error::Engine)
+        self.db.put(key, value).map_err(r2e)
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.db, cf)?;
-        self.db.put_cf(handle, key, value).map_err(Error::Engine)
+        self.db.put_cf(handle, key, value).map_err(r2e)
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        self.db.delete(key).map_err(Error::Engine)
+        self.db.delete(key).map_err(r2e)
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.db, cf)?;
-        self.db.delete_cf(handle, key).map_err(Error::Engine)
+        self.db.delete_cf(handle, key).map_err(r2e)
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        self.db
-            .delete_range(begin_key, end_key)
-            .map_err(Error::Engine)
+        self.db.delete_range(begin_key, end_key).map_err(r2e)
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.db, cf)?;
         self.db
             .delete_range_cf(handle, begin_key, end_key)
-            .map_err(Error::Engine)
+            .map_err(r2e)
     }
 }
 
@@ -211,7 +204,7 @@ impl SyncMutable for RocksEngine {
 mod tests {
     use std::sync::Arc;
 
-    use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
+    use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT};
     use kvproto::metapb::Region;
     use tempfile::Builder;
 
@@ -285,7 +278,7 @@ mod tests {
 
         let mut data = vec![];
         engine
-            .scan(b"", &[0xFF, 0xFF], false, |key, value| {
+            .scan(CF_DEFAULT, b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
             })
@@ -300,7 +293,7 @@ mod tests {
         data.clear();
 
         engine
-            .scan_cf(cf, b"", &[0xFF, 0xFF], false, |key, value| {
+            .scan(cf, b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
             })
@@ -314,16 +307,16 @@ mod tests {
         );
         data.clear();
 
-        let pair = engine.seek(b"a1").unwrap().unwrap();
+        let pair = engine.seek(CF_DEFAULT, b"a1").unwrap().unwrap();
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
-        assert!(engine.seek(b"a3").unwrap().is_none());
-        let pair_cf = engine.seek_cf(cf, b"a1").unwrap().unwrap();
+        assert!(engine.seek(CF_DEFAULT, b"a3").unwrap().is_none());
+        let pair_cf = engine.seek(cf, b"a1").unwrap().unwrap();
         assert_eq!(pair_cf, (b"a1".to_vec(), b"v1".to_vec()));
-        assert!(engine.seek_cf(cf, b"a3").unwrap().is_none());
+        assert!(engine.seek(cf, b"a3").unwrap().is_none());
 
         let mut index = 0;
         engine
-            .scan(b"", &[0xFF, 0xFF], false, |key, value| {
+            .scan(CF_DEFAULT, b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 index += 1;
                 Ok(index != 1)
@@ -335,15 +328,15 @@ mod tests {
         let snap = RocksSnapshot::new(engine.get_sync_db());
 
         engine.put(b"a3", b"v3").unwrap();
-        assert!(engine.seek(b"a3").unwrap().is_some());
+        assert!(engine.seek(CF_DEFAULT, b"a3").unwrap().is_some());
 
-        let pair = snap.seek(b"a1").unwrap().unwrap();
+        let pair = snap.seek(CF_DEFAULT, b"a1").unwrap().unwrap();
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
-        assert!(snap.seek(b"a3").unwrap().is_none());
+        assert!(snap.seek(CF_DEFAULT, b"a3").unwrap().is_none());
 
         data.clear();
 
-        snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
+        snap.scan(CF_DEFAULT, b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
         })

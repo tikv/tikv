@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use kvproto::{kvrpcpb::Op, metapb::Peer};
 use pd_client::PdClient;
@@ -314,15 +314,15 @@ fn test_stale_read_while_applying_snapshot() {
 
     // Compact logs to force requesting snapshot after clearing send filters.
     let gc_limit = cluster.cfg.raft_store.raft_log_gc_count_limit();
-    let state = cluster.truncated_state(1, 1);
-    for i in 1..gc_limit * 10 {
+    for i in 1..gc_limit * 2 {
         let (k, v) = (
             format!("k{}", i).into_bytes(),
             format!("v{}", i).into_bytes(),
         );
         leader_client.must_kv_write(&pd_client, vec![new_mutation(Op::Put, &k, &v)], k);
     }
-    cluster.wait_log_truncated(1, 1, state.get_index() + 5 * gc_limit);
+    let last_index_on_store_2 = cluster.raft_local_state(1, 2).last_index;
+    cluster.wait_log_truncated(1, 1, last_index_on_store_2 + 1);
 
     // Pasuse before applying snapshot is finish
     let raft_before_applying_snap_finished = "raft_before_applying_snap_finished";
@@ -330,7 +330,7 @@ fn test_stale_read_while_applying_snapshot() {
     cluster.clear_send_filters();
 
     // Wait follower 2 start applying snapshot
-    cluster.wait_log_truncated(1, 2, state.get_index() + 5 * gc_limit);
+    cluster.wait_log_truncated(1, 2, last_index_on_store_2 + 1);
     sleep_ms(100);
 
     // We can't read while applying snapshot and the `safe_ts` should reset to 0
@@ -345,6 +345,9 @@ fn test_stale_read_while_applying_snapshot() {
 
     // Resume applying snapshot
     fail::remove(raft_before_applying_snap_finished);
+
+    let last_index_on_store_1 = cluster.raft_local_state(1, 1).last_index;
+    cluster.wait_last_index(1, 2, last_index_on_store_1, Duration::from_secs(3));
 
     // We can read `key1` after applied snapshot
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts);

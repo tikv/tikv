@@ -598,6 +598,15 @@ where
     }
 
     async fn get_last_checkpoint_of(&self, task: &str, region: &Region) -> Result<TimeStamp> {
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("get_last_checkpoint_of", |hint| Err(Error::Other(
+            box_err!(
+                "get_last_checkpoint_of({}, {:?}) failed because {:?}",
+                task,
+                region,
+                hint
+            )
+        )));
         let meta_cli = self.meta_cli.clone();
         let cp = meta_cli.get_region_checkpoint(task, region).await?;
         debug!("got region checkpoint"; "region_id" => %region.get_id(), "checkpoint" => ?cp);
