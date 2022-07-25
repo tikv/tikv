@@ -3110,7 +3110,7 @@ mod tests {
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op};
+    use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op, PessimisticLockType};
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
     use txn_types::{Mutation, PessimisticLock, WriteType};
@@ -7078,8 +7078,8 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::make_put(key.clone(), val.clone()), true),
-                        (Mutation::make_put(key2.clone(), val2.clone()), false),
+                        (Mutation::make_put(key.clone(), val.clone()), PessimisticLockType::PessimisticLocked),
+                        (Mutation::make_put(key2.clone(), val2.clone()), PessimisticLockType::NonPessimisticLocked),
                     ],
                     key.to_raw().unwrap(),
                     10.into(),

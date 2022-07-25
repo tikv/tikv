@@ -106,7 +106,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 match commit(&mut txn, &mut reader, current_key.clone(), commit_ts) {
                     Ok(res) => res,
                     Err(MvccError(box MvccErrorInner::TxnLockNotFound { .. }))
-                        if current_lock.is_pessimistic_lock() =>
+                        if current_lock.pessimistic_lock_type() =>
                     {
                         None
                     }

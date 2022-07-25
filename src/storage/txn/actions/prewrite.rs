@@ -4,7 +4,7 @@
 use std::cmp;
 
 use fail::fail_point;
-use kvproto::kvrpcpb::{Assertion, AssertionLevel};
+use kvproto::kvrpcpb::{Assertion, AssertionLevel, PessimisticLockType};
 use txn_types::{
     is_short_value, Key, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
 };
@@ -28,10 +28,14 @@ pub fn prewrite<S: Snapshot>(
     txn_props: &TransactionProperties<'_>,
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
-    is_pessimistic_lock: bool,
+    pessimistic_lock_type: PessimisticLockType,
 ) -> Result<(TimeStamp, OldValue)> {
-    let mut mutation =
-        PrewriteMutation::from_mutation(mutation, secondary_keys, is_pessimistic_lock, txn_props)?;
+    let mut mutation = PrewriteMutation::from_mutation(
+        mutation,
+        secondary_keys,
+        pessimistic_lock_type,
+        txn_props,
+    )?;
 
     // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
     if mutation.should_not_exist {
@@ -55,8 +59,12 @@ pub fn prewrite<S: Snapshot>(
     let mut lock_amended = false;
 
     let lock_status = match reader.load_lock(&mutation.key)? {
-        Some(lock) => mutation.check_lock(lock, is_pessimistic_lock)?,
-        None if is_pessimistic_lock => {
+        Some(lock) => mutation.check_lock(lock, pessimistic_lock_type)?,
+        None if matches!(
+            pessimistic_lock_type,
+            PessimisticLockType::PessimisticLocked
+        ) =>
+        {
             amend_pessimistic_lock(&mutation, reader)?;
             lock_amended = true;
             LockStatus::None
@@ -224,7 +232,7 @@ struct PrewriteMutation<'a> {
     mutation_type: MutationType,
     secondary_keys: &'a Option<Vec<Vec<u8>>>,
     min_commit_ts: TimeStamp,
-    is_pessimistic_lock: bool,
+    pessimistic_lock_type: PessimisticLockType,
 
     lock_type: Option<LockType>,
     lock_ttl: u64,
@@ -239,7 +247,7 @@ impl<'a> PrewriteMutation<'a> {
     fn from_mutation(
         mutation: Mutation,
         secondary_keys: &'a Option<Vec<Vec<u8>>>,
-        is_pessimistic_lock: bool,
+        pessimistic_lock_type: PessimisticLockType,
         txn_props: &'a TransactionProperties<'a>,
     ) -> Result<PrewriteMutation<'a>> {
         let should_not_write = mutation.should_not_write();
@@ -261,7 +269,7 @@ impl<'a> PrewriteMutation<'a> {
             mutation_type,
             secondary_keys,
             min_commit_ts: txn_props.min_commit_ts,
-            is_pessimistic_lock,
+            pessimistic_lock_type,
 
             lock_type,
             lock_ttl: txn_props.lock_ttl,
@@ -286,11 +294,18 @@ impl<'a> PrewriteMutation<'a> {
     }
 
     /// Check whether the current key is locked at any timestamp.
-    fn check_lock(&mut self, lock: Lock, is_pessimistic_lock: bool) -> Result<LockStatus> {
+    fn check_lock(
+        &mut self,
+        lock: Lock,
+        pessimistic_lock_type: PessimisticLockType,
+    ) -> Result<LockStatus> {
         if lock.ts != self.txn_props.start_ts {
             // Abort on lock belonging to other transaction if
             // prewrites a pessimistic lock.
-            if is_pessimistic_lock {
+            if matches!(
+                pessimistic_lock_type,
+                PessimisticLockType::PessimisticLocked
+            ) {
                 warn!(
                     "prewrite failed (pessimistic lock not found)";
                     "start_ts" => self.txn_props.start_ts,
@@ -563,10 +578,15 @@ impl<'a> PrewriteMutation<'a> {
         match &self.txn_props.kind {
             TransactionKind::Optimistic(s) => *s,
             TransactionKind::Pessimistic(_) => {
-                // For non-pessimistic-locked keys, do not skip constraint check when retrying.
-                // This intents to protect idempotency.
-                // Ref: https://github.com/tikv/tikv/issues/11187
-                self.is_pessimistic_lock || !self.txn_props.is_retry_request
+                match self.pessimistic_lock_type {
+                    PessimisticLockType::PessimisticLocked => true,
+                    // For non-pessimistic-locked keys, do not skip constraint check when retrying.
+                    // This intents to protect idempotency.
+                    // Ref: https://github.com/tikv/tikv/issues/11187
+                    PessimisticLockType::NonPessimisticLocked => !self.txn_props.is_retry_request,
+                    // For keys that postpones constraint check to prewrite, do not skip constraint check.
+                    PessimisticLockType::NeedConflictCheck => false,
+                }
             }
         }
     }
@@ -770,7 +790,7 @@ pub mod tests {
             &props,
             Mutation::make_insert(Key::from_raw(key), value.to_vec()),
             &None,
-            false,
+            PessimisticLockType::NonPessimisticLocked,
         )?;
         // Insert must be None if the key is not lock, or be Unspecified if the
         // key is already locked.
@@ -801,7 +821,7 @@ pub mod tests {
             &optimistic_txn_props(pk, ts),
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
-            true,
+            PessimisticLockType::PessimisticLocked,
         )?;
         assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
@@ -1057,7 +1077,7 @@ pub mod tests {
             },
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
-            false,
+            PessimisticLockType::NonPessimisticLocked,
         )?;
         assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
@@ -1769,7 +1789,7 @@ pub mod tests {
         let prewrite_put = |key: &'_ _,
                             value,
                             ts: u64,
-                            is_pessimistic_lock,
+                            pessimistic_lock_type,
                             for_update_ts: u64,
                             assertion,
                             assertion_level,
@@ -1782,7 +1802,7 @@ pub mod tests {
                     key,
                     &None,
                     ts.into(),
-                    is_pessimistic_lock,
+                    pessimistic_lock_type,
                     100,
                     for_update_ts.into(),
                     1,
@@ -1801,7 +1821,7 @@ pub mod tests {
                     &None,
                     ts,
                     for_update_ts,
-                    is_pessimistic_lock,
+                    pessimistic_lock_type,
                     0,
                     false,
                     assertion,
@@ -1922,7 +1942,7 @@ pub mod tests {
             must_rollback(&engine, &k2, 30, true);
             must_rollback(&engine, &k4, 30, true);
 
-            // Pessimistic transaction fail on strict level no matter whether `is_pessimistic_lock`.
+            // Pessimistic transaction fail on strict level no matter whether `pessimistic_lock_type`.
             let pass = assertion_level != AssertionLevel::Strict;
             prewrite_put(
                 &k1,

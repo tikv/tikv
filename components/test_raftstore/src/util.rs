@@ -893,7 +893,7 @@ pub fn must_kv_prewrite_with(
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
-        prewrite_req.is_pessimistic_lock = vec![true; muts.len()];
+        prewrite_req.pessimistic_lock_type = vec![true; muts.len()];
     }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
@@ -930,7 +930,7 @@ pub fn try_kv_prewrite_with(
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
-        prewrite_req.is_pessimistic_lock = vec![true; muts.len()];
+        prewrite_req.pessimistic_lock_type = vec![true; muts.len()];
     }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;

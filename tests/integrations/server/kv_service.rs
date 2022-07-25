@@ -2078,7 +2078,7 @@ fn test_commands_write_detail() {
     mutation.set_op(Op::Put);
     mutation.set_value(v);
     prewrite_req.set_mutations(vec![mutation].into());
-    prewrite_req.set_is_pessimistic_lock(vec![true]);
+    prewrite_req.set_pessimistic_lock_type(vec![true]);
     prewrite_req.set_context(ctx.clone());
     prewrite_req.set_primary_lock(k.clone());
     prewrite_req.set_start_version(20);

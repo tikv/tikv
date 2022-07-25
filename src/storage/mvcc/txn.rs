@@ -266,7 +266,7 @@ pub(crate) fn make_txn_error(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use kvproto::kvrpcpb::{AssertionLevel, Context};
+    use kvproto::kvrpcpb::{AssertionLevel, Context, PessimisticLockType};
     use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::*;
@@ -333,7 +333,7 @@ pub(crate) mod tests {
         must_commit(&engine, k1, 25, 27);
         must_acquire_pessimistic_lock(&engine, k1, k1, 23, 29);
         must_get(&engine, k1, 30, v);
-        must_pessimistic_prewrite_delete(&engine, k1, k1, 23, 29, true);
+        must_pessimistic_prewrite_delete(&engine, k1, k1, 23, 29, PessimisticLockType::PessimisticLocked);
         must_get_err(&engine, k1, 30);
         // should read the latest record when `ts == u64::max_value()`
         // even if lock.start_ts(23) < latest write.commit_ts(27)
@@ -750,7 +750,7 @@ pub(crate) mod tests {
             &txn_props(10.into(), pk, CommitKind::TwoPc, None, 0, false),
             Mutation::make_put(key.clone(), v.to_vec()),
             &None,
-            false,
+            PessimisticLockType::NonPessimisticLocked,
         )
         .unwrap();
         assert!(txn.write_size() > 0);

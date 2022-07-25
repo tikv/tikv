@@ -160,12 +160,13 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.take_context(),
             )
         } else {
-            let is_pessimistic_lock = req.take_is_pessimistic_lock();
+            // the inconsistent naming is for compatibility with the old version :-(
+            let pessimistic_lock_type = req.take_is_pessimistic_lock();
             let mutations = req
                 .take_mutations()
                 .into_iter()
                 .map(Into::into)
-                .zip(is_pessimistic_lock.into_iter())
+                .zip(pessimistic_lock_type.into_iter())
                 .collect();
             PrewritePessimistic::new(
                 mutations,

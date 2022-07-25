@@ -9,7 +9,7 @@
 use std::mem;
 
 use engine_traits::CF_WRITE;
-use kvproto::kvrpcpb::{AssertionLevel, ExtraOp};
+use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PessimisticLockType};
 use tikv_kv::SnapshotExt;
 use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 
@@ -254,7 +254,7 @@ command! {
         cmd_ty => PrewriteResult,
         content => {
             /// The set of mutations to apply; the bool = is pessimistic lock.
-            mutations: Vec<(Mutation, bool)>,
+            mutations: Vec<(Mutation, PessimisticLockType)>,
             /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
             primary: Vec<u8>,
             /// The transaction timestamp.
@@ -545,7 +545,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         let mut assertion_failure = None;
 
         for m in mem::take(&mut self.mutations) {
-            let is_pessimistic_lock = m.is_pessimistic_lock();
+            let pessimistic_lock_type = m.pessimistic_lock_type();
             let m = m.into_mutation();
             let key = m.key().clone();
             let mutation_type = m.mutation_type();
@@ -557,7 +557,7 @@ impl<K: PrewriteKind> Prewriter<K> {
 
             let need_min_commit_ts = secondaries.is_some() || self.try_one_pc;
             let prewrite_result =
-                prewrite(txn, reader, &props, m, secondaries, is_pessimistic_lock);
+                prewrite(txn, reader, &props, m, secondaries, pessimistic_lock_type);
             match prewrite_result {
                 Ok((ts, old_value)) if !(need_min_commit_ts && ts.is_zero()) => {
                     if need_min_commit_ts && final_min_commit_ts < ts {
@@ -776,7 +776,7 @@ struct Pessimistic {
 }
 
 impl PrewriteKind for Pessimistic {
-    type Mutation = (Mutation, bool);
+    type Mutation = (Mutation, PessimisticLockType);
 
     fn txn_kind(&self) -> TransactionKind {
         TransactionKind::Pessimistic(self.for_update_ts)
@@ -789,13 +789,13 @@ impl PrewriteKind for Pessimistic {
 /// For pessimistic txns, this is `(Mutation, bool)`, where the bool indicates
 /// whether the mutation takes a pessimistic lock or not.
 trait MutationLock {
-    fn is_pessimistic_lock(&self) -> bool;
+    fn pessimistic_lock_type(&self) -> PessimisticLockType;
     fn into_mutation(self) -> Mutation;
 }
 
 impl MutationLock for Mutation {
-    fn is_pessimistic_lock(&self) -> bool {
-        false
+    fn pessimistic_lock_type(&self) -> PessimisticLockType {
+        PessimisticLockType::NonPessimisticLocked
     }
 
     fn into_mutation(self) -> Mutation {
@@ -803,8 +803,8 @@ impl MutationLock for Mutation {
     }
 }
 
-impl MutationLock for (Mutation, bool) {
-    fn is_pessimistic_lock(&self) -> bool {
+impl MutationLock for (Mutation, PessimisticLockType) {
+    fn pessimistic_lock_type(&self) -> PessimisticLockType {
         self.1
     }
 
@@ -1956,13 +1956,13 @@ mod tests {
              pk: &[u8],
              secondary_keys,
              ts: u64,
-             is_pessimistic_lock,
+             pessimistic_lock_type,
              is_retry_request| {
                 let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
                 let mut ctx = Context::default();
                 ctx.set_is_retry_request(is_retry_request);
                 let cmd = PrewritePessimistic::new(
-                    vec![(mutation, is_pessimistic_lock)],
+                    vec![(mutation, pessimistic_lock_type)],
                     pk.to_vec(),
                     ts.into(),
                     100,
