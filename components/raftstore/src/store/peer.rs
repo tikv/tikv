@@ -2846,7 +2846,7 @@ where
         } else {
             self.long_uncommitted_threshold = LONG_UNCOMMITTED_BASE_THRESHOLD
         }
-        return has_long_uncommitted;
+        has_long_uncommitted
     }
 
     fn on_persist_snapshot<T>(
