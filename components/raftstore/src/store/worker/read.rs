@@ -842,7 +842,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
 const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
 #[derive(Clone)]
-struct ReadMetrics {
+pub struct ReadMetrics {
     local_executed_requests: u64,
     local_executed_stale_read_requests: u64,
     local_executed_snapshot_cache_hit: u64,

@@ -4198,6 +4198,7 @@ dependencies = [
  "test_pd",
  "test_util",
  "tikv_util",
+ "time",
 ]
 
 [[package]]

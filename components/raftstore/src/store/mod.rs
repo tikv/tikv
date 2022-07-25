@@ -64,6 +64,6 @@ pub use self::{
         AutoSplitController, Bucket, BucketRange, CheckLeaderRunner, CheckLeaderTask,
         FlowStatistics, FlowStatsReporter, KeyEntry, LocalReader, PdTask, QueryStats, ReadDelegate,
         ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
-        SplitConfigManager, TrackVer, WriteStats,
+        SplitConfigManager, TrackVer, WriteStats, ReadMetrics,
     },
 };

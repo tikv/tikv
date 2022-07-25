@@ -42,6 +42,7 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 raft-proto = { version = "0.7.0" }
 raftstore = { path = "../raftstore" }
 slog = "2.3"
+time = "0.1"
 smallvec = "1.4"
 tikv_util = { path = "../tikv_util", default-features = false }
 
