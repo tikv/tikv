@@ -207,7 +207,7 @@ impl TitanCfConfig {
             );
         }
         if self.sample_ratio.is_some() {
-            warn!("sample-ratio is deprecated. It will be ignored.");
+            warn!("sample-ratio is deprecated. Ignoring the value.");
         }
         Ok(())
     }
