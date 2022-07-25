@@ -227,6 +227,17 @@ impl PessimisticLockKeyResult {
     pub fn assert_waiting(&self) {
         assert!(matches!(self, Self::Waiting(_)));
     }
+
+    #[cfg(test)]
+    pub fn unwrap_err(&self) -> Arc<Error> {
+        match self {
+            Self::Failed(e) => e.clone(),
+            x => panic!(
+                "pessimistic lock key result not match expected Failed, got {:?}",
+                x,
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

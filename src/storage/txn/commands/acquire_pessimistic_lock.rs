@@ -251,8 +251,11 @@ impl AcquirePessimisticLock {
                         // The request is in legacy behavior. Do not lock previously succeeded keys.
                         txn.clear();
                         res.0.clear();
+                        res.push(PessimisticLockKeyResult::Waiting(Some(lock_info)));
+                        break;
+                    } else {
+                        res.push(PessimisticLockKeyResult::Waiting(Some(lock_info)));
                     }
-                    res.push(PessimisticLockKeyResult::Waiting(Some(lock_info)));
                 }
                 Err(e) => return Err(Error::from(e)),
             }
@@ -528,14 +531,17 @@ impl AcquirePessimisticLock {
 
     pub fn get_single_request_meta(&self) -> Option<SingleRequestPessimisticLockCommandMeta> {
         match &self.inner {
-            PessimisticLockCmdInner::SingleRequest { params, keys, .. } => {
-                Some(SingleRequestPessimisticLockCommandMeta {
-                    start_ts: params.start_ts,
-                    for_update_ts: params.for_update_ts,
-                    keys_count: keys.len(),
-                    is_first_lock: self.is_first_lock,
-                })
-            }
+            PessimisticLockCmdInner::SingleRequest {
+                params,
+                keys,
+                allow_lock_with_conflict,
+            } => Some(SingleRequestPessimisticLockCommandMeta {
+                start_ts: params.start_ts,
+                for_update_ts: params.for_update_ts,
+                keys_count: keys.len(),
+                is_first_lock: self.is_first_lock,
+                allow_lock_with_conflict: *allow_lock_with_conflict,
+            }),
             PessimisticLockCmdInner::BatchResumedRequests { .. } => None,
         }
     }
@@ -546,6 +552,7 @@ pub struct SingleRequestPessimisticLockCommandMeta {
     pub for_update_ts: TimeStamp,
     pub keys_count: usize,
     pub is_first_lock: bool,
+    pub allow_lock_with_conflict: bool,
 }
 
 #[cfg(test)]

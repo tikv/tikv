@@ -16,8 +16,8 @@ use crate::storage::{
     txn::{
         actions::prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
         commands::{
-            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
-            WriteContext, WriteResult,
+            CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+            WriteResult,
         },
         Error, ErrorInner, Result,
     },
@@ -802,6 +802,7 @@ mod tests {
             commands::test_util::{
                 commit, pessimistic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
             },
+            commands::Command,
             tests::{
                 must_acquire_pessimistic_lock, must_acquire_pessimistic_lock_err, must_commit,
                 must_prewrite_put_err_impl, must_prewrite_put_impl, must_rollback,

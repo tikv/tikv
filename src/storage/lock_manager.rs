@@ -2,6 +2,8 @@
 
 use crate::server::lock_manager::waiter_manager;
 use crate::server::lock_manager::waiter_manager::Callback;
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+use crate::storage::txn::Error as TxnError;
 use crate::storage::Error as StorageError;
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::metapb::RegionEpoch;
@@ -155,12 +157,18 @@ impl LockManager for DummyLockManager {
         _region_epoch: RegionEpoch,
         _term: u64,
         _start_ts: TimeStamp,
-        _wait_info: Vec<KeyLockWaitInfo>,
+        wait_info: Vec<KeyLockWaitInfo>,
         _is_first_lock: bool,
-        _timeout: Option<WaitTimeout>,
-        _cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
+        timeout: Option<WaitTimeout>,
+        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         _diag_ctx: DiagnosticContext,
     ) {
+        if timeout.is_none() {
+            let error = MvccError::from(MvccErrorInner::KeyIsLocked(
+                wait_info.into_iter().next().unwrap().lock_info,
+            ));
+            cancel_callback(StorageError::from(TxnError::from(error)));
+        }
     }
 
     fn on_keys_wakeup(&self, _wake_up_events: Vec<KeyWakeUpEvent>) {}

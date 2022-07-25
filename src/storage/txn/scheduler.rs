@@ -56,8 +56,8 @@ use crate::storage::lock_manager::{
 use crate::storage::metrics::{self, *};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::commands::{
-    self, CallbackWithArcError, ReleasedLocks, ResponsePolicy, SyncCommandContext, WriteContext,
-    WriteResult, WriteResultLockInfo,
+    self, CallbackWithArcError, PessimisticLockKeyCallback, ReleasedLocks, ResponsePolicy,
+    SyncCommandContext, WriteContext, WriteResult, WriteResultLockInfo,
 };
 use crate::storage::txn::latch::LockWaitQueueMap;
 use crate::storage::txn::sched_pool::tls_collect_query;
@@ -1028,6 +1028,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         mem::replace(&mut pr, Some(ProcessResult::Res)).unwrap(),
                         cmd_meta.keys_count,
                         first_batch_size,
+                        cmd_meta.allow_lock_with_conflict,
                     );
 
                     scheduler.on_wait_for_lock(
@@ -1040,7 +1041,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         l[0].parameters.wait_timeout,
                         diag_ctx,
                     );
-                    // It's possible that the request is cancelled immediately due to no timeout (non-blocking waiting).
+                    // It's possible that the request is cancelled immediately due to no timeout (non-blocking locking).
                     if lock_req_ctx.shared_states.finished.load(Ordering::Acquire) {
                         lock_info_list = None;
                     } else {
@@ -1048,10 +1049,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         for lock_info in l {
                             assert!(lock_info.key_cb.is_none());
                             // TODO: Check if there are paths that the cb is never invoked.
-                            lock_info.key_cb = Some(Box::new(
+                            lock_info.key_cb = Some(
                                 lock_req_ctx
                                     .get_callback_for_blocked_key(lock_info.index_in_request),
-                            ));
+                            );
                             lock_info.req_states = Some(lock_req_ctx.get_shared_states());
                             key_callback_count += 1;
                         }
@@ -1478,19 +1479,26 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
 
         self.inner.lock_mgr.on_keys_wakeup(wake_up_events);
-        for (mut lock_info, released_lock) in legacy_wakeup_list {
-            let cb = lock_info.key_cb.unwrap();
-            let e = StorageError::from(Error::from(MvccError::from(
-                MvccErrorInner::WriteConflict {
-                    start_ts: lock_info.parameters.start_ts,
-                    conflict_start_ts: released_lock.start_ts,
-                    conflict_commit_ts: released_lock.commit_ts,
-                    key: released_lock.key.into_raw().unwrap(),
-                    primary: lock_info.last_found_lock.take_primary_lock(),
-                },
-            )));
-            cb(Err(Arc::new(e)));
-        }
+
+        self.get_sched_pool(CommandPri::High)
+            .pool
+            .spawn(async move {
+                for (mut lock_info, released_lock) in legacy_wakeup_list {
+                    let cb = lock_info.key_cb.unwrap();
+                    let e = StorageError::from(Error::from(MvccError::from(
+                        MvccErrorInner::WriteConflict {
+                            start_ts: lock_info.parameters.start_ts,
+                            conflict_start_ts: released_lock.start_ts,
+                            conflict_commit_ts: released_lock.commit_ts,
+                            key: released_lock.key.into_raw().unwrap(),
+                            primary: lock_info.last_found_lock.take_primary_lock(),
+                        },
+                    )));
+                    let res = Err(Arc::new(e));
+                    cb(res);
+                }
+            })
+            .unwrap();
     }
 
     fn convert_to_keywise_callbacks(
@@ -1502,6 +1510,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         first_batch_pr: ProcessResult,
         total_size: usize,
         first_batch_size: usize,
+        allow_lock_with_conflict: bool,
     ) -> PartialPessimisticLockRequestContext<L> {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
@@ -1518,6 +1527,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             first_batch_pr,
             cb,
             total_size,
+            allow_lock_with_conflict,
         );
         let first_batch_cb = ctx.get_callback_for_first_write_batch(first_batch_size);
         // TODO: Do not use NormalRequestCallback and remove get_callback_for_first_write_batch
@@ -1612,6 +1622,8 @@ struct PartialPessimisticLockRequestContext<L: LockManager> {
     )>,
 
     lock_manager: L,
+    allow_lock_with_conflict: bool,
+
     // Fields for logging:
     start_ts: TimeStamp,
     for_update_ts: TimeStamp,
@@ -1626,6 +1638,7 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
         first_batch_pr: ProcessResult,
         cb: StorageCallback,
         size: usize,
+        allow_lock_with_conflict: bool,
     ) -> Self {
         let (tx, rx) = channel();
         let inner = PartialPessimisticLockRequestContextInner {
@@ -1642,6 +1655,7 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
             }),
             tx,
             lock_manager,
+            allow_lock_with_conflict,
             start_ts,
             for_update_ts,
         }
@@ -1653,40 +1667,51 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
 
     fn get_callback_for_first_write_batch(&self, first_batch_size: usize) -> StorageCallback {
         let ctx = self.clone();
-        StorageCallback::Boolean(Box::new(move |res| {
-            let prev = ctx
-                .shared_states
-                .remaining_keys
-                .fetch_sub(first_batch_size, Ordering::SeqCst);
-            if prev == first_batch_size {
-                ctx.finish_request(res.err(), true);
-            }
-        }))
+        if self.allow_lock_with_conflict {
+            StorageCallback::Boolean(Box::new(move |res| {
+                if first_batch_size != 0 {
+                    let prev = ctx
+                        .shared_states
+                        .remaining_keys
+                        .fetch_sub(first_batch_size, Ordering::SeqCst);
+                    if prev == first_batch_size {
+                        ctx.finish_request(res.err(), true);
+                    }
+                }
+            }))
+        } else {
+            StorageCallback::Boolean(Box::new(|res| {
+                res.unwrap();
+            }))
+        }
     }
 
-    fn get_callback_for_blocked_key(
-        &self,
-        index: usize,
-    ) -> impl FnOnce(std::result::Result<PessimisticLockKeyResult, Arc<StorageError>>) {
+    fn get_callback_for_blocked_key(&self, index: usize) -> PessimisticLockKeyCallback {
         let ctx = self.clone();
-        move |res| {
-            // TODO: Handle error.
-            if let Err(e) = ctx.tx.send((index, res)) {
-                info!("sending partial pessimistic lock result to closed channel, maybe the request is already cancelled due to error";
-                    "start_ts" => ctx.start_ts,
-                    "for_update_ts" => ctx.for_update_ts,
-                    "err" => ?e
-                );
-                return;
-            }
-            let prev = ctx
-                .shared_states
-                .remaining_keys
-                .fetch_sub(1, Ordering::SeqCst);
-            if prev == 1 {
-                // All keys are finished.
-                ctx.finish_request(None, false);
-            }
+        if self.allow_lock_with_conflict {
+            Box::new(move |res| {
+                // TODO: Handle error.
+                if let Err(e) = ctx.tx.send((index, res)) {
+                    info!("sending partial pessimistic lock result to closed channel, maybe the request is already cancelled due to error";
+                        "start_ts" => ctx.start_ts,
+                        "for_update_ts" => ctx.for_update_ts,
+                        "err" => ?e
+                    );
+                    return;
+                }
+                let prev = ctx
+                    .shared_states
+                    .remaining_keys
+                    .fetch_sub(1, Ordering::SeqCst);
+                if prev == 1 {
+                    // All keys are finished.
+                    ctx.finish_request(None, false);
+                }
+            })
+        } else {
+            Box::new(move |res| {
+                ctx.finish_request(Some(Arc::try_unwrap(res.unwrap_err()).unwrap()), false);
+            })
         }
     }
 
@@ -1719,6 +1744,19 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
             } => v,
             _ => unreachable!(),
         };
+
+        if !self.allow_lock_with_conflict {
+            assert_eq!(results.len(), 1);
+            assert!(matches!(
+                results[0],
+                PessimisticLockKeyResult::Waiting(None)
+            ));
+            ctx_inner.cb.execute(ProcessResult::Failed {
+                err: external_error.unwrap(),
+            });
+            return;
+        }
+
         while let Ok((index, msg)) = ctx_inner.result_rx.try_recv() {
             assert!(matches!(
                 results[index],
