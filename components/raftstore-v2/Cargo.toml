@@ -45,6 +45,8 @@ slog = "2.3"
 time = "0.1"
 smallvec = "1.4"
 tikv_util = { path = "../tikv_util", default-features = false }
+keys = { path = "../keys", default-features = false }
+log_wrappers = { path = "../log_wrappers" }
 
 [dev-dependencies]
 engine_test = { path = "../engine_test", default-features = false }

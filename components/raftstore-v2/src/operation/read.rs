@@ -26,10 +26,9 @@ use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp,
-        fsm::store::StoreMeta,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
         Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadMetrics,
-        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
+        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt, TrackVer,
     },
     Error, Result,
 };
@@ -44,25 +43,16 @@ use time::Timespec;
 use crate::tablet::CachedTablet;
 
 pub trait ReadExecutor<E: KvEngine> {
-    // If multi-rocksdb is enabled, we must ensure that the tablet with `region_id` must be
-    // cached in the tablet factory.
-    fn get_tablet(&self, region_id: u64) -> E;
+    fn get_tablet(&self) -> E;
 
-    // If multi-rocksdb is enabled, we must ensure that the tablet with `region_id` must be
-    // cached in the tablet factory.
-    fn get_snapshot(
-        &mut self,
-        ts: Option<ThreadReadId>,
-        region_id: u64,
-        read_metrics: &mut ReadMetrics,
-    ) -> Arc<E::Snapshot>;
+    fn get_snapshot(&mut self) -> Arc<E::Snapshot>;
 
     fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, region)?;
 
-        let engine = self.get_tablet(region.id);
+        let engine = self.get_tablet();
         let mut resp = Response::default();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
@@ -99,8 +89,6 @@ pub trait ReadExecutor<E: KvEngine> {
         msg: &RaftCmdRequest,
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
-        mut ts: Option<ThreadReadId>,
-        read_metrics: &mut ReadMetrics,
     ) -> ReadResponse<E::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
@@ -124,10 +112,8 @@ pub trait ReadExecutor<E: KvEngine> {
                     }
                 },
                 CmdType::Snap => {
-                    let snapshot = RegionSnapshot::from_snapshot(
-                        self.get_snapshot(ts.take(), region.id, read_metrics),
-                        region.clone(),
-                    );
+                    let snapshot =
+                        RegionSnapshot::from_snapshot(self.get_snapshot(), region.clone());
                     response.snapshot = Some(snapshot);
                     Response::default()
                 }
@@ -181,9 +167,7 @@ where
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
     pub track_ver: TrackVer,
 
-    cached_tablet: Arc<CachedTablet<E>>,
-    snap_cache: Option<Arc<E::Snapshot>>,
-    cache_read_id: ThreadReadId,
+    cached_tablet: CachedTablet<E>,
 }
 
 impl<E> Drop for ReadDelegate<E>
@@ -193,55 +177,6 @@ where
     fn drop(&mut self) {
         // call `inc` to notify the source `ReadDelegate` is dropped
         self.track_ver.inc();
-    }
-}
-
-#[derive(Debug)]
-pub struct TrackVer {
-    version: Arc<AtomicU64>,
-    local_ver: u64,
-    // source set to `true` means the `TrackVer` is created by `TrackVer::new` instead
-    // of `TrackVer::clone`, more specific, only the `ReadDelegate` created by `ReadDelegate::new`
-    // will have source `TrackVer` and be able to increase `TrackVer::version`, because these
-    // `ReadDelegate` are store at `StoreMeta` and only them will invoke `ReadDelegate::update`
-    source: bool,
-}
-
-impl TrackVer {
-    pub fn new() -> TrackVer {
-        TrackVer {
-            version: Arc::new(AtomicU64::from(0)),
-            local_ver: 0,
-            source: true,
-        }
-    }
-
-    // Take `&mut self` to prevent calling `inc` and `clone` at the same time
-    fn inc(&mut self) {
-        // Only the source `TrackVer` can increase version
-        if self.source {
-            self.version.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    fn any_new(&self) -> bool {
-        self.version.load(Ordering::Relaxed) > self.local_ver
-    }
-}
-
-impl Default for TrackVer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clone for TrackVer {
-    fn clone(&self) -> Self {
-        TrackVer {
-            version: Arc::clone(&self.version),
-            local_ver: self.version.load(Ordering::Relaxed),
-            source: false,
-        }
     }
 }
 
@@ -268,9 +203,7 @@ where
             pending_remove: false,
             bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
             track_ver: TrackVer::new(),
-            cached_tablet: Arc::new(CachedTablet::new(None)),
-            snap_cache: None,
-            cache_read_id,
+            cached_tablet: CachedTablet::new(None),
         }
     }
 
@@ -400,9 +333,7 @@ where
             pending_remove: false,
             track_ver: TrackVer::new(),
             bucket_meta: None,
-            cached_tablet: Arc::new(CachedTablet::new(None)),
-            snap_cache: None,
-            cache_read_id,
+            cached_tablet: CachedTablet::new(None),
         }
     }
 }
@@ -411,30 +342,12 @@ impl<E> ReadExecutor<E> for ReadDelegate<E>
 where
     E: KvEngine,
 {
-    fn get_tablet(&self, region_id: u64) -> E {
-        self.cached_tablet.as_ref().cache().unwrap().clone()
+    fn get_tablet(&self) -> E {
+        self.cached_tablet.cache().unwrap().clone()
     }
 
-    fn get_snapshot(
-        &mut self,
-        create_time: Option<ThreadReadId>,
-        region_id: u64,
-        read_metrics: &mut ReadMetrics,
-    ) -> Arc<E::Snapshot> {
-        read_metrics.local_executed_requests += 1;
-        if let Some(ts) = create_time {
-            if ts == self.cache_read_id {
-                if let Some(snap) = self.snap_cache.as_ref() {
-                    read_metrics.local_executed_snapshot_cache_hit += 1;
-                    return snap.clone();
-                }
-            }
-            let snap = Arc::new(self.cached_tablet.as_ref().cache().unwrap().snapshot());
-            self.cache_read_id = ts;
-            self.snap_cache = Some(snap.clone());
-            return snap;
-        }
-        Arc::new(self.cached_tablet.as_ref().cache().unwrap().snapshot())
+    fn get_snapshot(&mut self) -> Arc<E::Snapshot> {
+        Arc::new(self.cached_tablet.latest().unwrap().clone().snapshot())
     }
 }
 
@@ -493,13 +406,75 @@ where
     E: KvEngine,
 {
     store_id: Cell<Option<u64>>,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Arc<Mutex<StoreMeta<E>>>,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     delegates: LruCache<u64, Arc<ReadDelegate<E>>>,
     // A channel to raftstore.
     router: C,
+}
+
+struct SnapCache<E>
+where
+    E: KvEngine,
+{
+    snap_cache: HashMap<u64, Arc<E::Snapshot>>,
+    cache_read_id: ThreadReadId,
+}
+
+impl<E> SnapCache<E>
+where
+    E: KvEngine,
+{
+    fn new() -> SnapCache<E> {
+        let cache_read_id = ThreadReadId::new();
+        SnapCache {
+            snap_cache: HashMap::new(),
+            cache_read_id,
+        }
+    }
+
+    fn get_snap_from_cache(
+        &mut self,
+        region_id: u64,
+        create_time: &Option<ThreadReadId>,
+        read_metrics: &mut ReadMetrics,
+    ) -> Option<&Arc<E::Snapshot>> {
+        if let Some(ts) = create_time {
+            if self.cache_read_id == *ts {
+                let snap = self.snap_cache.get(&region_id);
+                if let Some(snap) = snap {
+                    read_metrics.local_executed_snapshot_cache_hit += 1;
+                    return Some(snap);
+                }
+            } else {
+                // We should clear the cache when read id is changed since since all
+                // requests in a batch should have the same read id. Which means once the read id
+                // is changed, items in the cache are not needed.
+                self.snap_cache.clear();
+            }
+        }
+        None
+    }
+
+    fn store_snap_in_cache(
+        &mut self,
+        region_id: u64,
+        snap: Arc<E::Snapshot>,
+        create_time: ThreadReadId,
+    ) {
+        self.snap_cache.insert(region_id, snap);
+        self.cache_read_id = create_time;
+    }
+}
+
+struct StoreMeta<E>
+where
+    E: KvEngine,
+{
+    pub store_id: Option<u64>,
+    pub readers: HashMap<u64, ReadDelegate<E>>,
 }
 
 impl<C, E> LocalReader<C, E>
@@ -509,7 +484,7 @@ where
 {
     pub fn new(
         factory: Arc<dyn TabletFactory<E> + Send + Sync>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<E>>>,
         router: C,
     ) -> Self {
         let cache_read_id = ThreadReadId::new();
@@ -686,13 +661,7 @@ where
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        let response = delegate.execute(
-                            &req,
-                            &delegate.region,
-                            None,
-                            read_id,
-                            &mut self.metrics,
-                        );
+                        let response = delegate.execute(&req, &delegate.region, None);
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(
                             &self.router,
@@ -713,13 +682,7 @@ where
                         }
 
                         // Getting the snapshot
-                        let response = delegate.execute(
-                            &req,
-                            &delegate.region,
-                            None,
-                            read_id,
-                            &mut self.metrics,
-                        );
+                        let response = delegate.execute(&req, &delegate.region, None);
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
                         if let Err(resp) =
@@ -773,53 +736,8 @@ where
         self.metrics.maybe_flush();
     }
 
-    pub fn release_snapshot_cache(&mut self) {
-        self.snap_cache.clear();
-    }
-
-    fn get_snap_from_cache(
-        &mut self,
-        region_id: u64,
-        create_time: &Option<ThreadReadId>,
-    ) -> Option<&Arc<E::Snapshot>> {
-        if let Some(ts) = create_time {
-            if self.cache_read_id == *ts {
-                let snap = if self.factory.is_single_engine() {
-                    // In single rocksdb version, we only have one global kv rocksdb, so always use 0 to
-                    // get snap from cache.
-                    self.snap_cache.get(&0)
-                } else {
-                    self.snap_cache.get(&region_id)
-                };
-                if let Some(snap) = snap {
-                    self.metrics.local_executed_snapshot_cache_hit += 1;
-                    return Some(snap);
-                }
-            } else {
-                // We should clear the cache when read id is changed since since all
-                // requests in a batch should have the same read id. Which means once the read id
-                // is changed, items in the cache are not needed.
-                self.snap_cache.clear();
-            }
-        }
-        None
-    }
-
-    fn store_snap_in_cache(
-        &mut self,
-        region_id: u64,
-        snap: Arc<E::Snapshot>,
-        create_time: ThreadReadId,
-    ) {
-        if self.factory.is_single_engine() {
-            // In single rocksdb version, we only have one global kv rocksdb, so always use 0 to
-            // store snap into cache.
-            self.snap_cache.insert(0, snap);
-        } else {
-            self.snap_cache.insert(region_id, snap);
-        }
-        self.cache_read_id = create_time;
-    }
+    /// Now, We don't have snapshot cache for multi-rocks version, so we do nothing here.
+    pub fn release_snapshot_cache(&mut self) {}
 }
 
 impl<C, E> Clone for LocalReader<C, E>

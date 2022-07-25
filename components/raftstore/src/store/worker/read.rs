@@ -201,14 +201,14 @@ impl TrackVer {
     }
 
     // Take `&mut self` to prevent calling `inc` and `clone` at the same time
-    fn inc(&mut self) {
+    pub fn inc(&mut self) {
         // Only the source `TrackVer` can increase version
         if self.source {
             self.version.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    fn any_new(&self) -> bool {
+    pub fn any_new(&self) -> bool {
         self.version.load(Ordering::Relaxed) > self.local_ver
     }
 }
@@ -843,24 +843,24 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
 #[derive(Clone)]
 pub struct ReadMetrics {
-    local_executed_requests: u64,
-    local_executed_stale_read_requests: u64,
-    local_executed_snapshot_cache_hit: u64,
+    pub local_executed_requests: u64,
+    pub local_executed_stale_read_requests: u64,
+    pub local_executed_snapshot_cache_hit: u64,
     // TODO: record rejected_by_read_quorum.
-    rejected_by_store_id_mismatch: u64,
-    rejected_by_peer_id_mismatch: u64,
-    rejected_by_term_mismatch: u64,
-    rejected_by_lease_expire: u64,
-    rejected_by_no_region: u64,
-    rejected_by_no_lease: u64,
-    rejected_by_epoch: u64,
-    rejected_by_applied_term: u64,
-    rejected_by_channel_full: u64,
-    rejected_by_cache_miss: u64,
-    rejected_by_safe_timestamp: u64,
-    renew_lease_advance: u64,
+    pub rejected_by_store_id_mismatch: u64,
+    pub rejected_by_peer_id_mismatch: u64,
+    pub rejected_by_term_mismatch: u64,
+    pub rejected_by_lease_expire: u64,
+    pub rejected_by_no_region: u64,
+    pub rejected_by_no_lease: u64,
+    pub rejected_by_epoch: u64,
+    pub rejected_by_applied_term: u64,
+    pub rejected_by_channel_full: u64,
+    pub rejected_by_cache_miss: u64,
+    pub rejected_by_safe_timestamp: u64,
+    pub renew_lease_advance: u64,
 
-    last_flush_time: Instant,
+    pub last_flush_time: Instant,
 }
 
 impl Default for ReadMetrics {
