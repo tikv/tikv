@@ -848,10 +848,11 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::IncompatibleVersion => Err(Error::Incompatible),
         ErrorType::StoreTombstone => Err(Error::StoreTombstone(err.get_message().to_owned())),
         ErrorType::RegionNotFound => Err(Error::RegionNotFound(vec![])),
-        ErrorType::Unknown => Err(box_err!(err.get_message())),
         ErrorType::GlobalConfigNotFound => {
             Err(Error::GlobalConfigNotFound(err.get_message().to_owned()))
         }
+        ErrorType::Unknown => Err(box_err!(err.get_message())),
+        ErrorType::DuplicatedEntry | ErrorType::EntryNotFound => Err(box_err!(err.get_message())),
         ErrorType::Ok => Ok(()),
     }
 }

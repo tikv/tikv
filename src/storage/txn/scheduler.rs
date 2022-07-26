@@ -49,7 +49,9 @@ use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
-use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
+use tracker::{
+    get_tls_tracker_token, set_tls_tracker_token, TrackGuard, TrackerToken, GLOBAL_TRACKERS,
+};
 use txn_types::TimeStamp;
 
 use crate::{
@@ -166,9 +168,15 @@ impl TaskContext {
     }
 
     fn on_schedule(&mut self) {
+        let elapsed = self.latch_timer.saturating_elapsed();
+        if let Some(task) = &self.task.as_ref() {
+            GLOBAL_TRACKERS.with_tracker(task.tracker, |tracker| {
+                tracker.metrics.latch_wait_nanos = elapsed.as_nanos() as u64;
+            });
+        }
         SCHED_LATCH_HISTOGRAM_VEC
             .get(self.tag)
-            .observe(self.latch_timer.saturating_elapsed_secs());
+            .observe(elapsed.as_secs_f64());
     }
 
     // Try to own this TaskContext by setting `owned` from false to true.
@@ -778,6 +786,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let cid = task.cid;
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
+        let tracker = task.tracker;
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
@@ -785,7 +794,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
-
+        let begin_instant = Instant::now();
         let deadline = task.cmd.deadline();
         let write_result = {
             let _guard = sample.observe_cpu();
@@ -796,19 +805,22 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
             };
-            let begin_instant = Instant::now();
-            let res = unsafe {
+
+            unsafe {
                 with_perf_context::<E, _, _>(tag, || {
                     task.cmd
                         .process_write(snapshot, context)
                         .map_err(StorageError::from)
                 })
-            };
-            SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                .get(tag)
-                .observe(begin_instant.saturating_elapsed_secs());
-            res
+            }
         };
+        let process_duration = begin_instant.saturating_elapsed();
+        SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+            .get(tag)
+            .observe(process_duration.as_secs_f64());
+        let mut total_process_duration =
+            TrackGuard::new(tracker, |m| &mut m.scheduler_process_nanos);
+        total_process_duration.value += process_duration.as_nanos() as u64;
 
         if write_result.is_ok() {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
@@ -820,12 +832,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             + statistics.cf_statistics(CF_WRITE).flow_stats.read_bytes;
         sample.add_read_bytes(read_bytes);
         let quota_delay = quota_limiter.consume_sample(sample, true).await;
+        let mut total_throttle_duration =
+            TrackGuard::new(tracker, |m| &mut m.scheduler_throttle_nanos);
         if !quota_delay.is_zero() {
+            total_throttle_duration.value += quota_delay.as_nanos() as u64;
             TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                 .get(tag)
                 .inc_by(quota_delay.as_micros() as u64);
         }
-
         let WriteResult {
             ctx,
             mut to_be_write,
@@ -877,22 +891,26 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         if tag == CommandKind::acquire_pessimistic_lock
             && pessimistic_lock_mode == PessimisticLockMode::InMemory
-            && self.try_write_in_memory_pessimistic_locks(
+        {
+            let begin_instant = Instant::now();
+            if self.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
                 &mut to_be_write,
                 &ctx,
-            )
-        {
-            // Safety: `self.sched_pool` ensures a TLS engine exists.
-            unsafe {
-                with_tls_engine(|engine: &E| {
-                    // We skip writing the raftstore, but to improve CDC old value hit rate,
-                    // we should send the old values to the CDC scheduler.
-                    engine.schedule_txn_extra(to_be_write.extra);
-                })
+            ) {
+                // Safety: `self.sched_pool` ensures a TLS engine exists.
+                unsafe {
+                    with_tls_engine(|engine: &E| {
+                        // We skip writing the raftstore, but to improve CDC old value hit rate,
+                        // we should send the old values to the CDC scheduler.
+                        engine.schedule_txn_extra(to_be_write.extra);
+                    })
+                }
+                total_process_duration.value +=
+                    begin_instant.saturating_elapsed().as_nanos() as u64;
+                scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+                return;
             }
-            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
-            return;
         }
 
         let mut is_async_apply_prewrite = false;
@@ -994,10 +1012,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         .await
                         .unwrap();
                 }
-                SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
+                let elapsed = start.saturating_elapsed();
+                SCHED_THROTTLE_TIME.observe(elapsed.as_secs_f64());
+                total_throttle_duration.value += elapsed.as_nanos() as u64;
             }
         }
 
+        let begin_instant = Instant::now();
         let (version, term) = (ctx.get_region_epoch().get_version(), ctx.get_term());
         // Mutations on the lock CF should overwrite the memory locks.
         // We only set a deleted flag here, and the lock will be finally removed when it
@@ -1091,6 +1112,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 })
                 .unwrap()
         });
+        total_process_duration.value += begin_instant.saturating_elapsed().as_nanos() as u64;
 
         // Safety: `self.sched_pool` ensures a TLS engine exists.
         unsafe {
