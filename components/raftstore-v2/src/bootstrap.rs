@@ -28,8 +28,10 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(
 /// 2. Calls `bootstrap_first_region` to bootstrap the first region using store
 ///    ID returned from last step.
 ///
-/// These steps are re-entrant, i.e. the caller can redo if any step fails or
-/// succeeds.
+/// # Safety
+///
+/// These steps are re-entrant, i.e. the caller can redo any steps whether or
+/// not they fail or succeed.
 pub struct Bootstrap<'a, ER: RaftEngine> {
     engine: &'a ER,
     cluster_id: u64,
@@ -62,15 +64,15 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
     ///
     /// If the store is already bootstrapped, return the store ID directly.
     pub fn bootstrap_store(&mut self) -> Result<u64> {
-        if let Some(id) = self.check_engine_store_id()? {
+        if let Some(id) = self.check_store_id_in_engine()? {
             return Ok(id);
+        }
+        if !self.engine.is_empty()? {
+            return Err(box_err!("store is not empty and has already had data"));
         }
         let id = self.pd_client.alloc_id()?;
         debug!(self.logger, "alloc store id"; "store_id" => id);
         let mut ident = StoreIdent::default();
-        if !self.engine.is_empty()? {
-            return Err(box_err!("store is not empty and has already had data."));
-        }
         ident.set_cluster_id(self.cluster_id);
         ident.set_store_id(id);
         self.engine.put_store_ident(&ident)?;
@@ -83,7 +85,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
 
     /// Gets and validates the store ID from engine if it's already
     /// bootstrapped.
-    fn check_engine_store_id(&mut self) -> Result<Option<u64>> {
+    fn check_store_id_in_engine(&mut self) -> Result<Option<u64>> {
         let ident = match self.engine.get_store_ident()? {
             Some(ident) => ident,
             None => return Ok(None),
@@ -91,7 +93,8 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         if ident.get_cluster_id() != self.cluster_id {
             return Err(box_err!(
                 "cluster ID mismatch, local {} != remote {}, \
-                    you are trying to connect to another cluster, please reconnect to the correct PD",
+                you are trying to connect to another cluster, \
+                please reconnect to the correct PD",
                 ident.get_cluster_id(),
                 self.cluster_id
             ));
@@ -107,7 +110,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
     /// The bootstrapping starts by allocating a region ID from PD. Then it
     /// initializes the region's state and writes a preparing marker to the
     /// engine. After attempting to register itself as the first region to PD,
-    /// the preparing marker is deleted from engine.
+    /// the preparing marker is deleted from the engine.
     ///
     /// On the occasion that the someone else bootstraps the first region
     /// before us, the region state is cleared and `None` is returned.
@@ -184,7 +187,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
                 Err(e) => {
                     error!(
                         self.logger,
-                        "bootstrap cluster";
+                        "bootstrap cluster failed once";
                         "cluster_id" => self.cluster_id,
                         "err" => ?e,
                         "err_code" => %e.error_code()
@@ -195,7 +198,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
             thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
         }
         Err(box_err!(
-            "bootstrapped cluster failed after {} retries",
+            "bootstrapped cluster failed after {} attempts",
             retry
         ))
     }
