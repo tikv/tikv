@@ -86,7 +86,9 @@ pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 /// By default, block cache size will be set to 45% of system memory.
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
-pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
+pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.90;
+/// The Max Percent of BlockCache memory usage, based on the TiKV memory limit.
+pub const MAX_BLOCK_CACHE_PCT: f64 = 0.60;
 
 /// Min block cache shard's size. If a shard is too small, the index/filter data may not fit one shard
 pub const MIN_BLOCK_CACHE_SHARD_SIZE: usize = 128 * MIB as usize;
@@ -102,6 +104,8 @@ const RAFT_MAX_MEM: usize = 2 * GIB as usize;
 const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MIB as usize;
+/// total mem table size limit.
+const MAX_MEMTABLE_PCT: u64 = 10;
 
 fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSize {
     let (ratio, min, max) = match (is_raft_db, cf) {
@@ -367,6 +371,22 @@ macro_rules! cf_config {
                         self.block_size.0,
                         stringify!($name),
                         MAX_BLOCK_SIZE
+                    )
+                    .into());
+                }
+
+                let total_mem = SysQuota::memory_limit_in_bytes();
+                if self.write_buffer_size.0 * self.max_write_buffer_number as u64 * 100
+                    > MAX_MEMTABLE_PCT * total_mem
+                {
+                    return Err(format!(
+                        "invalid MemTable size configure: write-buffer-size={},\
+                        max-write-buffer-number={},\
+                        should less than {}% of total memory {}",
+                        self.write_buffer_size.0,
+                        self.max_write_buffer_number,
+                        MAX_MEMTABLE_PCT,
+                        total_mem
                     )
                     .into());
                 }
@@ -2960,7 +2980,7 @@ impl Default for TiKvConfig {
             enable_io_snoop: true,
             abort_on_panic: false,
             memory_usage_limit: None,
-            memory_usage_high_water: 0.9,
+            memory_usage_high_water: 0.85,
             log: LogConfig::default(),
             quota: QuotaConfig::default(),
             readpool: ReadPoolConfig::default(),
@@ -3202,9 +3222,9 @@ impl TiKvConfig {
         fill_cf_opts!(self.rocksdb.lockcf, flow_control_cfg);
         fill_cf_opts!(self.rocksdb.raftcf, flow_control_cfg);
 
-        if let Some(memory_usage_limit) = self.memory_usage_limit {
-            let total = SysQuota::memory_limit_in_bytes();
-            if memory_usage_limit.0 > total {
+        let total = SysQuota::memory_limit_in_bytes();
+        let memory_usage_limit = if let Some(limit) = self.memory_usage_limit {
+            if limit.0 > total {
                 // Explicitly exceeds system memory capacity is not allowed.
                 return Err(format!(
                     "memory_usage_limit is greater than system memory capacity {}",
@@ -3212,41 +3232,41 @@ impl TiKvConfig {
                 )
                 .into());
             }
+            limit.0
         } else {
-            // Adjust `memory_usage_limit` if necessary.
-            if self.storage.block_cache.shared {
-                if let Some(cap) = self.storage.block_cache.capacity {
-                    let limit = (cap.0 as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
-                    self.memory_usage_limit = Some(ReadableSize(limit));
-                } else {
-                    self.memory_usage_limit = Some(Self::suggested_memory_usage_limit());
-                }
-            } else {
-                let cap = self.rocksdb.defaultcf.block_cache_size.0
-                    + self.rocksdb.writecf.block_cache_size.0
-                    + self.rocksdb.lockcf.block_cache_size.0
-                    + self.raftdb.defaultcf.block_cache_size.0;
-                let limit = (cap as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
-                self.memory_usage_limit = Some(ReadableSize(limit));
-            }
-        }
+            // If not config, set it to the 95% of total memory.
+            let limit = Self::suggested_memory_usage_limit();
+            self.memory_usage_limit = Some(limit);
+            limit.0
+        };
 
-        let mut limit = self.memory_usage_limit.unwrap();
-        let total = ReadableSize(SysQuota::memory_limit_in_bytes());
-        if limit.0 > total.0 {
-            warn!(
-                "memory_usage_limit:{:?} > total:{:?}, fallback to total",
-                limit, total,
-            );
-            self.memory_usage_limit = Some(total);
-            limit = total;
+        // Check BlockCache memory quota based on memory usage limit.
+        let block_cache_size = if self.storage.block_cache.shared {
+            if let Some(cap) = self.storage.block_cache.capacity {
+                cap.0
+            } else {
+                0
+            }
+        } else {
+            self.rocksdb.defaultcf.block_cache_size.0
+                + self.rocksdb.writecf.block_cache_size.0
+                + self.rocksdb.lockcf.block_cache_size.0
+                + self.raftdb.defaultcf.block_cache_size.0
+        };
+
+        if block_cache_size > (memory_usage_limit as f64 * MAX_BLOCK_CACHE_PCT) as u64 {
+            return Err(format!(
+                    "block cache size may be very larger: memory_usage_limit={}, block cache size={}, max percent={}",
+                    memory_usage_limit,block_cache_size,MAX_BLOCK_CACHE_PCT
+                )
+                .into());
         }
 
         let default = Self::suggested_memory_usage_limit();
-        if limit.0 > default.0 {
+        if memory_usage_limit > default.0 {
             warn!(
-                "memory_usage_limit:{:?} > recommanded:{:?}, maybe page cache isn't enough",
-                limit, default,
+                "memory_usage_limit:{} > recommanded:{:?}, maybe page cache isn't enough",
+                memory_usage_limit, default,
             );
         }
 
@@ -5180,23 +5200,6 @@ mod tests {
             cfg.raft_store.region_split_check_diff().0,
             default_region_split_check_diff + 1
         );
-
-        // Test validating memory_usage_limit when it's greater than max.
-        cfg.memory_usage_limit = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
-        assert!(cfg.validate().is_err());
-
-        // Test memory_usage_limit is based on block cache size if it's not configured.
-        cfg.memory_usage_limit = None;
-        cfg.storage.block_cache.capacity = Some(ReadableSize(3 * GIB));
-        assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(5 * GIB));
-
-        // Test memory_usage_limit will fallback to system memory capacity with huge block cache.
-        cfg.memory_usage_limit = None;
-        let system = SysQuota::memory_limit_in_bytes();
-        cfg.storage.block_cache.capacity = Some(ReadableSize(system * 3 / 4));
-        assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(system));
     }
 
     #[test]
@@ -5772,5 +5775,49 @@ mod tests {
             cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
             Some(ReadableSize::gb(1))
         );
+    }
+
+    #[test]
+    fn test_memory_config_check() {
+        let default_memory_limit = TiKvConfig::suggested_memory_usage_limit();
+        let sys_mem_limit = SysQuota::memory_limit_in_bytes();
+        let huge_mem = sys_mem_limit * 2;
+
+        // check tikv total memory limit.
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.memory_usage_limit = Some(ReadableSize(huge_mem));
+        assert!(tikv_cfg.validate().is_err());
+
+        // check the default memory usage limit comes from suggested_memory_usage_limit.
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.validate().unwrap();
+        if let Some(limit) = tikv_cfg.memory_usage_limit {
+            assert_eq!(limit, default_memory_limit);
+        }
+
+        // check memory config validate under shared block cache mode.
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.storage.block_cache.shared = true;
+        tikv_cfg.validate().unwrap();
+
+        // check invalid block cache configure.
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.storage.block_cache.capacity = Some(ReadableSize(huge_mem));
+        assert!(tikv_cfg.validate().is_err());
+
+        // check block cache configure.
+        let mut tikv_cfg = TiKvConfig::default();
+        let max_block_cache_size = (default_memory_limit.0 as f64 * 0.6) as u64;
+        tikv_cfg.storage.block_cache.capacity = Some(ReadableSize(max_block_cache_size));
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.storage.block_cache.capacity = Some(ReadableSize(max_block_cache_size + 1));
+        assert!(tikv_cfg.validate().is_err());
+
+        // check memory usage limit under unshared block cache mode.
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.storage.block_cache.shared = false;
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.memory_usage_limit = Some(ReadableSize(default_memory_limit.0 / 2));
+        assert!(tikv_cfg.validate().is_err());
     }
 }
