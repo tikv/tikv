@@ -52,10 +52,6 @@ fn assert_same_files(mut files1: Vec<kvproto::brpb::File>, mut files2: Vec<kvpro
         assert_ne!(f1.cipher_iv, f2.cipher_iv);
         f1.cipher_iv = "".to_string().into_bytes();
         f2.cipher_iv = "".to_string().into_bytes();
-        // After RocksDB 6.12, each SST file writer writes its own session id to the generated file. The SHA will not never be the same.
-        // Detail: https://github.com/facebook/rocksdb/pull/6983
-        f1.sha256.clear();
-        f2.sha256.clear();
         assert_eq!(f1, f2);
     }
 }

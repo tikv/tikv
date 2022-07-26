@@ -9,8 +9,7 @@ use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine_rocks::{
     config::{BlobRunMode, CompressionType, LogLevel},
     raw::{
-        ChecksumType, CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode,
-        DBRecoveryMode, PrepopulateBlockCache,
+        CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
     },
 };
 use engine_traits::PerfLevel;
@@ -350,9 +349,6 @@ fn test_serde_custom_tikv_config() {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 1024,
             bottommost_zstd_compression_sample_size: 1024,
-            prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
-            checksum: ChecksumType::XXH3,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -418,9 +414,6 @@ fn test_serde_custom_tikv_config() {
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
-            prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
-            checksum: ChecksumType::XXH3,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -486,9 +479,6 @@ fn test_serde_custom_tikv_config() {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
-            prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
-            checksum: ChecksumType::XXH3,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -554,9 +544,6 @@ fn test_serde_custom_tikv_config() {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
-            prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
-            checksum: ChecksumType::XXH3,
         },
         titan: titan_db_config.clone(),
     };
@@ -637,9 +624,6 @@ fn test_serde_custom_tikv_config() {
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
-            prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
-            format_version: 5,
-            checksum: ChecksumType::XXH3,
         },
         titan: titan_db_config,
     };

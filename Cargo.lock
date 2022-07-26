@@ -1768,7 +1768,7 @@ dependencies = [
  "serde",
  "slog",
  "slog-global",
- "strum",
+ "strum 0.20.0",
  "tempfile",
  "thread_local",
  "tikv_alloc",
@@ -2748,7 +2748,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#827a5df22cd59dc708c4c6a87dd8735a2312773d"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#bb42bd1b8db514471a8784a962e7f73cdbd55fef"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2767,7 +2767,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#827a5df22cd59dc708c4c6a87dd8735a2312773d"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#bb42bd1b8db514471a8784a962e7f73cdbd55fef"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4032,7 +4032,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#7a436eae40a6b62371123c96941e058b7fe52b63"
+source = "git+https://github.com/tikv/raft-engine.git#70d27ee04b9e92586b62cb44c3a82b2ea7dc75b3"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4057,13 +4057,15 @@ dependencies = [
  "rhai",
  "scopeguard",
  "serde",
+ "serde_repr",
+ "strum 0.24.1",
  "thiserror",
 ]
 
 [[package]]
 name = "raft-engine-ctl"
 version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#7a436eae40a6b62371123c96941e058b7fe52b63"
+source = "git+https://github.com/tikv/raft-engine.git#70d27ee04b9e92586b62cb44c3a82b2ea7dc75b3"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -4584,7 +4586,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#827a5df22cd59dc708c4c6a87dd8735a2312773d"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#bb42bd1b8db514471a8784a962e7f73cdbd55fef"
 dependencies = [
  "libc 0.2.125",
  "librocksdb_sys",
@@ -4994,6 +4996,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_repr"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2ad84e47328a31223de7fed7a4f5087f2d6ddfe586cf3ca25b7a165bc0a5aed"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "serde_urlencoded"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5372,7 +5385,16 @@ version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7318c509b5ba57f18533982607f24070a55d353e90d4cae30c467cdb2ad5ac5c"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.20.1",
+]
+
+[[package]]
+name = "strum"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
+dependencies = [
+ "strum_macros 0.24.2",
 ]
 
 [[package]]
@@ -5384,6 +5406,19 @@ dependencies = [
  "heck 0.3.1",
  "proc-macro2",
  "quote",
+ "syn",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4faebde00e8ff94316c01800f9054fd2ba77d30d9e922541913051d1d978918b"
+dependencies = [
+ "heck 0.4.0",
+ "proc-macro2",
+ "quote",
+ "rustversion",
  "syn",
 ]
 
@@ -6064,7 +6099,7 @@ dependencies = [
  "slog",
  "slog-global",
  "sst_importer",
- "strum",
+ "strum 0.20.0",
  "sysinfo",
  "tempfile",
  "test_sst_importer",

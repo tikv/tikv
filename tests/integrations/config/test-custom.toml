@@ -320,9 +320,6 @@ enable-doubly-skiplist = false
 enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
-prepopulate-block-cache = "flush-only"
-format-version = 5
-checksum = "xxh3"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -382,9 +379,6 @@ prop-keys-index-distance = 40000
 enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
-prepopulate-block-cache = "flush-only"
-format-version = 5
-checksum = "xxh3"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -431,9 +425,6 @@ prop-keys-index-distance = 40000
 enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
-prepopulate-block-cache = "flush-only"
-format-version = 5
-checksum = "xxh3"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -480,9 +471,6 @@ prop-keys-index-distance = 40000
 enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
-prepopulate-block-cache = "flush-only"
-format-version = 5
-checksum = "xxh3"
 
 [raftdb]
 wal-recovery-mode = "skip-any-corrupted-records"
@@ -562,9 +550,6 @@ prop-keys-index-distance = 40000
 enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
-prepopulate-block-cache = "flush-only"
-format-version = 5
-checksum = "xxh3"
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
