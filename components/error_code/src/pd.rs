@@ -8,6 +8,7 @@ define_error_codes!(
     CLUSTER_NOT_BOOTSTRAPPED => ("ClusterNotBootstraped", "", ""),
     INCOMPATIBLE => ("Imcompatible", "", ""),
     GRPC => ("gRPC", "", ""),
+    STREAM_DISCONNECT => ("STREAM_DISCONNECT","",""),
     REGION_NOT_FOUND => ("RegionNotFound", "", ""),
     STORE_TOMBSTONE => ("StoreTombstone", "", ""),
     GLOBAL_CONFIG_NOT_FOUND => ("GlobalConfigNotFound","",""),
