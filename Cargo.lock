@@ -4181,6 +4181,7 @@ dependencies = [
  "batch-system",
  "collections",
  "crossbeam",
+ "engine_rocks",
  "engine_test",
  "engine_traits",
  "error_code",
@@ -4199,8 +4200,10 @@ dependencies = [
  "tempfile",
  "test_pd",
  "test_util",
+ "tikv_kv",
  "tikv_util",
  "time",
+ "txn_types",
 ]
 
 [[package]]

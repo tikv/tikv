@@ -47,6 +47,9 @@ smallvec = "1.4"
 tikv_util = { path = "../tikv_util", default-features = false }
 keys = { path = "../keys", default-features = false }
 log_wrappers = { path = "../log_wrappers" }
+txn_types = { path = "../txn_types", default-features = false }
+engine_rocks = { path = "../engine_rocks", default-features = false }
+tikv_kv = { path = "../tikv_kv", default-features = false }
 
 [dev-dependencies]
 engine_test = { path = "../engine_test", default-features = false }
