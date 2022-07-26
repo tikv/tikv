@@ -11,6 +11,7 @@ use super::*;
 
 #[derive(Default, Clone)]
 pub struct ShardMeta {
+    pub engine_id: u64,
     pub id: u64,
     pub ver: u64,
     pub start: Vec<u8>,
@@ -27,7 +28,7 @@ pub struct ShardMeta {
 }
 
 impl ShardMeta {
-    pub fn new(cs: &pb::ChangeSet) -> Self {
+    pub fn new(engine_id: u64, cs: &pb::ChangeSet) -> Self {
         assert!(cs.has_snapshot() || cs.has_initial_flush());
         let snap = if cs.has_snapshot() {
             cs.get_snapshot()
@@ -35,6 +36,7 @@ impl ShardMeta {
             cs.get_initial_flush()
         };
         let mut meta = Self {
+            engine_id,
             id: cs.shard_id,
             ver: cs.shard_ver,
             start: snap.get_start().to_vec(),
@@ -58,10 +60,14 @@ impl ShardMeta {
             );
         }
         if cs.has_parent() {
-            let parent_meta = Box::new(Self::new(cs.get_parent()));
+            let parent_meta = Box::new(Self::new(engine_id, cs.get_parent()));
             meta.parent = Some(parent_meta);
         }
         meta
+    }
+
+    pub fn tag(&self) -> ShardTag {
+        ShardTag::new(self.engine_id, IDVer::new(self.id, self.ver))
     }
 
     pub fn new_split(
@@ -172,8 +178,8 @@ impl ShardMeta {
                 }
             }
             info!(
-                "{}:{} skip duplicated move_down compaction level:{}",
-                self.id, self.ver, comp.level
+                "{} skip duplicated move_down compaction level:{}",
+                self.tag(), comp.level
             );
             return true;
         }
@@ -194,15 +200,16 @@ impl ShardMeta {
 
     pub fn is_duplicated_change_set(&self, cs: &mut pb::ChangeSet) -> bool {
         if cs.sequence > 0 && self.seq >= cs.sequence {
-            info!("{}:{} skip duplicated change {:?}", self.id, self.ver, cs);
+            info!("{} skip duplicated change {:?}", self.tag(), cs);
             return true;
         }
         if cs.has_flush() {
             let flush = cs.get_flush();
             if flush.get_version() <= self.data_version() {
                 info!(
-                    "{}:{} skip duplicated flush {:?} for old version",
-                    self.id, self.ver, cs
+                    "{} skip duplicated flush {:?} for old version",
+                    self.tag(),
+                    cs
                 );
                 return true;
             }
@@ -220,10 +227,7 @@ impl ShardMeta {
                 .iter()
                 .any(|deleted| !self.files.contains_key(&deleted.get_id()))
             {
-                info!(
-                    "{}:{} skip duplicated destroy range {:?}",
-                    self.id, self.ver, cs
-                );
+                info!("{} skip duplicated destroy range {:?}", self.tag(), cs);
                 return true;
             }
         }
@@ -234,8 +238,9 @@ impl ShardMeta {
             if let Some(old_ingest_id) = self.get_property(INGEST_ID_KEY) {
                 if ingest_id.eq(&old_ingest_id) {
                     info!(
-                        "{}:{} skip duplicated ingest files, ingest_id:{:?}",
-                        self.id, self.ver, ingest_id,
+                        "{} skip duplicated ingest files, ingest_id:{:?}",
+                        self.tag(),
+                        ingest_id,
                     );
                     return true;
                 }
@@ -247,8 +252,9 @@ impl ShardMeta {
     fn is_compaction_file_deleted(&self, id: u64, comp: &mut pb::Compaction) -> bool {
         if !self.files.contains_key(&id) {
             info!(
-                "{}:{} skip duplicated compaction file {} already deleted.",
-                self.id, self.ver, id
+                "{} skip duplicated compaction file {} already deleted.",
+                self.tag(),
+                id
             );
             comp.conflicted = true;
             return true;
@@ -266,9 +272,8 @@ impl ShardMeta {
         let new_data_seq = flush.get_version() - self.base_version;
         if self.data_sequence < new_data_seq {
             debug!(
-                "{}:{} apply flush update data sequence from {} to {}, flush ver {} base {}",
-                self.id,
-                self.ver,
+                "{} apply flush update data sequence from {} to {}, flush ver {} base {}",
+                self.tag(),
                 self.data_sequence,
                 new_data_seq,
                 flush.get_version(),
@@ -280,7 +285,7 @@ impl ShardMeta {
 
     pub fn apply_initial_flush(&mut self, cs: &pb::ChangeSet) {
         let props = self.properties.clone();
-        let mut new_meta = Self::new(cs);
+        let mut new_meta = Self::new(self.engine_id, cs);
         new_meta.properties = props;
         *self = new_meta;
     }
@@ -388,8 +393,10 @@ impl ShardMeta {
                 meta.seq = old.seq;
             } else {
                 debug!(
-                    "new base for {}:{}, {} {}",
-                    meta.id, meta.ver, old.base_version, sequence
+                    "new base for {}, {} {}",
+                    meta.tag(),
+                    old.base_version,
+                    sequence
                 );
                 meta.base_version = old.base_version + sequence;
                 meta.data_sequence = initial_seq;
@@ -543,7 +550,7 @@ fn test_ingest_level() {
     tbl4.biggest = "4000".as_bytes().to_vec();
     snap.mut_l0_creates().push(tbl4);
 
-    let meta = ShardMeta::new(&cs);
+    let meta = ShardMeta::new(1, &cs);
     let assert_get_ingest_level = |smallest: &str, biggest: &str, level| {
         assert_eq!(
             meta.get_ingest_level(smallest.as_bytes(), biggest.as_bytes()),

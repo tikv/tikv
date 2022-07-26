@@ -248,11 +248,9 @@ impl Applier {
         }
     }
 
-    fn tag(&self) -> RegionIDVer {
-        RegionIDVer::new(
-            self.region.get_id(),
-            self.region.get_region_epoch().get_version(),
-        )
+    fn tag(&self) -> PeerTag {
+        let id_ver = RegionIDVer::new(self.region.id, self.region.get_region_epoch().version);
+        PeerTag::new(self.peer.store_id, id_ver)
     }
 
     pub(crate) fn new_for_recover(
@@ -358,11 +356,9 @@ impl Applier {
         let item = snap.get(mvcc::WRITE_CF, key, u64::MAX);
         if item.user_meta_len() == 0 {
             panic!(
-                "failed to get lock for key {:?}, {}:{} snap_ver:{}, snap_write_sequence: {}, snap_files: {:?}, log_index:{}",
+                "failed to get lock for key {:?}, {}, snap_write_sequence: {}, snap_files: {:?}, log_index:{}",
                 key,
-                region_id,
-                self.region.get_region_epoch().version,
-                snap.get_version(),
+                snap.get_tag(),
                 snap.get_write_sequence(),
                 snap.get_all_files(),
                 log_index,
@@ -370,13 +366,7 @@ impl Applier {
         }
         let user_meta = mvcc::UserMeta::from_slice(item.user_meta());
         assert_eq!(user_meta.commit_ts, commit_ts);
-        warn!(
-            "duplicated commit for key {:?}, {}:{} snap_ver:{}",
-            key,
-            region_id,
-            self.region.get_region_epoch().version,
-            snap.get_version()
-        );
+        warn!("duplicated commit for key {:?}, {}", key, snap.get_tag(),);
         vec![]
     }
 
@@ -413,7 +403,7 @@ impl Applier {
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
             info!(
                 "execute admin command";
-                "region_id" => self.region_id(),
+                "tag" => self.tag(),
                 "peer_id" => self.id(),
                 "term" => ctx.exec_log_term,
                 "index" => ctx.exec_log_index,
@@ -695,7 +685,7 @@ impl Applier {
         );
         info!(
             "exec ConfChange";
-            "region_id" => self.region_id(),
+            "tag" => self.tag(),
             "peer_id" => self.id(),
             "type" => util::conf_change_type_str(change_type),
             "epoch" => ?region.get_region_epoch(),
@@ -726,7 +716,7 @@ impl Applier {
                     if !util::is_learner(p) || p.get_id() != peer.get_id() {
                         error!(
                             "can't add duplicated peer";
-                            "region_id" => self.region_id(),
+                            "tag" => self.tag(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
                             "region" => ?&self.region
@@ -750,7 +740,7 @@ impl Applier {
                     .inc();
                 info!(
                     "add peer successfully";
-                    "region_id" => self.region_id(),
+                    "tag" => self.tag(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
                     "region" => ?&self.region
@@ -766,7 +756,7 @@ impl Applier {
                     if &p != peer {
                         error!(
                             "ignore remove unmatched peer";
-                            "region_id" => self.region_id(),
+                            "tag" => self.tag(),
                             "peer_id" => self.id(),
                             "expect_peer" => ?peer,
                             "get_peeer" => ?p
@@ -786,7 +776,7 @@ impl Applier {
                 } else {
                     error!(
                         "remove missing peer";
-                        "region_id" => self.region_id(),
+                        "tag" => self.tag(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
                         "region" => ?&self.region
@@ -803,7 +793,7 @@ impl Applier {
                     .inc();
                 info!(
                     "remove peer successfully";
-                    "region_id" => self.region_id(),
+                    "tag" => self.tag(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
                     "region" => ?&self.region
@@ -817,7 +807,7 @@ impl Applier {
                 if util::find_peer(&region, store_id).is_some() {
                     error!(
                         "can't add duplicated learner";
-                        "region_id" => self.region_id(),
+                        "tag" => self.tag(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
                         "region" => ?&self.region
@@ -835,7 +825,7 @@ impl Applier {
                     .inc();
                 info!(
                     "add learner successfully";
-                    "region_id" => self.region_id(),
+                    "tag" => self.tag(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
                     "region" => ?&self.region
@@ -867,7 +857,7 @@ impl Applier {
 
         info!(
             "exec ConfChangeV2";
-            "region_id" => self.region_id(),
+            "tag" => self.tag(),
             "peer_id" => self.id(),
             "kind" => ?ConfChangeKind::confchange_kind(changes.len()),
             "epoch" => ?self.region.get_region_epoch(),
@@ -932,7 +922,7 @@ impl Applier {
                 (None, ConfChangeType::RemoveNode) => {
                     error!(
                         "remove missing peer";
-                        "region_id" => self.region_id(),
+                        "tag" => self.region_id(),
                         "peer_id" => self.id(),
                         "peer" => ?peer,
                         "region" => ?&self.region,
@@ -956,7 +946,7 @@ impl Applier {
                     {
                         error!(
                             "can't add duplicated peer";
-                            "region_id" => self.region_id(),
+                            "tag" => self.tag(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
                             "exist peer" => ?exist_peer,
@@ -995,7 +985,7 @@ impl Applier {
                     {
                         error!(
                             "can't remove voter directly";
-                            "region_id" => self.region_id(),
+                            "tag" => self.tag(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
                             "region" => ?&self.region
@@ -1011,7 +1001,7 @@ impl Applier {
                             if &p != peer {
                                 error!(
                                     "ignore remove unmatched peer";
-                                    "region_id" => self.region_id(),
+                                    "tag" => self.tag(),
                                     "peer_id" => self.id(),
                                     "expect_peer" => ?peer,
                                     "get_peeer" => ?p
@@ -1039,7 +1029,7 @@ impl Applier {
         region.mut_region_epoch().set_conf_ver(conf_ver);
         info!(
             "conf change successfully";
-            "region_id" => self.region_id(),
+            "tag" => self.tag(),
             "peer_id" => self.id(),
             "changes" => ?changes,
             "original region" => ?&self.region,
@@ -1115,7 +1105,7 @@ impl Applier {
         region.mut_region_epoch().set_conf_ver(conf_ver);
         info!(
             "leave joint state successfully";
-            "region_id" => self.region_id(),
+            "tag" => self.tag(),
             "peer_id" => self.id(),
             "region" => ?&region,
         );
@@ -1146,7 +1136,9 @@ impl Applier {
         // clear the cache here or the locks doesn't belong to the new range would never have chance to delete.
         self.lock_cache.clear();
         let mut splits = BatchSplitResponse::default();
-        let regions = split_gen_new_region_metas(&self.region, request.get_splits()).unwrap();
+        let regions =
+            split_gen_new_region_metas(self.peer.store_id, &self.region, request.get_splits())
+                .unwrap();
         splits.set_regions(RepeatedField::from(regions.clone()));
         resp.set_splits(splits);
         let result = ApplyResult::Res(ExecResult::SplitRegion { regions });
@@ -1327,7 +1319,7 @@ impl Applier {
     fn handle_registration(&mut self, reg: MsgRegistration) {
         info!(
             "re-register to applier";
-            "region_id" => self.region.get_id(),
+            "tag" => self.tag(),
             "peer_id" => self.get_peer().get_id(),
             "term" => reg.term,
             "reg_region_id" => reg.region.get_id(),
@@ -1339,12 +1331,11 @@ impl Applier {
     }
 
     fn destroy(&mut self, _: &mut ApplyContext) {
-        let region_id = self.region.get_id();
         let peer_id = self.get_peer().get_id();
         fail_point!("before_peer_destroy_1003", peer_id == 1003, |_| {});
         info!(
             "remove applier";
-            "region_id" => region_id,
+            "tag" => self.tag(),
             "peer_id" => peer_id,
         );
         self.stopped = true;
@@ -1554,6 +1545,7 @@ pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
 }
 
 pub(crate) fn split_gen_new_region_metas(
+    store_id: u64,
     old_region: &metapb::Region,
     splits: &BatchSplitRequest,
 ) -> Result<Vec<metapb::Region>> {
@@ -1562,6 +1554,7 @@ pub(crate) fn split_gen_new_region_metas(
         return Err(box_err!("missing split key"));
     }
     let new_region_cnt = requests.len();
+    let tag = PeerTag::new(store_id, RegionIDVer::from_region(old_region));
 
     let mut keys = Vec::with_capacity(new_region_cnt + 1);
     keys.push(old_region.start_key.clone());
@@ -1571,12 +1564,10 @@ pub(crate) fn split_gen_new_region_metas(
             return Err(box_err!("missing split key"));
         }
         if split_key <= keys.last().unwrap() {
-            let ver = old_region.get_region_epoch().get_version();
             return Err(box_err!(
-                "invalid split requests {:?}, old region {}:{} start_key {:?}, end_key {:?}",
+                "invalid split requests {:?}, old region {} start_key {:?}, end_key {:?}",
                 splits,
-                old_region.id,
-                ver,
+                tag,
                 old_region.start_key.clone(),
                 old_region.end_key.clone()
             ));
@@ -1599,7 +1590,6 @@ pub(crate) fn split_gen_new_region_metas(
     let mut derived = old_region.clone();
     let mut new_regions = Vec::with_capacity(new_region_cnt + 1);
     let old_version = old_region.get_region_epoch().get_version();
-    let tag = RegionIDVer::from_region(old_region);
     info!("split region"; "region" => tag);
     derived
         .mut_region_epoch()

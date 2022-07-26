@@ -80,6 +80,8 @@ pub trait MetaIterator {
     fn iterate<F>(&self, f: F) -> Result<()>
     where
         F: FnMut(kvenginepb::ChangeSet);
+
+    fn engine_id(&self) -> u64;
 }
 
 pub trait MetaChangeListener: DynClone + Sync + Send {

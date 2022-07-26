@@ -25,6 +25,7 @@ use crate::{
 };
 
 pub struct Shard {
+    pub engine_id: u64,
     pub id: u64,
     pub ver: u64,
     pub start: Bytes,
@@ -63,6 +64,7 @@ pub const DEL_PREFIXES_KEY: &str = "_del_prefixes";
 
 impl Shard {
     pub fn new(
+        engine_id: u64,
         props: &pb::Properties,
         ver: u64,
         start: &[u8],
@@ -72,6 +74,7 @@ impl Shard {
         let start = Bytes::copy_from_slice(start);
         let end = Bytes::copy_from_slice(end);
         let shard = Self {
+            engine_id,
             id: props.shard_id,
             ver,
             start: start.clone(),
@@ -97,9 +100,10 @@ impl Shard {
         shard
     }
 
-    pub fn new_for_ingest(cs: &pb::ChangeSet, opt: Arc<Options>) -> Self {
+    pub fn new_for_ingest(engine_id: u64, cs: &pb::ChangeSet, opt: Arc<Options>) -> Self {
         let snap = cs.get_snapshot();
         let mut shard = Self::new(
+            engine_id,
             snap.get_properties(),
             cs.shard_ver,
             snap.start.as_slice(),
@@ -111,9 +115,8 @@ impl Shard {
         shard.meta_seq.store(cs.sequence, Release);
         shard.write_sequence.store(snap.data_sequence, Release);
         info!(
-            "ingest shard {}:{} mem_table_version {}, change {:?}",
-            cs.shard_id,
-            cs.shard_ver,
+            "ingest shard {} mem_table_version {}, change {:?}",
+            shard.tag(),
             shard.load_mem_table_version(),
             &cs,
         );
@@ -327,6 +330,10 @@ impl Shard {
 
     pub fn data_all_persisted(&self) -> bool {
         self.data.read().unwrap().all_presisted()
+    }
+
+    pub fn tag(&self) -> ShardTag {
+        ShardTag::new(self.engine_id, IDVer::new(self.id, self.ver))
     }
 
     pub(crate) fn ready_to_compact(&self) -> bool {
@@ -687,7 +694,7 @@ impl LevelHandler {
         None
     }
 
-    pub(crate) fn check_order(&self, cf: usize, shard_id: u64, shard_ver: u64) {
+    pub(crate) fn check_order(&self, cf: usize, tag: ShardTag) {
         let tables = &self.tables;
         if tables.len() <= 1 {
             return;
@@ -700,9 +707,8 @@ impl LevelHandler {
                 || ti.biggest() >= tj.biggest()
             {
                 panic!(
-                    "[{}:{}] check table fail table ti {} smallest {:?}, biggest {:?}, tj {} smallest {:?}, biggest {:?}, cf: {}, level: {}",
-                    shard_id,
-                    shard_ver,
+                    "[{}] check table fail table ti {} smallest {:?}, biggest {:?}, tj {} smallest {:?}, biggest {:?}, cf: {}, level: {}",
+                    tag,
                     ti.id(),
                     ti.smallest(),
                     ti.biggest(),

@@ -65,23 +65,22 @@ impl ChangeSet {
 
 impl EngineCore {
     pub fn apply_change_set(&self, cs: ChangeSet) -> Result<()> {
-        info!(
-            "{}:{} apply change set {:?}",
-            cs.shard_id, cs.shard_ver, &cs
-        );
         let shard = self.get_shard(cs.shard_id);
         if shard.is_none() {
             return Err(Error::ShardNotFound);
         }
         let shard = shard.unwrap();
+        info!("{} apply change set {:?}", shard.tag(), &cs);
         if shard.ver != cs.shard_ver {
             return Err(Error::ShardNotMatch);
         }
         let seq = load_u64(&shard.meta_seq);
         if seq >= cs.sequence {
             warn!(
-                "{}:{} skip duplicated shard seq:{}, change seq:{}",
-                shard.id, shard.ver, seq, cs.sequence
+                "{} skip duplicated shard seq:{}, change seq:{}",
+                shard.tag(),
+                seq,
+                cs.sequence
             );
             return Ok(());
         } else {
@@ -320,7 +319,7 @@ impl EngineCore {
             new_level_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
         }
         let new_level = LevelHandler::new(level, new_level_tables);
-        new_level.check_order(cf, shard.id, shard.ver);
+        new_level.check_order(cf, shard.tag());
         new_level
     }
 

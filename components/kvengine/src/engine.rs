@@ -86,6 +86,7 @@ impl Engine {
         let (compact_tx, compact_rx) = mpsc::unbounded();
         let (free_tx, free_rx) = mpsc::unbounded();
         let core = EngineCore {
+            engine_id: AtomicU64::new(meta_iter.engine_id()),
             shards: DashMap::new(),
             opts: opts.clone(),
             flush_tx,
@@ -166,9 +167,18 @@ impl Engine {
         }
         Ok(())
     }
+
+    pub fn set_engine_id(&self, engine_id: u64) {
+        self.engine_id.store(engine_id, Ordering::Release);
+    }
+
+    pub fn get_engine_id(&self) -> u64 {
+        self.engine_id.load(Ordering::Acquire)
+    }
 }
 
 pub struct EngineCore {
+    pub(crate) engine_id: AtomicU64,
     pub(crate) shards: DashMap<u64, Arc<Shard>>,
     pub opts: Arc<Options>,
     pub(crate) flush_tx: mpsc::Sender<FlushMsg>,
@@ -186,8 +196,9 @@ pub struct EngineCore {
 impl EngineCore {
     fn read_meta(&self, meta_iter: impl MetaIterator) -> Result<HashMap<u64, ShardMeta>> {
         let mut metas = HashMap::new();
+        let engine_id = meta_iter.engine_id();
         meta_iter.iterate(|cs| {
-            let meta = ShardMeta::new(&cs);
+            let meta = ShardMeta::new(engine_id, &cs);
             metas.insert(meta.id, meta);
         })?;
         Ok(metas)
@@ -199,7 +210,7 @@ impl EngineCore {
                 return Ok(shard);
             }
         }
-        info!("load shard {}:{}", meta.id, meta.ver);
+        info!("load shard {}", meta.tag());
         let change_set = self.prepare_change_set(meta.to_change_set(), false)?;
         self.ingest(change_set, false)?;
         let shard = self.get_shard(meta.id);
@@ -207,7 +218,8 @@ impl EngineCore {
     }
 
     pub fn ingest(&self, cs: ChangeSet, active: bool) -> Result<()> {
-        let shard = Shard::new_for_ingest(&cs, self.opts.clone());
+        let engine_id = self.engine_id.load(Ordering::Acquire);
+        let shard = Shard::new_for_ingest(engine_id, &cs, self.opts.clone());
         shard.set_active(active);
         let (l0s, scfs) = self.create_snapshot_tables(cs.get_snapshot(), &cs);
         let data = ShardData::new(
@@ -460,7 +472,7 @@ impl EngineCore {
 
     pub fn set_shard_active(&self, shard_id: u64, active: bool) {
         if let Some(shard) = self.get_shard(shard_id) {
-            info!("shard {}:{} set active {}", shard_id, shard.ver, active);
+            info!("shard {} set active {}", shard.tag(), active);
             shard.set_active(active);
             if active {
                 self.refresh_shard_states(&shard);
@@ -485,6 +497,35 @@ impl EngineCore {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+pub struct ShardTag {
+    pub engine_id: u64,
+    pub id_ver: IDVer,
+}
+
+impl ShardTag {
+    pub fn new(engine_id: u64, id_ver: IDVer) -> Self {
+        Self { engine_id, id_ver }
+    }
+
+    pub fn from_comp_req(req: &CompactionRequest) -> Self {
+        Self {
+            engine_id: req.engine_id,
+            id_ver: IDVer::new(req.shard_id, req.shard_ver),
+        }
+    }
+}
+
+impl Display for ShardTag {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}",
+            self.engine_id, self.id_ver.id, self.id_ver.ver
+        )
+    }
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct IDVer {
     pub id: u64,
@@ -495,11 +536,9 @@ impl IDVer {
     pub fn new(id: u64, ver: u64) -> Self {
         Self { id, ver }
     }
-}
 
-impl Display for IDVer {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.id, self.ver)
+    pub fn from_change_set(cs: &kvenginepb::ChangeSet) -> Self {
+        Self::new(cs.shard_id, cs.shard_ver)
     }
 }
 

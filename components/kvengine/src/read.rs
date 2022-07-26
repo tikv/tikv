@@ -67,17 +67,12 @@ impl Deref for SnapAccess {
 
 impl Debug for SnapAccess {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "snap access {}:{}, seq: {}",
-            self.id, self.ver, self.write_sequence,
-        )
+        write!(f, "snap access {}, seq: {}", self.tag, self.write_sequence,)
     }
 }
 
 pub struct SnapAccessCore {
-    id: u64,
-    ver: u64,
+    tag: ShardTag,
     managed_ts: u64,
     write_sequence: u64,
     data: ShardData,
@@ -89,8 +84,7 @@ impl SnapAccessCore {
         let write_sequence = shard.get_write_sequence();
         let data = shard.get_data();
         Self {
-            id: shard.id,
-            ver: shard.ver,
+            tag: shard.tag(),
             write_sequence,
             managed_ts: 0,
             data,
@@ -247,12 +241,16 @@ impl SnapAccessCore {
         self.data.end.clone()
     }
 
+    pub fn get_tag(&self) -> ShardTag {
+        self.tag
+    }
+
     pub fn get_id(&self) -> u64 {
-        self.id
+        self.tag.id_ver.id
     }
 
     pub fn get_version(&self) -> u64 {
-        self.ver
+        self.tag.id_ver.ver
     }
 
     pub(crate) fn contains_in_older_table(&self, key: &[u8], cf: usize) -> bool {

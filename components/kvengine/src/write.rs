@@ -123,9 +123,8 @@ impl Engine {
         );
         shard.set_data(new_data);
         info!(
-            "shard {}:{} switch mem-table version {}, size {}",
-            shard.id,
-            shard.ver,
+            "shard {} switch mem-table version {}, size {}",
+            shard.tag(),
             version,
             mem_table.size()
         );

@@ -10,11 +10,11 @@ use kvproto::{metapb, raft_cmdpb::RaftCmdRequest, raft_serverpb};
 use protobuf::Message;
 use raft_proto::eraftpb;
 use slog_global::info;
-use tikv_util::{debug, warn};
+use tikv_util::warn;
 
 use crate::store::{
     parse_region_state_key, raft_state_key, rlog, Applier, ApplyContext, RaftApplyState, RaftState,
-    RegionIDVer, KV_ENGINE_META_KEY, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
+    KV_ENGINE_META_KEY, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
 };
 
 #[derive(Clone)]
@@ -66,8 +66,6 @@ impl RecoverHandler {
                 .unwrap();
             let mut raft_state = RaftState::default();
             raft_state.unmarshal(val.as_ref());
-            let id_ver = RegionIDVer::from_region(&region);
-            debug!("load raft state {:?} for region {}", raft_state, id_ver);
             return Ok((region, raft_state.commit));
         }
         Err(kvengine::Error::ErrOpen(
@@ -184,5 +182,9 @@ impl kvengine::MetaIterator for RecoverHandler {
             return Err(kvengine::Error::ErrOpen(err));
         }
         Ok(())
+    }
+
+    fn engine_id(&self) -> u64 {
+        self.store_id
     }
 }

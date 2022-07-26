@@ -36,6 +36,7 @@ impl Engine {
                 i,
             );
             let mut new_shard = Shard::new(
+                self.get_engine_id(),
                 &new_shard_props[i],
                 new_ver,
                 start_key,
@@ -119,8 +120,12 @@ impl Engine {
             }
             let all_files = shard.get_all_files();
             info!(
-                "new shard {}:{}, start {:x}, end {:x} mem-version {}， all files {:?}",
-                shard.id, shard.ver, shard.start, shard.end, version, all_files
+                "new shard {}, start {:x}, end {:x} mem-version {}， all files {:?}",
+                shard.tag(),
+                shard.start,
+                shard.end,
+                version,
+                all_files
             );
         }
         Ok(())

@@ -118,7 +118,7 @@ impl ProposalQueue {
     /// in front that term and index
     fn find_proposal(
         &mut self,
-        tag: RegionIDVer,
+        tag: PeerTag,
         term: u64,
         index: u64,
         current_term: u64,
@@ -467,7 +467,7 @@ impl Peer {
             return Err(box_err!("invalid peer id"));
         }
 
-        let ps = PeerStorage::new(engines, region.clone(), peer.get_id())?;
+        let ps = PeerStorage::new(engines, region.clone(), peer.get_id(), store_id)?;
         let first = ps.first_index();
         let truncated = ps.truncated_index();
         let truncated_term = ps.truncated_term();
@@ -535,7 +535,7 @@ impl Peer {
         Ok(peer)
     }
 
-    pub(crate) fn tag(&self) -> RegionIDVer {
+    pub(crate) fn tag(&self) -> PeerTag {
         self.get_store().tag()
     }
 
@@ -551,7 +551,7 @@ impl Peer {
         if self.pending_remove {
             info!(
                 "is being destroyed, skip";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
             );
             return false;
@@ -559,7 +559,7 @@ impl Peer {
         if self.is_applying_snapshot() {
             info!(
                 "stale peer is applying snapshot, will destroy next time";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
             );
             return false;
@@ -574,7 +574,7 @@ impl Peer {
         let region = self.region().clone();
         info!(
             "begin to destroy";
-            "region_id" => self.region_id,
+            "tag" => self.tag(),
             "peer_id" => self.peer.get_id(),
         );
         raft_wb.clear_region(self.region_id);
@@ -596,7 +596,7 @@ impl Peer {
         }
         info!(
             "peer destroy itself";
-            "region_id" => self.region_id,
+            "tag" => self.tag(),
             "peer_id" => self.peer.get_id(),
             "takes" => ?t.saturating_elapsed(),
         );
@@ -730,7 +730,7 @@ impl Peer {
 
             debug!(
                 "send raft msg";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
                 "msg_type" => ?msg_type,
                 "msg_size" => msg.get_message().compute_size(),
@@ -742,7 +742,7 @@ impl Peer {
                 // We use metrics to observe failure on production.
                 debug!(
                     "failed to send msg to other peer";
-                    "region_id" => self.region_id,
+                    "tag" => self.tag(),
                     "peer_id" => self.peer.get_id(),
                     "target_peer_id" => to_peer_id,
                     "target_store_id" => to_store_id,
@@ -770,7 +770,7 @@ impl Peer {
             None => {
                 warn!(
                     "failed to look up recipient peer";
-                    "region_id" => self.region_id,
+                    "tag" => self.tag(),
                     "peer_id" => self.peer.get_id(),
                     "to_peer" => msg.get_to(),
                 );
@@ -942,7 +942,7 @@ impl Peer {
                         self.peers_start_pending_time.push((id, now));
                         debug!(
                             "peer start pending";
-                            "region_id" => self.region_id,
+                            "tag" => self.tag(),
                             "peer_id" => self.peer.get_id(),
                             "time" => ?now,
                         );
@@ -950,7 +950,7 @@ impl Peer {
                 } else {
                     error!(
                         "failed to get peer from cache";
-                        "region_id" => self.region_id,
+                        "tag" => self.tag(),
                         "peer_id" => self.peer.get_id(),
                         "get_peer_id" => id,
                     );
@@ -1011,7 +1011,7 @@ impl Peer {
             .store(initial_status, Ordering::SeqCst);
         info!(
             "require updating max ts";
-            "region_id" => self.region_id,
+            "tag" => self.tag(),
             "initial_status" => initial_status,
         );
         if let Err(e) = pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
@@ -1043,7 +1043,7 @@ impl Peer {
                     self.maybe_renew_leader_lease(monotonic_raw_now(), ctx, Some(progress_term));
                     debug!(
                         "becomes leader with lease";
-                        "region_id" => self.region_id,
+                        "tag" => self.tag(),
                         "peer_id" => self.peer.get_id(),
                         "lease" => ?self.leader_lease,
                     );
@@ -1129,7 +1129,7 @@ impl Peer {
         if let Err(e) = ctx.global.pd_scheduler.schedule(task) {
             error!(
                 "failed to notify pd";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
                 "err" => ?e,
             );
@@ -1206,7 +1206,7 @@ impl Peer {
             if peer != self.peer {
                 info!(
                     "meta changed in applying snapshot";
-                    "region_id" => self.region_id,
+                    "tag" => self.tag(),
                     "peer_id" => self.peer.get_id(),
                     "before" => ?self.peer,
                     "after" => ?peer,
@@ -1394,7 +1394,7 @@ impl Peer {
             warn!("{} there is pending conf change skip split", self.tag());
             return;
         }
-        let result = split_gen_new_region_metas(self.region(), splits);
+        let result = split_gen_new_region_metas(self.get_store().store_id, self.region(), splits);
         if result.is_err() {
             warn!("preprocess pending split failed {:?}", result.unwrap_err());
             return;
@@ -1483,7 +1483,7 @@ impl Peer {
         debug!(
             "handle reads with a read index";
             "request_id" => ?read.id,
-            "region_id" => self.region_id,
+            "tag" => self.tag(),
             "peer_id" => self.peer.get_id(),
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds().len() as i64);
@@ -1545,7 +1545,7 @@ impl Peer {
                 let read_cmd = RaftCommand::new(req, cb);
                 info!(
                     "re-propose read index request because the response is lost";
-                    "region_id" => self.region_id,
+                    "tag" => self.tag(),
                     "peer_id" => self.peer.get_id(),
                 );
                 RAFT_READ_INDEX_PENDING_COUNT.sub(1);
@@ -1674,7 +1674,7 @@ impl Peer {
             // if splitting runs slow on the leader.
             debug!(
                 "prevents renew lease while splitting";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
             );
             None
@@ -1684,7 +1684,7 @@ impl Peer {
             // if commit merge runs slow on sibling peers.
             debug!(
                 "prevents renew lease while merging";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
             );
             None
@@ -1716,7 +1716,7 @@ impl Peer {
         let region = apply_result.region;
         info!(
             "snapshot is applied";
-            "region_id" => self.region_id,
+            "tag" => self.tag(),
             "peer_id" => self.peer_id(),
             "region" => ?region,
         );
@@ -1740,7 +1740,7 @@ impl Peer {
         if is_region_initialized(&prev_region) {
             info!(
                 "region changed after applying snapshot";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer_id(),
                 "prev_region" => ?prev_region,
                 "region" => ?region,
@@ -1779,7 +1779,7 @@ impl Peer {
         }
         debug!(
             "update read progress";
-            "region_id" => self.region_id,
+            "tag" => self.tag(),
             "peer_id" => self.peer.get_id(),
             "progress" => ?progress,
         );
@@ -2014,7 +2014,7 @@ impl Peer {
     pub(crate) fn transfer_leader(&mut self, peer: &metapb::Peer) {
         info!(
             "transfer leader";
-            "region_id" => self.region_id,
+            "tag" => self.tag(),
             "peer_id" => self.peer.get_id(),
             "peer" => ?peer,
         );
@@ -2027,7 +2027,7 @@ impl Peer {
         if self.raft_group.raft.has_pending_conf() {
             info!(
                 "reject transfer leader due to pending conf change";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
                 "peer" => ?peer,
             );
@@ -2137,12 +2137,6 @@ impl Peer {
                 read.addition_request.as_deref(),
                 None,
             ));
-        debug!(
-            "request to get a read index";
-            "request_id" => ?read.id,
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
     }
 
     // Returns a boolean to indicate whether the `read` is proposed or not.
@@ -2160,7 +2154,7 @@ impl Peer {
         if let Err(e) = self.pre_read_index() {
             debug!(
                 "prevents unsafe read index";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
                 "err" => ?e,
             );
@@ -2258,7 +2252,7 @@ impl Peer {
         debug!(
             "request to get a read index";
             "request_id" => ?id,
-            "region_id" => self.region_id,
+            "tag" => self.tag(),
             "peer_id" => self.peer.get_id(),
             "is_leader" => self.is_leader(),
         );
@@ -2348,7 +2342,7 @@ impl Peer {
             Err(e) => {
                 warn!(
                     "skip proposal";
-                    "region_id" => self.region_id,
+                    "tag" => self.tag(),
                     "peer_id" => self.peer.get_id(),
                     "err" => ?e,
                     "error_code" => %e.error_code(),
@@ -2362,7 +2356,7 @@ impl Peer {
         if data.len() as u64 > raft_ctx.cfg.raft_entry_max_size.0 {
             error!(
                 "entry is too large";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
                 "size" => data.len(),
             );
@@ -2391,7 +2385,7 @@ impl Peer {
         if pending_snapshot || msg.get_from() != self.leader_id() {
             info!(
                 "reject transferring leader";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
                 "pending_snapshot" => pending_snapshot,
@@ -2460,7 +2454,7 @@ impl Peer {
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!(
                 "there is a pending conf change, try later";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
             );
             return Err(box_err!(
@@ -2517,7 +2511,7 @@ impl Peer {
         ctx.raft_metrics.propose.conf_change += 1;
         info!(
             "propose conf change peer";
-            "region_id" => self.region_id,
+            "tag" => self.tag(),
             "peer_id" => self.peer.get_id(),
             "changes" => ?changes.as_ref(),
             "kind" => ?ConfChangeKind::confchange_kind(changes.as_ref().len()),
@@ -2641,7 +2635,7 @@ impl RequestInspector for Peer {
         if LeaseState::Expired == state {
             debug!(
                 "leader lease is expired";
-                "region_id" => self.region_id,
+                "tag" => self.tag(),
                 "peer_id" => self.peer.get_id(),
                 "lease" => ?self.leader_lease,
             );

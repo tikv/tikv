@@ -891,12 +891,13 @@ impl<'a> StoreMsgHandler<'a> {
         msg: &RaftMessage,
         is_local_first: bool,
     ) -> bool {
+        let tag = PeerTag::new(self.store.id, RegionIDVer::new(region_id, region_ver));
         if !is_initial_msg(msg.get_message()) {
             let msg_type = msg.get_message().get_msg_type();
             debug!(
                 "target peer doesn't exist, stale message";
                 "target_peer" => ?msg.get_to_peer(),
-                "region_id" => region_id,
+                "region" => tag,
                 "msg_type" => ?msg_type,
             );
             self.ctx.raft_metrics.message_dropped.stale_msg += 1;
@@ -905,10 +906,7 @@ impl<'a> StoreMsgHandler<'a> {
         match self.maybe_create_peer_internal(region_id, region_ver, msg, is_local_first) {
             Ok(created) => created,
             Err(err) => {
-                error!(
-                    "{}:{} failed to create peer {:?}",
-                    region_id, region_ver, err
-                );
+                error!("{} failed to create peer {:?}", tag, err);
                 false
             }
         }
@@ -961,13 +959,8 @@ impl<'a> StoreMsgHandler<'a> {
 
     pub(crate) fn register(&mut self, peer: PeerFsm) {
         let id = peer.peer.region().id;
-        let ver = peer.peer.region().get_region_epoch().get_version();
-        info!(
-            "register region {}:{}, peer {}",
-            id,
-            ver,
-            peer.peer.peer_id()
-        );
+        let tag = peer.peer.tag();
+        info!("register region {}, peer {}", tag, peer.peer.peer_id());
         let applier = Applier::new_from_peer(&peer);
         let new_peer = PeerStates::new(applier, peer);
         self.ctx.peers.insert(id, new_peer);
@@ -998,7 +991,7 @@ impl<'a> StoreMsgHandler<'a> {
             // Notify pd immediately to let it update the region meta.
             info!(
                 "notify pd with split";
-                "region_id" => peer_fsm.region_id(),
+                "tag" => peer_fsm.peer.tag(),
                 "peer_id" => peer_fsm.peer_id(),
                 "split_count" => regions.len(),
             );
@@ -1010,7 +1003,7 @@ impl<'a> StoreMsgHandler<'a> {
             if let Err(e) = self.ctx.global.pd_scheduler.schedule(task) {
                 error!(
                     "failed to notify pd";
-                    "region_id" => peer_fsm.region_id(),
+                    "tag" => peer_fsm.peer.tag(),
                     "peer_id" => peer_fsm.peer_id(),
                     "err" => %e,
                 );
@@ -1052,6 +1045,7 @@ impl<'a> StoreMsgHandler<'a> {
             // Insert new regions and validation
             info!(
                 "insert new region";
+                "tag" => peer_fsm.peer.tag(),
                 "region_id" => new_region_id,
                 "region" => ?new_region,
             );
@@ -1204,7 +1198,7 @@ impl<'a> StoreMsgHandler<'a> {
             // Notify pd immediately.
             info!(
                 "notify pd with change peer region";
-                "region_id" => peer_fsm.region_id(),
+                "tag" => peer_fsm.peer.tag(),
                 "peer_id" => peer_fsm.peer_id(),
                 "region" => ?peer_fsm.peer.region(),
             );
@@ -1218,7 +1212,7 @@ impl<'a> StoreMsgHandler<'a> {
             if remove_self || demote_self {
                 warn!(
                     "Removing or demoting leader";
-                    "region_id" => peer_fsm.region_id(),
+                    "tag" => peer_fsm.peer.tag(),
                     "peer_id" => peer_fsm.peer_id(),
                     "remove" => remove_self,
                     "demote" => demote_self,
@@ -1280,7 +1274,7 @@ impl<'a> StoreMsgHandler<'a> {
         fail_point!("destroy_peer");
         info!(
             "starts destroy";
-            "region_id" => peer_fsm.region_id(),
+            "tag" => peer_fsm.peer.tag(),
             "peer_id" => peer_fsm.peer_id(),
         );
         let region_id = peer_fsm.region_id();
@@ -1309,7 +1303,7 @@ impl<'a> StoreMsgHandler<'a> {
         if let Err(e) = self.ctx.global.pd_scheduler.schedule(task) {
             error!(
                 "failed to notify pd";
-                "region_id" => peer_fsm.region_id(),
+                "tag" => peer_fsm.peer.tag(),
                 "peer_id" => peer_fsm.peer_id(),
                 "err" => %e,
             );

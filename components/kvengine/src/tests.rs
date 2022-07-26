@@ -208,7 +208,7 @@ impl Deref for EngineTester {
 impl EngineTester {
     fn new() -> Self {
         let initial_cs = new_initial_cs();
-        let initial_meta = ShardMeta::new(&initial_cs);
+        let initial_meta = ShardMeta::new(1, &initial_cs);
         let metas = dashmap::DashMap::new();
         metas.insert(1, Arc::new(initial_meta));
         let tmp_dir = TempDir::new().unwrap();
@@ -242,6 +242,10 @@ impl MetaIterator for EngineTester {
             f(meta.value().to_change_set())
         }
         Ok(())
+    }
+
+    fn engine_id(&self) -> u64 {
+        1
     }
 }
 
@@ -531,8 +535,10 @@ fn check_get(begin: usize, end: usize, cfs: &[usize], en: &Engine, exsit: bool) 
             } else if exsit {
                 let shard_stats = shard.get_stats();
                 panic!(
-                    "failed to get key {}, shard {}:{}, stats {:?}",
-                    key, shard.id, shard.ver, shard_stats,
+                    "failed to get key {}, shard {}, stats {:?}",
+                    key,
+                    shard.tag(),
+                    shard_stats,
                 );
             }
         }

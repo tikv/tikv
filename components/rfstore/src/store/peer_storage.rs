@@ -19,8 +19,8 @@ use super::util::raft_state_key;
 use crate::{
     errors::*,
     store::{
-        get_preprocess_cmd, region_state_key, Engines, MsgApplyResult, RaftApplyState, RaftContext,
-        RaftState, RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY, TERM_KEY,
+        get_preprocess_cmd, region_state_key, Engines, MsgApplyResult, PeerTag, RaftApplyState,
+        RaftContext, RaftState, RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY, TERM_KEY,
     },
 };
 
@@ -71,6 +71,7 @@ pub(crate) struct PeerStorage {
     pub(crate) engines: Engines,
 
     pub(crate) peer_id: u64,
+    pub(crate) store_id: u64,
     region: metapb::Region,
     pub(crate) raft_state: RaftState,
     apply_state: RaftApplyState,
@@ -191,6 +192,7 @@ impl PeerStorage {
         engines: Engines,
         region: metapb::Region,
         peer_id: u64,
+        store_id: u64,
     ) -> Result<PeerStorage> {
         let raft_state = init_raft_state(&engines.raft, &region)?;
         let apply_state = init_apply_state(&engines.kv, &region);
@@ -200,7 +202,7 @@ impl PeerStorage {
             let shard_meta_bin = res.unwrap();
             let mut change_set = kvenginepb::ChangeSet::default();
             change_set.merge_from_bytes(&shard_meta_bin).unwrap();
-            let meta = kvengine::ShardMeta::new(&change_set);
+            let meta = kvengine::ShardMeta::new(store_id, &change_set);
             shard_meta = Some(meta);
         }
         let last_term = init_last_term(&engines, &region, raft_state)?;
@@ -214,6 +216,7 @@ impl PeerStorage {
         Ok(PeerStorage {
             engines,
             peer_id,
+            store_id,
             region,
             raft_state,
             apply_state,
@@ -225,8 +228,8 @@ impl PeerStorage {
         })
     }
 
-    pub(crate) fn tag(&self) -> RegionIDVer {
-        RegionIDVer::from_region(&self.region)
+    pub(crate) fn tag(&self) -> PeerTag {
+        PeerTag::new(self.store_id, RegionIDVer::from_region(&self.region))
     }
 
     pub(crate) fn clear_meta(&self, rwb: &mut rfengine::WriteBatch) {
@@ -470,7 +473,7 @@ impl PeerStorage {
         );
         ctx.raft_wb
             .truncate_raft_log(region.get_id(), last_index, last_term);
-        self.shard_meta = Some(kvengine::ShardMeta::new(&change_set));
+        self.shard_meta = Some(kvengine::ShardMeta::new(self.store_id, &change_set));
         self.region = region;
         self.snap_state = SnapState::Applying;
         Ok(change_set)

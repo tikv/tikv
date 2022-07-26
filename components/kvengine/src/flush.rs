@@ -86,9 +86,10 @@ impl Engine {
         let mut cs = new_change_set(task.id_ver.id, task.id_ver.ver);
         let m = task.normal.as_ref().unwrap();
         let flush_version = m.get_version();
+        let tag = ShardTag::new(self.get_engine_id(), task.id_ver);
         info!(
             "{} flush mem-table version {}, size {}",
-            task.id_ver,
+            tag,
             flush_version,
             m.size(),
         );
@@ -110,9 +111,10 @@ impl Engine {
 
     pub(crate) fn flush_initial(&self, task: FlushTask) -> Result<pb::ChangeSet> {
         let flush = task.initial.as_ref().unwrap();
+        let tag = ShardTag::new(self.get_engine_id(), task.id_ver);
         info!(
             "{} initial flush {} mem-tables, base_version {}, data_sequence {}",
-            task.id_ver,
+            tag,
             flush.mem_tbls.len(),
             flush.base_version,
             flush.data_sequence
@@ -262,8 +264,9 @@ impl FlushWorker {
                     }
                 }
                 FlushMsg::Result(res) => {
+                    let tag = ShardTag::new(self.engine.get_engine_id(), res.id_ver);
                     let task_manager = self.get_shard_task_manager(res.id_ver.id);
-                    if let Some(finished) = task_manager.handle_flush_result(res) {
+                    if let Some(finished) = task_manager.handle_flush_result(tag, res) {
                         self.engine.meta_change_listener.on_change_set(finished);
                     }
                 }
@@ -356,9 +359,13 @@ impl ShardTaskManager {
         }
     }
 
-    fn handle_flush_result(&mut self, res: FlushResult) -> Option<kvenginepb::ChangeSet> {
+    fn handle_flush_result(
+        &mut self,
+        tag: ShardTag,
+        res: FlushResult,
+    ) -> Option<kvenginepb::ChangeSet> {
         if self.term != res.term {
-            info!("{} discard old term flush result {:?}", res.id_ver, res.res);
+            info!("{} discard old term flush result {:?}", tag, res.res);
             return None;
         }
         match res.res {
@@ -370,7 +377,7 @@ impl ShardTaskManager {
             }
             Err(err) => {
                 // TODO(x): properly handle the error.
-                panic!("flush task failed {:?}", err);
+                panic!("{} flush task failed {:?}", tag, err);
             }
         }
         None

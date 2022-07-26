@@ -62,8 +62,9 @@ impl CompactionClient {
                             if retry_cnt >= 5 {
                                 break Err(e);
                             }
-                            error!("shard {}:{} cf: {} level: {} remote compaction failed {:?}, retrying {} ",
-                                   req.shard_id, req.shard_ver, req.cf, req.level, e, retry_cnt);
+                            let tag = ShardTag::from_comp_req(&req);
+                            error!("shard {} cf: {} level: {} remote compaction failed {:?}, retrying {} ",
+                                   tag, req.cf, req.level, e, retry_cnt);
                             tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }
@@ -81,15 +82,10 @@ impl CompactionClient {
             .uri(self.remote_url.clone())
             .header("content-type", "application/json")
             .body(hyper::Body::from(body_str))?;
-        info!(
-            "{}:{} send request to remote compactor",
-            comp_req.shard_id, comp_req.shard_ver
-        );
+        let tag = ShardTag::from_comp_req(comp_req);
+        info!("{} send request to remote compactor", tag);
         let response = self.client.as_ref().unwrap().request(req).await?;
-        info!(
-            "{}:{} got response from remote compactor",
-            comp_req.shard_id, comp_req.shard_ver
-        );
+        info!("{} got response from remote compactor", tag);
         let success = response.status().is_success();
         let body = hyper::body::to_bytes(response.into_body()).await?;
         if !success {
@@ -113,6 +109,7 @@ pub struct CompactionRequest {
     pub level: usize,
     pub tops: Vec<u64>,
 
+    pub engine_id: u64,
     pub shard_id: u64,
     pub shard_ver: u64,
     pub start: Vec<u8>,
@@ -343,24 +340,21 @@ impl Engine {
         let pri = shard.get_compaction_priority()?;
         let (req, cd) = self.build_compact_request(&shard, pri)?;
         store_bool(&shard.compacting, true);
+        let tag = ShardTag::new(self.get_engine_id(), id_ver);
         if req.level == 0 {
-            info!("start compact L0 for {}:{}", req.shard_id, req.shard_ver);
+            info!("start compact L0 for {}", tag);
         } else {
             let cd = cd.unwrap();
             info!(
-                "start compact L{} CF{} for {}:{}, num_ids: {}, input_size: {}",
+                "start compact L{} CF{} for {}, num_ids: {}, input_size: {}",
                 req.level,
                 req.cf,
-                req.shard_id,
-                req.shard_ver,
+                tag,
                 req.file_ids.len(),
                 cd.top_size + cd.bot_size,
             );
             if req.bottoms.is_empty() && req.cf as usize == WRITE_CF {
-                info!(
-                    "move down L{} CF{} for {}:{}",
-                    req.level, req.cf, id_ver.id, id_ver.ver,
-                );
+                info!("move down L{} CF{} for {}", req.level, req.cf, tag,);
                 // Move down. only write CF benefits from this optimization.
                 let mut comp = pb::Compaction::new();
                 comp.set_cf(req.cf as i32);
@@ -448,6 +442,7 @@ impl Engine {
         level: usize,
     ) -> CompactionRequest {
         CompactionRequest {
+            engine_id: shard.engine_id,
             shard_id: shard.id,
             shard_ver: shard.ver,
             start: shard.start.to_vec(),
@@ -1060,17 +1055,12 @@ fn local_compact(dfs: Arc<dyn dfs::DFS>, req: CompactionRequest) -> Result<pb::C
     let mut cs = pb::ChangeSet::new();
     cs.set_shard_id(req.shard_id);
     cs.set_shard_ver(req.shard_ver);
+    let tag = ShardTag::from_comp_req(&req);
     if req.destroy_range {
-        info!(
-            "start destroying range for {}:{}",
-            req.shard_id, req.shard_ver
-        );
+        info!("start destroying range for {}", tag);
         let dr = compact_destroy_range(&req, dfs)?;
         cs.set_destroy_range(dr);
-        info!(
-            "finish destroying range for {}:{}",
-            req.shard_id, req.shard_ver
-        );
+        info!("finish destroying range for {}", tag);
         return Ok(cs);
     }
 
@@ -1079,27 +1069,18 @@ fn local_compact(dfs: Arc<dyn dfs::DFS>, req: CompactionRequest) -> Result<pb::C
     comp.set_cf(req.cf as i32);
     comp.set_level(req.level as u32);
     if req.level == 0 {
-        info!("start compacting L0 for {}:{}", req.shard_id, req.shard_ver);
+        info!("start compact L0 for {}", tag);
         let tbls = compact_l0(&req, dfs.clone())?;
         comp.set_table_creates(tbls.into());
         let bot_dels = req.multi_cf_bottoms.into_iter().flatten().collect();
         comp.set_bottom_deletes(bot_dels);
-        info!(
-            "finish compacting L0 for {}:{}",
-            req.shard_id, req.shard_ver
-        );
+        info!("finish compacting L0 for {}", tag);
     } else {
-        info!(
-            "start compacting L{} CF{} for {}:{}",
-            req.level, req.cf, req.shard_id, req.shard_ver
-        );
+        info!("start compacting L{} CF{} for {}", req.level, req.cf, tag);
         let tbls = compact_tables(&req, dfs.clone())?;
         comp.set_table_creates(tbls.into());
         comp.set_bottom_deletes(req.bottoms);
-        info!(
-            "finish compacting L{} CF{} for {}:{}",
-            req.level, req.cf, req.shard_id, req.shard_ver
-        );
+        info!("finish compacting L{} CF{} for {}", req.level, req.cf, tag);
     }
     cs.set_compaction(comp);
     Ok(cs)
@@ -1309,6 +1290,7 @@ impl CompactRunner {
         task_id: u64,
         result: Option<Result<pb::ChangeSet>>,
     ) {
+        let tag = ShardTag::new(self.engine.get_engine_id(), id_ver);
         if self
             .running
             .get(&id_ver)
@@ -1316,8 +1298,8 @@ impl CompactRunner {
             .unwrap_or(true)
         {
             info!(
-                "shard {} discard old term compaction result {} {:?}",
-                id_ver.id, id_ver, result
+                "shard {} discard old term compaction result {:?}",
+                tag, result
             );
             return;
         }
@@ -1329,7 +1311,7 @@ impl CompactRunner {
                 self.schedule_pending_compaction();
             }
             Some(Err(e)) => {
-                error!("shard {} compaction failed {}, retrying", id_ver, e);
+                error!("shard {} compaction failed {}, retrying", tag, e);
                 self.compact(id_ver);
             }
             None => {

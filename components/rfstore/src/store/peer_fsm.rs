@@ -173,7 +173,7 @@ impl<'a> PeerMsgHandler<'a> {
                     if let Err(e) = self.on_raft_message(msg) {
                         error!(%e;
                             "handle raft message err";
-                            "region_id" => self.fsm.region_id(),
+                            "tag" => self.peer.tag(),
                             "peer_id" => self.fsm.peer_id(),
                         );
                     }
@@ -240,7 +240,7 @@ impl<'a> PeerMsgHandler<'a> {
         trace!(
             "tick";
             "peer_id" => self.fsm.peer_id(),
-            "region_id" => self.region_id(),
+            "tag" => self.peer.tag(),
         );
         self.ticker.tick_clock();
         if self.ticker.is_on_tick(PEER_TICK_RAFT) {
@@ -339,7 +339,7 @@ impl<'a> PeerMsgHandler<'a> {
         }
         debug!(
             "async apply finish";
-            "region_id" => self.region_id(),
+            "tag" => self.peer.tag(),
             "peer_id" => self.fsm.peer_id(),
             "res" => ?res,
         );
@@ -367,7 +367,7 @@ impl<'a> PeerMsgHandler<'a> {
                 Some(reason) => {
                     info!(
                         "reject to transfer leader";
-                        "region_id" => self.fsm.region_id(),
+                        "tag" => self.peer.tag(),
                         "peer_id" => self.fsm.peer_id(),
                         "to" => ?from,
                         "reason" => reason,
@@ -387,7 +387,7 @@ impl<'a> PeerMsgHandler<'a> {
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         debug!(
             "handle raft message";
-            "region_id" => self.region_id(),
+            "tag" => self.peer.tag(),
             "peer_id" => self.fsm.peer_id(),
             "message_type" => %util::MsgType(&msg),
             "from_peer_id" => msg.get_from_peer().get_id(),
@@ -446,6 +446,7 @@ impl<'a> PeerMsgHandler<'a> {
         if to.get_store_id() != self.store_id() {
             warn!(
                 "store not match, ignore it";
+                "tag" => self.peer.tag(),
                 "region_id" => region_id,
                 "to_store_id" => to.get_store_id(),
                 "my_store_id" => self.store_id(),
@@ -457,6 +458,7 @@ impl<'a> PeerMsgHandler<'a> {
         if !msg.has_region_epoch() {
             error!(
                 "missing epoch in raft message, ignore it";
+                "tag" => self.peer.tag(),
                 "region_id" => region_id,
             );
             self.ctx.raft_metrics.message_dropped.mismatch_region_epoch += 1;
@@ -504,7 +506,7 @@ impl<'a> PeerMsgHandler<'a> {
             cmp::Ordering::Less => {
                 info!(
                     "target peer id is smaller, msg maybe stale";
-                    "region_id" => self.fsm.region_id(),
+                    "tag" => self.peer.tag(),
                     "peer_id" => self.fsm.peer_id(),
                     "target_peer" => ?target,
                 );
@@ -534,7 +536,7 @@ impl<'a> PeerMsgHandler<'a> {
         if self.fsm.peer.peer != *msg.get_to_peer() {
             info!(
                 "receive stale gc message, ignore.";
-                "region_id" => self.fsm.region_id(),
+                "tag" => self.peer.tag(),
                 "peer_id" => self.fsm.peer_id(),
             );
             return;
@@ -542,7 +544,7 @@ impl<'a> PeerMsgHandler<'a> {
         // TODO: ask pd to guarantee we are stale now.
         info!(
             "receives gc message, trying to remove";
-            "region_id" => self.fsm.region_id(),
+            "tag" => self.peer.tag(),
             "peer_id" => self.fsm.peer_id(),
             "to_peer" => ?msg.get_to_peer(),
         );
@@ -667,7 +669,7 @@ impl<'a> PeerMsgHandler<'a> {
             Err(e) => {
                 debug!(
                     "failed to propose";
-                    "region_id" => self.region_id(),
+                    "tag" => self.peer.tag(),
                     "peer_id" => self.fsm.peer_id(),
                     "message" => ?msg,
                     "err" => %e,
@@ -798,7 +800,7 @@ impl<'a> PeerMsgHandler<'a> {
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             info!(
                 "prepare split error";
-                "region_id" => self.fsm.region_id(),
+                "tag" => self.peer.tag(),
                 "peer_id" => self.fsm.peer_id(),
                 "split_keys" => %util::KeysInfoFormatter(split_keys.iter()),
                 "source" => source,
@@ -809,7 +811,7 @@ impl<'a> PeerMsgHandler<'a> {
         }
         info!(
             "on split";
-            "region_id" => self.fsm.region_id(),
+            "tag" => self.peer.tag(),
             "peer_id" => self.fsm.peer_id(),
             "split_keys" => %util::KeysInfoFormatter(split_keys.iter()),
             "source" => source,
@@ -832,7 +834,7 @@ impl<'a> PeerMsgHandler<'a> {
         if split_keys.is_empty() {
             error!(
                 "no split key is specified.";
-                "region_id" => self.fsm.region_id(),
+                "tag" => self.peer.tag(),
                 "peer_id" => self.fsm.peer_id(),
             );
             return Err(box_err!(
@@ -844,7 +846,7 @@ impl<'a> PeerMsgHandler<'a> {
             if key.is_empty() {
                 error!(
                     "split key should not be empty!!!";
-                    "region_id" => self.fsm.region_id(),
+                    "tag" => self.peer.tag(),
                     "peer_id" => self.fsm.peer_id(),
                 );
                 return Err(box_err!(
@@ -857,7 +859,7 @@ impl<'a> PeerMsgHandler<'a> {
             // region on this store is no longer leader, skipped.
             info!(
                 "not leader, skip.";
-                "region_id" => self.fsm.region_id(),
+                "tag" => self.peer.tag(),
                 "peer_id" => self.fsm.peer_id(),
             );
             return Err(Error::NotLeader(
@@ -875,7 +877,7 @@ impl<'a> PeerMsgHandler<'a> {
         if latest_epoch.get_version() != epoch.get_version() {
             info!(
                 "epoch changed, retry later";
-                "region_id" => self.fsm.region_id(),
+                "tag" => self.peer.tag(),
                 "peer_id" => self.fsm.peer_id(),
                 "prev_epoch" => ?region.get_region_epoch(),
                 "epoch" => ?epoch,
@@ -901,9 +903,10 @@ impl<'a> PeerMsgHandler<'a> {
             callback.invoke_with_response(RaftCmdResponse::default());
             return;
         }
-        let id_ver = self.peer.tag();
+        let tag = self.peer.tag();
+        let id_ver = tag.id_ver;
         if region_version != id_ver.ver() {
-            warn!("{} delete prefix version not match", id_ver);
+            warn!("{} delete prefix version not match", tag);
             callback.invoke_with_response(RaftCmdResponse::default());
             return;
         }
@@ -1017,7 +1020,7 @@ impl<'a> PeerMsgHandler<'a> {
         if ready.peer_id != self.fsm.peer_id() {
             error!(
                 "peer id not match";
-                "region_id" => self.fsm.region_id(),
+                "tag" => self.peer.tag(),
                 "peer_id" => self.fsm.peer_id(),
                 "persisted_peer_id" => ready.peer_id,
                 "persisted_number" => ready.ready_number,
@@ -1147,7 +1150,7 @@ impl<'a> PeerMsgHandler<'a> {
             self.ctx
                 .raft_wb
                 .truncate_raft_log(region_id, to_truncate_idx, to_truncate_term);
-            debug!("truncate raft logs"; "region_id" => region_id, "truncate_idx" => to_truncate_idx, "truncated_term" => to_truncate_term);
+            debug!("truncate raft logs"; "tag" => self.peer.tag(), "truncate_idx" => to_truncate_idx, "truncated_term" => to_truncate_term);
         }
     }
 }

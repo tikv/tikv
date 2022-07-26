@@ -185,12 +185,45 @@ pub fn cf_name_to_num(cf_name: &str) -> usize {
 /// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
 #[inline]
-pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: RegionIDVer) -> T {
+pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: PeerTag) -> T {
     let mut result = T::default();
     result.merge_from_bytes(data).unwrap_or_else(|e| {
         panic!("{} data is corrupted at {}: {:?}", tag, index, e);
     });
     result
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PeerTag {
+    pub store_id: u64,
+    pub id_ver: RegionIDVer,
+}
+
+impl PeerTag {
+    pub fn new(store_id: u64, id_ver: RegionIDVer) -> Self {
+        Self { store_id, id_ver }
+    }
+}
+
+impl Display for PeerTag {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[{}:{}:{}]",
+            self.store_id, self.id_ver.id, self.id_ver.ver
+        )
+    }
+}
+
+impl slog::Value for PeerTag {
+    fn serialize(
+        &self,
+        _record: &Record<'_>,
+        key: Key,
+        serializer: &mut dyn Serializer,
+    ) -> slog::Result {
+        serializer.emit_str(key, &self.to_string())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
@@ -214,23 +247,6 @@ impl RegionIDVer {
 
     pub fn ver(&self) -> u64 {
         self.ver
-    }
-}
-
-impl slog::Value for RegionIDVer {
-    fn serialize(
-        &self,
-        _record: &Record<'_>,
-        key: Key,
-        serializer: &mut dyn Serializer,
-    ) -> slog::Result {
-        serializer.emit_str(key, &self.to_string())
-    }
-}
-
-impl Display for RegionIDVer {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}:{}]", self.id, self.ver)
     }
 }
 
