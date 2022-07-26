@@ -2,6 +2,7 @@
 
 use std::{
     ops::Deref,
+    path::Path,
     sync::{atomic::AtomicU64, Arc},
     thread,
     time::Duration,
@@ -11,6 +12,7 @@ use std::{
 use bytes::Buf;
 use file_system::IORateLimiter;
 use kvenginepb as pb;
+use tempfile::TempDir;
 use tikv_util::mpsc;
 
 use crate::{dfs::InMemFS, *};
@@ -27,11 +29,7 @@ macro_rules! unwrap_or_return {
     };
 }
 
-// FIXME(youjiali1995): it has data race and may not be suilable for the current kvengine.
-#[ignore]
-#[test]
-fn test_engine() {
-    init_logger();
+fn new_test_engine() -> (Engine, mpsc::Sender<ApplyTask>) {
     let (listener_tx, listener_rx) = mpsc::unbounded();
     let tester = EngineTester::new();
     let meta_change_listener = Box::new(TestMetaChangeListener {
@@ -66,19 +64,121 @@ fn test_engine() {
     thread::spawn(move || {
         meta_applier.run();
     });
-    let mut keys = vec![];
-    for i in &[1000, 3000, 6000, 9000] {
-        keys.push(i_to_key(*i));
-    }
-    let mut splitter = Splitter::new(keys.clone(), applier_tx.clone());
-    let handle = thread::spawn(move || {
-        splitter.run();
-    });
+    (engine, applier_tx)
+}
+
+#[test]
+fn test_engine() {
+    init_logger();
+    let (engine, applier_tx) = new_test_engine();
+    // FIXME(youjiali1995): split has bugs.
+    //
+    // let mut keys = vec![];
+    // for i in &[1000, 3000, 6000, 9000] {
+    // keys.push(i_to_key(*i));
+    // }
+    // let mut splitter = Splitter::new(keys.clone(), applier_tx.clone());
+    // let handle = thread::spawn(move || {
+    // splitter.run();
+    // });
     let (begin, end) = (0, 10000);
     load_data(begin, end, applier_tx);
-    handle.join().unwrap();
-    check_get(begin, end, &engine);
+    // handle.join().unwrap();
+    check_get(begin, end, &[0, 1, 2], &engine, true);
     check_iterater(begin, end, &engine);
+}
+
+#[test]
+fn test_destroy_range() {
+    init_logger();
+    let (engine, applier_tx) = new_test_engine();
+    load_data(10, 50, applier_tx.clone());
+    let mem_table_count = engine.get_shard_stat(1).mem_table_count;
+    // Unsafe destroy keys [10, 30).
+    for prefix in [10, 20] {
+        let mut wb = WriteBatch::new(1);
+        let key = i_to_key(prefix);
+        wb.set_property(DEL_PREFIXES_KEY, &key[..key.len() - 1]);
+        write_data(wb, &applier_tx);
+    }
+    assert!(
+        !engine
+            .get_shard(1)
+            .unwrap()
+            .get_data()
+            .del_prefixes
+            .is_empty()
+    );
+    // Memtable is switched because it contains data covered by the delete-prefixes.
+    assert_eq!(
+        engine.get_shard_stat(1).mem_table_count,
+        mem_table_count + 1
+    );
+    let wait_for_destroying_range = || {
+        for _ in 0..30 {
+            if engine
+                .get_shard(1)
+                .unwrap()
+                .get_data()
+                .del_prefixes
+                .is_empty()
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        // Delete-prefixes is cleaned up.
+        assert!(
+            engine
+                .get_shard(1)
+                .unwrap()
+                .get_data()
+                .del_prefixes
+                .is_empty()
+        );
+    };
+    wait_for_destroying_range();
+    // After destroying range, key [10, 30) should be removed.
+    check_get(10, 30, &[0, 1, 2], &engine, false);
+    check_get(30, 50, &[0, 1, 2], &engine, true);
+    check_iterater(30, 50, &engine);
+
+    // Trigger L0 compaction.
+    for i in 1..=10 {
+        load_data(50 + (i - 1) * 10, 50 + i * 10, applier_tx.clone());
+        let mut wb = WriteBatch::new(1);
+        wb.set_switch_mem_table();
+        write_data(wb, &applier_tx);
+    }
+    // Waiting for L0 compaction.
+    for _ in 0..30 {
+        if engine.get_shard_stat(1).l0_table_count == 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(engine.get_shard_stat(1).l0_table_count < 10);
+    // Unsafe destroy keys [100, 150).
+    let mut wb = WriteBatch::new(1);
+    let key = i_to_key(100);
+    wb.set_property(DEL_PREFIXES_KEY, &key[..key.len() - 2]);
+    write_data(wb, &applier_tx);
+    wait_for_destroying_range();
+    check_get(100, 150, &[0, 1, 2], &engine, false);
+    check_get(50, 100, &[0, 1, 2], &engine, true);
+
+    // Clean all data.
+    let mut wb = WriteBatch::new(1);
+    wb.set_property(DEL_PREFIXES_KEY, b"key");
+    write_data(wb, &applier_tx);
+    wait_for_destroying_range();
+    check_get(10, 150, &[0, 1, 2], &engine, false);
+
+    // No data exists and delete-prefixes can be cleaned too.
+    let mut wb = WriteBatch::new(1);
+    wb.set_property(DEL_PREFIXES_KEY, b"key");
+    write_data(wb, &applier_tx);
+    wait_for_destroying_range();
 }
 
 #[derive(Clone)]
@@ -88,7 +188,6 @@ struct TestMetaChangeListener {
 
 impl MetaChangeListener for TestMetaChangeListener {
     fn on_change_set(&self, cs: pb::ChangeSet) {
-        println!("on meta change listener");
         info!("on meta change listener");
         self.sender.send(cs).unwrap();
     }
@@ -112,11 +211,14 @@ impl EngineTester {
         let initial_meta = ShardMeta::new(&initial_cs);
         let metas = dashmap::DashMap::new();
         metas.insert(1, Arc::new(initial_meta));
+        let tmp_dir = TempDir::new().unwrap();
+        let opts = new_test_options(tmp_dir.path());
         Self {
             core: Arc::new(EngineTesterCore {
+                _tmp_dir: tmp_dir,
                 metas,
                 fs: Arc::new(InMemFS::new()),
-                opts: Arc::new(new_test_options()),
+                opts: Arc::new(opts),
                 id: AtomicU64::new(0),
             }),
         }
@@ -124,6 +226,7 @@ impl EngineTester {
 }
 
 struct EngineTesterCore {
+    _tmp_dir: TempDir,
     metas: dashmap::DashMap<u64, Arc<ShardMeta>>,
     fs: Arc<dfs::InMemFS>,
     opts: Arc<Options>,
@@ -276,8 +379,10 @@ impl MetaApplier {
     fn run(&self) {
         loop {
             let cs = unwrap_or_return!(self.meta_rx.recv(), "meta_applier recv");
+            self.engine.meta_committed(&cs);
             unwrap_or_return!(
-                self.engine.apply_change_set(ChangeSet::new(cs)),
+                self.engine
+                    .apply_change_set(self.engine.prepare_change_set(cs, false).unwrap()),
                 "meta_applier cs"
             );
         }
@@ -291,6 +396,7 @@ struct Splitter {
     new_id: u64,
 }
 
+#[allow(dead_code)]
 impl Splitter {
     fn new(keys: Vec<Vec<u8>>, apply_sender: mpsc::Sender<ApplyTask>) -> Self {
         Self {
@@ -360,11 +466,14 @@ fn new_initial_cs() -> pb::ChangeSet {
     cs
 }
 
-fn new_test_options() -> Options {
+fn new_test_options(path: impl AsRef<Path>) -> Options {
     let mut opts = Options::default();
-    opts.table_builder_options.block_size = 4 << 15;
-    opts.base_size = 4 << 15;
-    opts.num_compactors = 1;
+    opts.local_dir = path.as_ref().to_path_buf();
+    opts.base_size = 64 << 10;
+    opts.table_builder_options.block_size = 4 << 10;
+    opts.table_builder_options.max_table_size = 16 << 10;
+    opts.max_mem_table_size = 16 << 10;
+    opts.num_compactors = 2;
     opts
 }
 
@@ -402,17 +511,24 @@ fn write_data(wb: WriteBatch, applier_tx: &mpsc::Sender<ApplyTask>) {
     result_rx.recv().unwrap().unwrap();
 }
 
-fn check_get(begin: usize, end: usize, en: &Engine) {
+fn check_get(begin: usize, end: usize, cfs: &[usize], en: &Engine, exsit: bool) {
     for i in begin..end {
         let key = format!("key{:06}", i);
         let shard = get_shard_for_key(key.as_bytes(), en);
         let snap = SnapAccess::new(&shard);
-        for cf in 0..3 {
+        for &cf in cfs {
             let version = if cf == 1 { 0 } else { 2 };
             let item = snap.get(cf, key.as_bytes(), version);
             if item.is_valid() {
+                if !exsit {
+                    let shard_stats = shard.get_stats();
+                    panic!(
+                        "got key {}, shard {}:{}, cf {}, stats {:?}",
+                        key, shard.id, shard.ver, cf, shard_stats,
+                    );
+                }
                 assert_eq!(item.get_value(), key.repeat(cf + 2).as_bytes());
-            } else {
+            } else if exsit {
                 let shard_stats = shard.get_stats();
                 panic!(
                     "failed to get key {}, shard {}:{}, stats {:?}",
@@ -427,7 +543,8 @@ fn check_iterater(begin: usize, end: usize, en: &Engine) {
     thread::sleep(Duration::from_secs(1));
     for cf in 0..3 {
         let mut i = begin;
-        let ids = vec![2, 3, 4, 5, 1];
+        // let ids = vec![2, 3, 4, 5, 1];
+        let ids = vec![1];
         for id in ids {
             let shard = en.get_shard(id).unwrap();
             let snap = SnapAccess::new(&shard);

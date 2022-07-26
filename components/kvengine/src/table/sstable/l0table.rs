@@ -155,6 +155,16 @@ impl L0TableCore {
     pub fn version(&self) -> u64 {
         self.footer.version
     }
+
+    pub fn has_data_in_range(&self, start: &[u8], end: &[u8]) -> bool {
+        if self.smallest() >= end || self.biggest() < start {
+            return false;
+        }
+        self.cfs
+            .iter()
+            .filter_map(|t| t.as_ref())
+            .any(|t| t.has_overlap(start, end, false))
+    }
 }
 
 pub struct L0Builder {

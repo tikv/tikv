@@ -132,16 +132,64 @@ impl ShardMeta {
             self.apply_compaction(cs.get_compaction());
             return;
         }
+        if cs.has_destroy_range() {
+            self.apply_destroy_range(cs);
+            return;
+        }
         if cs.has_ingest_files() {
             self.apply_ingest_files(cs.get_ingest_files());
             return;
         }
         if !cs.get_property_key().is_empty() {
-            self.properties
-                .set(cs.get_property_key(), cs.get_property_value());
+            if cs.get_property_merge() {
+                // Now only DEL_PREFIXES_KEY is mergeable.
+                assert_eq!(cs.get_property_key(), DEL_PREFIXES_KEY);
+                let prefix = cs.get_property_value();
+                self.properties.set(
+                    DEL_PREFIXES_KEY,
+                    &self
+                        .properties
+                        .get(DEL_PREFIXES_KEY)
+                        .map(|b| DeletePrefixes::unmarshal(b.chunk()))
+                        .unwrap_or_default()
+                        .merge(prefix)
+                        .marshal(),
+                );
+            } else {
+                self.properties
+                    .set(cs.get_property_key(), cs.get_property_value());
+            }
             return;
         }
         panic!("unexpected change set {:?}", cs)
+    }
+
+    fn is_duplicated_compaction(&self, comp: &mut pb::Compaction) -> bool {
+        if is_move_down(comp) {
+            if let Some(level) = self.file_level(comp.get_top_deletes()[0]) {
+                if level == comp.level {
+                    return false;
+                }
+            }
+            info!(
+                "{}:{} skip duplicated move_down compaction level:{}",
+                self.id, self.ver, comp.level
+            );
+            return true;
+        }
+        for i in 0..comp.get_top_deletes().len() {
+            let id = comp.get_top_deletes()[i];
+            if self.is_compaction_file_deleted(id, comp) {
+                return true;
+            }
+        }
+        for i in 0..comp.get_bottom_deletes().len() {
+            let id = comp.get_bottom_deletes()[i];
+            if self.is_compaction_file_deleted(id, comp) {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn is_duplicated_change_set(&self, cs: &mut pb::ChangeSet) -> bool {
@@ -161,37 +209,22 @@ impl ShardMeta {
         }
         if cs.has_compaction() {
             let comp = cs.mut_compaction();
-            if is_move_down(comp) {
-                if let Some(level) = self.file_level(comp.get_top_deletes()[0]) {
-                    if level == comp.level {
-                        return false;
-                    }
-                }
-                info!(
-                    "{}:{} skip duplicated move_down compaction level:{}",
-                    self.id, self.ver, comp.level
-                );
+            if self.is_duplicated_compaction(comp) {
                 return true;
             }
-            for i in 0..comp.get_top_deletes().len() {
-                let id = comp.get_top_deletes()[i];
-                if self.is_compaction_file_deleted(id, comp) {
-                    info!(
-                        "{}:{} skip duplicated compaction file {} is deleted",
-                        self.id, self.ver, id
-                    );
-                    return true;
-                }
-            }
-            for i in 0..comp.get_bottom_deletes().len() {
-                let id = comp.get_bottom_deletes()[i];
-                if self.is_compaction_file_deleted(id, comp) {
-                    info!(
-                        "{}:{} skip duplicated compaction file {} is deleted",
-                        self.id, self.ver, id
-                    );
-                    return true;
-                }
+        }
+        if cs.has_destroy_range() {
+            if cs
+                .get_destroy_range()
+                .get_table_deletes()
+                .iter()
+                .any(|deleted| !self.files.contains_key(&deleted.get_id()))
+            {
+                info!(
+                    "{}:{} skip duplicated destroy range {:?}",
+                    self.id, self.ver, cs
+                );
+                return true;
             }
         }
         if cs.has_ingest_files() {
@@ -273,6 +306,32 @@ impl ShardMeta {
                 tbl.get_smallest(),
                 tbl.get_biggest(),
             )
+        }
+    }
+
+    fn apply_destroy_range(&mut self, cs: &pb::ChangeSet) {
+        assert!(cs.has_destroy_range());
+        let dr = cs.get_destroy_range();
+        for deleted in dr.get_table_deletes() {
+            self.delete_file(deleted.get_id());
+        }
+        for created in dr.get_table_creates() {
+            self.add_file(
+                created.id,
+                created.cf,
+                created.level,
+                created.get_smallest(),
+                created.get_biggest(),
+            );
+        }
+        // ChangeSet of DestroyRange contains the corresponding delete-prefixes which should be
+        // cleaned up.
+        assert_eq!(cs.get_property_key(), DEL_PREFIXES_KEY);
+        if let Some(data) = self.properties.get(DEL_PREFIXES_KEY) {
+            let old = DeletePrefixes::unmarshal(data.chunk());
+            let done = DeletePrefixes::unmarshal(cs.get_property_value());
+            self.properties
+                .set(DEL_PREFIXES_KEY, &old.split(&done).marshal());
         }
     }
 

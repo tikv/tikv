@@ -32,6 +32,8 @@ message ChangeSet {
   IngestFiles ingest_files = 14;
   string property_key = 15;
   bytes property_value = 16;
+  bool property_merge = 17;
+  DestroyRange destroy_range = 18;
 }
 
 message Compaction {
@@ -73,6 +75,12 @@ message TableCreate {
   bytes biggest = 5;
 }
 
+message TableDelete {
+  uint64 ID = 1;
+  uint32 level = 2;
+  int32 CF = 3;
+}
+
 message Split {
   repeated Properties newShards = 1;
   repeated bytes Keys = 3;
@@ -88,4 +96,11 @@ message Properties {
   uint64 shardID = 1;
   repeated string keys = 2;
   repeated bytes values = 3;
+}
+
+message DestroyRange {
+  // Tables that full destroyed by destroy range.
+  repeated TableDelete tableDeletes = 1;
+  // Tables that only partially destroyed by destroy range.
+  repeated TableCreate tableCreates = 2;
 }

@@ -8,9 +8,8 @@ use std::{
     u64,
 };
 
-use bytes::Buf;
 use fail::fail_point;
-use kvengine::{DeletePrefixes, DEL_PREFIXES_KEY};
+use kvengine::DEL_PREFIXES_KEY;
 use kvproto::{
     import_sstpb::SwitchMode,
     metapb::{self, Region, RegionEpoch},
@@ -908,16 +907,11 @@ impl<'a> PeerMsgHandler<'a> {
             callback.invoke_with_response(RaftCmdResponse::default());
             return;
         }
-        let meta = self.get_peer().get_store().shard_meta.as_ref().unwrap();
-        let del_prefixes = if let Some(old_val) = meta.get_property(DEL_PREFIXES_KEY) {
-            DeletePrefixes::unmarshal(old_val.chunk()).merge(&prefix)
-        } else {
-            DeletePrefixes::default().merge(&prefix)
-        };
         let mut cmd = self.new_raft_cmd_request();
         let mut cs = kvengine::new_change_set(id_ver.id(), id_ver.ver());
         cs.set_property_key(DEL_PREFIXES_KEY.to_string());
-        cs.set_property_value(del_prefixes.marshal());
+        cs.set_property_value(prefix);
+        cs.set_property_merge(true);
         let mut custom_builder = CustomBuilder::new();
         custom_builder.set_change_set(cs);
         cmd.set_custom_request(custom_builder.build());

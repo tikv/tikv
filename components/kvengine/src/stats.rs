@@ -130,6 +130,7 @@ pub struct ShardStats {
     pub compaction_cf: isize,
     pub compaction_level: usize,
     pub compaction_score: f64,
+    pub delete_prefixes: String,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug)]
@@ -257,6 +258,7 @@ impl super::Shard {
             compaction_cf,
             compaction_level,
             compaction_score,
+            delete_prefixes: format!("{:?}", data.del_prefixes),
         }
     }
 }

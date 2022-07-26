@@ -11,7 +11,7 @@ use std::{
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
 use kvenginepb as pb;
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use slog_global::error;
 use tikv_util::mpsc;
 
@@ -19,10 +19,10 @@ use crate::{
     dfs,
     table::{
         search,
-        sstable::{self, InMemFile, SSTable},
+        sstable::{self, InMemFile, L0Builder, SSTable},
     },
     Error::RemoteCompaction,
-    *,
+    Iterator, *,
 };
 
 #[derive(Clone)]
@@ -46,7 +46,7 @@ impl CompactionClient {
         }
     }
 
-    pub(crate) fn compact(&self, req: CompactionRequest) -> Result<pb::Compaction> {
+    pub(crate) fn compact(&self, req: CompactionRequest) -> Result<pb::ChangeSet> {
         if self.client.is_none() {
             local_compact(self.dfs.clone(), req)
         } else {
@@ -74,7 +74,7 @@ impl CompactionClient {
         }
     }
 
-    async fn remote_compact(&self, comp_req: &CompactionRequest) -> Result<pb::Compaction> {
+    async fn remote_compact(&self, comp_req: &CompactionRequest) -> Result<pb::ChangeSet> {
         let body_str = serde_json::to_string(&comp_req).unwrap();
         let req = hyper::Request::builder()
             .method(hyper::Method::POST)
@@ -97,11 +97,11 @@ impl CompactionClient {
                 String::from_utf8_lossy(body.chunk()).to_string(),
             ));
         }
-        let mut compaction = pb::Compaction::new();
-        if let Err(err) = compaction.merge_from_bytes(&body) {
+        let mut cs = pb::ChangeSet::new();
+        if let Err(err) = cs.merge_from_bytes(&body) {
             return Err(RemoteCompaction(err.to_string()));
         }
-        Ok(compaction)
+        Ok(cs)
     }
 }
 
@@ -117,7 +117,13 @@ pub struct CompactionRequest {
     pub shard_ver: u64,
     pub start: Vec<u8>,
     pub end: Vec<u8>,
+
+    /// If `destroy_range` is true, `in_place_compact_files` will be compacted in place
+    /// to filter out data that covered by `del_prefixes`.
+    pub destroy_range: bool,
     pub del_prefixes: Vec<u8>,
+    // Vec<(id, level, cf)>
+    pub in_place_compact_files: Vec<(u64, u32, i32)>,
 
     // Used for L1+ compaction.
     pub bottoms: Vec<u64>,
@@ -306,16 +312,11 @@ impl Engine {
     fn build_compact_request(
         &self,
         shard: &Shard,
+        pri: CompactionPriority,
     ) -> Option<(CompactionRequest, Option<CompactDef>)> {
-        if !shard.ready_to_compact() {
-            info!("avoid shard {}:{} compaction", shard.id, shard.ver);
-            return None;
-        }
-        let pri = shard.get_compaction_priority()?;
         if pri.cf == -1 {
             return self.build_compact_l0_request(&shard).map(|req| (req, None));
         }
-
         let data = shard.get_data();
         let scf = data.get_cf(pri.cf as usize);
         let this_level = &scf.levels[pri.level - 1];
@@ -329,9 +330,18 @@ impl Engine {
         Some((self.build_compact_ln_request(&shard, &cd), Some(cd)))
     }
 
-    pub(crate) fn compact(&self, id_ver: IDVer) -> Option<Result<pb::Compaction>> {
+    pub(crate) fn compact(&self, id_ver: IDVer) -> Option<Result<pb::ChangeSet>> {
         let shard = self.get_shard_with_ver(id_ver.id, id_ver.ver).ok()?;
-        let (req, cd) = self.build_compact_request(&shard)?;
+        if !shard.ready_to_compact() {
+            info!("avoid shard {}:{} compaction", shard.id, shard.ver);
+            return None;
+        }
+        // Destroy range has higher priority than compaction.
+        if shard.get_data().ready_to_destroy_range() {
+            return Some(self.destroy_range(&shard));
+        }
+        let pri = shard.get_compaction_priority()?;
+        let (req, cd) = self.build_compact_request(&shard, pri)?;
         store_bool(&shard.compacting, true);
         if req.level == 0 {
             info!("start compact L0 for {}:{}", req.shard_id, req.shard_ver);
@@ -356,18 +366,23 @@ impl Engine {
                 comp.set_cf(req.cf as i32);
                 comp.set_level(req.level as u32);
                 comp.set_top_deletes(req.tops.clone());
-                let mut tbl_creates = vec![];
-                for top_tbl in &cd.top {
-                    let mut tbl_create = pb::TableCreate::new();
-                    tbl_create.set_id(top_tbl.id());
-                    tbl_create.set_cf(req.cf as i32);
-                    tbl_create.set_level(req.level as u32 + 1);
-                    tbl_create.set_smallest(top_tbl.smallest().to_vec());
-                    tbl_create.set_biggest(top_tbl.biggest().to_vec());
-                    tbl_creates.push(tbl_create);
-                }
+                let tbl_creates = cd
+                    .top
+                    .into_iter()
+                    .map(|top_tbl| {
+                        let mut tbl_create = pb::TableCreate::new();
+                        tbl_create.set_id(top_tbl.id());
+                        tbl_create.set_cf(req.cf as i32);
+                        tbl_create.set_level(req.level as u32 + 1);
+                        tbl_create.set_smallest(top_tbl.smallest().to_vec());
+                        tbl_create.set_biggest(top_tbl.biggest().to_vec());
+                        tbl_create
+                    })
+                    .collect::<Vec<_>>();
                 comp.set_table_creates(tbl_creates.into());
-                return Some(Ok(comp));
+                let mut cs = new_change_set(id_ver.id, id_ver.ver);
+                cs.set_compaction(comp);
+                return Some(Ok(cs));
             }
         }
         Some(self.comp_client.compact(req))
@@ -432,13 +447,14 @@ impl Engine {
         cf: isize,
         level: usize,
     ) -> CompactionRequest {
-        let shard_data = shard.get_data();
         CompactionRequest {
             shard_id: shard.id,
             shard_ver: shard.ver,
             start: shard.start.to_vec(),
             end: shard.end.to_vec(),
-            del_prefixes: shard_data.del_prefixes.marshal(),
+            destroy_range: false,
+            del_prefixes: vec![],
+            in_place_compact_files: vec![],
             cf,
             level,
             safe_ts: load_u64(&self.managed_safe_ts),
@@ -470,14 +486,85 @@ impl Engine {
         req
     }
 
-    pub(crate) fn handle_compact_response(&self, comp: pb::Compaction, id_ver: IDVer) {
-        let mut cs = new_change_set(id_ver.id, id_ver.ver);
-        cs.set_compaction(comp);
+    fn destroy_range(&self, shard: &Shard) -> Result<pb::ChangeSet> {
+        let data = shard.get_data();
+        assert!(!data.del_prefixes.is_empty());
+        // Tables that full covered by delete-prefixes.
+        let mut deletes = vec![];
+        // Tables that partially covered by delete-prefixes.
+        let mut overlaps = vec![];
+        for t in &data.l0_tbls {
+            if data.del_prefixes.cover_range(t.smallest(), t.biggest()) {
+                let mut delete = pb::TableDelete::default();
+                delete.set_id(t.id());
+                delete.set_level(0);
+                delete.set_cf(-1);
+                deletes.push(delete);
+            } else if data
+                .del_prefixes
+                .delete_ranges()
+                .any(|(start, end)| t.has_data_in_range(start, end))
+            {
+                overlaps.push((t.id(), 0, -1));
+            }
+        }
+        data.for_each_level(|cf, lh| {
+            for t in lh.tables.iter() {
+                if data.del_prefixes.cover_range(t.smallest(), t.biggest()) {
+                    let mut delete = pb::TableDelete::default();
+                    delete.set_id(t.id());
+                    delete.set_level(lh.level as u32);
+                    delete.set_cf(cf as i32);
+                    deletes.push(delete);
+                } else if data
+                    .del_prefixes
+                    .delete_ranges()
+                    .any(|(start, end)| t.has_overlap(start, end, false))
+                {
+                    overlaps.push((t.id(), lh.level as u32, cf as i32));
+                }
+            }
+            false
+        });
+
+        info!(
+            "start destroying range for {}:{}, {:?}, destroyed: {}, overlapping: {}",
+            shard.id,
+            shard.ver,
+            data.del_prefixes,
+            deletes.len(),
+            overlaps.len()
+        );
+
+        let mut cs = if overlaps.is_empty() {
+            let mut cs = pb::ChangeSet::default();
+            cs.mut_destroy_range().set_table_deletes(deletes.into());
+            cs
+        } else {
+            let mut req = self.new_compact_request(&shard, 0, 0);
+            req.destroy_range = true;
+            req.in_place_compact_files = overlaps;
+            req.del_prefixes = data.del_prefixes.marshal();
+            req.file_ids = self.id_allocator.alloc_id(req.in_place_compact_files.len());
+            let mut cs = self.comp_client.compact(req)?;
+            let dr = cs.mut_destroy_range();
+            deletes.extend(dr.take_table_deletes().into_iter());
+            dr.set_table_deletes(deletes.into());
+            cs
+        };
+        cs.set_shard_id(shard.id);
+        cs.set_shard_ver(shard.ver);
+        cs.set_property_key(DEL_PREFIXES_KEY.to_string());
+        cs.set_property_value(data.del_prefixes.marshal());
+        Ok(cs)
+    }
+
+    pub(crate) fn handle_compact_response(&self, cs: pb::ChangeSet) {
         self.meta_change_listener.on_change_set(cs);
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct CompactionPriority {
     pub cf: isize,
     pub level: usize,
@@ -544,13 +631,13 @@ pub(crate) fn compact_l0(
 ) -> Result<Vec<pb::TableCreate>> {
     let opts = dfs::Options::new(req.shard_id, req.shard_ver);
     let l0_files = load_table_files(&req.tops, fs.clone(), opts)?;
-    let mut l0_tbls = in_mem_files_to_l0_tables(&l0_files);
+    let mut l0_tbls = in_mem_files_to_l0_tables(l0_files);
     l0_tbls.sort_by(|a, b| b.version().cmp(&a.version()));
     let mut mult_cf_bot_tbls = vec![];
     for cf in 0..NUM_CFS {
         let bot_ids = &req.multi_cf_bottoms[cf];
         let bot_files = load_table_files(bot_ids, fs.clone(), opts)?;
-        let mut bot_tbls = in_mem_files_to_tables(&bot_files);
+        let mut bot_tbls = in_mem_files_to_tables(bot_files);
         bot_tbls.sort_by(|a, b| a.smallest().cmp(b.smallest()));
         mult_cf_bot_tbls.push(bot_tbls);
     }
@@ -576,11 +663,12 @@ pub(crate) fn compact_l0(
             let atx = tx.clone();
 
             fs.get_runtime().spawn(async move {
-                if let Err(err) = afs.create(tbl_create.id, data, opts).await {
-                    atx.send(Err(err)).unwrap();
-                } else {
-                    atx.send(Ok(tbl_create)).unwrap();
-                }
+                atx.send(
+                    afs.create(tbl_create.id, data, opts)
+                        .await
+                        .map(|_| tbl_create),
+                )
+                .unwrap();
             });
             id_idx += 1;
         }
@@ -601,12 +689,12 @@ pub(crate) fn compact_l0(
 }
 
 pub(crate) fn load_table_files(
-    tbl_ids: &Vec<u64>,
+    tbl_ids: &[u64],
     fs: Arc<dyn dfs::DFS>,
     opts: dfs::Options,
 ) -> Result<Vec<InMemFile>> {
     let mut files = vec![];
-    let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Bytes>>(tbl_ids.len());
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Result<(u64, Bytes)>>(tbl_ids.len());
     for id in tbl_ids {
         let aid = *id;
         let atx = tx.clone();
@@ -615,16 +703,17 @@ pub(crate) fn load_table_files(
             let res = afs
                 .read_file(aid, opts)
                 .await
+                .map(|data| (aid, data))
                 .map_err(|e| Error::DFSError(e));
             atx.send(res).unwrap();
         });
     }
     let mut errors = vec![];
-    for id in tbl_ids {
+    for _ in tbl_ids {
         match rx.recv().unwrap() {
             Err(err) => errors.push(err),
-            Ok(data) => {
-                let file = InMemFile::new(*id, data);
+            Ok((id, data)) => {
+                let file = InMemFile::new(id, data);
                 files.push(file);
             }
         }
@@ -635,22 +724,18 @@ pub(crate) fn load_table_files(
     Ok(files)
 }
 
-fn in_mem_files_to_l0_tables(files: &Vec<InMemFile>) -> Vec<sstable::L0Table> {
-    let mut tables = vec![];
-    for file in files {
-        let table = sstable::L0Table::new(Arc::new(file.clone()), None).unwrap();
-        tables.push(table);
-    }
-    tables
+fn in_mem_files_to_l0_tables(files: Vec<InMemFile>) -> Vec<sstable::L0Table> {
+    files
+        .into_iter()
+        .map(|f| sstable::L0Table::new(Arc::new(f), None).unwrap())
+        .collect()
 }
 
-fn in_mem_files_to_tables(files: &Vec<InMemFile>) -> Vec<sstable::SSTable> {
-    let mut tables = vec![];
-    for file in files {
-        let table = sstable::SSTable::new(Arc::new(file.clone()), None).unwrap();
-        tables.push(table);
-    }
-    tables
+fn in_mem_files_to_tables(files: Vec<InMemFile>) -> Vec<sstable::SSTable> {
+    files
+        .into_iter()
+        .map(|f| sstable::SSTable::new(Arc::new(f), None).unwrap())
+        .collect()
 }
 
 fn build_compact_l0_iterator(
@@ -704,18 +789,18 @@ impl CompactL0Helper {
         id: u64,
     ) -> Result<(pb::TableCreate, Bytes)> {
         self.builder.reset(id);
-        self.last_key.truncate(0);
-        self.skip_key.truncate(0);
+        self.last_key.clear();
+        self.skip_key.clear();
 
         while iter.valid() {
-            // See if we need to skip this key.
             let key = iter.key();
+            // See if we need to skip this key.
             if !self.skip_key.is_empty() {
                 if key == self.skip_key {
                     iter.next_all_version();
                     continue;
                 } else {
-                    self.skip_key.truncate(0);
+                    self.skip_key.clear();
                 }
             }
             if key != self.last_key {
@@ -726,7 +811,7 @@ impl CompactL0Helper {
                 if key >= self.end.as_slice() {
                     break;
                 }
-                self.last_key.truncate(0);
+                self.last_key.clear();
                 self.last_key.extend_from_slice(key);
             }
 
@@ -735,7 +820,7 @@ impl CompactL0Helper {
             let val = iter.value();
             if val.version <= self.safe_ts {
                 // key is the latest readable version of this key, so we simply discard all the rest of the versions.
-                self.skip_key.truncate(0);
+                self.skip_key.clear();
                 self.skip_key.extend_from_slice(key);
                 if !val.is_deleted() {
                     match filter(self.safe_ts, self.cf, val) {
@@ -779,10 +864,10 @@ pub(crate) fn compact_tables(
     info!("compact req tops {:?}, bots {:?}", &req.tops, &req.bottoms);
     let opts = dfs::Options::new(req.shard_id, req.shard_ver);
     let top_files = load_table_files(&req.tops, fs.clone(), opts)?;
-    let mut top_tables = in_mem_files_to_tables(&top_files);
+    let mut top_tables = in_mem_files_to_tables(top_files);
     top_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
     let bot_files = load_table_files(&req.bottoms, fs.clone(), opts)?;
-    let mut bot_tables = in_mem_files_to_tables(&bot_files);
+    let mut bot_tables = in_mem_files_to_tables(bot_files);
     bot_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
     let top_iter = Box::new(ConcatIterator::new_with_tables(top_tables, false, false));
     let bot_iter = Box::new(ConcatIterator::new_with_tables(bot_tables, false, false));
@@ -798,7 +883,7 @@ pub(crate) fn compact_tables(
     while iter.valid() && !reach_end {
         let id = req.file_ids[id_idx];
         builder.reset(id);
-        last_key.truncate(0);
+        last_key.clear();
         while iter.valid() {
             let val = iter.value();
             let key = iter.key();
@@ -809,7 +894,7 @@ pub(crate) fn compact_tables(
                     iter.next_all_version();
                     continue;
                 } else {
-                    skip_key.truncate(0);
+                    skip_key.clear();
                 }
             }
             if key != last_key {
@@ -820,7 +905,7 @@ pub(crate) fn compact_tables(
                     reach_end = true;
                     break;
                 }
-                last_key.truncate(0);
+                last_key.clear();
                 last_key.extend_from_slice(key);
             }
 
@@ -828,7 +913,7 @@ pub(crate) fn compact_tables(
             // only valid version for a running transaction.
             if req.cf as usize == LOCK_CF || val.version <= req.safe_ts {
                 // key is the latest readable version of this key, so we simply discard all the rest of the versions.
-                skip_key.truncate(0);
+                skip_key.clear();
                 skip_key.extend_from_slice(key);
 
                 if val.is_deleted() {
@@ -874,11 +959,12 @@ pub(crate) fn compact_tables(
         let afs = fs.clone();
         let atx = tx.clone();
         fs.get_runtime().spawn(async move {
-            if let Err(err) = afs.create(tbl_create.id, buf.freeze(), opts).await {
-                atx.send(Err(err)).unwrap();
-            } else {
-                atx.send(Ok(tbl_create)).unwrap();
-            }
+            atx.send(
+                afs.create(tbl_create.id, buf.freeze(), opts)
+                    .await
+                    .map(|_| tbl_create),
+            )
+            .unwrap();
         });
         id_idx += 1;
     }
@@ -953,62 +1039,185 @@ pub async fn handle_remote_compaction(
         let result = local_compact(dfs, comp_req);
         tx.send(result).unwrap();
     });
-    let result = rx.await.unwrap();
-    if result.is_err() {
-        let err_str = format!("{:?}", result.unwrap_err());
-        error!("compaction failed {}", err_str);
-        let body = hyper::Body::from(err_str);
-        Ok(hyper::Response::builder().status(500).body(body).unwrap())
-    } else {
-        let compaction = result.unwrap();
-        let data = compaction.write_to_bytes().unwrap();
-        Ok(hyper::Response::builder()
-            .status(200)
-            .body(data.into())
-            .unwrap())
+    match rx.await.unwrap() {
+        Ok(cs) => {
+            let data = cs.write_to_bytes().unwrap();
+            Ok(hyper::Response::builder()
+                .status(200)
+                .body(data.into())
+                .unwrap())
+        }
+        Err(err) => {
+            let err_str = format!("{:?}", err);
+            error!("compaction failed {}", err_str);
+            let body = hyper::Body::from(err_str);
+            Ok(hyper::Response::builder().status(500).body(body).unwrap())
+        }
     }
 }
 
-fn local_compact(dfs: Arc<dyn dfs::DFS>, req: CompactionRequest) -> Result<pb::Compaction> {
+fn local_compact(dfs: Arc<dyn dfs::DFS>, req: CompactionRequest) -> Result<pb::ChangeSet> {
+    let mut cs = pb::ChangeSet::new();
+    cs.set_shard_id(req.shard_id);
+    cs.set_shard_ver(req.shard_ver);
+    if req.destroy_range {
+        info!(
+            "start destroying range for {}:{}",
+            req.shard_id, req.shard_ver
+        );
+        let dr = compact_destroy_range(&req, dfs)?;
+        cs.set_destroy_range(dr);
+        info!(
+            "finish destroying range for {}:{}",
+            req.shard_id, req.shard_ver
+        );
+        return Ok(cs);
+    }
+
     let mut comp = pb::Compaction::new();
     comp.set_top_deletes(req.tops.clone());
     comp.set_cf(req.cf as i32);
     comp.set_level(req.level as u32);
     if req.level == 0 {
-        info!("start compact L0 for {}:{}", req.shard_id, req.shard_ver);
+        info!("start compacting L0 for {}:{}", req.shard_id, req.shard_ver);
         let tbls = compact_l0(&req, dfs.clone())?;
-        comp.set_table_creates(RepeatedField::from_vec(tbls));
-        let mut bot_dels = vec![];
-        for cf_bot_dels in &req.multi_cf_bottoms {
-            bot_dels.extend_from_slice(cf_bot_dels.as_slice());
-        }
+        comp.set_table_creates(tbls.into());
+        let bot_dels = req.multi_cf_bottoms.into_iter().flatten().collect();
         comp.set_bottom_deletes(bot_dels);
-        info!("finish compact L0 for {}:{}", req.shard_id, req.shard_ver);
-        return Ok(comp);
+        info!(
+            "finish compacting L0 for {}:{}",
+            req.shard_id, req.shard_ver
+        );
+    } else {
+        info!(
+            "start compacting L{} CF{} for {}:{}",
+            req.level, req.cf, req.shard_id, req.shard_ver
+        );
+        let tbls = compact_tables(&req, dfs.clone())?;
+        comp.set_table_creates(tbls.into());
+        comp.set_bottom_deletes(req.bottoms);
+        info!(
+            "finish compacting L{} CF{} for {}:{}",
+            req.level, req.cf, req.shard_id, req.shard_ver
+        );
     }
-    info!(
-        "start compact L{} CF{} for {}:{}",
-        req.level, req.cf, req.shard_id, req.shard_ver
+    cs.set_compaction(comp);
+    Ok(cs)
+}
+
+/// Commpact files in place to remove data covered by delete prefixes.
+fn compact_destroy_range(
+    req: &CompactionRequest,
+    dfs: Arc<dyn dfs::DFS>,
+) -> Result<pb::DestroyRange> {
+    assert!(
+        req.destroy_range && !req.del_prefixes.is_empty() && !req.in_place_compact_files.is_empty()
     );
-    let tbls = compact_tables(&req, dfs.clone())?;
-    comp.set_table_creates(RepeatedField::from_vec(tbls));
-    comp.set_bottom_deletes(req.bottoms.clone());
-    info!(
-        "finish compact L{} CF{} for {}:{}",
-        req.level, req.cf, req.shard_id, req.shard_ver
-    );
-    Ok(comp)
+    assert_eq!(req.in_place_compact_files.len(), req.file_ids.len());
+
+    let opts = dfs::Options::new(req.shard_id, req.shard_ver);
+    let mut files: HashMap<u64, InMemFile> = load_table_files(
+        &req.in_place_compact_files
+            .iter()
+            .map(|(id, ..)| *id)
+            .collect::<Vec<_>>(),
+        dfs.clone(),
+        opts,
+    )?
+    .into_iter()
+    .map(|file| (file.id, file))
+    .collect();
+
+    let mut deletes = vec![];
+    let mut creates = vec![];
+    let del_prefixes = DeletePrefixes::unmarshal(&req.del_prefixes);
+    let (tx, rx) = tikv_util::mpsc::bounded(req.file_ids.len());
+    for (&(id, level, cf), &new_id) in req.in_place_compact_files.iter().zip(req.file_ids.iter()) {
+        let file = files.remove(&id).unwrap();
+        let (data, smallest, biggest) = if level == 0 {
+            let t = sstable::L0Table::new(Arc::new(file), None).unwrap();
+            let mut builder = L0Builder::new(new_id, req.block_size, t.version());
+            for cf in 0..NUM_CFS {
+                if let Some(cf_t) = t.get_cf(cf) {
+                    let mut iter = cf_t.new_iterator(false, false);
+                    iter.rewind();
+                    while iter.valid() {
+                        let key = iter.key();
+                        if !del_prefixes.cover_prefix(key) {
+                            builder.add(cf, key, iter.value());
+                        }
+                        iter.next_all_version();
+                    }
+                }
+            }
+            if builder.is_empty() {
+                continue;
+            }
+            let data = builder.finish();
+            let (smallest, biggest) = builder.smallest_biggest();
+            (data, smallest.to_vec(), biggest.to_vec())
+        } else {
+            let t = sstable::SSTable::new(Arc::new(file), None).unwrap();
+            let mut builder = sstable::Builder::new(new_id, req.block_size, t.compression_type());
+            let mut iter = t.new_iterator(false, false);
+            iter.rewind();
+            while iter.valid() {
+                let key = iter.key();
+                if !del_prefixes.cover_prefix(key) {
+                    builder.add(key, iter.value());
+                }
+                iter.next_all_version();
+            }
+            if builder.is_empty() {
+                continue;
+            }
+            let mut buf = BytesMut::with_capacity(builder.estimated_size());
+            let res = builder.finish(0, &mut buf);
+            (buf.freeze(), res.smallest, res.biggest)
+        };
+        let tx = tx.clone();
+        let dfs_clone = dfs.clone();
+        dfs.get_runtime().spawn(async move {
+            tx.send(dfs_clone.create(new_id, data, opts).await).unwrap();
+        });
+        let mut delete = pb::TableDelete::new();
+        delete.set_id(id);
+        delete.set_level(level);
+        delete.set_cf(cf);
+        deletes.push(delete);
+        let mut create = pb::TableCreate::new();
+        create.set_id(new_id);
+        create.set_level(level);
+        create.set_cf(cf);
+        create.set_smallest(smallest);
+        create.set_biggest(biggest);
+        creates.push(create);
+    }
+    let mut errors = creates
+        .iter()
+        .filter_map(|_| match rx.recv().unwrap() {
+            Ok(_) => None,
+            Err(e) => Some(e),
+        })
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        return Err(errors.pop().unwrap().into());
+    }
+    let mut destroy = pb::DestroyRange::new();
+    destroy.set_table_deletes(deletes.into());
+    destroy.set_table_creates(creates.into());
+    Ok(destroy)
 }
 
 pub(crate) enum CompactMsg {
-    /// The shard is ready to be compacted.
+    /// The shard is ready to be compacted or destroyed range.
     Compact(IDVer),
 
     /// Compaction finished.
     Finish {
         task_id: u64,
         id_ver: IDVer,
-        result: Option<Result<pb::Compaction>>,
+        result: Option<Result<pb::ChangeSet>>,
     },
 
     /// The compaction change set is applied to the engine, so the shard is ready
@@ -1098,7 +1307,7 @@ impl CompactRunner {
         &mut self,
         id_ver: IDVer,
         task_id: u64,
-        result: Option<Result<pb::Compaction>>,
+        result: Option<Result<pb::ChangeSet>>,
     ) {
         if self
             .running
@@ -1115,7 +1324,7 @@ impl CompactRunner {
         self.running.remove(&id_ver);
         match result {
             Some(Ok(resp)) => {
-                self.engine.handle_compact_response(resp, id_ver);
+                self.engine.handle_compact_response(resp);
                 self.notified.insert(id_ver);
                 self.schedule_pending_compaction();
             }
@@ -1157,6 +1366,17 @@ impl CompactRunner {
     }
 
     fn pick_highest_pri_pending_shard(&self) -> Option<IDVer> {
+        // Pick the shard that ready to destroy range.
+        if let Some(id_ver) = self.pending.iter().find(|id_ver| {
+            self.engine
+                .get_shard_with_ver(id_ver.id, id_ver.ver)
+                .map(|shard| shard.get_data().ready_to_destroy_range())
+                .unwrap_or(false)
+        }) {
+            return Some(*id_ver);
+        }
+
+        // Find the shard with highest compaction priority.
         self.pending
             .iter()
             .max_by_key(|&&id_ver| {

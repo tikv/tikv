@@ -365,6 +365,10 @@ impl SSTableCore {
         split_key.extend_from_slice(diff_key);
         return Some(split_key.freeze());
     }
+
+    pub fn compression_type(&self) -> u8 {
+        self.footer.compression_type
+    }
 }
 
 #[derive(Clone)]

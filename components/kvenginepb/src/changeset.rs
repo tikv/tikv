@@ -42,6 +42,8 @@ pub struct ChangeSet {
     pub ingest_files: ::protobuf::SingularPtrField<IngestFiles>,
     pub property_key: ::std::string::String,
     pub property_value: ::std::vec::Vec<u8>,
+    pub property_merge: bool,
+    pub destroy_range: ::protobuf::SingularPtrField<DestroyRange>,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -400,6 +402,54 @@ impl ChangeSet {
     pub fn take_property_value(&mut self) -> ::std::vec::Vec<u8> {
         ::std::mem::replace(&mut self.property_value, ::std::vec::Vec::new())
     }
+
+    // bool property_merge = 17;
+
+
+    pub fn get_property_merge(&self) -> bool {
+        self.property_merge
+    }
+    pub fn clear_property_merge(&mut self) {
+        self.property_merge = false;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_property_merge(&mut self, v: bool) {
+        self.property_merge = v;
+    }
+
+    // .enginepb.DestroyRange destroy_range = 18;
+
+
+    pub fn get_destroy_range(&self) -> &DestroyRange {
+        self.destroy_range.as_ref().unwrap_or_else(|| DestroyRange::default_instance())
+    }
+    pub fn clear_destroy_range(&mut self) {
+        self.destroy_range.clear();
+    }
+
+    pub fn has_destroy_range(&self) -> bool {
+        self.destroy_range.is_some()
+    }
+
+    // Param is passed by value, moved
+    pub fn set_destroy_range(&mut self, v: DestroyRange) {
+        self.destroy_range = ::protobuf::SingularPtrField::some(v);
+    }
+
+    // Mutable pointer to the field.
+    // If field is not initialized, it is initialized with default value first.
+    pub fn mut_destroy_range(&mut self) -> &mut DestroyRange {
+        if self.destroy_range.is_none() {
+            self.destroy_range.set_default();
+        }
+        self.destroy_range.as_mut().unwrap()
+    }
+
+    // Take field
+    pub fn take_destroy_range(&mut self) -> DestroyRange {
+        self.destroy_range.take().unwrap_or_else(|| DestroyRange::new())
+    }
 }
 
 impl ::protobuf::Message for ChangeSet {
@@ -435,6 +485,11 @@ impl ::protobuf::Message for ChangeSet {
             }
         };
         for v in &self.ingest_files {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
+        for v in &self.destroy_range {
             if !v.is_initialized() {
                 return false;
             }
@@ -501,6 +556,16 @@ impl ::protobuf::Message for ChangeSet {
                 16 => {
                     ::protobuf::rt::read_singular_proto3_bytes_into(wire_type, is, &mut self.property_value)?;
                 },
+                17 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_bool()?;
+                    self.property_merge = tmp;
+                },
+                18 => {
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.destroy_range)?;
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -558,6 +623,13 @@ impl ::protobuf::Message for ChangeSet {
         }
         if !self.property_value.is_empty() {
             my_size += ::protobuf::rt::bytes_size(16, &self.property_value);
+        }
+        if self.property_merge != false {
+            my_size += 3;
+        }
+        if let Some(ref v) = self.destroy_range.as_ref() {
+            let len = v.compute_size();
+            my_size += 2 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
@@ -617,6 +689,14 @@ impl ::protobuf::Message for ChangeSet {
         }
         if !self.property_value.is_empty() {
             os.write_bytes(16, &self.property_value)?;
+        }
+        if self.property_merge != false {
+            os.write_bool(17, self.property_merge)?;
+        }
+        if let Some(ref v) = self.destroy_range.as_ref() {
+            os.write_tag(18, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -725,6 +805,16 @@ impl ::protobuf::Message for ChangeSet {
                     |m: &ChangeSet| { &m.property_value },
                     |m: &mut ChangeSet| { &mut m.property_value },
                 ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
+                    "property_merge",
+                    |m: &ChangeSet| { &m.property_merge },
+                    |m: &mut ChangeSet| { &mut m.property_merge },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<DestroyRange>>(
+                    "destroy_range",
+                    |m: &ChangeSet| { &m.destroy_range },
+                    |m: &mut ChangeSet| { &mut m.destroy_range },
+                ));
                 ::protobuf::reflect::MessageDescriptor::new::<ChangeSet>(
                     "ChangeSet",
                     fields,
@@ -760,6 +850,8 @@ impl ::protobuf::Clear for ChangeSet {
         self.ingest_files.clear();
         self.property_key.clear();
         self.property_value.clear();
+        self.property_merge = false;
+        self.destroy_range.clear();
         self.unknown_fields.clear();
     }
 }
@@ -782,6 +874,8 @@ impl ::protobuf::PbPrint for ChangeSet {
         ::protobuf::PbPrint::fmt(&self.ingest_files, "ingest_files", buf);
         ::protobuf::PbPrint::fmt(&self.property_key, "property_key", buf);
         ::protobuf::PbPrint::fmt(&self.property_value, "property_value", buf);
+        ::protobuf::PbPrint::fmt(&self.property_merge, "property_merge", buf);
+        ::protobuf::PbPrint::fmt(&self.destroy_range, "destroy_range", buf);
         if old_len < buf.len() {
           buf.push(' ');
         }
@@ -805,6 +899,8 @@ impl ::std::fmt::Debug for ChangeSet {
         ::protobuf::PbPrint::fmt(&self.ingest_files, "ingest_files", &mut s);
         ::protobuf::PbPrint::fmt(&self.property_key, "property_key", &mut s);
         ::protobuf::PbPrint::fmt(&self.property_value, "property_value", &mut s);
+        ::protobuf::PbPrint::fmt(&self.property_merge, "property_merge", &mut s);
+        ::protobuf::PbPrint::fmt(&self.destroy_range, "destroy_range", &mut s);
         write!(f, "{}", s)
     }
 }
@@ -2566,6 +2662,257 @@ impl ::protobuf::reflect::ProtobufValue for TableCreate {
 }
 
 #[derive(PartialEq,Clone,Default)]
+pub struct TableDelete {
+    // message fields
+    pub id: u64,
+    pub level: u32,
+    pub cf: i32,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a TableDelete {
+    fn default() -> &'a TableDelete {
+        <TableDelete as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TableDelete {
+    pub fn new() -> TableDelete {
+        ::std::default::Default::default()
+    }
+
+    // uint64 ID = 1;
+
+
+    pub fn get_id(&self) -> u64 {
+        self.id
+    }
+    pub fn clear_id(&mut self) {
+        self.id = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_id(&mut self, v: u64) {
+        self.id = v;
+    }
+
+    // uint32 level = 2;
+
+
+    pub fn get_level(&self) -> u32 {
+        self.level
+    }
+    pub fn clear_level(&mut self) {
+        self.level = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_level(&mut self, v: u32) {
+        self.level = v;
+    }
+
+    // int32 CF = 3;
+
+
+    pub fn get_cf(&self) -> i32 {
+        self.cf
+    }
+    pub fn clear_cf(&mut self) {
+        self.cf = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_cf(&mut self, v: i32) {
+        self.cf = v;
+    }
+}
+
+impl ::protobuf::Message for TableDelete {
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint64()?;
+                    self.id = tmp;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint32()?;
+                    self.level = tmp;
+                },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_int32()?;
+                    self.cf = tmp;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        if self.id != 0 {
+            my_size += ::protobuf::rt::value_size(1, self.id, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.level != 0 {
+            my_size += ::protobuf::rt::value_size(2, self.level, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.cf != 0 {
+            my_size += ::protobuf::rt::value_size(3, self.cf, ::protobuf::wire_format::WireTypeVarint);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+        if self.id != 0 {
+            os.write_uint64(1, self.id)?;
+        }
+        if self.level != 0 {
+            os.write_uint32(2, self.level)?;
+        }
+        if self.cf != 0 {
+            os.write_int32(3, self.cf)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn as_any(&self) -> &dyn (::std::any::Any) {
+        self as &dyn (::std::any::Any)
+    }
+    fn as_any_mut(&mut self) -> &mut dyn (::std::any::Any) {
+        self as &mut dyn (::std::any::Any)
+    }
+    fn into_any(self: Box<Self>) -> ::std::boxed::Box<dyn (::std::any::Any)> {
+        self
+    }
+
+    fn descriptor(&self) -> &'static ::protobuf::reflect::MessageDescriptor {
+        Self::descriptor_static()
+    }
+
+    fn new() -> TableDelete {
+        TableDelete::new()
+    }
+
+    fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
+        static mut descriptor: ::protobuf::lazy::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::lazy::Lazy {
+            lock: ::protobuf::lazy::ONCE_INIT,
+            ptr: 0 as *const ::protobuf::reflect::MessageDescriptor,
+        };
+        unsafe {
+            descriptor.get(|| {
+                let mut fields = ::std::vec::Vec::new();
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
+                    "ID",
+                    |m: &TableDelete| { &m.id },
+                    |m: &mut TableDelete| { &mut m.id },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
+                    "level",
+                    |m: &TableDelete| { &m.level },
+                    |m: &mut TableDelete| { &mut m.level },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
+                    "CF",
+                    |m: &TableDelete| { &m.cf },
+                    |m: &mut TableDelete| { &mut m.cf },
+                ));
+                ::protobuf::reflect::MessageDescriptor::new::<TableDelete>(
+                    "TableDelete",
+                    fields,
+                    file_descriptor_proto()
+                )
+            })
+        }
+    }
+
+    fn default_instance() -> &'static TableDelete {
+        static mut instance: ::protobuf::lazy::Lazy<TableDelete> = ::protobuf::lazy::Lazy {
+            lock: ::protobuf::lazy::ONCE_INIT,
+            ptr: 0 as *const TableDelete,
+        };
+        unsafe {
+            instance.get(TableDelete::new)
+        }
+    }
+}
+
+impl ::protobuf::Clear for TableDelete {
+    fn clear(&mut self) {
+        self.id = 0;
+        self.level = 0;
+        self.cf = 0;
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::protobuf::PbPrint for TableDelete {
+    #[allow(unused_variables)]
+    fn fmt(&self, name: &str, buf: &mut String) {
+        ::protobuf::push_message_start(name, buf);
+        let old_len = buf.len();
+        ::protobuf::PbPrint::fmt(&self.id, "id", buf);
+        ::protobuf::PbPrint::fmt(&self.level, "level", buf);
+        ::protobuf::PbPrint::fmt(&self.cf, "cf", buf);
+        if old_len < buf.len() {
+          buf.push(' ');
+        }
+        buf.push('}');
+    }
+}
+impl ::std::fmt::Debug for TableDelete {
+    #[allow(unused_variables)]
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        let mut s = String::new();
+        ::protobuf::PbPrint::fmt(&self.id, "id", &mut s);
+        ::protobuf::PbPrint::fmt(&self.level, "level", &mut s);
+        ::protobuf::PbPrint::fmt(&self.cf, "cf", &mut s);
+        write!(f, "{}", s)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TableDelete {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct Split {
     // message fields
     pub new_shards: ::protobuf::RepeatedField<Properties>,
@@ -3363,8 +3710,250 @@ impl ::protobuf::reflect::ProtobufValue for Properties {
     }
 }
 
+#[derive(PartialEq,Clone,Default)]
+pub struct DestroyRange {
+    // message fields
+    pub table_deletes: ::protobuf::RepeatedField<TableDelete>,
+    pub table_creates: ::protobuf::RepeatedField<TableCreate>,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a DestroyRange {
+    fn default() -> &'a DestroyRange {
+        <DestroyRange as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DestroyRange {
+    pub fn new() -> DestroyRange {
+        ::std::default::Default::default()
+    }
+
+    // repeated .enginepb.TableDelete tableDeletes = 1;
+
+
+    pub fn get_table_deletes(&self) -> &[TableDelete] {
+        &self.table_deletes
+    }
+    pub fn clear_table_deletes(&mut self) {
+        self.table_deletes.clear();
+    }
+
+    // Param is passed by value, moved
+    pub fn set_table_deletes(&mut self, v: ::protobuf::RepeatedField<TableDelete>) {
+        self.table_deletes = v;
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_table_deletes(&mut self) -> &mut ::protobuf::RepeatedField<TableDelete> {
+        &mut self.table_deletes
+    }
+
+    // Take field
+    pub fn take_table_deletes(&mut self) -> ::protobuf::RepeatedField<TableDelete> {
+        ::std::mem::replace(&mut self.table_deletes, ::protobuf::RepeatedField::new())
+    }
+
+    // repeated .enginepb.TableCreate tableCreates = 2;
+
+
+    pub fn get_table_creates(&self) -> &[TableCreate] {
+        &self.table_creates
+    }
+    pub fn clear_table_creates(&mut self) {
+        self.table_creates.clear();
+    }
+
+    // Param is passed by value, moved
+    pub fn set_table_creates(&mut self, v: ::protobuf::RepeatedField<TableCreate>) {
+        self.table_creates = v;
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_table_creates(&mut self) -> &mut ::protobuf::RepeatedField<TableCreate> {
+        &mut self.table_creates
+    }
+
+    // Take field
+    pub fn take_table_creates(&mut self) -> ::protobuf::RepeatedField<TableCreate> {
+        ::std::mem::replace(&mut self.table_creates, ::protobuf::RepeatedField::new())
+    }
+}
+
+impl ::protobuf::Message for DestroyRange {
+    fn is_initialized(&self) -> bool {
+        for v in &self.table_deletes {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
+        for v in &self.table_creates {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.table_deletes)?;
+                },
+                2 => {
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.table_creates)?;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        for value in &self.table_deletes {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        };
+        for value in &self.table_creates {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        };
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+        for v in &self.table_deletes {
+            os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
+        };
+        for v in &self.table_creates {
+            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
+        };
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn as_any(&self) -> &dyn (::std::any::Any) {
+        self as &dyn (::std::any::Any)
+    }
+    fn as_any_mut(&mut self) -> &mut dyn (::std::any::Any) {
+        self as &mut dyn (::std::any::Any)
+    }
+    fn into_any(self: Box<Self>) -> ::std::boxed::Box<dyn (::std::any::Any)> {
+        self
+    }
+
+    fn descriptor(&self) -> &'static ::protobuf::reflect::MessageDescriptor {
+        Self::descriptor_static()
+    }
+
+    fn new() -> DestroyRange {
+        DestroyRange::new()
+    }
+
+    fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
+        static mut descriptor: ::protobuf::lazy::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::lazy::Lazy {
+            lock: ::protobuf::lazy::ONCE_INIT,
+            ptr: 0 as *const ::protobuf::reflect::MessageDescriptor,
+        };
+        unsafe {
+            descriptor.get(|| {
+                let mut fields = ::std::vec::Vec::new();
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<TableDelete>>(
+                    "tableDeletes",
+                    |m: &DestroyRange| { &m.table_deletes },
+                    |m: &mut DestroyRange| { &mut m.table_deletes },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<TableCreate>>(
+                    "tableCreates",
+                    |m: &DestroyRange| { &m.table_creates },
+                    |m: &mut DestroyRange| { &mut m.table_creates },
+                ));
+                ::protobuf::reflect::MessageDescriptor::new::<DestroyRange>(
+                    "DestroyRange",
+                    fields,
+                    file_descriptor_proto()
+                )
+            })
+        }
+    }
+
+    fn default_instance() -> &'static DestroyRange {
+        static mut instance: ::protobuf::lazy::Lazy<DestroyRange> = ::protobuf::lazy::Lazy {
+            lock: ::protobuf::lazy::ONCE_INIT,
+            ptr: 0 as *const DestroyRange,
+        };
+        unsafe {
+            instance.get(DestroyRange::new)
+        }
+    }
+}
+
+impl ::protobuf::Clear for DestroyRange {
+    fn clear(&mut self) {
+        self.table_deletes.clear();
+        self.table_creates.clear();
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::protobuf::PbPrint for DestroyRange {
+    #[allow(unused_variables)]
+    fn fmt(&self, name: &str, buf: &mut String) {
+        ::protobuf::push_message_start(name, buf);
+        let old_len = buf.len();
+        ::protobuf::PbPrint::fmt(&self.table_deletes, "table_deletes", buf);
+        ::protobuf::PbPrint::fmt(&self.table_creates, "table_creates", buf);
+        if old_len < buf.len() {
+          buf.push(' ');
+        }
+        buf.push('}');
+    }
+}
+impl ::std::fmt::Debug for DestroyRange {
+    #[allow(unused_variables)]
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        let mut s = String::new();
+        ::protobuf::PbPrint::fmt(&self.table_deletes, "table_deletes", &mut s);
+        ::protobuf::PbPrint::fmt(&self.table_creates, "table_creates", &mut s);
+        write!(f, "{}", s)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DestroyRange {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n\x0fchangeset.proto\x12\x08enginepb\"\xac\x03\n\tChangeSet\x12\x11\n\
+    \n\x0fchangeset.proto\x12\x08enginepb\"\xf7\x03\n\tChangeSet\x12\x11\n\
     \x07shardID\x18\x01\x20\x01(\x04B\0\x12\x12\n\x08shardVer\x18\x02\x20\
     \x01(\x04B\0\x12*\n\ncompaction\x18\x04\x20\x01(\x0b2\x14.enginepb.Compa\
     ctionB\0\x12\x20\n\x05flush\x18\x05\x20\x01(\x0b2\x0f.enginepb.FlushB\0\
@@ -3375,33 +3964,39 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x04B\0\x12%\n\x06parent\x18\r\x20\x01(\x0b2\x13.enginepb.ChangeSetB\0\
     \x12-\n\x0cingest_files\x18\x0e\x20\x01(\x0b2\x15.enginepb.IngestFilesB\
     \0\x12\x16\n\x0cproperty_key\x18\x0f\x20\x01(\tB\0\x12\x18\n\x0eproperty\
-    _value\x18\x10\x20\x01(\x0cB\0:\0\"\xa1\x01\n\nCompaction\x12\x0c\n\x02c\
-    f\x18\x01\x20\x01(\x05B\0\x12\x0f\n\x05level\x18\x02\x20\x01(\rB\0\x12-\
-    \n\x0ctableCreates\x18\x03\x20\x03(\x0b2\x15.enginepb.TableCreateB\0\x12\
-    \x14\n\ntopDeletes\x18\x04\x20\x03(\x04B\0\x12\x17\n\rbottomDeletes\x18\
-    \x05\x20\x03(\x04B\0\x12\x14\n\nconflicted\x18\x06\x20\x01(\x08B\0:\0\"p\
-    \n\x05Flush\x12&\n\x08l0Create\x18\x01\x20\x01(\x0b2\x12.enginepb.L0Crea\
-    teB\0\x12*\n\nproperties\x18\x02\x20\x01(\x0b2\x14.enginepb.PropertiesB\
-    \0\x12\x11\n\x07version\x18\x03\x20\x01(\x04B\0:\0\"\xe0\x01\n\x08Snapsh\
-    ot\x12\x0f\n\x05start\x18\x01\x20\x01(\x0cB\0\x12\r\n\x03end\x18\x02\x20\
-    \x01(\x0cB\0\x12*\n\nproperties\x18\x03\x20\x01(\x0b2\x14.enginepb.Prope\
-    rtiesB\0\x12'\n\tl0Creates\x18\x05\x20\x03(\x0b2\x12.enginepb.L0CreateB\
-    \0\x12-\n\x0ctableCreates\x18\x06\x20\x03(\x0b2\x15.enginepb.TableCreate\
-    B\0\x12\x15\n\x0bbaseVersion\x18\x07\x20\x01(\x04B\0\x12\x17\n\rdata_seq\
-    uence\x18\x08\x20\x01(\x04B\0:\0\"A\n\x08L0Create\x12\x0c\n\x02ID\x18\
-    \x01\x20\x01(\x04B\0\x12\x12\n\x08smallest\x18\x02\x20\x01(\x0cB\0\x12\
-    \x11\n\x07biggest\x18\x03\x20\x01(\x0cB\0:\0\"c\n\x0bTableCreate\x12\x0c\
-    \n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x0f\n\x05level\x18\x02\x20\x01(\rB\
-    \0\x12\x0c\n\x02CF\x18\x03\x20\x01(\x05B\0\x12\x12\n\x08smallest\x18\x04\
-    \x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\x05\x20\x01(\x0cB\0:\0\"D\n\
-    \x05Split\x12)\n\tnewShards\x18\x01\x20\x03(\x0b2\x14.enginepb.Propertie\
-    sB\0\x12\x0e\n\x04Keys\x18\x03\x20\x03(\x0cB\0:\0\"\x93\x01\n\x0bIngestF\
-    iles\x12'\n\tl0Creates\x18\x01\x20\x03(\x0b2\x12.enginepb.L0CreateB\0\
-    \x12-\n\x0ctableCreates\x18\x02\x20\x03(\x0b2\x15.enginepb.TableCreateB\
-    \0\x12*\n\nproperties\x18\x03\x20\x01(\x0b2\x14.enginepb.PropertiesB\0:\
-    \0\"C\n\nProperties\x12\x11\n\x07shardID\x18\x01\x20\x01(\x04B\0\x12\x0e\
-    \n\x04keys\x18\x02\x20\x03(\tB\0\x12\x10\n\x06values\x18\x03\x20\x03(\
-    \x0cB\0:\0B\0b\x06proto3\
+    _value\x18\x10\x20\x01(\x0cB\0\x12\x18\n\x0eproperty_merge\x18\x11\x20\
+    \x01(\x08B\0\x12/\n\rdestroy_range\x18\x12\x20\x01(\x0b2\x16.enginepb.De\
+    stroyRangeB\0:\0\"\xa1\x01\n\nCompaction\x12\x0c\n\x02cf\x18\x01\x20\x01\
+    (\x05B\0\x12\x0f\n\x05level\x18\x02\x20\x01(\rB\0\x12-\n\x0ctableCreates\
+    \x18\x03\x20\x03(\x0b2\x15.enginepb.TableCreateB\0\x12\x14\n\ntopDeletes\
+    \x18\x04\x20\x03(\x04B\0\x12\x17\n\rbottomDeletes\x18\x05\x20\x03(\x04B\
+    \0\x12\x14\n\nconflicted\x18\x06\x20\x01(\x08B\0:\0\"p\n\x05Flush\x12&\n\
+    \x08l0Create\x18\x01\x20\x01(\x0b2\x12.enginepb.L0CreateB\0\x12*\n\nprop\
+    erties\x18\x02\x20\x01(\x0b2\x14.enginepb.PropertiesB\0\x12\x11\n\x07ver\
+    sion\x18\x03\x20\x01(\x04B\0:\0\"\xe0\x01\n\x08Snapshot\x12\x0f\n\x05sta\
+    rt\x18\x01\x20\x01(\x0cB\0\x12\r\n\x03end\x18\x02\x20\x01(\x0cB\0\x12*\n\
+    \nproperties\x18\x03\x20\x01(\x0b2\x14.enginepb.PropertiesB\0\x12'\n\tl0\
+    Creates\x18\x05\x20\x03(\x0b2\x12.enginepb.L0CreateB\0\x12-\n\x0ctableCr\
+    eates\x18\x06\x20\x03(\x0b2\x15.enginepb.TableCreateB\0\x12\x15\n\x0bbas\
+    eVersion\x18\x07\x20\x01(\x04B\0\x12\x17\n\rdata_sequence\x18\x08\x20\
+    \x01(\x04B\0:\0\"A\n\x08L0Create\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\
+    \x12\x12\n\x08smallest\x18\x02\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\
+    \x03\x20\x01(\x0cB\0:\0\"c\n\x0bTableCreate\x12\x0c\n\x02ID\x18\x01\x20\
+    \x01(\x04B\0\x12\x0f\n\x05level\x18\x02\x20\x01(\rB\0\x12\x0c\n\x02CF\
+    \x18\x03\x20\x01(\x05B\0\x12\x12\n\x08smallest\x18\x04\x20\x01(\x0cB\0\
+    \x12\x11\n\x07biggest\x18\x05\x20\x01(\x0cB\0:\0\"<\n\x0bTableDelete\x12\
+    \x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x0f\n\x05level\x18\x02\x20\x01(\
+    \rB\0\x12\x0c\n\x02CF\x18\x03\x20\x01(\x05B\0:\0\"D\n\x05Split\x12)\n\tn\
+    ewShards\x18\x01\x20\x03(\x0b2\x14.enginepb.PropertiesB\0\x12\x0e\n\x04K\
+    eys\x18\x03\x20\x03(\x0cB\0:\0\"\x93\x01\n\x0bIngestFiles\x12'\n\tl0Crea\
+    tes\x18\x01\x20\x03(\x0b2\x12.enginepb.L0CreateB\0\x12-\n\x0ctableCreate\
+    s\x18\x02\x20\x03(\x0b2\x15.enginepb.TableCreateB\0\x12*\n\nproperties\
+    \x18\x03\x20\x01(\x0b2\x14.enginepb.PropertiesB\0:\0\"C\n\nProperties\
+    \x12\x11\n\x07shardID\x18\x01\x20\x01(\x04B\0\x12\x0e\n\x04keys\x18\x02\
+    \x20\x03(\tB\0\x12\x10\n\x06values\x18\x03\x20\x03(\x0cB\0:\0\"n\n\x0cDe\
+    stroyRange\x12-\n\x0ctableDeletes\x18\x01\x20\x03(\x0b2\x15.enginepb.Tab\
+    leDeleteB\0\x12-\n\x0ctableCreates\x18\x02\x20\x03(\x0b2\x15.enginepb.Ta\
+    bleCreateB\0:\0B\0b\x06proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {

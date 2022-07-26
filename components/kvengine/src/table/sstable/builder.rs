@@ -101,7 +101,6 @@ impl EntrySlice {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Default)]
 pub struct Builder {
     fid: u64,
@@ -268,7 +267,7 @@ impl Builder {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.smallest.len() == 0
+        self.smallest.is_empty()
     }
 
     pub fn get_smallest(&self) -> &[u8] {

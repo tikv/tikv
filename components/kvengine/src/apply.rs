@@ -89,8 +89,12 @@ impl EngineCore {
         }
         if cs.has_flush() {
             self.apply_flush(&shard, &cs);
-        } else if cs.has_compaction() {
-            self.apply_compaction(&shard, &cs);
+        } else if cs.has_compaction() || cs.has_destroy_range() {
+            if cs.has_compaction() {
+                self.apply_compaction(&shard, &cs);
+            } else {
+                self.apply_destroy_range(&shard, &cs);
+            }
             store_bool(&shard.compacting, false);
             self.compact_tx
                 .send(CompactMsg::Applied(IDVer::new(shard.id, shard.ver)))
@@ -204,6 +208,71 @@ impl EngineCore {
             new_cfs,
         );
         shard.set_data(new_data);
+        self.remove_dfs_files(shard, del_files);
+    }
+
+    fn apply_destroy_range(&self, shard: &Shard, cs: &ChangeSet) {
+        assert!(cs.has_destroy_range());
+        let dr = cs.get_destroy_range();
+        let data = shard.get_data();
+        let mut new_l0s = data.l0_tbls.clone();
+        let mut new_cfs = data.cfs.clone();
+        // Group files by cf and level.
+        let mut grouped = HashMap::new();
+        for deleted in dr.get_table_deletes() {
+            grouped
+                .entry((deleted.get_cf() as usize, deleted.get_level() as usize))
+                .or_insert_with(|| (Vec::new(), Vec::new()))
+                .0
+                .push(deleted.get_id());
+        }
+        for created in dr.get_table_creates() {
+            grouped
+                .entry((created.get_cf() as usize, created.get_level() as usize))
+                .or_insert_with(|| (Vec::new(), Vec::new()))
+                .1
+                .push(created.get_id());
+        }
+
+        for ((cf, level), (deletes, creates)) in grouped {
+            if level == 0 {
+                new_l0s.retain(|l0| !deletes.contains(&l0.id()));
+                new_l0s.extend(
+                    creates
+                        .into_iter()
+                        .map(|id| cs.l0_tables.get(&id).unwrap().clone()),
+                );
+                new_l0s.sort_by(|a, b| b.version().cmp(&a.version()));
+            } else {
+                let old_level = new_cfs[cf].get_level(level);
+                let mut new_level_tables = old_level.tables.as_ref().clone();
+                new_level_tables.retain(|t| !deletes.contains(&t.id()));
+                new_level_tables.extend(
+                    creates
+                        .into_iter()
+                        .map(|id| cs.ln_tables.get(&id).unwrap().clone()),
+                );
+                new_level_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
+                let new_level = LevelHandler::new(level, new_level_tables);
+                new_cfs[cf].set_level(new_level);
+            }
+        }
+        assert_eq!(cs.get_property_key(), DEL_PREFIXES_KEY);
+        let done = DeletePrefixes::unmarshal(cs.get_property_value());
+        let new_data = ShardData::new(
+            shard.start.clone(),
+            shard.end.clone(),
+            data.del_prefixes.split(&done),
+            data.mem_tbls.clone(),
+            new_l0s,
+            new_cfs,
+        );
+        shard.set_data(new_data);
+        let del_files = dr
+            .get_table_deletes()
+            .iter()
+            .map(|deleted| (deleted.get_id(), true))
+            .collect();
         self.remove_dfs_files(shard, del_files);
     }
 

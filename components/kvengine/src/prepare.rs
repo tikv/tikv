@@ -29,6 +29,11 @@ impl EngineCore {
                 }
             }
         }
+        if cs.has_destroy_range() {
+            for t in cs.get_destroy_range().get_table_creates() {
+                ids.insert(t.id, t.level == 0);
+            }
+        }
         if cs.has_snapshot() {
             self.collect_snap_ids(cs.get_snapshot(), &mut ids);
         }

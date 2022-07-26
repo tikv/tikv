@@ -143,10 +143,19 @@ impl Engine {
         for cf in 0..NUM_CFS {
             mem_tbl.get_cf(cf).put_batch(wb.get_cf_mut(cf), &snap, cf);
         }
-        for (k, v) in &wb.properties {
-            shard.properties.set(k.as_str(), v.chunk());
+        for (k, v) in std::mem::take(&mut wb.properties) {
             if k == DEL_PREFIXES_KEY {
-                shard.set_del_prefix(v.chunk());
+                shard.merge_del_prefix(v.chunk());
+                let data = shard.get_data();
+                if data.writable_mem_table_has_data_in_deleted_prefix() {
+                    wb.set_switch_mem_table();
+                }
+                self.refresh_shard_states(&shard);
+                shard
+                    .properties
+                    .set(k.as_str(), &data.del_prefixes.marshal());
+            } else {
+                shard.properties.set(k.as_str(), v.chunk());
             }
         }
         store_u64(&shard.write_sequence, wb.sequence);
