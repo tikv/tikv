@@ -26,7 +26,7 @@ use crate::{
     Error, PeerMsg, PeerTick, Result, StoreMsg,
 };
 
-/// A per thread context used for handling raft messages.
+/// A per-thread context used for handling raft messages.
 pub struct StoreContext<T> {
     /// A logger without any KV. It's clean for creating new PeerFSM.
     pub logger: Logger,
@@ -76,7 +76,7 @@ impl<EK: KvEngine, T> StorePoller<EK, T> {
         poller
     }
 
-    /// Updates the internal buffer to latest capacity.
+    /// Updates the internal buffer to match the latest configuration.
     fn apply_buf_capacity(&mut self) {
         let new_cap = self.messages_per_tick();
         tikv_util::set_vec_capacity(&mut self.store_msg_buf, new_cap);
@@ -119,6 +119,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
+        debug_assert!(self.store_msg_buf.is_empty());
         let received_cnt = store.recv(&mut self.store_msg_buf);
         let expected_msg_count = if received_cnt == self.messages_per_tick() {
             None
@@ -134,6 +135,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         &mut self,
         peer: &mut impl DerefMut<Target = PeerFsm<EK, ER>>,
     ) -> HandleResult {
+        debug_assert!(self.peer_msg_buf.is_empty());
         let received_cnt = peer.recv(&mut self.peer_msg_buf);
         let handle_result = if received_cnt == self.messages_per_tick() {
             HandleResult::KeepProcessing
@@ -203,7 +205,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         }
     }
 
-    /// Init all the existing raft machine and cleanup stale tablets.
+    /// Initializes all the existing raft machines and cleanup stale tablets.
     fn init(&self) -> Result<HashMap<u64, SenderFsmPair<EK, ER>>> {
         let mut regions = HashMap::default();
         let cfg = self.cfg.value();
@@ -328,7 +330,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
 pub type StoreRouter<EK, ER> = BatchRouter<PeerFsm<EK, ER>, StoreFsm>;
 
-/// Create the batch system for polling raft activities.
+/// Creates the batch system for polling raft activities.
 pub fn create_store_batch_system<EK, ER>(
     cfg: &Config,
     store: Store,

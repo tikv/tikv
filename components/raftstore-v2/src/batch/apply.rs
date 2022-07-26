@@ -50,15 +50,17 @@ pub struct ApplyPoller {
 
 impl ApplyPoller {
     pub fn new(apply_ctx: ApplyContext, cfg_tracker: Tracker<Config>) -> ApplyPoller {
-        ApplyPoller {
+        let mut poller = ApplyPoller {
             apply_task_buf: Vec::new(),
             pending_latency_inspect: Vec::new(),
             apply_ctx,
             cfg_tracker,
-        }
+        };
+        poller.apply_buf_capacity();
+        poller
     }
 
-    /// Updates the internal buffer to latest capacity.
+    /// Updates the internal buffer to match the latest configuration.
     fn apply_buf_capacity(&mut self) {
         let new_cap = self.messages_per_tick();
         tikv_util::set_vec_capacity(&mut self.apply_task_buf, new_cap);
