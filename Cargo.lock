@@ -4050,9 +4050,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b14007813cf262c866a60f29cbe4e317ea402eb156a0076af544f5cf19daa190"
+checksum = "2f0c797114b1503093f19fb2cb81eaf399b2e9a8c5ac04670910ed53cca3fb2b"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4082,9 +4082,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a26142d71fd30e1871cd8b8e14633776f64a71ad64e22d1a0c0779409ece3117"
+checksum = "0ad2f818a3c64f3228efd18c44bffbc27c5c6987d01919dbcd35eeb13b278550"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
