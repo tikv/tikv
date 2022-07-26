@@ -1260,12 +1260,12 @@ impl<T: Simulator> Cluster<T> {
         let mut kv_wb = self.engines[&store_id].kv.write_batch();
         self.engines[&store_id]
             .kv
-            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |k, _| {
+            .scan(CF_RAFT, &meta_start, &meta_end, false, |k, _| {
                 kv_wb.delete(k).unwrap();
                 Ok(true)
             })
             .unwrap();
-        snap.scan_cf(CF_RAFT, &meta_start, &meta_end, false, |k, v| {
+        snap.scan(CF_RAFT, &meta_start, &meta_end, false, |k, v| {
             kv_wb.put(k, v).unwrap();
             Ok(true)
         })
@@ -1277,12 +1277,12 @@ impl<T: Simulator> Cluster<T> {
         );
         self.engines[&store_id]
             .kv
-            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |k, _| {
+            .scan(CF_RAFT, &raft_start, &raft_end, false, |k, _| {
                 kv_wb.delete(k).unwrap();
                 Ok(true)
             })
             .unwrap();
-        snap.scan_cf(CF_RAFT, &raft_start, &raft_end, false, |k, v| {
+        snap.scan(CF_RAFT, &raft_start, &raft_end, false, |k, v| {
             kv_wb.put(k, v).unwrap();
             Ok(true)
         })

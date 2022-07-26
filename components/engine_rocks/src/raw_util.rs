@@ -13,6 +13,8 @@ use rocksdb::{
 };
 use tikv_util::warn;
 
+use crate::r2e;
+
 pub struct CFOptions<'a> {
     cf: &'a str,
     options: ColumnFamilyOptions,
@@ -92,12 +94,13 @@ pub fn new_engine_opt(
             cfs_v.push(x.cf);
             cf_opts_v.push(x.options.clone());
         }
-        let mut db = DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cf_opts_v).collect())?;
+        let mut db =
+            DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cf_opts_v).collect()).map_err(r2e)?;
         for x in cfs_opts {
             if x.cf == CF_DEFAULT {
                 continue;
             }
-            db.create_cf((x.cf, x.options))?;
+            db.create_cf((x.cf, x.options)).map_err(r2e)?;
         }
 
         return Ok(db);
@@ -106,7 +109,7 @@ pub fn new_engine_opt(
     db_opt.create_if_missing(false);
 
     // Lists all column families in current db.
-    let cfs_list = DB::list_column_families(&db_opt, path)?;
+    let cfs_list = DB::list_column_families(&db_opt, path).map_err(r2e)?;
     let existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
     let needed: Vec<&str> = cfs_opts.iter().map(|x| x.cf).collect();
 
@@ -134,7 +137,8 @@ pub fn new_engine_opt(
             cfs_opts_v.push(x.options);
         }
 
-        let db = DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cfs_opts_v).collect())?;
+        let db =
+            DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cfs_opts_v).collect()).map_err(r2e)?;
         return Ok(db);
     }
 
@@ -155,14 +159,14 @@ pub fn new_engine_opt(
         }
     }
     let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
-    let mut db = DB::open_cf(db_opt, path, cfds)?;
+    let mut db = DB::open_cf(db_opt, path, cfds).map_err(r2e)?;
 
     // Drops discarded column families.
     //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
     for cf in cfs_diff(&existed, &needed) {
         // Never drop default column families.
         if cf != CF_DEFAULT {
-            db.drop_cf(cf)?;
+            db.drop_cf(cf).map_err(r2e)?;
         }
     }
 
@@ -176,7 +180,8 @@ pub fn new_engine_opt(
                 .unwrap()
                 .options
                 .clone(),
-        ))?;
+        ))
+        .map_err(r2e)?;
     }
     Ok(db)
 }
