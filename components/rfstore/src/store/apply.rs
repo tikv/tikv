@@ -1247,6 +1247,7 @@ impl Applier {
         }
         self.term = apply.term;
         self.append_proposal(apply.cbs.drain(..));
+        self.metrics = ApplyMetrics::default();
         self.handle_raft_committed_entries(ctx, apply.entries.drain(..));
         self.snap.take();
         if let Some(state) = apply.new_role {
