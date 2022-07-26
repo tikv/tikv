@@ -33,8 +33,8 @@ pub struct Bootstrap<'a, ER: RaftEngine> {
     logger: Logger,
 }
 
-// Although all methods won't change internal state, but they still receive `&mut self` as it's
-// not thread safe to bootstrap concurrently.
+// Although all methods won't change internal state, but they still receive
+// `&mut self` as it's not thread safe to bootstrap concurrently.
 impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
     pub fn new(
         engine: &'a ER,
@@ -50,8 +50,20 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         }
     }
 
-    /// check store, return store id for the engine.
-    /// If the store is not bootstrapped, use None.
+    /// Bootstraps the store and returns the store ID.
+    ///
+    /// If the store is bootstrapped already, return the store ID directly.
+    pub fn bootstrap_store(&mut self) -> Result<u64> {
+        let store_id = match self.check_store()? {
+            Some(id) => id,
+            None => self.bootstrap_store_imp()?,
+        };
+
+        Ok(store_id)
+    }
+
+    /// Gets and validates the store ID from engine if it's already
+    /// bootstrapped.
     fn check_store(&mut self) -> Result<Option<u64>> {
         let ident = match self.engine.get_store_ident()? {
             Some(ident) => ident,
@@ -71,7 +83,9 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         Ok(Some(ident.get_store_id()))
     }
 
-    fn inner_bootstrap_store(&mut self) -> Result<u64> {
+    /// Allocates a store ID from PD and bootstraps the engine with it. Returns
+    /// the store ID if success.
+    fn bootstrap_store_imp(&mut self) -> Result<u64> {
         let id = self.pd_client.alloc_id()?;
         debug!(self.logger, "alloc store id"; "store_id" => id);
         let mut ident = StoreIdent::default();
@@ -88,16 +102,50 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         Ok(id)
     }
 
-    /// Bootstrap the store and return the store ID.
+    /// Bootstraps the first region.
     ///
-    /// If store is bootstrapped already, return the store ID directly.
-    pub fn bootstrap_store(&mut self) -> Result<u64> {
-        let store_id = match self.check_store()? {
-            Some(id) => id,
-            None => self.inner_bootstrap_store()?,
+    /// If the cluster is already bootstrapped, `None` is returned.
+    pub fn bootstrap_first_region(
+        &mut self,
+        store: &Store,
+        store_id: u64,
+    ) -> Result<Option<Region>> {
+        let first_region = match self.engine.get_prepare_bootstrap_region()? {
+            // The last bootstrap aborts. We need to resume or clean it up.
+            Some(r) => r,
+            None => {
+                if self.check_first_region_bootstrapped()? {
+                    // If other node has bootstrap the cluster, skip to avoid
+                    // useless ID allocating and disk writes.
+                    return Ok(None);
+                }
+                self.prepare_bootstrap_first_region(store_id)?
+            }
         };
 
-        Ok(store_id)
+        info!(self.logger, "trying to bootstrap first region"; "store_id" => store_id, "region" => ?first_region);
+        // cluster is not bootstrapped, and we choose first store to bootstrap
+        fail_point!("node_after_prepare_bootstrap_cluster", |_| Err(box_err!(
+            "injected error: node_after_prepare_bootstrap_cluster"
+        )));
+        if self.bootstrap_first_region_imp(store, &first_region)? {
+            Ok(Some(first_region))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn check_first_region_bootstrapped(&mut self) -> Result<bool> {
+        for _ in 0..MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
+            match self.pd_client.is_cluster_bootstrapped() {
+                Ok(b) => return Ok(b),
+                Err(e) => {
+                    warn!(self.logger, "check cluster bootstrapped failed"; "err" => ?e);
+                }
+            }
+            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
+        }
+        Err(box_err!("check cluster bootstrapped failed"))
     }
 
     fn prepare_bootstrap_first_region(&mut self, store_id: u64) -> Result<Region> {
@@ -127,52 +175,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         Ok(region)
     }
 
-    fn check_first_region_bootstrapped(&mut self) -> Result<bool> {
-        for _ in 0..MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
-            match self.pd_client.is_cluster_bootstrapped() {
-                Ok(b) => return Ok(b),
-                Err(e) => {
-                    warn!(self.logger, "check cluster bootstrapped failed"; "err" => ?e);
-                }
-            }
-            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
-        }
-        Err(box_err!("check cluster bootstrapped failed"))
-    }
-
-    fn check_or_prepare_bootstrap_first_region(&mut self, store_id: u64) -> Result<Option<Region>> {
-        if let Some(first_region) = self.engine.get_prepare_bootstrap_region()? {
-            // Bootstrap is aborted last time, resume. It may succeed or fail last time, no matter
-            // what, at least we need a way to clean up.
-            Ok(Some(first_region))
-        } else if self.check_first_region_bootstrapped()? {
-            // If other node has bootstrap the cluster, skip to avoid useless ID allocating and
-            // disk writes.
-            Ok(None)
-        } else {
-            // We are probably the first one triggering bootstrap.
-            self.prepare_bootstrap_first_region(store_id).map(Some)
-        }
-    }
-
-    fn clear_prepare_bootstrap(&mut self, first_region_id: Option<u64>) -> Result<()> {
-        let mut wb = self.engine.log_batch(10);
-        wb.remove_prepare_bootstrap_region()?;
-        if let Some(id) = first_region_id {
-            box_try!(
-                self.engine
-                    .clean(id, 0, &RaftLocalState::default(), &mut wb)
-            );
-        }
-        box_try!(self.engine.consume(&mut wb, true));
-        Ok(())
-    }
-
-    fn inner_bootstrap_first_region(
-        &mut self,
-        store: &Store,
-        first_region: &Region,
-    ) -> Result<bool> {
+    fn bootstrap_first_region_imp(&mut self, store: &Store, first_region: &Region) -> Result<bool> {
         let region_id = first_region.get_id();
         let mut retry = 0;
         while retry < MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
@@ -215,27 +218,16 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         Err(box_err!("bootstrapped cluster failed"))
     }
 
-    /// Bootstrap the first region.
-    ///
-    /// If the cluster is already bootstrapped, `None` is returned.
-    pub fn bootstrap_first_region(
-        &mut self,
-        store: &Store,
-        store_id: u64,
-    ) -> Result<Option<Region>> {
-        let first_region = match self.check_or_prepare_bootstrap_first_region(store_id)? {
-            Some(r) => r,
-            None => return Ok(None),
-        };
-        info!(self.logger, "trying to bootstrap first region"; "store_id" => store_id, "region" => ?first_region);
-        // cluster is not bootstrapped, and we choose first store to bootstrap
-        fail_point!("node_after_prepare_bootstrap_cluster", |_| Err(box_err!(
-            "injected error: node_after_prepare_bootstrap_cluster"
-        )));
-        if self.inner_bootstrap_first_region(store, &first_region)? {
-            Ok(Some(first_region))
-        } else {
-            Ok(None)
+    fn clear_prepare_bootstrap(&mut self, first_region_id: Option<u64>) -> Result<()> {
+        let mut wb = self.engine.log_batch(10);
+        wb.remove_prepare_bootstrap_region()?;
+        if let Some(id) = first_region_id {
+            box_try!(
+                self.engine
+                    .clean(id, 0, &RaftLocalState::default(), &mut wb)
+            );
         }
+        box_try!(self.engine.consume(&mut wb, true));
+        Ok(())
     }
 }
