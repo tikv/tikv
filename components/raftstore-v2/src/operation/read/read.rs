@@ -33,9 +33,9 @@ use raftstore::{
     },
     Error, Result,
 };
+use slog::{debug, error, info, o, warn, Logger};
 use tikv_util::{
     codec::number::decode_u64,
-    debug, error,
     lru::LruCache,
     time::{monotonic_raw_now, Instant, ThreadReadId},
 };
@@ -167,6 +167,8 @@ pub struct ReadDelegateInner {
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
     pub track_ver: TrackVer,
+
+    logger: Logger,
 }
 
 /// ReadDelegate is a wrapper of ReadDelegate in v1 and CachedTablet.
@@ -202,7 +204,10 @@ impl Drop for ReadDelegateInner {
 }
 
 impl ReadDelegateInner {
-    pub fn from_peer<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> ReadDelegateInner {
+    pub fn from_peer<EK: KvEngine, ER: RaftEngine>(
+        peer: &Peer<EK, ER>,
+        logger: Logger,
+    ) -> ReadDelegateInner {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();
@@ -220,6 +225,7 @@ impl ReadDelegateInner {
             pending_remove: false,
             bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
             track_ver: TrackVer::new(),
+            logger,
         }
     }
 
@@ -273,11 +279,12 @@ impl ReadDelegateInner {
         metrics.renew_lease_advance += 1;
         let region_id = self.region.get_id();
         if let Err(e) = router.send(region_id, CasualMessage::RenewLease) {
-            // debug!(
-            //     "failed to send renew lease message";
-            //     "region" => region_id,
-            //     "error" => ?e
-            // )
+            debug!(
+                self.logger,
+                "failed to send renew lease message";
+                "region" => region_id,
+                "error" => ?e
+            )
         }
     }
 
@@ -289,11 +296,11 @@ impl ReadDelegateInner {
                     return true;
                 } else {
                     metrics.rejected_by_lease_expire += 1;
-                    // debug!("rejected by lease expire"; "tag" => &self.tag);
+                    debug!(self.logger, "rejected by lease expire"; "tag" => &self.tag);
                 }
             } else {
                 metrics.rejected_by_term_mismatch += 1;
-                // debug!("rejected by term mismatch"; "tag" => &self.tag);
+                debug!(self.logger, "rejected by term mismatch"; "tag" => &self.tag);
             }
         }
 
@@ -309,12 +316,13 @@ impl ReadDelegateInner {
         if safe_ts >= read_ts {
             return Ok(());
         }
-        // debug!(
-        //     "reject stale read by safe ts";
-        //     "tag" => &self.tag,
-        //     "safe ts" => safe_ts,
-        //     "read ts" => read_ts
-        // );
+        debug!(
+            self.logger,
+            "reject stale read by safe ts";
+            "tag" => &self.tag,
+            "safe ts" => safe_ts,
+            "read ts" => read_ts
+        );
         metrics.rejected_by_safe_timestamp += 1;
         let mut response = cmd_resp::new_error(Error::DataIsNotReady {
             region_id: self.region.get_id(),
@@ -330,13 +338,10 @@ impl ReadDelegateInner {
     }
 
     /// Used in some external tests.
-    pub fn mock(region_id: u64) -> Self {
-        let mut region: metapb::Region = Default::default();
-        region.set_id(region_id);
-        let read_progress = Arc::new(RegionReadProgress::new(&region, 0, 0, "mock".to_owned()));
-        let cache_read_id = ThreadReadId::new();
+    pub fn mock(region: &metapb::Region) -> Self {
+        let region_id = region.get_id();
         ReadDelegateInner {
-            region: Arc::new(region),
+            region: Arc::new(region.clone()),
             peer_id: 1,
             term: 1,
             applied_index_term: 1,
@@ -345,10 +350,11 @@ impl ReadDelegateInner {
             tag: format!("[region {}] {}", region_id, 1),
             txn_extra_op: Default::default(),
             txn_ext: Default::default(),
-            read_progress,
+            read_progress: Arc::new(RegionReadProgress::new(region, 0, 0, "".to_owned())),
             pending_remove: false,
             track_ver: TrackVer::new(),
             bucket_meta: None,
+            logger: Logger::root(slog::Discard, o!("region_id" => region_id)),
         }
     }
 }
@@ -836,21 +842,11 @@ mod tests {
         term: u64,
         applied_index_term: u64,
     ) -> ReadDelegateInner {
-        ReadDelegateInner {
-            tag: String::new(),
-            region: Arc::new(region.clone()),
-            peer_id,
-            term,
-            applied_index_term,
-            leader_lease: None,
-            last_valid_ts: Timespec::new(0, 0),
-            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-            txn_ext: Arc::new(TxnExt::default()),
-            track_ver: TrackVer::new(),
-            read_progress: Arc::new(RegionReadProgress::new(region, 0, 0, "".to_owned())),
-            pending_remove: false,
-            bucket_meta: None,
-        }
+        let mut read_delegate_inner = ReadDelegateInner::mock(region);
+        read_delegate_inner.peer_id = peer_id;
+        read_delegate_inner.term = term;
+        read_delegate_inner.applied_index_term = applied_index_term;
+        read_delegate_inner
     }
 
     fn new_peers(store_id: u64, pr_ids: Vec<u64>) -> Vec<metapb::Peer> {
