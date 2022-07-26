@@ -11,7 +11,7 @@ codec = { path = "../codec", default-features = false }
 collections = { path = "../collections" }
 error_code = { path = "../error_code", default-features = false }
 farmhash = "1.1.5"
-kvproto = { git = "https://github.com/ekexium/kvproto.git", branch = "pessimistic-lock-type" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "../log_wrappers" }
 slog = "2.3"
 thiserror = "1.0"
