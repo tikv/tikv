@@ -476,10 +476,10 @@ fn test_change_leader_async() {
 }
 
 #[test]
-fn test_pd_client_heartbeat_send_failed(){
+fn test_pd_client_heartbeat_send_failed() {
     let pd_client_send_fail_fp = "region_heartbeat_send_failed";
     fail::cfg(pd_client_send_fail_fp, "return()").unwrap();
-    let server = MockServer::with_case(1,Arc::new(AlreadyBootstrapped));
+    let server = MockServer::with_case(1, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
 
     let client = new_client(eps, None);
@@ -489,38 +489,35 @@ fn test_pd_client_heartbeat_send_failed(){
         .build()
         .unwrap();
     let (tx, rx) = mpsc::channel();
-    let f = client.handle_region_heartbeat_response(1, move |resp| {
-        tx.send(resp).unwrap_or_default()
-    });
+    let f =
+        client.handle_region_heartbeat_response(1, move |resp| tx.send(resp).unwrap_or_default());
     poller.spawn(f);
 
     let heartbeat_send_fail = |ok| {
         let mut region = metapb::Region::default();
         region.set_id(1);
-        let peer = metapb::Peer::default();
-        let stat = RegionStat::default();
         poller.spawn(client.region_heartbeat(
             store::RAFT_INIT_LOG_TERM,
-            region.clone(),
-            peer.clone(),
-            stat.clone(),
+            region,
+            metapb::Peer::default(),
+            RegionStat::default(),
             None,
         ));
-        let rsp=rx.recv_timeout(Duration::from_millis(100));
-        if ok{
+        let rsp = rx.recv_timeout(Duration::from_millis(100));
+        if ok {
             assert!(rsp.is_ok());
-            assert_eq!(rsp.unwrap().get_region_id(),1);
-        }else{
+            assert_eq!(rsp.unwrap().get_region_id(), 1);
+        } else {
             assert!(rsp.is_err());
         }
-       
+
         let region = block_on(client.get_region_by_id(1));
-        if ok{
+        if ok {
             assert!(region.is_ok());
-            let r=region.unwrap();
+            let r = region.unwrap();
             assert!(r.is_some());
-            assert_eq!(1,r.unwrap().get_id());
-        }else{
+            assert_eq!(1, r.unwrap().get_id());
+        } else {
             assert!(region.is_err());
         }
     };

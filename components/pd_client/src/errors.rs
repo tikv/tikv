@@ -3,7 +3,7 @@
 use std::{error, result};
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use futures::channel::mpsc::{SendError};
+use futures::channel::mpsc::SendError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -17,7 +17,7 @@ pub enum Error {
     #[error("{0}")]
     Grpc(#[from] grpcio::Error),
     #[error("{0}")]
-    StreamDisconnect (#[from] SendError),
+    StreamDisconnect(#[from] SendError),
     #[error("unknown error {0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
     #[error("region is not found for key {}", log_wrappers::Value::key(.0))]
@@ -33,9 +33,9 @@ pub type Result<T> = result::Result<T, Error>;
 impl Error {
     pub fn retryable(&self) -> bool {
         match self {
-            Error::Grpc(_) | Error::ClusterNotBootstrapped(_)|Error::StreamDisconnect(_) => true,
+            Error::Grpc(_) | Error::ClusterNotBootstrapped(_) | Error::StreamDisconnect(_) => true,
             Error::Other(_)
-            |Error::RegionNotFound(_)
+            | Error::RegionNotFound(_)
             | Error::StoreTombstone(_)
             | Error::GlobalConfigNotFound(_)
             | Error::ClusterBootstrapped(_)
