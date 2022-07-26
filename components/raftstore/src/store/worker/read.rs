@@ -43,7 +43,7 @@ use crate::{
 };
 
 pub trait ReadExecutor<E: KvEngine> {
-    fn get_engine(&self) -> &E;
+    fn get_tablet(&self) -> &E;
     fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
 
     fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
@@ -51,7 +51,7 @@ pub trait ReadExecutor<E: KvEngine> {
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, region)?;
 
-        let engine = self.get_engine();
+        let engine = self.get_tablet();
         let mut resp = Response::default();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
@@ -441,7 +441,7 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
-    fn get_engine(&self) -> &E {
+    fn get_tablet(&self) -> &E {
         &self.kv_engine
     }
 

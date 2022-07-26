@@ -27,9 +27,9 @@ use raftstore::{
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadMetrics,
-        ReadProgress, ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TrackVer,
-        TxnExt,
+        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadExecutor,
+        ReadMetrics, ReadProgress, ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy,
+        TrackVer, TxnExt,
     },
     Error, Result,
 };
@@ -42,110 +42,6 @@ use tikv_util::{
 use time::Timespec;
 
 use crate::tablet::CachedTablet;
-
-pub trait ReadExecutor<E: KvEngine> {
-    fn get_tablet(&self) -> E;
-
-    fn get_snapshot(&mut self, read_metrics: &mut Option<&mut ReadMetrics>) -> Arc<E::Snapshot>;
-
-    fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
-        let key = req.get_get().get_key();
-        // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, region)?;
-
-        let engine = self.get_tablet();
-        let mut resp = Response::default();
-        let res = if !req.get_get().get_cf().is_empty() {
-            let cf = req.get_get().get_cf();
-            engine
-                .get_value_cf(cf, &keys::data_key(key))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "[region {}] failed to get {} with cf {}: {:?}",
-                        region.get_id(),
-                        log_wrappers::Value::key(key),
-                        cf,
-                        e
-                    )
-                })
-        } else {
-            engine.get_value(&keys::data_key(key)).unwrap_or_else(|e| {
-                panic!(
-                    "[region {}] failed to get {}: {:?}",
-                    region.get_id(),
-                    log_wrappers::Value::key(key),
-                    e
-                )
-            })
-        };
-        if let Some(res) = res {
-            resp.mut_get().set_value(res.to_vec());
-        }
-
-        Ok(resp)
-    }
-
-    fn execute(
-        &mut self,
-        msg: &RaftCmdRequest,
-        region: Arc<metapb::Region>,
-        read_index: Option<u64>,
-        mut read_metrics: Option<&mut ReadMetrics>,
-    ) -> ReadResponse<E::Snapshot> {
-        let requests = msg.get_requests();
-        let mut response = ReadResponse {
-            response: RaftCmdResponse::default(),
-            snapshot: None,
-            txn_extra_op: TxnExtraOp::Noop,
-        };
-        let mut responses = Vec::with_capacity(requests.len());
-        for req in requests {
-            let cmd_type = req.get_cmd_type();
-            let mut resp = match cmd_type {
-                CmdType::Get => match self.get_value(req, region.as_ref()) {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        // error!(?e;
-                        //     "failed to execute get command";
-                        //     "region_id" => region.get_id(),
-                        // );
-                        response.response = cmd_resp::new_error(e);
-                        return response;
-                    }
-                },
-                CmdType::Snap => {
-                    let snapshot = RegionSnapshot::from_snapshot(
-                        self.get_snapshot(&mut read_metrics),
-                        region.clone(),
-                    );
-                    response.snapshot = Some(snapshot);
-                    Response::default()
-                }
-                CmdType::ReadIndex => {
-                    let mut resp = Response::default();
-                    if let Some(read_index) = read_index {
-                        let mut res = ReadIndexResponse::default();
-                        res.set_read_index(read_index);
-                        resp.set_read_index(res);
-                    } else {
-                        panic!("[region {}] can not get readindex", region.get_id());
-                    }
-                    resp
-                }
-                CmdType::Prewrite
-                | CmdType::Put
-                | CmdType::Delete
-                | CmdType::DeleteRange
-                | CmdType::IngestSst
-                | CmdType::Invalid => unreachable!(),
-            };
-            resp.set_cmd_type(cmd_type);
-            responses.push(resp);
-        }
-        response.response.set_responses(responses.into());
-        response
-    }
-}
 
 /// A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
@@ -171,17 +67,32 @@ pub struct ReadDelegateInner {
     logger: Logger,
 }
 
-/// ReadDelegate is a wrapper of ReadDelegate in v1 and CachedTablet.
-/// The major difference with v1 is that, in v2, ReadDelegate implements ReadExecutor whereas
-/// LocalReader implements it in v1. In v2, each region has it's own tablet, and now, it's the ReadDelegate's
-/// responsibility to fetch snapshot or tablet (LocalReader does these in v1).
-/// Having CachedTablet as a field makes these operations very quickly.
 pub struct ReadDelegate<E>
 where
     E: KvEngine,
 {
-    read_delegate: Arc<ReadDelegateInner>,
+    delegate_inner: Arc<ReadDelegateInner>,
     cached_tablet: CachedTablet<E>,
+}
+
+/// ReadDelegateWithMetric is a wrapper of ReadMetrics and v2's ReadDelegate which is a wrapper of v1's ReadDelegate
+/// and CachedTablet which will be used as a temporay local variable to complete each execution.
+/// The reasons for the wrappings are:
+/// 1. For v2's ReadDelegate (the wrapper of v1's ReadDelegate and CachedTablet): Unlike v1, which uses a single
+/// global kv rocksdb, each region in v2 has it's own kv rocksdb, namely the tablet. Equipping ReadDelegate with a
+/// CachedTablet makes tablet/snapshot acquisition very quickly. But CachedTablet requires &mut self to acquire tablet
+/// as sometimes tablet may be updated which makes CachedTablet to mutate itself. ReadDelegate is read only, so wrapping them
+/// together to workaround this.
+/// 2. For ReadDelgateWithMetric (the wrapper of ReadMetrics and v2's ReadDelegate): Unlike v1 where the LocalReader implements
+/// ReadExecutor, in v2, we use ReadDelegateWithMetric to implement ReadDelegateWithMetric so that each delegate can get its
+/// tablet/snapshot very quickly. But we also need to update some metrics which is a field of LocalReader, so we use this wrapper
+/// which will be used as a temporary local variable to make compiler happy.
+pub struct ReadDelegateWithMetric<'a, E>
+where
+    E: KvEngine,
+{
+    delegate: ReadDelegate<E>,
+    metrics: &'a mut ReadMetrics,
 }
 
 impl<E> Clone for ReadDelegate<E>
@@ -190,7 +101,7 @@ where
 {
     fn clone(&self) -> Self {
         ReadDelegate {
-            read_delegate: self.read_delegate.clone(),
+            delegate_inner: self.delegate_inner.clone(),
             cached_tablet: self.cached_tablet.clone(),
         }
     }
@@ -359,17 +270,24 @@ impl ReadDelegateInner {
     }
 }
 
-impl<E> ReadExecutor<E> for ReadDelegate<E>
+impl<E> ReadExecutor<E> for ReadDelegateWithMetric<'_, E>
 where
     E: KvEngine,
 {
-    fn get_tablet(&self) -> E {
-        self.cached_tablet.cache().unwrap().clone()
+    fn get_tablet(&self) -> &E {
+        self.delegate.cached_tablet.cache().unwrap()
     }
 
-    fn get_snapshot(&mut self, read_metrics: &mut Option<&mut ReadMetrics>) -> Arc<E::Snapshot> {
-        (**read_metrics.as_mut().unwrap()).local_executed_requests += 1;
-        Arc::new(self.cached_tablet.latest().unwrap().clone().snapshot())
+    fn get_snapshot(&mut self, create_time: Option<ThreadReadId>) -> Arc<E::Snapshot> {
+        self.metrics.local_executed_requests += 1;
+        Arc::new(
+            self.delegate
+                .cached_tablet
+                .latest()
+                .unwrap()
+                .clone()
+                .snapshot(),
+        )
     }
 }
 
@@ -403,6 +321,8 @@ where
     cached_delegates: LruCache<u64, ReadDelegate<E>>,
     // A channel to raftstore.
     router: C,
+
+    logger: Logger,
 }
 
 pub struct StoreMeta<E>
@@ -432,7 +352,7 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
-    pub fn new(store_meta: Arc<Mutex<StoreMeta<E>>>, router: C) -> Self {
+    pub fn new(store_meta: Arc<Mutex<StoreMeta<E>>>, router: C, logger: Logger) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
@@ -440,6 +360,7 @@ where
             store_id: Cell::new(None),
             metrics: Default::default(),
             cached_delegates: LruCache::with_capacity_and_sample(0, 7),
+            logger,
         }
     }
 
@@ -483,7 +404,7 @@ where
     fn get_delegate(&mut self, region_id: u64) -> Option<ReadDelegate<E>> {
         let rd = match self.cached_delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
-            Some(d) if !d.read_delegate.track_ver.any_new() => Some(d.clone()),
+            Some(d) if !d.delegate_inner.track_ver.any_new() => Some(d.clone()),
             _ => {
                 // debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
@@ -504,7 +425,7 @@ where
                     Some(reader) => {
                         let meta_cache = meta_cache.unwrap();
                         let cached_read_delegate = ReadDelegate {
-                            read_delegate: Arc::new(reader),
+                            delegate_inner: Arc::new(reader),
                             cached_tablet: meta_cache,
                         };
                         self.cached_delegates
@@ -516,7 +437,7 @@ where
             }
         };
         // Return `None` if the read delegate is pending remove
-        rd.filter(|r| !r.read_delegate.pending_remove)
+        rd.filter(|r| !r.delegate_inner.pending_remove)
     }
 
     fn pre_propose_raft_command(
@@ -550,24 +471,25 @@ where
         fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
-        if let Err(e) = util::check_peer_id(req, delegate.read_delegate.peer_id) {
+        if let Err(e) = util::check_peer_id(req, delegate.delegate_inner.peer_id) {
             self.metrics.rejected_by_peer_id_mismatch += 1;
             return Err(e);
         }
 
         // Check term.
-        if let Err(e) = util::check_term(req, delegate.read_delegate.term) {
-            // debug!(
-            //     "check term";
-            //     "delegate_term" => delegate.read_delegate.term,
-            //     "header_term" => req.get_header().get_term(),
-            // );
+        if let Err(e) = util::check_term(req, delegate.delegate_inner.term) {
+            debug!(
+                self.logger,
+                "check term";
+                "delegate_term" => delegate.delegate_inner.term,
+                "header_term" => req.get_header().get_term(),
+            );
             self.metrics.rejected_by_term_mismatch += 1;
             return Err(e);
         }
 
         // Check region epoch.
-        if util::check_region_epoch(req, &delegate.read_delegate.region, false).is_err() {
+        if util::check_region_epoch(req, &delegate.delegate_inner.region, false).is_err() {
             self.metrics.rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
             // debug!("rejected by epoch not match"; "tag" => &delegate.read_delegate.tag);
@@ -575,7 +497,7 @@ where
         }
 
         let mut inspector = Inspector {
-            delegate: &delegate.read_delegate,
+            delegate: &delegate.delegate_inner,
             metrics: &mut self.metrics,
         };
         match inspector.inspect(req) {
@@ -595,6 +517,7 @@ where
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
+                let mut region_with_metric;
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
@@ -602,7 +525,7 @@ where
                             // If this peer became Leader not long ago and just after the cached
                             // snapshot was created, this snapshot can not see all data of the peer.
                             Some(id) => {
-                                if id.create_time <= delegate.read_delegate.last_valid_ts {
+                                if id.create_time <= delegate.delegate_inner.last_valid_ts {
                                     id.create_time = monotonic_raw_now();
                                 }
                                 id.create_time
@@ -610,22 +533,30 @@ where
                             None => monotonic_raw_now(),
                         };
                         if !delegate
-                            .read_delegate
+                            .delegate_inner
                             .is_in_leader_lease(snapshot_ts, &mut self.metrics)
                         {
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        let region = Arc::clone(&delegate.read_delegate.region);
-                        let response =
-                            delegate.execute(&req, region, None, Some(&mut self.metrics));
+
+                        let region = Arc::clone(&delegate.delegate_inner.region);
+                        region_with_metric = ReadDelegateWithMetric {
+                            delegate,
+                            metrics: &mut self.metrics,
+                        };
+                        let response = region_with_metric.execute(&req, &region, None, None);
+
                         // Try renew lease in advance
-                        delegate.read_delegate.maybe_renew_lease_advance(
-                            &self.router,
-                            snapshot_ts,
-                            &mut self.metrics,
-                        );
+                        region_with_metric
+                            .delegate
+                            .delegate_inner
+                            .maybe_renew_lease_advance(
+                                &self.router,
+                                snapshot_ts,
+                                region_with_metric.metrics,
+                            );
                         response
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
@@ -633,37 +564,43 @@ where
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
                         assert!(read_ts > 0);
                         if let Err(resp) = delegate
-                            .read_delegate
+                            .delegate_inner
                             .check_stale_read_safe(read_ts, &mut self.metrics)
                         {
                             cb.invoke_read(resp);
                             return;
                         }
 
-                        let region = Arc::clone(&delegate.read_delegate.region);
-                        // Getting the snapshot
-                        let response =
-                            delegate.execute(&req, region, None, Some(&mut self.metrics));
+                        let region = Arc::clone(&delegate.delegate_inner.region);
+                        region_with_metric = ReadDelegateWithMetric {
+                            delegate,
+                            metrics: &mut self.metrics,
+                        };
+                        let response = region_with_metric.execute(&req, &region, None, None);
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
-                        if let Err(resp) = delegate
-                            .read_delegate
-                            .check_stale_read_safe(read_ts, &mut self.metrics)
+                        if let Err(resp) = region_with_metric
+                            .delegate
+                            .delegate_inner
+                            .check_stale_read_safe(read_ts, region_with_metric.metrics)
                         {
                             cb.invoke_read(resp);
                             return;
                         }
-                        self.metrics.local_executed_stale_read_requests += 1;
+                        region_with_metric
+                            .metrics
+                            .local_executed_stale_read_requests += 1;
                         response
                     }
                     _ => unreachable!(),
                 };
-                cmd_resp::bind_term(&mut response.response, delegate.read_delegate.term);
+                let ReadDelegateWithMetric { delegate, .. } = region_with_metric;
+                cmd_resp::bind_term(&mut response.response, delegate.delegate_inner.term);
                 if let Some(snap) = response.snapshot.as_mut() {
-                    snap.txn_ext = Some(delegate.read_delegate.txn_ext.clone());
-                    snap.bucket_meta = delegate.read_delegate.bucket_meta.clone();
+                    snap.txn_ext = Some(delegate.delegate_inner.txn_ext.clone());
+                    snap.bucket_meta = delegate.delegate_inner.bucket_meta.clone();
                 }
-                response.txn_extra_op = delegate.read_delegate.txn_extra_op.load();
+                response.txn_extra_op = delegate.delegate_inner.txn_extra_op.load();
                 cb.invoke_read(response);
             }
             // Forward to raftstore.
@@ -672,7 +609,7 @@ where
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self.cached_delegates.get(&req.get_header().get_region_id())
                 {
-                    cmd_resp::bind_term(&mut response, delegate.read_delegate.term);
+                    cmd_resp::bind_term(&mut response, delegate.delegate_inner.term);
                 }
                 cb.invoke_read(ReadResponse {
                     response,
@@ -715,6 +652,7 @@ where
             store_id: self.store_id.clone(),
             metrics: Default::default(),
             cached_delegates: LruCache::with_capacity_and_sample(0, 7),
+            logger: self.logger.clone(),
         }
     }
 }
@@ -828,7 +766,8 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let db = engine_test::kv::new_engine(path_str, None, ALL_CFS, None).unwrap();
         let (ch, rx, _) = MockRouter::new();
-        let mut reader = LocalReader::new(store_meta, ch);
+        let mut reader =
+            LocalReader::new(store_meta, ch, Logger::root(slog::Discard, o!("" => "")));
         reader.store_id = Cell::new(Some(store_id));
 
         let factory = Arc::new(TestTabletFactoryV2::new(path_str, None, ALL_CFS, None));
@@ -1307,10 +1246,10 @@ mod tests {
         }
 
         let d = reader.get_delegate(1).unwrap();
-        assert_eq!(&*d.read_delegate.region, &region);
-        assert_eq!(d.read_delegate.term, 1);
-        assert_eq!(d.read_delegate.applied_index_term, 1);
-        assert!(d.read_delegate.leader_lease.is_none());
+        assert_eq!(&*d.delegate_inner.region, &region);
+        assert_eq!(d.delegate_inner.term, 1);
+        assert_eq!(d.delegate_inner.applied_index_term, 1);
+        assert!(d.delegate_inner.leader_lease.is_none());
         drop(d);
 
         {
@@ -1322,7 +1261,7 @@ mod tests {
                 .update(ReadProgress::region(region.clone()));
         }
         assert_eq!(
-            &*reader.get_delegate(1).unwrap().read_delegate.region,
+            &*reader.get_delegate(1).unwrap().delegate_inner.region,
             &region
         );
 
@@ -1333,7 +1272,7 @@ mod tests {
                 .unwrap()
                 .update(ReadProgress::term(2));
         }
-        assert_eq!(reader.get_delegate(1).unwrap().read_delegate.term, 2);
+        assert_eq!(reader.get_delegate(1).unwrap().delegate_inner.term, 2);
 
         {
             let mut meta = store_meta.lock().unwrap();
@@ -1346,7 +1285,7 @@ mod tests {
             reader
                 .get_delegate(1)
                 .unwrap()
-                .read_delegate
+                .delegate_inner
                 .applied_index_term,
             2
         );
@@ -1359,6 +1298,6 @@ mod tests {
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
         let d = reader.get_delegate(1).unwrap();
-        assert_eq!(d.read_delegate.leader_lease.clone().unwrap().term(), 3);
+        assert_eq!(d.delegate_inner.leader_lease.clone().unwrap().term(), 3);
     }
 }

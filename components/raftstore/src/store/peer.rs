@@ -5375,7 +5375,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn get_engine(&self) -> &EK {
+    fn get_tablet(&self) -> &EK {
         &self.engines.kv
     }
 
