@@ -71,6 +71,7 @@ pub struct ReadDelegate<E>
 where
     E: KvEngine,
 {
+    // The reason for this to be Arc, see the comment on get_delegate in raftstore/src/store/worker/read.rs
     delegate_inner: Arc<ReadDelegateInner>,
     cached_tablet: CachedTablet<E>,
 }
@@ -325,6 +326,7 @@ where
     logger: Logger,
 }
 
+// This struct is for temporay use to make LocaReader testable. It may be remove in the future.
 pub struct StoreMeta<E>
 where
     E: KvEngine,
@@ -365,7 +367,7 @@ where
     }
 
     fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
-        // debug!("localreader redirects command"; "command" => ?cmd);
+        debug!(self.logger, "localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
         match ProposalRouter::send(&self.router, cmd) {
@@ -396,17 +398,12 @@ where
         cmd.callback.invoke_read(read_resp);
     }
 
-    // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the lifetime of
-    // the returned `&ReadDelegate` will bind to `self`, and make it impossible to use `&mut self`
-    // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will be
-    // violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
-    // make the logic clear
     fn get_delegate(&mut self, region_id: u64) -> Option<ReadDelegate<E>> {
         let rd = match self.cached_delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
             Some(d) if !d.delegate_inner.track_ver.any_new() => Some(d.clone()),
             _ => {
-                // debug!("update local read delegate"; "region_id" => region_id);
+                debug!(self.logger, "update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
 
                 let (meta_len, meta_reader, meta_cache) = {
@@ -453,7 +450,7 @@ where
 
         if let Err(e) = util::check_store_id(req, store_id) {
             self.metrics.rejected_by_store_id_mismatch += 1;
-            // debug!("rejected by store id not match"; "err" => %e);
+            debug!(self.logger, "rejected by store id not match"; "err" => %e);
             return Err(e);
         }
 
@@ -463,7 +460,7 @@ where
             Some(d) => d,
             None => {
                 self.metrics.rejected_by_no_region += 1;
-                // debug!("rejected by no region"; "region_id" => region_id);
+                debug!(self.logger, "rejected by no region"; "region_id" => region_id);
                 return Ok(None);
             }
         };
@@ -492,13 +489,14 @@ where
         if util::check_region_epoch(req, &delegate.delegate_inner.region, false).is_err() {
             self.metrics.rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
-            // debug!("rejected by epoch not match"; "tag" => &delegate.read_delegate.tag);
+            debug!(self.logger, "rejected by epoch not match"; "tag" => &delegate.delegate_inner.tag);
             return Ok(None);
         }
 
         let mut inspector = Inspector {
             delegate: &delegate.delegate_inner,
             metrics: &mut self.metrics,
+            logger: &self.logger,
         };
         match inspector.inspect(req) {
             Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
@@ -657,22 +655,24 @@ where
     }
 }
 
-struct Inspector<'r, 'm> {
+struct Inspector<'r, 'm, 'a> {
     delegate: &'r ReadDelegateInner,
     metrics: &'m mut ReadMetrics,
+    logger: &'a Logger,
 }
 
-impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
+impl<'r, 'm, 'a> RequestInspector for Inspector<'r, 'm, 'a> {
     fn has_applied_to_current_term(&mut self) -> bool {
         if self.delegate.applied_index_term == self.delegate.term {
             true
         } else {
-            // debug!(
-            //     "rejected by term check";
-            //     "tag" => &self.delegate.tag,
-            //     "applied_index_term" => self.delegate.applied_index_term,
-            //     "delegate_term" => ?self.delegate.term,
-            // );
+            debug!(
+                self.logger,
+                "rejected by term check";
+                "tag" => &self.delegate.tag,
+                "applied_index_term" => self.delegate.applied_index_term,
+                "delegate_term" => ?self.delegate.term,
+            );
 
             // only for metric.
             self.metrics.rejected_by_applied_term += 1;
@@ -686,7 +686,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
             // We skip lease check, because it is postponed until `handle_read`.
             LeaseState::Valid
         } else {
-            // debug!("rejected by leader lease"; "tag" => &self.delegate.tag);
+            debug!(self.logger, "rejected by leader lease"; "tag" => &self.delegate.tag);
             self.metrics.rejected_by_no_lease += 1;
             LeaseState::Expired
         }
@@ -856,8 +856,7 @@ mod tests {
         let leader2 = prs[0].clone();
         region1.set_region_epoch(epoch13.clone());
         let term6 = 6;
-        // todo(SpadeA): modify back 100 -> 1
-        let mut lease = Lease::new(Duration::seconds(100), Duration::milliseconds(250)); // 1s is long enough.
+        let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
         let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned()));
 
         let mut cmd = RaftCmdRequest::default();
