@@ -12,7 +12,7 @@ struct LatestTablet<EK> {
 }
 
 /// Tablet may change during split, merge and applying snapshot. So we need a shared value to
-/// reflect the latest tablet. `CachedTablet` provide cache that can speed up common access.
+/// reflect the latest tablet. `CachedTablet` provide cache that can speed up common access
 #[derive(Clone, Debug)]
 pub struct CachedTablet<EK> {
     latest: Arc<LatestTablet<EK>>,
