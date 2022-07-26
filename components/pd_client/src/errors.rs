@@ -17,7 +17,7 @@ pub enum Error {
     #[error("{0}")]
     Grpc(#[from] grpcio::Error),
     #[error("{0}")]
-    SteamDisconnect(#[from]SendError),
+    StreamDisconnect (#[from] SendError),
     #[error("unknown error {0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
     #[error("region is not found for key {}", log_wrappers::Value::key(.0))]
@@ -33,7 +33,7 @@ pub type Result<T> = result::Result<T, Error>;
 impl Error {
     pub fn retryable(&self) -> bool {
         match self {
-            Error::Grpc(_) | Error::ClusterNotBootstrapped(_)|Error::SteamRpcDisconnect(_) => true,
+            Error::Grpc(_) | Error::ClusterNotBootstrapped(_)|Error::StreamDisconnect(_) => true,
             Error::Other(_)
             |Error::RegionNotFound(_)
             | Error::StoreTombstone(_)
@@ -51,7 +51,7 @@ impl ErrorCodeExt for Error {
             Error::ClusterNotBootstrapped(_) => error_code::pd::CLUSTER_NOT_BOOTSTRAPPED,
             Error::Incompatible => error_code::pd::INCOMPATIBLE,
             Error::Grpc(_) => error_code::pd::GRPC,
-            Error::SteamDisconnect(_) => error_code::pd::STREAM_DISCONNECT,
+            Error::StreamDisconnect(_) => error_code::pd::STREAM_DISCONNECT,
             Error::RegionNotFound(_) => error_code::pd::REGION_NOT_FOUND,
             Error::StoreTombstone(_) => error_code::pd::STORE_TOMBSTONE,
             Error::GlobalConfigNotFound(_) => error_code::pd::GLOBAL_CONFIG_NOT_FOUND,
