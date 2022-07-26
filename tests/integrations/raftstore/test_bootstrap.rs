@@ -6,7 +6,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{Engines, Peekable, CF_RAFT};
+use engine_traits::{Engines, Peekable, ALL_CFS, CF_RAFT};
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -37,29 +37,24 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
 
 #[test]
 fn test_node_bootstrap_with_prepared_data() {
-    use engine_traits::TabletFactory;
-    use tikv::server::KvEngineFactoryBuilder;
-
     // create a node
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let cfg = new_tikv_config(0);
 
     let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
-
     let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
-    let env = cfg.build_shared_rocks_env(None, None).unwrap();
-    let builder = KvEngineFactoryBuilder::new(env, &cfg, tmp_path.path().to_str().unwrap());
-    let factory = Arc::new(builder.build());
-    let engine = factory.create_shared_db().unwrap();
-
+    let engine = Arc::new(
+        engine_rocks::raw_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None)
+            .unwrap(),
+    );
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
     let raft_engine = Arc::new(
         engine_rocks::raw_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None)
             .unwrap(),
     );
     let engines = Engines::new(
-        engine.clone(),
+        RocksEngine::from_db(Arc::clone(&engine)),
         RocksEngine::from_db(Arc::clone(&raft_engine)),
     );
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
@@ -86,7 +81,6 @@ fn test_node_bootstrap_with_prepared_data() {
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
     assert!(
         engine
-            .as_inner()
             .c()
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
@@ -95,7 +89,6 @@ fn test_node_bootstrap_with_prepared_data() {
     let region_state_key = keys::region_state_key(region.get_id());
     assert!(
         engine
-            .as_inner()
             .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
@@ -125,11 +118,10 @@ fn test_node_bootstrap_with_prepared_data() {
         AutoSplitController::default(),
         ConcurrencyManager::new(1.into()),
         CollectorRegHandle::new_for_test(),
-        factory,
     )
     .unwrap();
     assert!(
-        Arc::clone(engine.as_inner())
+        Arc::clone(&engine)
             .c()
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
@@ -137,7 +129,6 @@ fn test_node_bootstrap_with_prepared_data() {
     );
     assert!(
         engine
-            .as_inner()
             .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()

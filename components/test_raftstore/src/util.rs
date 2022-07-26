@@ -622,19 +622,16 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
-#[allow(clippy::type_complexity)]
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IORateLimiter>>,
     cfg: &Config,
-    multi_rocks: bool,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
     LazyWorker<String>,
-    Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
@@ -665,15 +662,10 @@ pub fn create_test_engine(
             router: Mutex::new(router),
         }));
     }
-    let factory = if multi_rocks {
-        Arc::new(builder.buildv2()) as Arc<dyn TabletFactory<RocksEngine> + Send + Sync>
-    } else {
-        Arc::new(builder.build()) as Arc<dyn TabletFactory<RocksEngine> + Send + Sync>
-    };
+    let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
-
     let engines = Engines::new(engine, raft_engine);
-    (engines, key_manager, dir, sst_worker, factory)
+    (engines, key_manager, dir, sst_worker)
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

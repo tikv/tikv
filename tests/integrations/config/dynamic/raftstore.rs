@@ -8,7 +8,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, TabletFactory};
+use engine_traits::{Engines, ALL_CFS};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -25,7 +25,6 @@ use test_raftstore::TestPdClient;
 use tikv::{
     config::{ConfigController, Module, TiKvConfig},
     import::SstImporter,
-    server::KvEngineFactoryBuilder,
 };
 use tikv_util::{
     config::{ReadableSize, VersionTrack},
@@ -49,18 +48,16 @@ impl Transport for MockTransport {
     }
 }
 
-fn create_tmp_engine(
-    dir: &TempDir,
-    cfg: &TiKvConfig,
-) -> (
-    Engines<RocksEngine, RocksEngine>,
-    Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
-) {
-    let env = cfg.build_shared_rocks_env(None, None).unwrap();
-    let builder = KvEngineFactoryBuilder::new(env, cfg, dir.path().join("db").to_str().unwrap());
-    let factory = Arc::new(builder.build());
-    let engine = factory.create_shared_db().unwrap();
-
+fn create_tmp_engine(dir: &TempDir) -> Engines<RocksEngine, RocksEngine> {
+    let db = Arc::new(
+        engine_rocks::raw_util::new_engine(
+            dir.path().join("db").to_str().unwrap(),
+            None,
+            ALL_CFS,
+            None,
+        )
+        .unwrap(),
+    );
     let raft_db = Arc::new(
         engine_rocks::raw_util::new_engine(
             dir.path().join("raft").to_str().unwrap(),
@@ -70,7 +67,7 @@ fn create_tmp_engine(
         )
         .unwrap(),
     );
-    (Engines::new(engine, RocksEngine::from_db(raft_db)), factory)
+    Engines::new(RocksEngine::from_db(db), RocksEngine::from_db(raft_db))
 }
 
 fn start_raftstore(
@@ -83,7 +80,7 @@ fn start_raftstore(
     RaftBatchSystem<RocksEngine, RocksEngine>,
 ) {
     let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
-    let (engines, factory) = create_tmp_engine(dir, &cfg);
+    let engines = create_tmp_engine(dir);
     let host = CoprocessorHost::default();
     let importer = {
         let p = dir
@@ -127,7 +124,6 @@ fn start_raftstore(
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
-            factory,
         )
         .unwrap();
 

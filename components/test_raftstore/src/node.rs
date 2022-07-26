@@ -10,7 +10,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, MiscExt, Peekable, TabletFactory};
+use engine_traits::{Engines, MiscExt, Peekable};
 use kvproto::{
     kvrpcpb::ApiVersion,
     metapb,
@@ -224,7 +224,6 @@ impl Simulator for NodeCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
-        factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -291,7 +290,7 @@ impl Simulator for NodeCluster {
             Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
         };
 
-        let local_reader = LocalReader::new(factory.clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
         let split_check_runner =
@@ -315,7 +314,6 @@ impl Simulator for NodeCluster {
             AutoSplitController::default(),
             cm,
             CollectorRegHandle::new_for_test(),
-            factory,
         )?;
         assert!(
             engines

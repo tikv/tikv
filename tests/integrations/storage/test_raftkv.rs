@@ -4,7 +4,6 @@ use std::{
     thread, time,
 };
 
-use engine_rocks::raw::Writable;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, KeyRange};
@@ -44,67 +43,6 @@ fn test_raftkv() {
     empty_write(&ctx, &storage);
     wrong_context(&ctx, &storage);
     // TODO: test multiple node
-}
-
-#[test]
-fn test_get_snapshot_from_different_tablet() {
-    // todo(SpadeA): When the test is writing, the master version does not support tablet split and merge.
-    // So, when region is split, the kv rocksdb will not be splitted. To work around it, we create
-    // relevant tablets manually. When the tablet split and merge are supported, the test can be modified.
-
-    let count = 1;
-    let mut cluster = new_server_cluster(1, count);
-    cluster.set_multi_rocks();
-    cluster.run();
-
-    let region = cluster.get_region(b"a");
-    cluster.must_split(&region, b"h");
-
-    let region = cluster.get_region(b"a");
-    let region_1 = region.get_id();
-    let region = cluster.get_region(b"i");
-    let region_2 = region.get_id();
-
-    let factory = cluster.get_tablet_factory(1).unwrap();
-
-    let tablet = factory.create_tablet(region_1, 0).unwrap();
-    let db = tablet.get_sync_db();
-    db.put(b"za", b"val_a").unwrap();
-    db.put(b"zb", b"val_b").unwrap();
-
-    let tablet = factory.create_tablet(region_2, 0).unwrap();
-    let db = tablet.get_sync_db();
-    let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
-    db.put_cf(default_cf, b"zb", b"val_bbb").unwrap();
-    db.put_cf(default_cf, b"zi", b"val_i").unwrap();
-
-    let region_snap = cluster.must_get_snapshot_of_region(region_1);
-    assert_eq!(
-        region_snap
-            .get(&Key::from_encoded(b"a".to_vec()))
-            .unwrap()
-            .unwrap(),
-        b"val_a"
-    );
-    // Read "zi" leads to region error
-    assert!(region_snap.get(&Key::from_encoded(b"i".to_vec())).is_err());
-    // Region 1 cannot read the modifications that the region 2 made
-    assert_eq!(
-        region_snap
-            .get(&Key::from_encoded(b"b".to_vec()))
-            .unwrap()
-            .unwrap(),
-        b"val_b"
-    );
-
-    let region_snap = cluster.must_get_snapshot_of_region(region_2);
-    assert_eq!(
-        region_snap
-            .get(&Key::from_encoded(b"i".to_vec()))
-            .unwrap()
-            .unwrap(),
-        b"val_i"
-    );
 }
 
 #[test]

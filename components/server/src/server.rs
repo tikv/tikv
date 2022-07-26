@@ -153,9 +153,9 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
     tikv.init_encryption();
     let fetcher = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
-    let (engines, engines_info, factory) = tikv.init_raw_engines(listener);
-    tikv.init_engines(engines.clone(), factory.clone());
-    let server_config = tikv.init_servers::<F>(factory);
+    let (engines, engines_info) = tikv.init_raw_engines(listener);
+    tikv.init_engines(engines.clone());
+    let server_config = tikv.init_servers::<F>();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_storage_stats_task(engines);
@@ -553,16 +553,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         engine_rocks::FlowListener::new(tx)
     }
 
-    fn init_engines(
-        &mut self,
-        engines: Engines<RocksEngine, ER>,
-        factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
-    ) {
+    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
                 self.router.clone(),
-                LocalReader::new(factory, store_meta.clone(), self.router.clone()),
+                LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone()),
             ),
             engines.kv.clone(),
         );
@@ -607,10 +603,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         gc_worker
     }
 
-    fn init_servers<F: KvFormat>(
-        &mut self,
-        factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
-    ) -> Arc<VersionTrack<ServerConfig>> {
+    fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
@@ -1021,7 +1014,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             auto_split_controller,
             self.concurrency_manager.clone(),
             collector_reg_handle,
-            factory,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -1637,11 +1629,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (
-        Engines<RocksEngine, CER>,
-        Arc<EnginesResourceInfo>,
-        Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
-    ) {
+    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
             .config
@@ -1668,7 +1656,6 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             builder = builder.block_cache(cache);
         }
         let factory = Arc::new(builder.build());
-        let factory_clone = factory.clone();
         let kv_engine = factory
             .create_shared_db()
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
@@ -1692,7 +1679,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             &engines, 180, /*max_samples_to_preserve*/
         ));
 
-        (engines, engines_info, factory_clone)
+        (engines, engines_info)
     }
 }
 

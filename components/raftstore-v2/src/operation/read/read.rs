@@ -171,7 +171,7 @@ pub struct ReadDelegateInner {
 
 /// ReadDelegate is a wrapper of ReadDelegate in v1 and CachedTablet.
 /// The major difference with v1 is that, in v2, ReadDelegate implements ReadExecutor whereas
-/// LocalReader implements it in v1. In v2, each region has it's own tablet, and now, it's the ReadDelegate's 
+/// LocalReader implements it in v1. In v2, each region has it's own tablet, and now, it's the ReadDelegate's
 /// responsibility to fetch snapshot or tablet (LocalReader does these in v1).
 /// Having CachedTablet as a field makes these operations very quickly.
 pub struct ReadDelegate<E>
@@ -382,7 +382,7 @@ impl Display for ReadDelegateInner {
     }
 }
 
-/// The main difference between v1 and v2 is that it's ReadDelegate that implements ReadExecutor 
+/// The main difference between v1 and v2 is that it's ReadDelegate that implements ReadExecutor
 /// rather than LocalReader. See comments on ReadDelegate.
 pub struct LocalReader<C, E>
 where
@@ -847,7 +847,7 @@ mod tests {
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
             txn_ext: Arc::new(TxnExt::default()),
             track_ver: TrackVer::new(),
-            read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
+            read_progress: Arc::new(RegionReadProgress::new(region, 0, 0, "".to_owned())),
             pending_remove: false,
             bucket_meta: None,
         }
@@ -946,14 +946,14 @@ mod tests {
         lease.renew(monotonic_raw_now());
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
         let tablet1 = factory.create_tablet(region1.id, 0).unwrap();
-        let mut cached_tablet1 = CachedTablet::new(Some(tablet1.clone()));
+        let mut cached_tablet1 = CachedTablet::new(Some(tablet1));
         // But the applied_index_term is stale
         {
             let mut meta = store_meta.lock().unwrap();
             let mut read_delegate = new_read_delegate(&region1, leader2.get_id(), term6, term6 - 1);
             read_delegate.leader_lease = Some(remote);
             meta.readers.insert(1, read_delegate);
-            meta.caches.insert(1, cached_tablet1.clone());
+            meta.caches.insert(1, cached_tablet1);
         }
 
         // The applied_index_term is stale
@@ -1202,7 +1202,7 @@ mod tests {
         let mut header2 = RaftRequestHeader::default();
         header2.set_region_id(2);
         header2.set_peer(prs2[0].clone());
-        header2.set_region_epoch(epoch13.clone());
+        header2.set_region_epoch(epoch13);
         header2.set_term(1);
         cmd2.set_header(header2);
         let mut req2 = Request::default();
@@ -1217,8 +1217,8 @@ mod tests {
         let db = tablet2.get_sync_db();
         db.put(b"za2", b"val_a2").unwrap();
 
-        let mut cached_tablet1 = CachedTablet::new(Some(tablet1.clone()));
-        let mut cached_tablet2 = CachedTablet::new(Some(tablet2.clone()));
+        let mut cached_tablet1 = CachedTablet::new(Some(tablet1));
+        let mut cached_tablet2 = CachedTablet::new(Some(tablet2));
         {
             let mut meta = store_meta.lock().unwrap();
             let mut read_delegate1 = new_read_delegate(&region1, 1, 1, 1);
@@ -1232,9 +1232,9 @@ mod tests {
             read_delegate2.leader_lease = Some(remote);
 
             meta.readers.insert(1, read_delegate1);
-            meta.caches.insert(1, cached_tablet1.clone());
+            meta.caches.insert(1, cached_tablet1);
             meta.readers.insert(2, read_delegate2);
-            meta.caches.insert(2, cached_tablet2.clone());
+            meta.caches.insert(2, cached_tablet2);
         }
 
         let region1_clone = region1.clone();

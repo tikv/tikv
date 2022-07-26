@@ -15,8 +15,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{raw::DB, Compat, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, TabletFactory,
-    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
+    WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
 use futures::executor::block_on;
@@ -77,7 +77,6 @@ pub trait Simulator {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
-        factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -163,17 +162,13 @@ pub struct Cluster<T: Simulator> {
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IORateLimiter>>,
     pub engines: HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
-    pub factory_map: HashMap<u64, Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
     group_props: HashMap<u64, GroupProperties>,
     pub sst_workers: Vec<LazyWorker<String>>,
-    factories: Vec<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     pub sst_workers_map: HashMap<u64, usize>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
-
-    pub multi_rocks: bool,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -195,12 +190,10 @@ impl<T: Simulator> Cluster<T> {
             count,
             paths: vec![],
             dbs: vec![],
-            factories: vec![],
             store_metas: HashMap::default(),
             key_managers: vec![],
             io_rate_limiter: None,
             engines: HashMap::default(),
-            factory_map: HashMap::default(),
             key_managers_map: HashMap::default(),
             labels: HashMap::default(),
             group_props: HashMap::default(),
@@ -208,12 +201,7 @@ impl<T: Simulator> Cluster<T> {
             pd_client,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
-            multi_rocks: false,
         }
-    }
-
-    pub fn set_multi_rocks(&mut self) {
-        self.multi_rocks = true;
     }
 
     // To destroy temp dir later.
@@ -240,26 +228,19 @@ impl<T: Simulator> Cluster<T> {
     /// mark them as bootstrapped in `Cluster`.
     pub fn set_bootstrapped(&mut self, node_id: u64, offset: usize) {
         let engines = self.dbs[offset].clone();
-        let factory = self.factories[offset].clone();
         let key_mgr = self.key_managers[offset].clone();
         assert!(self.engines.insert(node_id, engines).is_none());
-        assert!(self.factory_map.insert(node_id, factory).is_none());
         assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
         assert!(self.sst_workers_map.insert(node_id, offset).is_none());
     }
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
-        let (engines, key_manager, dir, sst_worker, factory) = create_test_engine(
-            router,
-            self.io_rate_limiter.clone(),
-            &self.cfg,
-            self.multi_rocks,
-        );
+        let (engines, key_manager, dir, sst_worker) =
+            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
         self.sst_workers.push(sst_worker);
-        self.factories.push(factory);
     }
 
     pub fn create_engines(&mut self) {
@@ -287,7 +268,6 @@ impl<T: Simulator> Cluster<T> {
             self.create_engine(Some(router.clone()));
 
             let engines = self.dbs.last().unwrap().clone();
-            let factory = self.factories.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
@@ -303,11 +283,9 @@ impl<T: Simulator> Cluster<T> {
                 key_mgr.clone(),
                 router,
                 system,
-                factory.clone(),
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
-            self.factory_map.insert(node_id, factory);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
             self.sst_workers_map
@@ -375,16 +353,9 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
-        self.sim.wl().run_node(
-            node_id,
-            cfg,
-            engines,
-            store_meta,
-            key_mgr,
-            router,
-            system,
-            self.factory_map[&node_id].clone(),
-        )?;
+        self.sim
+            .wl()
+            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system)?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -661,8 +632,6 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
-            let factory = self.factories[i].clone();
-            self.factory_map.insert(id, factory);
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
@@ -697,8 +666,6 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
-            let factory = self.factories[i].clone();
-            self.factory_map.insert(id, factory);
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map
@@ -755,9 +722,6 @@ impl<T: Simulator> Cluster<T> {
         let engines = self.dbs.last().unwrap().clone();
         bootstrap_store(&engines, self.id(), node_id).unwrap();
         self.engines.insert(node_id, engines);
-
-        self.factory_map
-            .insert(node_id, self.factories.last().unwrap().clone());
 
         let key_mgr = self.key_managers.last().unwrap().clone();
         self.key_managers_map.insert(node_id, key_mgr);
@@ -1806,16 +1770,6 @@ impl<T: Simulator> Cluster<T> {
         )
         .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    }
-
-    pub fn get_tablet_factory(
-        &self,
-        node_id: u64,
-    ) -> Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>> {
-        if let Some(factory) = self.factory_map.get(&node_id) {
-            return Some(factory.clone());
-        }
-        None
     }
 }
 

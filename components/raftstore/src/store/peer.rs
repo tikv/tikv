@@ -5375,17 +5375,12 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn get_tablet(&self, region_id: u64) -> EK {
-        self.factory.open_tablet_cache_latest(region_id).unwrap()
+    fn get_engine(&self) -> &EK {
+        &self.engines.kv
     }
 
-    fn get_snapshot(&mut self, _: Option<ThreadReadId>, region_id: u64) -> Arc<EK::Snapshot> {
-        Arc::new(
-            self.factory
-                .open_tablet_cache_latest(region_id)
-                .unwrap()
-                .snapshot(),
-        )
+    fn get_snapshot(&mut self, _: Option<ThreadReadId>) -> Arc<EK::Snapshot> {
+        Arc::new(self.engines.kv.snapshot())
     }
 }
 
