@@ -1012,6 +1012,14 @@ impl TestPdClient {
         self.schedule_operator(region_id, op);
     }
 
+    pub fn try_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
+        let op = Operator::RemovePeer {
+            peer,
+            policy: SchedulePolicy::Repeat(5),
+        };
+        self.schedule_operator(region_id, op);
+    }
+
     pub fn joint_confchange(
         &self,
         region_id: u64,
@@ -1343,6 +1351,15 @@ impl TestPdClient {
 
     pub fn get_buckets(&self, region_id: u64) -> Option<BucketStat> {
         self.cluster.rl().buckets.get(&region_id).cloned()
+    }
+
+    pub fn get_all_regions(&self) -> Vec<metapb::Region> {
+        self.cluster
+            .rl()
+            .regions
+            .values()
+            .map(|r| r.clone())
+            .collect()
     }
 }
 

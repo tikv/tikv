@@ -250,7 +250,19 @@ impl ClusterClient {
     fn handle_retryable_error(&mut self, region_id: u64, region_err: &Error) -> bool {
         if region_err.has_not_leader() {
             let region = self.regions.get_mut(&region_id).unwrap();
-            region.leader_idx = (region.leader_idx + 1) % region.peers.len();
+            if region_err.get_not_leader().has_leader() {
+                let leader = region_err.get_not_leader().get_leader();
+                for (i, peer) in region.peers.iter().enumerate() {
+                    if peer.id == leader.id {
+                        region.leader_idx = i;
+                        return true;
+                    }
+                }
+                sleep(Duration::from_millis(100));
+                self.update_cache_by_id(region_id, None);
+            } else {
+                sleep(Duration::from_millis(100));
+            }
             return true;
         }
         if region_err.has_region_not_found() {
@@ -266,6 +278,10 @@ impl ClusterClient {
             return true;
         }
         if region_err.has_read_index_not_ready() {
+            sleep(Duration::from_millis(100));
+            return true;
+        }
+        if region_err.get_message().contains("mismatch peer") {
             sleep(Duration::from_millis(100));
             return true;
         }

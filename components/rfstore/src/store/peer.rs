@@ -416,6 +416,8 @@ pub(crate) struct Peer {
     pub(crate) last_urgent_proposal_idx: u64,
     // The index of the latest committed split command.
     pub(crate) last_committed_split_idx: u64,
+    // The index of the latest committed conf change command.
+    pub(crate) last_committed_conf_change_idx: u64,
 
     pub(crate) pending_remove: bool,
 
@@ -513,6 +515,7 @@ impl Peer {
             last_applying_idx: applied_index,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
+            last_committed_conf_change_idx: 0,
             leader_lease: Lease::new(
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
@@ -1324,6 +1327,8 @@ impl Peer {
             } else {
                 self.preprocess_pending_splits(ctx, entry, cmd.get_admin_request().get_splits());
             }
+        } else if entry.entry_type != eraftpb::EntryType::EntryNormal {
+            self.last_committed_conf_change_idx = entry.index;
         }
     }
 
@@ -1385,8 +1390,17 @@ impl Peer {
         entry: &Entry,
         splits: &BatchSplitRequest,
     ) {
+        if self.last_committed_conf_change_idx > self.get_store().applied_index() {
+            warn!("{} there is pending conf change skip split", self.tag());
+            return;
+        }
+        let result = split_gen_new_region_metas(self.region(), splits);
+        if result.is_err() {
+            warn!("preprocess pending split failed {:?}", result.unwrap_err());
+            return;
+        }
+        let regions = result.unwrap();
         self.last_committed_split_idx = entry.index;
-        let regions = split_gen_new_region_metas(self.region(), splits).unwrap();
         let split = build_split_pb(self.region(), &regions, entry.term);
         let shard_meta = self.mut_store().mut_engine_meta();
         let new_metas = shard_meta.apply_split(&split, entry.index, RAFT_INIT_LOG_INDEX);

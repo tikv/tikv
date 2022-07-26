@@ -1128,6 +1128,9 @@ impl Applier {
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
         // Write the engine before run finish split, or we will get shard not match error.
+        if self.pending_split.is_none() {
+            return Err(box_err!("split conflict with conf change"));
+        }
         let cs = self.pending_split.take().unwrap();
         let mut resp = AdminResponse::default();
         if let Err(err) = ctx.engine.split(cs, RAFT_INIT_LOG_INDEX) {
@@ -1143,7 +1146,7 @@ impl Applier {
         // clear the cache here or the locks doesn't belong to the new range would never have chance to delete.
         self.lock_cache.clear();
         let mut splits = BatchSplitResponse::default();
-        let regions = split_gen_new_region_metas(&self.region, request.get_splits())?;
+        let regions = split_gen_new_region_metas(&self.region, request.get_splits()).unwrap();
         splits.set_regions(RepeatedField::from(regions.clone()));
         resp.set_splits(splits);
         let result = ApplyResult::Res(ExecResult::SplitRegion { regions });

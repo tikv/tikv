@@ -22,7 +22,7 @@ use tikv_util::{
     time::Instant,
 };
 
-use crate::client::ClusterClient;
+use crate::{client::ClusterClient, scheduler::RegionScheduler};
 
 #[allow(dead_code)]
 pub struct ServerCluster {
@@ -218,6 +218,13 @@ impl ServerCluster {
             regions: Default::default(),
         }
     }
+
+    pub fn new_region_scheduler(&self) -> RegionScheduler {
+        RegionScheduler {
+            pd: self.pd_client.clone(),
+            store_ids: self.get_stores(),
+        }
+    }
 }
 
 pub fn new_test_config(base_dir: &Path, node_id: u16) -> TiKvConfig {
@@ -269,4 +276,19 @@ where
         sleep(Duration::from_millis(100))
     }
     panic!("{}", fail_msg);
+}
+
+pub fn try_wait<F>(f: F, seconds: usize) -> bool
+where
+    F: Fn() -> bool,
+{
+    let begin = Instant::now_coarse();
+    let timeout = Duration::from_secs(seconds as u64);
+    while begin.saturating_elapsed() < timeout {
+        if f() {
+            return true;
+        }
+        sleep(Duration::from_millis(100))
+    }
+    false
 }

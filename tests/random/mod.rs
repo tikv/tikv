@@ -47,10 +47,12 @@ fn test_random_workload() {
     }
     let start_time = Instant::now();
     let pd_client = cluster.get_pd_client();
+    let scheduler = cluster.new_region_scheduler();
     while start_time.saturating_elapsed() < timeout {
         let ts = block_on(pd_client.get_tso()).unwrap();
         sleep(Duration::from_millis(1000));
         pd_client.set_gc_safe_point(ts.into_inner());
+        scheduler.move_random_region();
     }
     for handle in handles {
         handle.join().unwrap();

@@ -11,6 +11,7 @@ grpcio = { version = "0.10", default-features = false, features = ["openssl-vend
 kvengine = { path = "../kvengine" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 pd_client = { path = "../pd_client", default-features = false }
+rand = "0.8"
 rfengine = { path = "../rfengine" }
 rfstore = { path = "../rfstore" }
 security = { path = "../security", default-features = false }

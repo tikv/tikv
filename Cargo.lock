@@ -6035,6 +6035,7 @@ dependencies = [
  "kvengine",
  "kvproto",
  "pd_client",
+ "rand 0.8.3",
  "rfengine",
  "rfstore",
  "security",

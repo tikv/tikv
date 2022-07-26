@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     result,
     sync::{atomic::AtomicU64, Arc},
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -17,6 +18,7 @@ use bytes::Bytes;
 use file_system;
 pub use s3::S3FS;
 use thiserror::Error;
+use tikv_util::time::Instant;
 use tokio::runtime::Runtime;
 
 // DFS represents a distributed file system.
@@ -39,6 +41,7 @@ pub trait DFS: Sync + Send {
 
 pub struct InMemFS {
     files: dashmap::DashMap<u64, Bytes>,
+    pending_remove: dashmap::DashMap<u64, Instant>,
     runtime: tokio::runtime::Runtime,
 }
 
@@ -52,6 +55,7 @@ impl InMemFS {
     pub fn new() -> Self {
         Self {
             files: Default::default(),
+            pending_remove: Default::default(),
             runtime: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(1)
                 .enable_all()
@@ -76,7 +80,19 @@ impl DFS for InMemFS {
     }
 
     async fn remove(&self, file_id: u64, _opts: Options) {
-        self.files.remove(&file_id);
+        if self.pending_remove.contains_key(&file_id) {
+            return;
+        }
+        let now = Instant::now_coarse();
+        self.pending_remove.insert(file_id, now);
+        self.pending_remove.retain(|id, &mut remove_time| {
+            if now.saturating_duration_since(remove_time) > Duration::from_secs(10) {
+                self.files.remove(id);
+                false
+            } else {
+                true
+            }
+        });
     }
 
     fn get_runtime(&self) -> &Runtime {

@@ -4,6 +4,7 @@ extern crate core;
 
 pub mod client;
 pub mod cluster;
+pub mod scheduler;
 
 pub use cluster::*;
 
