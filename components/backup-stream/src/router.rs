@@ -972,8 +972,7 @@ impl StreamTaskInfo {
         let stat = reader.metadata().await?;
         let reader = UnpinReader(Box::new(limiter.limit(reader.compat())));
         let filepath = &data_file.storage_path;
-        // Once we cannot get the stat of the file, use 4K I/O.
-        let est_len = stat.len().max(4096);
+        let est_len = stat.len();
 
         let ret = storage.write(filepath, reader, est_len).await;
         match ret {
@@ -1370,13 +1369,17 @@ struct TaskRange {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, time::Duration};
+    use std::{ffi::OsStr, marker::Unpin, time::Duration};
 
+    use external_storage::NoopStorage;
+    use futures::AsyncReadExt;
+    use futures_io::AsyncRead;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use tikv_util::{
         codec::number::NumberEncoder,
         worker::{dummy_scheduler, ReceiverWrapper},
     };
+    use tokio::{fs::File, sync::Mutex};
     use txn_types::{Write, WriteType};
 
     use super::*;
@@ -2068,6 +2071,59 @@ mod tests {
         ts.copy_from_slice(&buff);
         let ts = u64::from_le_bytes(ts);
         assert_eq!(ts, global_checkpoint);
+        Ok(())
+    }
+
+    struct MockCheckContentStorage {
+        s: NoopStorage,
+    }
+
+    #[async_trait::async_trait]
+    impl ExternalStorage for MockCheckContentStorage {
+        fn name(&self) -> &'static str {
+            self.s.name()
+        }
+
+        fn url(&self) -> io::Result<url::Url> {
+            self.s.url()
+        }
+
+        async fn write(
+            &self,
+            _name: &str,
+            mut reader: UnpinReader,
+            content_length: u64,
+        ) -> io::Result<()> {
+            let mut data = Vec::new();
+            reader.0.read_to_end(&mut data).await?;
+            let data_len: u64 = data.len() as _;
+
+            if data_len == content_length {
+                Ok(())
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "the length of content in reader is not equal with content_length",
+                ))
+            }
+        }
+
+        fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+            self.s.read(name)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_est_len_in_flush() -> Result<()> {
+        let noop_s = NoopStorage::default();
+        let ms = MockCheckContentStorage { s: noop_s };
+        let file_path = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        let mut f = File::create(file_path.clone()).await?;
+        f.write_all("test-data".as_bytes()).await?;
+
+        let data_file = DataFile::new(file_path).await.unwrap();
+        let result = StreamTaskInfo::flush_log_file_to(Arc::new(ms), &Mutex::new(data_file)).await;
+        assert_eq!(result.is_ok(), true);
         Ok(())
     }
 }

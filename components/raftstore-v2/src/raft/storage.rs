@@ -58,8 +58,8 @@ pub struct Storage<ER> {
 impl<ER: RaftEngine> Storage<ER> {
     /// Creates a new storage.
     ///
-    /// All metadata should be initialized before calling this method. If the region is destroyed
-    /// `None` will be returned.
+    /// All metadata should be initialized before calling this method. If the
+    /// region is destroyed, `None` will be returned.
     pub fn new(
         region_id: u64,
         store_id: u64,

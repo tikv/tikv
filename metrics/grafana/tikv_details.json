@@ -6836,7 +6836,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"unified_read_po*\"}[1m])) by (instance)",
+              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"unified_read_po.*\"}[1m])) by (instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
@@ -40297,7 +40297,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "tikv_stream_enabled{instance=~\"$instance\"}",
+              "expr": "tikv_log_backup_enabled{instance=~\"$instance\"}",
               "instant": true,
               "interval": "",
               "legendFormat": "{{ instance }}",
@@ -40359,7 +40359,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "increase(tikv_stream_flush_file_size_sum{instance=~\"$instance\"}[30m]) / on(instance) increase(tikv_stream_flush_duration_sec_count{stage=~\"save_files\",instance=~\"$instance\"}[30m])",
+              "expr": "increase(tikv_log_backup_flush_file_size_sum{instance=~\"$instance\"}[30m]) / on(instance) increase(tikv_log_backup_flush_duration_sec_count{stage=~\"save_files\",instance=~\"$instance\"}[30m])",
               "hide": false,
               "instant": true,
               "interval": "",
@@ -40420,7 +40420,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "round(increase(tikv_stream_flush_file_size_count{instance=~\"$instance\"}[30m]))",
+              "expr": "round(increase(tikv_log_backup_flush_file_size_count{instance=~\"$instance\"}[30m]))",
               "instant": true,
               "interval": "",
               "legendFormat": "{{ instance }}",
@@ -40481,7 +40481,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "round(sum(increase(tikv_stream_flush_duration_sec_count{stage=~\"save_files\",instance=~\"$instance\"}[30m])))",
+              "expr": "round(sum(increase(tikv_log_backup_flush_duration_sec_count{stage=~\"save_files\",instance=~\"$instance\"}[30m])))",
               "hide": false,
               "instant": true,
               "interval": "",
@@ -40542,7 +40542,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_stream_flush_file_size_sum{instance=~\"$instance\"}[30m]))",
+              "expr": "sum(increase(tikv_log_backup_flush_file_size_sum{instance=~\"$instance\"}[30m]))",
               "hide": false,
               "instant": true,
               "interval": "",
@@ -40761,7 +40761,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "round(sum(increase(tikv_stream_flush_file_size_count{instance=~\"$instance\"}[30m])))",
+              "expr": "round(sum(increase(tikv_log_backup_flush_file_size_count{instance=~\"$instance\"}[30m])))",
               "hide": false,
               "instant": true,
               "interval": "",
@@ -40938,7 +40938,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "rate(tikv_stream_handle_kv_batch_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])",
+              "expr": "rate(tikv_log_backup_handle_kv_batch_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])",
               "format": "time_series",
               "instant": false,
               "interval": "",
@@ -41039,7 +41039,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "rate(tikv_stream_incremental_scan_bytes_sum{instance=~\"$instance\"}[$__rate_interval])",
+              "expr": "rate(tikv_log_backup_incremental_scan_bytes_sum{instance=~\"$instance\"}[$__rate_interval])",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
@@ -41291,7 +41291,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "tikv_stream_heap_memory{instance=~\"$instance\"}",
+              "expr": "tikv_log_backup_heap_memory{instance=~\"$instance\"}",
               "format": "time_series",
               "instant": false,
               "interval": "",
@@ -41396,7 +41396,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "tikv_stream_observed_region{instance=~\"$instance\"}",
+              "expr": "tikv_log_backup_observed_region{instance=~\"$instance\"}",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
@@ -41405,7 +41405,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(tikv_stream_observed_region{instance=~\"$instance\"})",
+              "expr": "sum(tikv_log_backup_observed_region{instance=~\"$instance\"})",
               "hide": false,
               "interval": "",
               "legendFormat": "total",
@@ -41505,7 +41505,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "increase(tikv_stream_errors{instance=~\"$instance\"}[$__interval])",
+              "expr": "increase(tikv_log_backup_errors{instance=~\"$instance\"}[$__interval])",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -41516,7 +41516,7 @@
             },
             {
               "exemplar": true,
-              "expr": "tikv_stream_errors{instance=~\"$instance\"}",
+              "expr": "tikv_log_backup_errors{instance=~\"$instance\"}",
               "hide": true,
               "interval": "1m",
               "intervalFactor": 2,
@@ -41850,7 +41850,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_stream_flush_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=~\"save_files\"}[$__interval])) by (le)",
+              "expr": "sum(increase(tikv_log_backup_flush_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=~\"save_files\"}[$__interval])) by (le)",
               "format": "heatmap",
               "instant": false,
               "interval": "",
@@ -41933,7 +41933,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_stream_initial_scan_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[$__interval])) by (le)",
+              "expr": "sum(increase(tikv_log_backup_initial_scan_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[$__interval])) by (le)",
               "format": "heatmap",
               "instant": false,
               "interval": "",
@@ -42016,7 +42016,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_stream_event_handle_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=~\"to_stream_event\"}[$__interval])) by (le)",
+              "expr": "sum(increase(tikv_log_backup_event_handle_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=~\"to_stream_event\"}[$__interval])) by (le)",
               "format": "heatmap",
               "instant": false,
               "interval": "",
@@ -42099,7 +42099,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_stream_event_handle_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=~\"get_router_lock\"}[$__interval])) by (le)",
+              "expr": "sum(increase(tikv_log_backup_event_handle_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=~\"get_router_lock\"}[$__interval])) by (le)",
               "format": "heatmap",
               "instant": false,
               "interval": "",
@@ -42182,7 +42182,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_stream_handle_kv_batch_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[$__interval])) by (le)",
+              "expr": "sum(increase(tikv_log_backup_handle_kv_batch_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[$__interval])) by (le)",
               "format": "heatmap",
               "instant": false,
               "interval": "",
@@ -42265,7 +42265,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_stream_event_handle_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=~\"save_to_temp_file\"}[$__interval])) by (le)",
+              "expr": "sum(increase(tikv_log_backup_event_handle_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=~\"save_to_temp_file\"}[$__interval])) by (le)",
               "format": "heatmap",
               "instant": false,
               "interval": "",
@@ -42348,7 +42348,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_stream_on_event_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=\"write_to_tempfile\"}[$__interval])) by (le)",
+              "expr": "sum(increase(tikv_log_backup_on_event_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=\"write_to_tempfile\"}[$__interval])) by (le)",
               "format": "heatmap",
               "instant": false,
               "interval": "",
@@ -42431,7 +42431,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(tikv_stream_on_event_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=\"syscall_write\"}[$__interval])) by (le)",
+              "expr": "sum(increase(tikv_log_backup_on_event_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=\"syscall_write\"}[$__interval])) by (le)",
               "format": "heatmap",
               "instant": false,
               "interval": "",
@@ -42814,7 +42814,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(tikv_stream_initial_scan_operations{instance=~\"$instance\", op=~\"read_bytes\"}[$__rate_interval])) BY (op, cf)",
+              "expr": "sum(rate(tikv_log_backup_initial_scan_operations{instance=~\"$instance\", op=~\"read_bytes\"}[$__rate_interval])) BY (op, cf)",
               "interval": "",
               "legendFormat": "{{ cf }}",
               "queryType": "randomWalk",
@@ -42913,7 +42913,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(tikv_stream_initial_scan_operations{instance=~\"$instance\", op!~\"read_bytes\"}[$__rate_interval])) BY (op, cf) > 0",
+              "expr": "sum(rate(tikv_log_backup_initial_scan_operations{instance=~\"$instance\", op!~\"read_bytes\"}[$__rate_interval])) BY (op, cf) > 0",
               "interval": "",
               "legendFormat": "{{ cf }}/{{ op }}",
               "queryType": "randomWalk",
