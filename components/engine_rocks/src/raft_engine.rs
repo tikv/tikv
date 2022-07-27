@@ -281,10 +281,6 @@ impl RaftEngine for RocksEngine {
         Ok(vec![])
     }
 
-    fn has_builtin_entry_cache(&self) -> bool {
-        false
-    }
-
     fn flush_metrics(&self, instance: &str) {
         KvEngine::flush_metrics(self, instance)
     }
