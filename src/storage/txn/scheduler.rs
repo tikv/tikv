@@ -858,6 +858,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             let diag_ctx = DiagnosticContext {
                 key,
                 resource_group_tag: ctx.get_resource_group_tag().into(),
+                tracker_token: get_tls_tracker_token(),
             };
             scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout, diag_ctx);
             return;

@@ -26,6 +26,7 @@ use tikv_util::{
     worker::{FutureRunnable, FutureScheduler, Stopped},
 };
 use tokio::task::spawn_local;
+use tracker::GLOBAL_TRACKERS;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{
@@ -180,6 +181,7 @@ pub(crate) struct Waiter {
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
     _lifetime_timer: HistogramTimer,
+    enqueue_time: Instant,
 }
 
 impl Waiter {
@@ -199,6 +201,7 @@ impl Waiter {
             delay: Delay::new(deadline),
             diag_ctx,
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            enqueue_time: Instant::now(),
         }
     }
 
@@ -222,6 +225,13 @@ impl Waiter {
     /// `Notify` consumes the `Waiter` to notify the corresponding transaction
     /// going on.
     fn notify(self) {
+        // Record the in queue wait time.
+        GLOBAL_TRACKERS.with_tracker(self.diag_ctx.tracker_token, |tracker| {
+            let notify_time = Instant::now();
+            tracker.metrics.wait_wall_time_ms = notify_time
+                .saturating_duration_since(self.enqueue_time)
+                .as_millis() as u64;
+        });
         // Cancel the delay timer to prevent removing the same `Waiter` earlier.
         self.delay.cancel();
         self.cb.execute(self.pr);
@@ -659,6 +669,7 @@ pub mod tests {
             diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            enqueue_time: Instant::now(),
         }
     }
 

@@ -2,6 +2,8 @@
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::{ExtraOp, LockInfo};
+use tikv_util::time::Instant;
+use tracker::with_tls_tracker;
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
@@ -96,6 +98,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             Ok(PessimisticLockRes::Empty)
         };
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
+        let read_start = Instant::now();
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
@@ -128,6 +131,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 Err(e) => return Err(Error::from(e)),
             }
         }
+        with_tls_tracker(|tracker| {
+            let now = Instant::now();
+            tracker.metrics.kv_read_wall_time_ms =
+                now.saturating_duration_since(read_start).as_millis() as u64;
+        });
 
         // Some values are read, update max_ts
         match &res {

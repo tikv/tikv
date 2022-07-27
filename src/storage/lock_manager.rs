@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use tracker::TrackerToken;
 use txn_types::TimeStamp;
 
 use crate::{
@@ -23,6 +24,8 @@ pub struct DiagnosticContext {
     /// This tag is used for aggregate related kv requests (eg. generated from same statement)
     /// Currently it is the encoded SQL digest if the client is TiDB
     pub resource_group_tag: Vec<u8>,
+    /// The tracker_token is used to track and collect the lock wait details.
+    pub tracker_token: TrackerToken,
 }
 
 /// Time to wait for lock released when encountering locks.

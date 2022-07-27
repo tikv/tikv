@@ -182,6 +182,12 @@ impl fmt::Debug for TrackerToken {
     }
 }
 
+impl Default for TrackerToken {
+    fn default() -> Self {
+        INVALID_TRACKER_TOKEN
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{sync::Arc, thread};

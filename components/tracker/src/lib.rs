@@ -69,6 +69,11 @@ impl Tracker {
         detail.set_apply_write_wal_nanos(self.metrics.apply_wait_nanos);
         detail.set_apply_write_memtable_nanos(self.metrics.apply_write_memtable_nanos);
     }
+
+    pub fn write_time_detail(&self, detail: &mut pb::TimeDetail) {
+        detail.set_wait_wall_time_ms(self.metrics.wait_wall_time_ms);
+        detail.set_kv_read_wall_time_ms(self.metrics.kv_read_wall_time_ms);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -148,4 +153,8 @@ pub struct RequestMetrics {
     pub apply_thread_wait_nanos: u64,
     pub apply_write_wal_nanos: u64,
     pub apply_write_memtable_nanos: u64,
+
+    // Some execution details about the `TimeDetail` fields in kv request responses.
+    pub wait_wall_time_ms: u64,
+    pub kv_read_wall_time_ms: u64,
 }
