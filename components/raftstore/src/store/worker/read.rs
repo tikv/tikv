@@ -243,7 +243,7 @@ impl ReadDelegate {
         }
     }
 
-    fn fresh_valid_ts(&mut self) {
+    pub fn fresh_valid_ts(&mut self) {
         self.last_valid_ts = monotonic_raw_now();
     }
 
@@ -276,7 +276,7 @@ impl ReadDelegate {
 
     // If the remote lease will be expired in near future send message
     // to `raftstore` renew it
-    fn maybe_renew_lease_advance<EK: KvEngine>(
+    pub fn maybe_renew_lease_advance<EK: KvEngine>(
         &self,
         router: &dyn CasualRouter<EK>,
         ts: Timespec,
@@ -301,7 +301,7 @@ impl ReadDelegate {
         }
     }
 
-    fn is_in_leader_lease(&self, ts: Timespec, metrics: &mut ReadMetrics) -> bool {
+    pub fn is_in_leader_lease(&self, ts: Timespec, metrics: &mut ReadMetrics) -> bool {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
@@ -320,7 +320,7 @@ impl ReadDelegate {
         false
     }
 
-    fn check_stale_read_safe<S: Snapshot>(
+    pub fn check_stale_read_safe<S: Snapshot>(
         &self,
         read_ts: u64,
         metrics: &mut ReadMetrics,

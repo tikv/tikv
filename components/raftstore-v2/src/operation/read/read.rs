@@ -27,9 +27,9 @@ use raftstore::{
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadExecutor,
-        ReadMetrics, ReadProgress, ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy,
-        TrackVer, TxnExt,
+        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand,
+        ReadDelegate as ReadDelegateV1, ReadExecutor, ReadMetrics, ReadProgress, ReadResponse,
+        RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
     },
     Error, Result,
 };
@@ -43,27 +43,9 @@ use time::Timespec;
 
 use crate::tablet::CachedTablet;
 
-/// A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
 pub struct ReadDelegateInner {
-    pub region: Arc<metapb::Region>,
-    pub peer_id: u64,
-    pub term: u64,
-    pub applied_index_term: u64,
-    pub leader_lease: Option<RemoteLease>,
-    pub last_valid_ts: Timespec,
-
-    pub tag: String,
-    pub bucket_meta: Option<Arc<BucketMeta>>,
-    pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    pub txn_ext: Arc<TxnExt>,
-    pub read_progress: Arc<RegionReadProgress>,
-    pub pending_remove: bool,
-
-    // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
-    // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
-    pub track_ver: TrackVer,
-
+    pub read_delegate: ReadDelegateV1,
     logger: Logger,
 }
 
@@ -76,19 +58,22 @@ where
     cached_tablet: CachedTablet<E>,
 }
 
-/// ReadDelegateWithMetric is a wrapper of ReadMetrics and v2's ReadDelegate which is a wrapper of v1's ReadDelegate
-/// and CachedTablet which will be used as a temporay local variable to complete each execution.
+/// ReadDelegateExt is a wrapper of ReadMetrics (now, only ReadMetrics, it can has other fields in the future) and
+/// v2's ReadDelegate which is a wrapper of v1's ReadDelegate and CachedTablet which will be used as a temporay
+/// local variable to complete each execution.
+///
 /// The reasons for the wrappings are:
 /// 1. For v2's ReadDelegate (the wrapper of v1's ReadDelegate and CachedTablet): Unlike v1, which uses a single
 /// global kv rocksdb, each region in v2 has it's own kv rocksdb, namely the tablet. Equipping ReadDelegate with a
 /// CachedTablet makes tablet/snapshot acquisition very quickly. But CachedTablet requires &mut self to acquire tablet
 /// as sometimes tablet may be updated which makes CachedTablet to mutate itself. ReadDelegate is read only, so wrapping them
 /// together to workaround this.
+///
 /// 2. For ReadDelgateWithMetric (the wrapper of ReadMetrics and v2's ReadDelegate): Unlike v1 where the LocalReader implements
-/// ReadExecutor, in v2, we use ReadDelegateWithMetric to implement ReadDelegateWithMetric so that each delegate can get its
+/// ReadExecutor, in v2, we use ReadDelegateExt to implement ReadDelegateExt so that each delegate can get its
 /// tablet/snapshot very quickly. But we also need to update some metrics which is a field of LocalReader, so we use this wrapper
 /// which will be used as a temporary local variable to make compiler happy.
-pub struct ReadDelegateWithMetric<'a, E>
+pub struct ReadDelegateExt<'a, E>
 where
     E: KvEngine,
 {
@@ -108,170 +93,42 @@ where
     }
 }
 
-impl Drop for ReadDelegateInner {
-    fn drop(&mut self) {
-        // call `inc` to notify the source `ReadDelegate` is dropped
-        self.track_ver.inc();
-    }
-}
-
 impl ReadDelegateInner {
     pub fn from_peer<EK: KvEngine, ER: RaftEngine>(
         peer: &Peer<EK, ER>,
         logger: Logger,
     ) -> ReadDelegateInner {
-        let region = peer.region().clone();
-        let region_id = region.get_id();
-        let peer_id = peer.peer.get_id();
         ReadDelegateInner {
-            region: Arc::new(region),
-            peer_id,
-            term: peer.term(),
-            applied_index_term: peer.get_store().applied_index_term(),
-            leader_lease: None,
-            last_valid_ts: Timespec::new(0, 0),
-            tag: format!("[region {}] {}", region_id, peer_id),
-            txn_extra_op: peer.txn_extra_op.clone(),
-            txn_ext: peer.txn_ext.clone(),
-            read_progress: peer.read_progress.clone(),
-            pending_remove: false,
-            bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
-            track_ver: TrackVer::new(),
+            read_delegate: ReadDelegateV1::from_peer(peer),
             logger,
         }
-    }
-
-    fn fresh_valid_ts(&mut self) {
-        self.last_valid_ts = monotonic_raw_now();
-    }
-
-    pub fn mark_pending_remove(&mut self) {
-        self.pending_remove = true;
-        self.track_ver.inc();
-    }
-
-    pub fn update(&mut self, progress: ReadProgress) {
-        self.fresh_valid_ts();
-        self.track_ver.inc();
-        match progress {
-            ReadProgress::Region(region) => {
-                self.region = Arc::new(region);
-            }
-            ReadProgress::Term(term) => {
-                self.term = term;
-            }
-            ReadProgress::AppliedIndexTerm(applied_index_term) => {
-                self.applied_index_term = applied_index_term;
-            }
-            ReadProgress::LeaderLease(leader_lease) => {
-                self.leader_lease = Some(leader_lease);
-            }
-            ReadProgress::RegionBuckets(bucket_meta) => {
-                self.bucket_meta = Some(bucket_meta);
-            }
-        }
-    }
-
-    // If the remote lease will be expired in near future send message
-    // to `raftstore` renew it
-    fn maybe_renew_lease_advance<EK: KvEngine>(
-        &self,
-        router: &dyn CasualRouter<EK>,
-        ts: Timespec,
-        metrics: &mut ReadMetrics,
-    ) {
-        if !self
-            .leader_lease
-            .as_ref()
-            .map(|lease| lease.need_renew(ts))
-            .unwrap_or(false)
-        {
-            return;
-        }
-        metrics.renew_lease_advance += 1;
-        let region_id = self.region.get_id();
-        if let Err(e) = router.send(region_id, CasualMessage::RenewLease) {
-            debug!(
-                self.logger,
-                "failed to send renew lease message";
-                "region" => region_id,
-                "error" => ?e
-            )
-        }
-    }
-
-    fn is_in_leader_lease(&self, ts: Timespec, metrics: &mut ReadMetrics) -> bool {
-        if let Some(ref lease) = self.leader_lease {
-            let term = lease.term();
-            if term == self.term {
-                if lease.inspect(Some(ts)) == LeaseState::Valid {
-                    return true;
-                } else {
-                    metrics.rejected_by_lease_expire += 1;
-                    debug!(self.logger, "rejected by lease expire"; "tag" => &self.tag);
-                }
-            } else {
-                metrics.rejected_by_term_mismatch += 1;
-                debug!(self.logger, "rejected by term mismatch"; "tag" => &self.tag);
-            }
-        }
-
-        false
-    }
-
-    fn check_stale_read_safe<S: Snapshot>(
-        &self,
-        read_ts: u64,
-        metrics: &mut ReadMetrics,
-    ) -> std::result::Result<(), ReadResponse<S>> {
-        let safe_ts = self.read_progress.safe_ts();
-        if safe_ts >= read_ts {
-            return Ok(());
-        }
-        debug!(
-            self.logger,
-            "reject stale read by safe ts";
-            "tag" => &self.tag,
-            "safe ts" => safe_ts,
-            "read ts" => read_ts
-        );
-        metrics.rejected_by_safe_timestamp += 1;
-        let mut response = cmd_resp::new_error(Error::DataIsNotReady {
-            region_id: self.region.get_id(),
-            peer_id: self.peer_id,
-            safe_ts,
-        });
-        cmd_resp::bind_term(&mut response, self.term);
-        Err(ReadResponse {
-            response,
-            snapshot: None,
-            txn_extra_op: TxnExtraOp::Noop,
-        })
     }
 
     /// Used in some external tests.
     pub fn mock(region: &metapb::Region) -> Self {
         let region_id = region.get_id();
         ReadDelegateInner {
-            region: Arc::new(region.clone()),
-            peer_id: 1,
-            term: 1,
-            applied_index_term: 1,
-            leader_lease: None,
-            last_valid_ts: Timespec::new(0, 0),
-            tag: format!("[region {}] {}", region_id, 1),
-            txn_extra_op: Default::default(),
-            txn_ext: Default::default(),
-            read_progress: Arc::new(RegionReadProgress::new(region, 0, 0, "".to_owned())),
-            pending_remove: false,
-            track_ver: TrackVer::new(),
-            bucket_meta: None,
+            read_delegate: ReadDelegateV1 {
+                region: Arc::new(region.clone()),
+                peer_id: 1,
+                term: 1,
+                applied_index_term: 1,
+                leader_lease: None,
+                last_valid_ts: Timespec::new(0, 0),
+                tag: format!("[region {}] {}", region_id, 1),
+                txn_extra_op: Default::default(),
+                txn_ext: Default::default(),
+                read_progress: Arc::new(RegionReadProgress::new(region, 0, 0, "".to_owned())),
+                pending_remove: false,
+                track_ver: TrackVer::new(),
+                bucket_meta: None,
+            },
             logger: Logger::root(slog::Discard, o!("region_id" => region_id)),
         }
     }
 }
 
-impl<E> ReadExecutor<E> for ReadDelegateWithMetric<'_, E>
+impl<E> ReadExecutor<E> for ReadDelegateExt<'_, E>
 where
     E: KvEngine,
 {
@@ -294,16 +151,7 @@ where
 
 impl Display for ReadDelegateInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ReadDelegate for region {}, \
-             leader {} at term {}, applied_index_term {}, has lease {}",
-            self.region.get_id(),
-            self.peer_id,
-            self.term,
-            self.applied_index_term,
-            self.leader_lease.is_some(),
-        )
+        self.read_delegate.fmt(f)
     }
 }
 
@@ -318,7 +166,6 @@ where
     store_meta: Arc<Mutex<StoreMeta<E>>>,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
-    // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     cached_delegates: LruCache<u64, ReadDelegate<E>>,
     // A channel to raftstore.
     router: C,
@@ -401,7 +248,7 @@ where
     fn get_delegate(&mut self, region_id: u64) -> Option<ReadDelegate<E>> {
         let rd = match self.cached_delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
-            Some(d) if !d.delegate_inner.track_ver.any_new() => Some(d.clone()),
+            Some(d) if !d.delegate_inner.read_delegate.track_ver.any_new() => Some(d.clone()),
             _ => {
                 debug!(self.logger, "update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
@@ -434,7 +281,7 @@ where
             }
         };
         // Return `None` if the read delegate is pending remove
-        rd.filter(|r| !r.delegate_inner.pending_remove)
+        rd.filter(|r| !r.delegate_inner.read_delegate.pending_remove)
     }
 
     fn pre_propose_raft_command(
@@ -468,17 +315,17 @@ where
         fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
-        if let Err(e) = util::check_peer_id(req, delegate.delegate_inner.peer_id) {
+        if let Err(e) = util::check_peer_id(req, delegate.delegate_inner.read_delegate.peer_id) {
             self.metrics.rejected_by_peer_id_mismatch += 1;
             return Err(e);
         }
 
         // Check term.
-        if let Err(e) = util::check_term(req, delegate.delegate_inner.term) {
+        if let Err(e) = util::check_term(req, delegate.delegate_inner.read_delegate.term) {
             debug!(
                 self.logger,
                 "check term";
-                "delegate_term" => delegate.delegate_inner.term,
+                "delegate_term" => delegate.delegate_inner.read_delegate.term,
                 "header_term" => req.get_header().get_term(),
             );
             self.metrics.rejected_by_term_mismatch += 1;
@@ -486,10 +333,12 @@ where
         }
 
         // Check region epoch.
-        if util::check_region_epoch(req, &delegate.delegate_inner.region, false).is_err() {
+        if util::check_region_epoch(req, &delegate.delegate_inner.read_delegate.region, false)
+            .is_err()
+        {
             self.metrics.rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
-            debug!(self.logger, "rejected by epoch not match"; "tag" => &delegate.delegate_inner.tag);
+            debug!(self.logger, "rejected by epoch not match"; "tag" => &delegate.delegate_inner.read_delegate.tag);
             return Ok(None);
         }
 
@@ -523,7 +372,9 @@ where
                             // If this peer became Leader not long ago and just after the cached
                             // snapshot was created, this snapshot can not see all data of the peer.
                             Some(id) => {
-                                if id.create_time <= delegate.delegate_inner.last_valid_ts {
+                                if id.create_time
+                                    <= delegate.delegate_inner.read_delegate.last_valid_ts
+                                {
                                     id.create_time = monotonic_raw_now();
                                 }
                                 id.create_time
@@ -532,6 +383,7 @@ where
                         };
                         if !delegate
                             .delegate_inner
+                            .read_delegate
                             .is_in_leader_lease(snapshot_ts, &mut self.metrics)
                         {
                             // Forward to raftstore.
@@ -539,8 +391,8 @@ where
                             return;
                         }
 
-                        let region = Arc::clone(&delegate.delegate_inner.region);
-                        region_with_metric = ReadDelegateWithMetric {
+                        let region = Arc::clone(&delegate.delegate_inner.read_delegate.region);
+                        region_with_metric = ReadDelegateExt {
                             delegate,
                             metrics: &mut self.metrics,
                         };
@@ -550,6 +402,7 @@ where
                         region_with_metric
                             .delegate
                             .delegate_inner
+                            .read_delegate
                             .maybe_renew_lease_advance(
                                 &self.router,
                                 snapshot_ts,
@@ -563,14 +416,15 @@ where
                         assert!(read_ts > 0);
                         if let Err(resp) = delegate
                             .delegate_inner
+                            .read_delegate
                             .check_stale_read_safe(read_ts, &mut self.metrics)
                         {
                             cb.invoke_read(resp);
                             return;
                         }
 
-                        let region = Arc::clone(&delegate.delegate_inner.region);
-                        region_with_metric = ReadDelegateWithMetric {
+                        let region = Arc::clone(&delegate.delegate_inner.read_delegate.region);
+                        region_with_metric = ReadDelegateExt {
                             delegate,
                             metrics: &mut self.metrics,
                         };
@@ -580,6 +434,7 @@ where
                         if let Err(resp) = region_with_metric
                             .delegate
                             .delegate_inner
+                            .read_delegate
                             .check_stale_read_safe(read_ts, region_with_metric.metrics)
                         {
                             cb.invoke_read(resp);
@@ -592,13 +447,16 @@ where
                     }
                     _ => unreachable!(),
                 };
-                let ReadDelegateWithMetric { delegate, .. } = region_with_metric;
-                cmd_resp::bind_term(&mut response.response, delegate.delegate_inner.term);
+                let ReadDelegateExt { delegate, .. } = region_with_metric;
+                cmd_resp::bind_term(
+                    &mut response.response,
+                    delegate.delegate_inner.read_delegate.term,
+                );
                 if let Some(snap) = response.snapshot.as_mut() {
-                    snap.txn_ext = Some(delegate.delegate_inner.txn_ext.clone());
-                    snap.bucket_meta = delegate.delegate_inner.bucket_meta.clone();
+                    snap.txn_ext = Some(delegate.delegate_inner.read_delegate.txn_ext.clone());
+                    snap.bucket_meta = delegate.delegate_inner.read_delegate.bucket_meta.clone();
                 }
-                response.txn_extra_op = delegate.delegate_inner.txn_extra_op.load();
+                response.txn_extra_op = delegate.delegate_inner.read_delegate.txn_extra_op.load();
                 cb.invoke_read(response);
             }
             // Forward to raftstore.
@@ -607,7 +465,7 @@ where
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self.cached_delegates.get(&req.get_header().get_region_id())
                 {
-                    cmd_resp::bind_term(&mut response, delegate.delegate_inner.term);
+                    cmd_resp::bind_term(&mut response, delegate.delegate_inner.read_delegate.term);
                 }
                 cb.invoke_read(ReadResponse {
                     response,
@@ -663,15 +521,15 @@ struct Inspector<'r, 'm, 'a> {
 
 impl<'r, 'm, 'a> RequestInspector for Inspector<'r, 'm, 'a> {
     fn has_applied_to_current_term(&mut self) -> bool {
-        if self.delegate.applied_index_term == self.delegate.term {
+        if self.delegate.read_delegate.applied_index_term == self.delegate.read_delegate.term {
             true
         } else {
             debug!(
                 self.logger,
                 "rejected by term check";
-                "tag" => &self.delegate.tag,
-                "applied_index_term" => self.delegate.applied_index_term,
-                "delegate_term" => ?self.delegate.term,
+                "tag" => &self.delegate.read_delegate.tag,
+                "applied_index_term" => self.delegate.read_delegate.applied_index_term,
+                "delegate_term" => ?self.delegate.read_delegate.term,
             );
 
             // only for metric.
@@ -682,11 +540,11 @@ impl<'r, 'm, 'a> RequestInspector for Inspector<'r, 'm, 'a> {
 
     fn inspect_lease(&mut self) -> LeaseState {
         // TODO: disable localreader if we did not enable raft's check_quorum.
-        if self.delegate.leader_lease.is_some() {
+        if self.delegate.read_delegate.leader_lease.is_some() {
             // We skip lease check, because it is postponed until `handle_read`.
             LeaseState::Valid
         } else {
-            debug!(self.logger, "rejected by leader lease"; "tag" => &self.delegate.tag);
+            debug!(self.logger, "rejected by leader lease"; "tag" => &self.delegate.read_delegate.tag);
             self.metrics.rejected_by_no_lease += 1;
             LeaseState::Expired
         }
@@ -782,9 +640,9 @@ mod tests {
         applied_index_term: u64,
     ) -> ReadDelegateInner {
         let mut read_delegate_inner = ReadDelegateInner::mock(region);
-        read_delegate_inner.peer_id = peer_id;
-        read_delegate_inner.term = term;
-        read_delegate_inner.applied_index_term = applied_index_term;
+        read_delegate_inner.read_delegate.peer_id = peer_id;
+        read_delegate_inner.read_delegate.term = term;
+        read_delegate_inner.read_delegate.applied_index_term = applied_index_term;
         read_delegate_inner
     }
 
@@ -885,7 +743,7 @@ mod tests {
         {
             let mut meta = store_meta.lock().unwrap();
             let mut read_delegate = new_read_delegate(&region1, leader2.get_id(), term6, term6 - 1);
-            read_delegate.leader_lease = Some(remote);
+            read_delegate.read_delegate.leader_lease = Some(remote);
             meta.readers.insert(1, read_delegate);
             meta.caches.insert(1, cached_tablet1);
         }
@@ -899,7 +757,7 @@ mod tests {
         let pg = ReadProgress::applied_index_term(term6);
         {
             let mut meta = store_meta.lock().unwrap();
-            meta.readers.get_mut(&1).unwrap().update(pg);
+            meta.readers.get_mut(&1).unwrap().read_delegate.update(pg);
         }
         let task =
             RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
@@ -1019,10 +877,12 @@ mod tests {
             meta.readers
                 .get_mut(&1)
                 .unwrap()
+                .read_delegate
                 .update(ReadProgress::term(term6 + 3));
             meta.readers
                 .get_mut(&1)
                 .unwrap()
+                .read_delegate
                 .update(ReadProgress::applied_index_term(term6 + 3));
         }
         reader.propose_raft_command(
@@ -1052,7 +912,7 @@ mod tests {
         let pg = ReadProgress::leader_lease(remote_lease);
         {
             let mut meta = store_meta.lock().unwrap();
-            meta.readers.get_mut(&1).unwrap().update(pg);
+            meta.readers.get_mut(&1).unwrap().read_delegate.update(pg);
         }
         let task =
             RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
@@ -1162,8 +1022,8 @@ mod tests {
             lease.renew(monotonic_raw_now());
             let remote = lease.maybe_new_remote_lease(1).unwrap();
 
-            read_delegate1.leader_lease = Some(remote.clone());
-            read_delegate2.leader_lease = Some(remote);
+            read_delegate1.read_delegate.leader_lease = Some(remote.clone());
+            read_delegate2.read_delegate.leader_lease = Some(remote);
 
             meta.readers.insert(1, read_delegate1);
             meta.caches.insert(1, cached_tablet1);
@@ -1245,10 +1105,10 @@ mod tests {
         }
 
         let d = reader.get_delegate(1).unwrap();
-        assert_eq!(&*d.delegate_inner.region, &region);
-        assert_eq!(d.delegate_inner.term, 1);
-        assert_eq!(d.delegate_inner.applied_index_term, 1);
-        assert!(d.delegate_inner.leader_lease.is_none());
+        assert_eq!(&*d.delegate_inner.read_delegate.region, &region);
+        assert_eq!(d.delegate_inner.read_delegate.term, 1);
+        assert_eq!(d.delegate_inner.read_delegate.applied_index_term, 1);
+        assert!(d.delegate_inner.read_delegate.leader_lease.is_none());
         drop(d);
 
         {
@@ -1257,10 +1117,16 @@ mod tests {
             meta.readers
                 .get_mut(&1)
                 .unwrap()
+                .read_delegate
                 .update(ReadProgress::region(region.clone()));
         }
         assert_eq!(
-            &*reader.get_delegate(1).unwrap().delegate_inner.region,
+            &*reader
+                .get_delegate(1)
+                .unwrap()
+                .delegate_inner
+                .read_delegate
+                .region,
             &region
         );
 
@@ -1269,15 +1135,25 @@ mod tests {
             meta.readers
                 .get_mut(&1)
                 .unwrap()
+                .read_delegate
                 .update(ReadProgress::term(2));
         }
-        assert_eq!(reader.get_delegate(1).unwrap().delegate_inner.term, 2);
+        assert_eq!(
+            reader
+                .get_delegate(1)
+                .unwrap()
+                .delegate_inner
+                .read_delegate
+                .term,
+            2
+        );
 
         {
             let mut meta = store_meta.lock().unwrap();
             meta.readers
                 .get_mut(&1)
                 .unwrap()
+                .read_delegate
                 .update(ReadProgress::applied_index_term(2));
         }
         assert_eq!(
@@ -1285,6 +1161,7 @@ mod tests {
                 .get_delegate(1)
                 .unwrap()
                 .delegate_inner
+                .read_delegate
                 .applied_index_term,
             2
         );
@@ -1294,9 +1171,17 @@ mod tests {
             let remote = lease.maybe_new_remote_lease(3).unwrap();
             let pg = ReadProgress::leader_lease(remote);
             let mut meta = store_meta.lock().unwrap();
-            meta.readers.get_mut(&1).unwrap().update(pg);
+            meta.readers.get_mut(&1).unwrap().read_delegate.update(pg);
         }
         let d = reader.get_delegate(1).unwrap();
-        assert_eq!(d.delegate_inner.leader_lease.clone().unwrap().term(), 3);
+        assert_eq!(
+            d.delegate_inner
+                .read_delegate
+                .leader_lease
+                .clone()
+                .unwrap()
+                .term(),
+            3
+        );
     }
 }
