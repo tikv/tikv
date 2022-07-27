@@ -376,9 +376,9 @@ impl RouterInner {
     }
 
     /// Find the task for a region. If `end_key` is empty, search from start_key
-    /// to +inf. It simply search for a random possible overlapping range
-    /// and get its task. FIXME: If a region crosses many tasks, this can
-    /// only find one of them.
+    /// to +inf. It simply search for a random possible overlapping range and
+    /// get its task.
+    /// FIXME: If a region crosses many tasks, this can only find one of them.
     pub fn find_task_by_range(&self, start_key: &[u8], mut end_key: &[u8]) -> Option<String> {
         let r = self.ranges.rl();
         if end_key.is_empty() {

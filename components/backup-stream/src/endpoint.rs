@@ -431,7 +431,7 @@ where
         // Stale data is acceptable, while stale locks may block the checkpoint
         // advancing.
         // ```text
-        // Let L be the instant some key locked, U be the instant it
+        // Let L be the instant some key locked, U be the instant it unlocked,
         // +---------*-------L-----------U--*-------------+
         //           ^   ^----(1)----^      ^ We get the snapshot for initial scanning at here.
         //           +- If we issue refresh resolver at here, and the cmd batch (1) is the last cmd batch of the first observing.
