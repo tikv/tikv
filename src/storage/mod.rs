@@ -6763,8 +6763,8 @@ mod tests {
                     }),
                 )
                 .unwrap();
-            // The DummyLockManager consumes the Msg::WaitForLock.
-            rx.recv_timeout(Duration::from_millis(100)).unwrap_err();
+            // The DummyLockManager calls the callback immediately if wait_timeout is not set.
+            rx.recv_timeout(Duration::from_millis(1000)).unwrap();
         }
 
         // Always update max_ts when trying to read.
@@ -7315,6 +7315,21 @@ mod tests {
                 .unwrap();
             rx.recv().unwrap();
             rx1.recv().unwrap();
+
+            must_have_locks(
+                &storage,
+                50,
+                &key(0),
+                &key(10),
+                &[
+                    (&key(1), Op::PessimisticLock, 25, 25),
+                    (&key(2), Op::PessimisticLock, 25, 40),
+                    (&key(3), Op::PessimisticLock, 25, 25),
+                    (&key(4), Op::PessimisticLock, 25, 40),
+                    (&key(5), Op::PessimisticLock, 25, 30),
+                    (&key(6), Op::PessimisticLock, 25, 25),
+                ],
+            );
 
             // Test idempotency
             for i in 0..6usize {
@@ -9058,8 +9073,8 @@ mod tests {
                 }),
             )
             .unwrap();
-        // DummyLockManager just drops the callback, so it will fail to receive anything.
-        assert!(rx.recv().is_err());
+        // DummyLockManager will call the callback immediately if wait_timeout is not set.
+        rx.recv().unwrap().unwrap_err();
 
         let (tx, rx) = channel();
         storage
