@@ -30,8 +30,9 @@ pub type Result<T> = result::Result<T, Error>;
 impl Error {
     pub fn retryable(&self) -> bool {
         match self {
-            Error::Grpc(_) | Error::Other(_) | Error::ClusterNotBootstrapped(_) => true,
-            Error::RegionNotFound(_)
+            Error::Grpc(_) | Error::ClusterNotBootstrapped(_) => true,
+            Error::Other(_)
+            | Error::RegionNotFound(_)
             | Error::StoreTombstone(_)
             | Error::GlobalConfigNotFound(_)
             | Error::ClusterBootstrapped(_)
