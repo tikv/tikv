@@ -81,7 +81,7 @@ where
     };
 
     let mut stats = BuildStatistics::default();
-    box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
+    box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
         stats.key_count += 1;
         stats.total_size += key.len() + value.len();
         box_try!(BytesEncoder::encode_compact_bytes(&mut writer, key));
@@ -133,7 +133,7 @@ where
         .to_string();
     let sst_writer = RefCell::new(create_sst_file_writer::<E>(engine, cf, &path)?);
     let mut file_length: usize = 0;
-    box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
+    box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if file_length + entry_len > raw_size_per_file as usize {
             cf_file.add_file(file_id); // add previous file
@@ -375,7 +375,7 @@ mod tests {
                 // Scan keys from db
                 let mut keys_in_db: HashMap<_, Vec<_>> = HashMap::new();
                 for cf in SNAPSHOT_CFS {
-                    snap.scan_cf(
+                    snap.scan(
                         cf,
                         &keys::data_key(b"a"),
                         &keys::data_end_key(b"z"),

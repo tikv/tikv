@@ -2011,7 +2011,7 @@ pub mod tests {
     pub fn get_kv_count(snap: &impl EngineSnapshot) -> usize {
         let mut kv_count = 0;
         for cf in SNAPSHOT_CFS {
-            snap.scan_cf(
+            snap.scan(
                 cf,
                 &keys::data_key(b"a"),
                 &keys::data_key(b"z"),

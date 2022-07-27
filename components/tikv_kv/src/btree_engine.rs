@@ -246,11 +246,8 @@ impl Snapshot for BTreeEngineSnapshot {
     fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(cf, key)
     }
-    fn iter(&self, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
-        self.iter_cf(CF_DEFAULT, iter_opt)
-    }
     #[inline]
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
+    fn iter(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
         let tree = self.inner_engine.get_cf(cf);
         Ok(BTreeEngineIterator::new(tree, iter_opt))
     }
@@ -341,13 +338,21 @@ pub mod tests {
         let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a7", 0);
         iter_op.set_upper_bound(b"a3", 0);
-        let mut cursor = Cursor::new(snap.iter(iter_op).unwrap(), ScanMode::Forward, false);
+        let mut cursor = Cursor::new(
+            snap.iter(CF_DEFAULT, iter_op).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
         let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a3", 0);
         iter_op.set_upper_bound(b"a7", 0);
-        let mut cursor = Cursor::new(snap.iter(iter_op).unwrap(), ScanMode::Forward, false);
+        let mut cursor = Cursor::new(
+            snap.iter(CF_DEFAULT, iter_op).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
 
         assert!(cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
         assert!(!cursor.seek(&Key::from_raw(b"a8"), &mut statistics).unwrap());

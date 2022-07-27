@@ -972,7 +972,7 @@ pub mod tests {
             iopt.set_hint_min_ts(min);
             iopt.set_hint_max_ts(max);
 
-            let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
+            let mut iter = snap.iter(CF_WRITE, iopt).unwrap();
 
             for (i, expect_ts) in res.iter().enumerate() {
                 if i == 0 {
@@ -1020,7 +1020,7 @@ pub mod tests {
         iopt.set_hint_max_ts(Bound::Included(6));
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
-        let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
+        let mut iter = snap.iter(CF_WRITE, iopt).unwrap();
 
         // Must not omit the latest deletion of key1 to prevent seeing outdated record.
         assert_eq!(iter.seek_to_first().unwrap(), true);
