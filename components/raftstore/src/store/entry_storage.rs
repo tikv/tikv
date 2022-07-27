@@ -1,5 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! This module contains the implementation of the `EntryStorage`, which covers a subset of
+//! raft storage. This module will be shared between raftstore v1 and v2.
+
 use std::{
     cell::{Cell, RefCell},
     cmp,
