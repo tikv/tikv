@@ -950,7 +950,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     resolved_regions.push(region_id, resolved_ts.min());
                     // The judge of raw region is not accuracy here, and we may miss at most one
                     // "normal" raw region. But this will not break the correctness of outlier detection.
-                    if resolved_ts.is_min_ts_from_raw() {
+                    if resolved_ts.is_min_ts_from_raw() || delegate.is_raw_region() {
                         raw_resolved_regions.push(region_id, resolved_ts.raw_ts)
                     }
 
@@ -2021,6 +2021,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::RawKv,
         );
+        downstream.get_state().store(DownstreamState::Normal);
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
         suite.run(Task::Register {
@@ -2052,10 +2053,25 @@ mod tests {
 
         let ts = TimeStamp::compose(10, 0);
         suite.run(Task::RawTrackTs { region_id, ts });
-        let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
-        let resolver = delegate.resolver.as_mut().unwrap();
-        let raw_resolved_ts = resolver.resolve(TimeStamp::compose(20, 0)).min();
-        assert_eq!(raw_resolved_ts, ts);
+        {
+            let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
+            let resolver = delegate.resolver.as_mut().unwrap();
+            let raw_resolved_ts = resolver.resolve(TimeStamp::compose(20, 0)).min();
+            assert_eq!(raw_resolved_ts, ts);
+            resolver.raw_untrack_lock(TimeStamp::compose(20, 0));
+            delegate.downstreams_mut().iter().for_each(|d| {
+                d.get_state().store(DownstreamState::Uninitialized);
+            });
+        }
+        let ts = TimeStamp::compose(20, 0);
+        suite.run(Task::RawTrackTs { region_id, ts });
+        {
+            // RawTrackTs does not take effect as the downstream state is Uninitialized.
+            let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
+            let resolver = delegate.resolver.as_mut().unwrap();
+            let raw_resolved_ts = resolver.resolve(TimeStamp::compose(20, 0)).min();
+            assert_eq!(raw_resolved_ts, TimeStamp::compose(20, 0)); //
+        }
     }
 
     #[test]
@@ -2085,6 +2101,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::RawKv,
         );
+        downstream.get_state().store(DownstreamState::Normal);
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
         suite.run(Task::Register {
@@ -2137,7 +2154,7 @@ mod tests {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, _) = channel::channel(1, quota);
         let mut region_cnt = 0;
-        let mut start_ts: u64 = 200;
+        let start_ts: u64 = 200;
         let region_ids: Vec<u64> = (1..50).collect();
         let dead_lock_region = 1;
         let dead_lock_ts = TimeStamp::compose(1, 0);
@@ -2159,6 +2176,7 @@ mod tests {
                 conn_id,
                 ChangeDataRequestKvApi::RawKv,
             );
+            downstream.get_state().store(DownstreamState::Normal);
             // Enable batch resolved ts in the test.
             let version = FeatureGate::batch_resolved_ts();
             suite.run(Task::Register {
@@ -2193,9 +2211,8 @@ mod tests {
             let ts = if region_id == dead_lock_region {
                 dead_lock_ts
             } else {
-                TimeStamp::compose(start_ts, 0)
+                TimeStamp::compose(start_ts + 1, 0)
             };
-            start_ts += 1;
             suite.run(Task::RawTrackTs { region_id, ts });
             let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
             let resolver = delegate.resolver.as_mut().unwrap();

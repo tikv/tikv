@@ -617,11 +617,11 @@ impl Delegate {
             return Ok(());
         }
         // the entry's timestamp is non-decreasing, the last has the max ts.
-        let max_raw_ts = TimeStamp::from(entries.last().unwrap().commit_ts);
+        // use prev ts, see reason at CausalObserver::pre_propose_query
+        let max_raw_ts = TimeStamp::from(entries.last().unwrap().commit_ts).prev();
         match self.resolver {
             Some(ref mut resolver) => {
-                // use prev ts, see reason at CausalObserver::pre_propose_query
-                resolver.raw_untrack_lock(max_raw_ts.prev());
+                resolver.raw_untrack_lock(max_raw_ts);
             }
             None => {
                 assert!(self.pending.is_some(), "region resolver not ready");
@@ -635,6 +635,15 @@ impl Delegate {
     }
 
     pub fn raw_track_ts(&mut self, ts: TimeStamp) {
+        // If downstream is not ready for change event, the `on_flush_applied_cmd_batch`
+        // does not accept apply request because of ObserveLevel is lower than ObserveLevel::All
+        let initialized = self
+            .downstreams()
+            .iter()
+            .any(|d| d.state.load().ready_for_change_events());
+        if !initialized {
+            return;
+        }
         match self.resolver {
             Some(ref mut resolver) => {
                 resolver.raw_track_lock(ts);
@@ -902,6 +911,18 @@ impl Delegate {
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
         self.txn_extra_op.store(TxnExtraOp::Noop);
+    }
+
+    // if raw data and tidb data both exist in this region, it will return false.
+    pub fn is_raw_region(&self) -> bool {
+        if let Some(region) = &self.region {
+            if ApiV2::parse_range_mode((Some(&region.start_key), Some(&region.end_key)))
+                == KeyMode::Raw
+            {
+                return true;
+            }
+        }
+        false
     }
 }
 
