@@ -4369,13 +4369,7 @@ mod tests {
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, KvTestEngine) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let engine = new_engine(
-            path.path().join("db").to_str().unwrap(),
-            None,
-            ALL_CFS,
-            None,
-        )
-        .unwrap();
+        let engine = new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS).unwrap();
         (path, engine)
     }
 

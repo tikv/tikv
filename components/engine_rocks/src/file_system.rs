@@ -42,32 +42,27 @@ impl<T: FileSystemInspector> DBFileSystemInspector for WrappedFileSystemInspecto
 mod tests {
     use std::sync::Arc;
 
-    use engine_traits::{CompactExt, CF_DEFAULT};
+    use engine_traits::{CompactExt, MiscExt, SyncMutable, CF_DEFAULT};
     use file_system::{IOOp, IORateLimiter, IORateLimiterStatistics, IOType};
     use keys::data_key;
-    use rocksdb::{DBOptions, Writable, DB};
     use tempfile::Builder;
 
     use super::*;
     use crate::{
-        compat::Compat,
-        event_listener::RocksEventListener,
-        raw::{ColumnFamilyOptions, DBCompressionType},
-        raw_util::{new_engine_opt, CFOptions},
+        event_listener::RocksEventListener, raw::DBCompressionType, util::new_engine_opt,
+        RocksCfOptions, RocksDBOptions, RocksEngine,
     };
 
-    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IORateLimiterStatistics>) {
+    fn new_test_db(dir: &str) -> (RocksEngine, Arc<IORateLimiterStatistics>) {
         let limiter = Arc::new(IORateLimiter::new_for_test());
-        let mut db_opts = DBOptions::new();
+        let mut db_opts = RocksDBOptions::default();
         db_opts.add_event_listener(RocksEventListener::new("test_db", None));
         let env = get_env(None, Some(limiter.clone())).unwrap();
         db_opts.set_env(env);
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_disable_auto_compactions(true);
         cf_opts.compression_per_level(&[DBCompressionType::No; 7]);
-        let db = Arc::new(
-            new_engine_opt(dir, db_opts, vec![CFOptions::new(CF_DEFAULT, cf_opts)]).unwrap(),
-        );
+        let db = new_engine_opt(dir, db_opts, vec![(CF_DEFAULT, cf_opts)]).unwrap();
         (db, limiter.statistics().unwrap())
     }
 
@@ -97,14 +92,13 @@ mod tests {
         assert!(stats.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
         assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 2 + amplification_bytes);
         stats.reset();
-        db.c()
-            .compact_range(
-                CF_DEFAULT, None,  /*start_key*/
-                None,  /*end_key*/
-                false, /*exclusive_manual*/
-                1,     /*max_subcompactions*/
-            )
-            .unwrap();
+        db.compact_range(
+            CF_DEFAULT, None,  /*start_key*/
+            None,  /*end_key*/
+            false, /*exclusive_manual*/
+            1,     /*max_subcompactions*/
+        )
+        .unwrap();
         assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Read) > value_size * 4);
         assert!(
             stats.fetch(IOType::LevelZeroCompaction, IOOp::Read)

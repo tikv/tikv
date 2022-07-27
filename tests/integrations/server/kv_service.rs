@@ -9,7 +9,6 @@ use std::{
 
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{raw::Writable, Compat};
 use engine_traits::{
     MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
     CF_WRITE,
@@ -709,7 +708,7 @@ fn test_debug_get() {
     let engine = cluster.get_engine(store_id);
     let key = keys::data_key(k);
     engine.put(&key, v).unwrap();
-    assert_eq!(engine.get(&key).unwrap().unwrap(), v);
+    assert_eq!(engine.get_value(&key).unwrap().unwrap(), v);
 
     // Debug get
     let mut req = debugpb::GetRequest::default();
@@ -784,12 +783,10 @@ fn test_debug_region_info() {
     let mut apply_state = raft_serverpb::RaftApplyState::default();
     apply_state.set_applied_index(42);
     kv_engine
-        .c()
         .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
         .unwrap();
     assert_eq!(
         kv_engine
-            .c()
             .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .unwrap(),
@@ -800,12 +797,10 @@ fn test_debug_region_info() {
     let mut region_state = raft_serverpb::RegionLocalState::default();
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     kv_engine
-        .c()
         .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
         .unwrap();
     assert_eq!(
         kv_engine
-            .c()
             .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .unwrap(),
@@ -844,7 +839,6 @@ fn test_debug_region_size() {
     let mut state = RegionLocalState::default();
     state.set_region(region);
     engine
-        .c()
         .put_msg_cf(CF_RAFT, &region_state_key, &state)
         .unwrap();
 
@@ -852,8 +846,7 @@ fn test_debug_region_size() {
     // At lease 8 bytes for the WRITE cf.
     let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
     for cf in &cfs {
-        let cf_handle = engine.cf_handle(cf).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
+        engine.put_cf(cf, k.as_slice(), v).unwrap();
     }
 
     let mut req = debugpb::RegionSizeRequest::default();
@@ -938,8 +931,7 @@ fn test_debug_scan_mvcc() {
             TimeStamp::zero(),
         )
         .to_bytes();
-        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
+        engine.put_cf(CF_LOCK, k.as_slice(), &v).unwrap();
     }
 
     let mut req = debugpb::ScanMvccRequest::default();

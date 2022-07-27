@@ -10,8 +10,8 @@ use tikv_util::time::Instant;
 use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS};
 
 use crate::{
-    perf_context_metrics::*, raw_util, set_perf_flags, set_perf_level,
-    PerfContext as RawPerfContext, PerfFlag, PerfFlags,
+    perf_context_metrics::*, set_perf_flags, set_perf_level, util, PerfContext as RawPerfContext,
+    PerfFlag, PerfFlags,
 };
 
 macro_rules! report_write_perf_context {
@@ -191,7 +191,7 @@ impl PerfContextStatistics {
                 }
             }
         } else {
-            set_perf_level(raw_util::to_raw_perf_level(self.perf_level));
+            set_perf_level(util::to_raw_perf_level(self.perf_level));
         }
     }
 

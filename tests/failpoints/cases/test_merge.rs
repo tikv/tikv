@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -76,7 +75,6 @@ fn test_node_merge_rollback() {
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
-            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -105,7 +103,6 @@ fn test_node_merge_rollback() {
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
-            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -139,10 +136,10 @@ fn test_node_merge_restart() {
     cluster.shutdown();
     let engine = cluster.get_engine(leader.get_store_id());
     let state_key = keys::region_state_key(left.get_id());
-    let state: RegionLocalState = engine.c().get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Merging, "{:?}", state);
     let state_key = keys::region_state_key(right.get_id());
-    let state: RegionLocalState = engine.c().get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
     fail::remove(schedule_merge_fp);
     cluster.start().unwrap();
@@ -157,7 +154,6 @@ fn test_node_merge_restart() {
         let state_key = keys::region_state_key(left.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
-            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -165,7 +161,6 @@ fn test_node_merge_restart() {
         let state_key = keys::region_state_key(right.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
-            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();

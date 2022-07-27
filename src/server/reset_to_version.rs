@@ -255,12 +255,7 @@ impl ResetToVersionManager {
 
 #[cfg(test)]
 mod tests {
-    use engine_rocks::{
-        raw::{ColumnFamilyOptions, DBOptions},
-        raw_util::CFOptions,
-        Compat,
-    };
-    use engine_traits::{WriteBatch, WriteBatchExt, CF_LOCK, CF_RAFT};
+    use engine_traits::{WriteBatch, WriteBatchExt, ALL_CFS, CF_LOCK};
     use tempfile::Builder;
     use txn_types::{Lock, LockType, WriteType};
 
@@ -270,19 +265,7 @@ mod tests {
     fn test_basic() {
         let tmp = Builder::new().prefix("test_basic").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let fake_engine = Arc::new(
-            engine_rocks::raw_util::new_engine_opt(
-                path,
-                DBOptions::new(),
-                vec![
-                    CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-                ],
-            )
-            .unwrap(),
-        );
+        let fake_engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
         let write = vec![
             // key, start_ts, commit_ts
@@ -339,19 +322,18 @@ mod tests {
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes()));
         }
-        let mut wb = fake_engine.c().write_batch();
+        let mut wb = fake_engine.write_batch();
         for &(cf, ref k, ref v) in &kv {
             wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
         wb.write().unwrap();
 
-        let manager = ResetToVersionManager::new(fake_engine.c().clone());
+        let manager = ResetToVersionManager::new(fake_engine.clone());
         manager.start(100.into());
         manager.wait();
 
         let readopts = IterOptions::new(None, None, false);
         let mut write_iter = fake_engine
-            .c()
             .iterator_opt(CF_WRITE, readopts.clone())
             .unwrap();
         write_iter.seek_to_first().unwrap();
@@ -363,7 +345,6 @@ mod tests {
             remaining_writes.push((key, write));
         }
         let mut default_iter = fake_engine
-            .c()
             .iterator_opt(CF_DEFAULT, readopts.clone())
             .unwrap();
         default_iter.seek_to_first().unwrap();
@@ -375,7 +356,7 @@ mod tests {
             remaining_defaults.push((key, value));
         }
 
-        let mut lock_iter = fake_engine.c().iterator_opt(CF_LOCK, readopts).unwrap();
+        let mut lock_iter = fake_engine.iterator_opt(CF_LOCK, readopts).unwrap();
         lock_iter.seek_to_first().unwrap();
         let mut remaining_locks = vec![];
         while lock_iter.valid().unwrap() {
