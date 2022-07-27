@@ -57,6 +57,28 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         }
     }
 
+    /// Gets and validates the store ID from engine if it's already
+    /// bootstrapped.
+    fn check_store_id_in_engine(&mut self) -> Result<Option<u64>> {
+        let ident = match self.engine.get_store_ident()? {
+            Some(ident) => ident,
+            None => return Ok(None),
+        };
+        if ident.get_cluster_id() != self.cluster_id {
+            return Err(box_err!(
+                "cluster ID mismatch, local {} != remote {}, \
+                you are trying to connect to another cluster, \
+                please reconnect to the correct PD",
+                ident.get_cluster_id(),
+                self.cluster_id
+            ));
+        }
+        if ident.get_store_id() == INVALID_ID {
+            return Err(box_err!("invalid store ident {:?}", ident));
+        }
+        Ok(Some(ident.get_store_id()))
+    }
+
     /// Bootstraps the store and returns the store ID.
     ///
     /// The bootstrapping basically allocates a new store ID from PD and writes
@@ -83,26 +105,57 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         Ok(id)
     }
 
-    /// Gets and validates the store ID from engine if it's already
-    /// bootstrapped.
-    fn check_store_id_in_engine(&mut self) -> Result<Option<u64>> {
-        let ident = match self.engine.get_store_ident()? {
-            Some(ident) => ident,
-            None => return Ok(None),
-        };
-        if ident.get_cluster_id() != self.cluster_id {
-            return Err(box_err!(
-                "cluster ID mismatch, local {} != remote {}, \
-                you are trying to connect to another cluster, \
-                please reconnect to the correct PD",
-                ident.get_cluster_id(),
-                self.cluster_id
-            ));
+    fn prepare_bootstrap_first_region(&mut self, store_id: u64) -> Result<Region> {
+        let region_id = self.pd_client.alloc_id()?;
+        debug!(
+            self.logger,
+            "alloc first region id";
+            "region_id" => region_id,
+            "cluster_id" => self.cluster_id,
+            "store_id" => store_id
+        );
+        let peer_id = self.pd_client.alloc_id()?;
+        debug!(
+            self.logger,
+            "alloc first peer id for first region";
+            "peer_id" => peer_id,
+            "region_id" => region_id,
+        );
+
+        let region = initial_region(store_id, region_id, peer_id);
+
+        let mut wb = self.engine.log_batch(10);
+        wb.put_prepare_bootstrap_region(&region)?;
+        write_initial_states(&mut wb, region.clone())?;
+        box_try!(self.engine.consume(&mut wb, true));
+
+        Ok(region)
+    }
+
+    fn check_pd_first_region_bootstrapped(&mut self) -> Result<bool> {
+        for _ in 0..MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
+            match self.pd_client.is_cluster_bootstrapped() {
+                Ok(b) => return Ok(b),
+                Err(e) => {
+                    warn!(self.logger, "check cluster bootstrapped failed"; "err" => ?e);
+                }
+            }
+            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
         }
-        if ident.get_store_id() == INVALID_ID {
-            return Err(box_err!("invalid store ident {:?}", ident));
+        Err(box_err!("check cluster bootstrapped failed"))
+    }
+
+    fn clear_prepare_bootstrap(&mut self, first_region_id: Option<u64>) -> Result<()> {
+        let mut wb = self.engine.log_batch(10);
+        wb.remove_prepare_bootstrap_region()?;
+        if let Some(id) = first_region_id {
+            box_try!(
+                self.engine
+                    .clean(id, 0, &RaftLocalState::default(), &mut wb)
+            );
         }
-        Ok(Some(ident.get_store_id()))
+        box_try!(self.engine.consume(&mut wb, true));
+        Ok(())
     }
 
     /// Bootstraps the first region of this cluster.
@@ -201,58 +254,5 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
             "bootstrapped cluster failed after {} attempts",
             retry
         ))
-    }
-
-    fn check_pd_first_region_bootstrapped(&mut self) -> Result<bool> {
-        for _ in 0..MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
-            match self.pd_client.is_cluster_bootstrapped() {
-                Ok(b) => return Ok(b),
-                Err(e) => {
-                    warn!(self.logger, "check cluster bootstrapped failed"; "err" => ?e);
-                }
-            }
-            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
-        }
-        Err(box_err!("check cluster bootstrapped failed"))
-    }
-
-    fn prepare_bootstrap_first_region(&mut self, store_id: u64) -> Result<Region> {
-        let region_id = self.pd_client.alloc_id()?;
-        debug!(
-            self.logger,
-            "alloc first region id";
-            "region_id" => region_id,
-            "cluster_id" => self.cluster_id,
-            "store_id" => store_id
-        );
-        let peer_id = self.pd_client.alloc_id()?;
-        debug!(
-            self.logger,
-            "alloc first peer id for first region";
-            "peer_id" => peer_id,
-            "region_id" => region_id,
-        );
-
-        let region = initial_region(store_id, region_id, peer_id);
-
-        let mut wb = self.engine.log_batch(10);
-        wb.put_prepare_bootstrap_region(&region)?;
-        write_initial_states(&mut wb, region.clone())?;
-        box_try!(self.engine.consume(&mut wb, true));
-
-        Ok(region)
-    }
-
-    fn clear_prepare_bootstrap(&mut self, first_region_id: Option<u64>) -> Result<()> {
-        let mut wb = self.engine.log_batch(10);
-        wb.remove_prepare_bootstrap_region()?;
-        if let Some(id) = first_region_id {
-            box_try!(
-                self.engine
-                    .clean(id, 0, &RaftLocalState::default(), &mut wb)
-            );
-        }
-        box_try!(self.engine.consume(&mut wb, true));
-        Ok(())
     }
 }
