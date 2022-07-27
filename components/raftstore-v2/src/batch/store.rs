@@ -64,16 +64,14 @@ struct StorePoller<EK: KvEngine, T> {
 
 impl<EK: KvEngine, T> StorePoller<EK, T> {
     pub fn new(poll_ctx: StoreContext<T>, cfg_tracker: Tracker<Config>) -> Self {
-        let mut poller = Self {
+        StorePoller {
             store_msg_buf: Vec::new(),
             peer_msg_buf: Vec::new(),
             poll_ctx,
             cfg_tracker,
             last_flush_time: TiInstant::now(),
             need_flush_events: false,
-        };
-        poller.apply_buf_capacity();
-        poller
+        }
     }
 
     /// Updates the internal buffer to match the latest configuration.

@@ -76,14 +76,14 @@ mod tests {
         // Setting tablet will refresh cache immediately.
         cached_tablet.set(2);
         assert_eq!(cached_tablet.cache().cloned(), Some(2));
+
         // Test `latest()` will use cache.
-        {
-            // Unsafe modify the data.
-            *cached_tablet.latest.data.lock().unwrap() = Some(0);
-            assert_eq!(cached_tablet.latest().cloned(), Some(2));
-            // Restore the data.
-            *cached_tablet.latest.data.lock().unwrap() = Some(2);
-        }
+        // Unsafe modify the data.
+        let old_data = *cached_tablet.latest.data.lock().unwrap();
+        *cached_tablet.latest.data.lock().unwrap() = Some(0);
+        assert_eq!(cached_tablet.latest().cloned(), old_data);
+        // Restore the data.
+        *cached_tablet.latest.data.lock().unwrap() = old_data;
 
         let mut cloned = cached_tablet.clone();
         // Clone should reuse cache.
