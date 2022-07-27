@@ -50,7 +50,7 @@ pub struct ApplyPoller {
 
 impl ApplyPoller {
     pub fn new(apply_ctx: ApplyContext, cfg_tracker: Tracker<Config>) -> ApplyPoller {
-        ApplyPoller {
+        Self {
             apply_task_buf: Vec::new(),
             pending_latency_inspect: Vec::new(),
             apply_ctx,

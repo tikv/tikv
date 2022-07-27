@@ -64,7 +64,7 @@ struct StorePoller<EK: KvEngine, T> {
 
 impl<EK: KvEngine, T> StorePoller<EK, T> {
     pub fn new(poll_ctx: StoreContext<T>, cfg_tracker: Tracker<Config>) -> Self {
-        StorePoller {
+        Self {
             store_msg_buf: Vec::new(),
             peer_msg_buf: Vec::new(),
             poll_ctx,
