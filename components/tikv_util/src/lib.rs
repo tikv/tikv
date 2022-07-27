@@ -586,6 +586,7 @@ pub fn build_on_master_branch() -> bool {
 }
 
 /// Set the capacity of a vector to the given capacity.
+#[inline]
 pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
     match cap.cmp(&v.capacity()) {
         cmp::Ordering::Less => v.shrink_to(cap),
