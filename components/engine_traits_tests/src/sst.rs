@@ -6,8 +6,7 @@ use std::fs;
 
 use engine_test::kv::KvTestEngine;
 use engine_traits::{
-    Error, ExternalSstFileInfo, Iterator, Result, SeekKey, SstExt, SstReader, SstWriter,
-    SstWriterBuilder,
+    Error, ExternalSstFileInfo, Iterator, Result, SstExt, SstReader, SstWriter, SstWriterBuilder,
 };
 use panic_hook::recover_safe;
 
@@ -51,7 +50,7 @@ fn basic() -> Result<()> {
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
-    iter.seek(SeekKey::Start)?;
+    iter.seek_to_first()?;
     let key = iter.key();
     let value = iter.value();
     assert_eq!(b"k1", key);
@@ -80,7 +79,7 @@ fn forward() -> Result<()> {
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
-    iter.seek(SeekKey::Start)?;
+    iter.seek_to_first()?;
 
     let key = iter.key();
     let value = iter.value();
@@ -117,7 +116,7 @@ fn reverse() -> Result<()> {
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
-    iter.seek(SeekKey::End)?;
+    iter.seek_to_last()?;
 
     let key = iter.key();
     let value = iter.value();
@@ -136,7 +135,7 @@ fn reverse() -> Result<()> {
     Ok(())
 }
 
-// todo test seek_for_prev(SeekKey::Key)
+// todo test seek_for_prev(Key)
 
 #[test]
 fn delete() -> Result<()> {
@@ -155,7 +154,7 @@ fn delete() -> Result<()> {
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
-    iter.seek(SeekKey::Start)?;
+    iter.seek_to_first()?;
 
     assert_eq!(iter.valid()?, false);
 
@@ -174,12 +173,10 @@ fn delete() -> Result<()> {
         .is_err()
     );
 
-    assert_eq!(iter.seek(SeekKey::Start)?, false);
-    assert_eq!(iter.seek(SeekKey::End)?, false);
-    assert_eq!(iter.seek(SeekKey::Key(b"foo"))?, false);
-    assert_eq!(iter.seek_for_prev(SeekKey::Start)?, false);
-    assert_eq!(iter.seek_for_prev(SeekKey::End)?, false);
-    assert_eq!(iter.seek_for_prev(SeekKey::Key(b"foo"))?, false);
+    assert_eq!(iter.seek_to_first()?, false);
+    assert_eq!(iter.seek_to_last()?, false);
+    assert_eq!(iter.seek(b"foo")?, false);
+    assert_eq!(iter.seek_for_prev(b"foo")?, false);
 
     Ok(())
 }
@@ -215,7 +212,7 @@ fn same_key() -> Result<()> {
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
-    iter.seek(SeekKey::Start)?;
+    iter.seek_to_first()?;
     let key = iter.key();
     let value = iter.value();
     assert_eq!(b"k1", key);
@@ -257,7 +254,7 @@ fn reverse_key() -> Result<()> {
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
 
-    iter.seek(SeekKey::Start)?;
+    iter.seek_to_first()?;
     let key = iter.key();
     let value = iter.value();
     assert_eq!(b"k2", key);

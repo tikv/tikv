@@ -767,7 +767,7 @@ mod test {
         let (items, size) = super::with_record_read_throughput(|| {
             let mut items = vec![];
             let snap = engine.snapshot();
-            snap.scan(b"", b"", false, |k, v| {
+            snap.scan(CF_DEFAULT, b"", b"", false, |k, v| {
                 items.push((k.to_owned(), v.to_owned()));
                 Ok(true)
             })

@@ -34,7 +34,7 @@ fn is_range_empty(
     end_key: &[u8],
 ) -> Result<bool> {
     let mut count: u32 = 0;
-    engine.scan_cf(cf, start_key, end_key, false, |_, _| {
+    engine.scan(cf, start_key, end_key, false, |_, _| {
         count += 1;
         Ok(false)
     })?;

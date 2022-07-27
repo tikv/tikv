@@ -17,6 +17,7 @@ mod fsm;
 mod operation;
 mod raft;
 mod router;
+mod tablet;
 
 pub(crate) use batch::StoreContext;
 pub use batch::{create_store_batch_system, StoreSystem};

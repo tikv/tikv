@@ -148,7 +148,7 @@ pub enum PeerTick {
 }
 
 impl PeerTick {
-    pub const VARIANT_COUNT: usize = Self::get_all_ticks().len();
+    pub const VARIANT_COUNT: usize = Self::all_ticks().len();
 
     #[inline]
     pub fn tag(self) -> &'static str {
@@ -166,7 +166,7 @@ impl PeerTick {
         }
     }
 
-    pub const fn get_all_ticks() -> &'static [PeerTick] {
+    pub const fn all_ticks() -> &'static [PeerTick] {
         const TICKS: &[PeerTick] = &[
             PeerTick::Raft,
             PeerTick::RaftLogGc,

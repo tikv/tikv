@@ -191,7 +191,7 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     fn create_shared_db(&self) -> Result<EK>;
 
     /// Destroy the tablet and its data
-    fn destroy_tablet(&self, id: u64, suffix: u64) -> crate::Result<()>;
+    fn destroy_tablet(&self, id: u64, suffix: u64) -> Result<()>;
 
     /// Check if the tablet with specified id/suffix exists
     #[inline]
@@ -224,7 +224,7 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
         unimplemented!();
     }
 
-    fn set_shared_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String>;
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()>;
 }
 
 pub struct DummyFactory<EK>
@@ -248,7 +248,7 @@ where
     fn create_shared_db(&self) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
-    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> crate::Result<()> {
+    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> Result<()> {
         Ok(())
     }
     fn exists_raw(&self, _path: &Path) -> bool {
@@ -261,7 +261,7 @@ where
         PathBuf::from(&self.root_path)
     }
 
-    fn set_shared_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
         let opt = self
             .engine
             .as_ref()
@@ -317,8 +317,8 @@ mod tests {
     fn test_tablet_error_collector_err() {
         let mut err = TabletErrorCollector::new();
         err.add_result(1, 1, Ok(()));
-        err.add_result(1, 1, Err("this is an error1".to_string().into()));
-        err.add_result(1, 1, Err("this is an error2".to_string().into()));
+        err.add_result(1, 1, Err(Status::with_code(Code::Aborted).into()));
+        err.add_result(1, 1, Err(Status::with_code(Code::NotFound).into()));
         err.add_result(1, 1, Ok(()));
         let r = err.take_result();
         assert!(r.is_err());

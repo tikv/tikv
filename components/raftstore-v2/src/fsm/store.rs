@@ -23,8 +23,8 @@ impl StoreFsm {
         (tx, fsm)
     }
 
-    /// Fetches messages to `store_msg_buf`. It will stop when the buffer is
-    /// full.
+    /// Fetches messages to `store_msg_buf`. It will stop when the buffer
+    /// capacity is reached or there is no more pending messages.
     ///
     /// Returns how many messages are fetched.
     pub fn recv(&self, store_msg_buf: &mut Vec<StoreMsg>) -> usize {

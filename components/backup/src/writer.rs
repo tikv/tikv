@@ -457,7 +457,7 @@ mod tests {
         }
         for (cf, kv) in kvs {
             let mut map = BTreeMap::new();
-            db.scan_cf(
+            db.scan(
                 cf,
                 keys::DATA_MIN_KEY,
                 keys::DATA_MAX_KEY,

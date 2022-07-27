@@ -40,9 +40,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
         });
         let mut iter_opt = IterOptions::new(Some(l_bound), u_bound, false);
         iter_opt.set_key_only(key_only);
-        let mut iter = snapshot
-            .iter_cf(CF_WRITE, iter_opt)
-            .map_err(from_kv_error)?;
+        let mut iter = snapshot.iter(CF_WRITE, iter_opt).map_err(from_kv_error)?;
         iter.seek(&start_key).map_err(from_kv_error)?;
         Ok(DuplicateDetector {
             snapshot,

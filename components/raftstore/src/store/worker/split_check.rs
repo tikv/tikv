@@ -98,8 +98,8 @@ where
                 Some(KeyBuilder::from_slice(end_key, 0, 0)),
                 fill_cache,
             );
-            let mut iter = db.iterator_cf_opt(cf, iter_opt)?;
-            let found: Result<bool> = iter.seek(start_key.into()).map_err(|e| box_err!(e));
+            let mut iter = db.iterator_opt(cf, iter_opt)?;
+            let found: Result<bool> = iter.seek(start_key).map_err(|e| box_err!(e));
             if found? {
                 heap.push(KeyEntry::new(
                     iter.key().to_vec(),

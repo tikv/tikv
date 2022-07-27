@@ -202,9 +202,7 @@ mod tests {
         raw_util::{new_engine_opt, CFOptions},
         RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
     };
-    use engine_traits::{
-        CompactExt, Iterator, MiscExt, SeekKey, SstReader, SyncMutable, CF_DEFAULT,
-    };
+    use engine_traits::{CompactExt, Iterator, MiscExt, SstReader, SyncMutable, CF_DEFAULT};
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
     use tempfile::TempDir;
@@ -404,7 +402,7 @@ mod tests {
 
     fn collect_keys(path: &str) -> Vec<Vec<u8>> {
         let mut sst_reader = RocksSstReader::open(path).unwrap().iter();
-        let mut valid = sst_reader.seek(SeekKey::Start).unwrap();
+        let mut valid = sst_reader.seek_to_first().unwrap();
         let mut ret = vec![];
         while valid {
             ret.push(sst_reader.key().to_owned());
