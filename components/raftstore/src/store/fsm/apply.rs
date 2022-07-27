@@ -77,13 +77,14 @@ use crate::{
     },
     store::{
         cmd_resp,
+        entry_storage::{self, CachedEntries},
         fsm::RaftPollerBuilder,
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
         msg::{Callback, PeerMsg, ReadResponse, SignificantMsg},
         peer::Peer,
-        peer_storage::{self, write_initial_apply_state, write_peer_state, CachedEntries},
+        peer_storage::{write_initial_apply_state, write_peer_state},
         util,
         util::{
             admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
@@ -597,7 +598,7 @@ where
             apply_state: delegate.apply_state.clone(),
             exec_res: results,
             metrics: delegate.metrics.clone(),
-            applied_index_term: delegate.applied_index_term,
+            applied_term: delegate.applied_term,
             bucket_stat: delegate.buckets.clone().map(Box::new),
         });
     }
@@ -889,7 +890,7 @@ where
     /// to file, but KV data may not synced to file, so we will lose data.
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
-    applied_index_term: u64,
+    applied_term: u64,
     /// The latest flushed applied index.
     last_flush_applied_index: u64,
 
@@ -924,7 +925,7 @@ where
             pending_remove: false,
             last_flush_applied_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
-            applied_index_term: reg.applied_index_term,
+            applied_term: reg.applied_term,
             term: reg.term,
             stopped: false,
             handle_start: None,
@@ -1094,7 +1095,7 @@ where
         apply_ctx.host.on_empty_cmd(&self.region, index, term);
 
         self.apply_state.set_applied_index(index);
-        self.applied_index_term = term;
+        self.applied_term = term;
         assert!(term > 0);
 
         // 1. When a peer become leader, it will send an empty entry.
@@ -1302,7 +1303,7 @@ where
         }
 
         self.apply_state.set_applied_index(index);
-        self.applied_index_term = term;
+        self.applied_term = term;
 
         let cmd = Cmd::new(index, term, req.clone(), resp.clone());
         let should_write = ctx.host.post_exec(
@@ -2469,7 +2470,7 @@ where
 
         let prepare_merge = req.get_prepare_merge();
         let index = prepare_merge.get_min_index();
-        let first_index = peer_storage::first_index(&self.apply_state);
+        let first_index = entry_storage::first_index(&self.apply_state);
         if index < first_index {
             // We filter `CompactLog` command before.
             panic!(
@@ -2713,7 +2714,7 @@ where
 
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::default();
-        let first_index = peer_storage::first_index(&self.apply_state);
+        let first_index = entry_storage::first_index(&self.apply_state);
         if compact_index <= first_index {
             debug!(
                 "compact index <= first index, no need to compact";
@@ -3011,7 +3012,7 @@ pub struct Registration {
     pub id: u64,
     pub term: u64,
     pub apply_state: RaftApplyState,
-    pub applied_index_term: u64,
+    pub applied_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
     pub is_merging: bool,
@@ -3024,7 +3025,7 @@ impl Registration {
             id: peer.peer_id(),
             term: peer.term(),
             apply_state: peer.get_store().apply_state().clone(),
-            applied_index_term: peer.get_store().applied_index_term(),
+            applied_term: peer.get_store().applied_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
             is_merging: peer.pending_merge_state.is_some(),
@@ -3110,7 +3111,7 @@ impl GenSnapTask {
     pub fn generate_and_schedule_snapshot<EK>(
         self,
         kv_snap: EK::Snapshot,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         region_sched: &Scheduler<RegionTask<EK::Snapshot>>,
     ) -> Result<()>
@@ -3123,7 +3124,7 @@ impl GenSnapTask {
             region_id: self.region_id,
             notifier: self.snap_notifier,
             for_balance: self.for_balance,
-            last_applied_index_term,
+            last_applied_term,
             last_applied_state,
             canceled: self.canceled,
             // This snapshot may be held for a long time, which may cause too many
@@ -3281,7 +3282,7 @@ where
 {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
-    pub applied_index_term: u64,
+    pub applied_term: u64,
     pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
     pub bucket_stat: Option<Box<BucketStat>>,
@@ -3591,7 +3592,7 @@ where
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
             apply_ctx.engine.snapshot(),
-            self.delegate.applied_index_term,
+            self.delegate.applied_term,
             self.delegate.apply_state.clone(),
             &apply_ctx.region_scheduler,
         ) {
@@ -4423,7 +4424,7 @@ mod tests {
                 id: Default::default(),
                 term: Default::default(),
                 apply_state: Default::default(),
-                applied_index_term: Default::default(),
+                applied_term: Default::default(),
                 region: Default::default(),
                 pending_request_snapshot_count: Default::default(),
                 is_merging: Default::default(),
@@ -4438,7 +4439,7 @@ mod tests {
                 id: self.id,
                 term: self.term,
                 apply_state: self.apply_state.clone(),
-                applied_index_term: self.applied_index_term,
+                applied_term: self.applied_term,
                 region: self.region.clone(),
                 pending_request_snapshot_count: self.pending_request_snapshot_count.clone(),
                 is_merging: self.is_merging,
@@ -4640,7 +4641,7 @@ mod tests {
         let mut reg = Registration {
             id: 1,
             term: 4,
-            applied_index_term: 5,
+            applied_term: 5,
             ..Default::default()
         };
         reg.region.set_id(2);
@@ -4653,7 +4654,7 @@ mod tests {
             assert!(!delegate.pending_remove);
             assert_eq!(delegate.apply_state, reg.apply_state);
             assert_eq!(delegate.term, reg.term);
-            assert_eq!(delegate.applied_index_term, reg.applied_index_term);
+            assert_eq!(delegate.applied_term, reg.applied_term);
         });
 
         let (resp_tx, resp_rx) = mpsc::channel();
@@ -4729,10 +4730,10 @@ mod tests {
         assert!(apply_res.exec_res.is_empty());
         // empty entry will make applied_index step forward and should write apply state to engine.
         assert_eq!(apply_res.metrics.written_keys, 1);
-        assert_eq!(apply_res.applied_index_term, 5);
+        assert_eq!(apply_res.applied_term, 5);
         validate(&router, 2, |delegate| {
             assert_eq!(delegate.term, 11);
-            assert_eq!(delegate.applied_index_term, 5);
+            assert_eq!(delegate.applied_term, 5);
             assert_eq!(delegate.apply_state.get_applied_index(), 5);
             assert_eq!(
                 delegate.apply_state.get_applied_index(),
@@ -5073,7 +5074,7 @@ mod tests {
         assert_eq!(engine.get_value(&dk_k2).unwrap().unwrap(), b"v1");
         assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
         validate(&router, 1, |delegate| {
-            assert_eq!(delegate.applied_index_term, 1);
+            assert_eq!(delegate.applied_term, 1);
             assert_eq!(delegate.apply_state.get_applied_index(), 1);
         });
         fetch_apply_res(&rx);
@@ -5086,7 +5087,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.region_id, 1);
         assert_eq!(apply_res.apply_state.get_applied_index(), 2);
-        assert_eq!(apply_res.applied_index_term, 2);
+        assert_eq!(apply_res.applied_term, 2);
         assert!(apply_res.exec_res.is_empty());
         assert!(apply_res.metrics.written_bytes >= 5);
         assert_eq!(apply_res.metrics.written_keys, 2);
@@ -5114,7 +5115,7 @@ mod tests {
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_epoch_not_match());
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 2);
+        assert_eq!(apply_res.applied_term, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 3);
 
         let put_entry = EntryBuilder::new(4, 2)
@@ -5135,7 +5136,7 @@ mod tests {
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 2);
+        assert_eq!(apply_res.applied_term, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         // a writebatch should be atomic.
         assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
@@ -5229,7 +5230,7 @@ mod tests {
         assert!(apply_res.exec_res.is_empty());
         // The entry should be applied now.
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 8);
 
         // UploadSST
@@ -5306,15 +5307,15 @@ mod tests {
         // The region was rescheduled low-priority becasuee of ingest command,
         // only put entry has been applied;
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 9);
         // The region will yield after timeout.
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 10);
         // The third entry should be applied now.
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
 
         let write_batch_max_keys = <KvTestEngine as WriteBatchExt>::WRITE_BATCH_MAX_KEYS;
@@ -5683,7 +5684,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         // applied_index can still be advanced.
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
-        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.applied_term, 1);
         // Executing CompactLog is filtered and takes no effect.
         assert_eq!(apply_res.exec_res.len(), 0);
         assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
@@ -5702,7 +5703,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         // applied_index can still be advanced.
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
-        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.applied_term, 1);
         // We can get exec result of CompactLog.
         assert_eq!(apply_res.exec_res.len(), 1);
         assert_eq!(
@@ -5720,7 +5721,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         // applied_index can still be advanced.
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
-        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.applied_term, 1);
         // We can't get exec result of ComputeHash.
         assert_eq!(apply_res.exec_res.len(), 0);
         obs.filter_consistency_check.store(false, Ordering::SeqCst);
@@ -5738,7 +5739,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![split], vec![])));
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
-        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.applied_term, 1);
         let (_, r8) = if let ExecResult::SplitRegion {
             regions,
             derived: _,
@@ -5762,7 +5763,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![merge], vec![])));
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
-        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.applied_term, 1);
         // PrepareMerge will trigger commit.
         let state: RaftApplyState = engine
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))

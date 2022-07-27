@@ -25,7 +25,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Creates a new peer.
     ///
-    /// If peer is destroyed, None is returned.
+    /// If peer is destroyed, `None` is returned.
     pub fn new(
         cfg: &Config,
         region_id: u64,
