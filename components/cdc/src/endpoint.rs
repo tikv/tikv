@@ -1317,6 +1317,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
             }
             Task::TxnExtra(txn_extra) => {
                 for (k, v) in txn_extra.old_values {
+                    println!("cdc gets a old value, len: {:?}", v.0);
                     self.old_value_cache.insert(k, v);
                 }
             }

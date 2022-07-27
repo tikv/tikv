@@ -9,7 +9,7 @@ use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::{
     import_sstpb::SstMeta,
-    kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
+    kvrpcpb::DiskFullOpt,
     metapb,
     metapb::RegionEpoch,
     pdpb::{self, CheckPolicy},
@@ -36,6 +36,30 @@ use crate::store::{
     worker::{Bucket, BucketRange},
     RaftlogFetchResult, SnapKey,
 };
+
+#[derive(Clone, Copy, Debug)]
+pub enum TxnExtraOp {
+    Noop,
+    ReadOldValue {
+        /// Whether to load old value from data CF or not.
+        prefer_load_data: bool,
+    },
+}
+
+impl Default for TxnExtraOp {
+    fn default() -> Self {
+        TxnExtraOp::Noop
+    }
+}
+
+impl TxnExtraOp {
+    pub fn read_old_value(&self) -> bool {
+        match self {
+            TxnExtraOp::Noop => false,
+            TxnExtraOp::ReadOldValue { .. } => true,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
@@ -727,5 +751,17 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossbeam::atomic::AtomicCell;
+
+    use super::*;
+
+    #[test]
+    fn test_atomic_cell_txn_extra_op_lock_free() {
+        assert!(AtomicCell::<TxnExtraOp>::is_lock_free());
     }
 }

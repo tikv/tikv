@@ -172,12 +172,11 @@ mod tests {
         cmd: TypedCommand<(Option<Value>, bool)>,
     ) -> Result<(Option<Value>, bool)> {
         let snap = engine.snapshot(Default::default())?;
-        use kvproto::kvrpcpb::ExtraOp;
         let mut statistic = Statistics::default();
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics: &mut statistic,
             async_apply_prewrite: false,
         };

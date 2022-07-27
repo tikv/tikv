@@ -104,9 +104,10 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         ts: TimeStamp,
         prev_write_loaded: bool,
         prev_write: Option<Write>,
+        prefer_load_data: bool,
     ) -> Result<OldValue> {
         self.reader
-            .get_old_value(key, ts, prev_write_loaded, prev_write)
+            .get_old_value(key, ts, prev_write_loaded, prev_write, prefer_load_data)
     }
 
     #[inline(always)]
@@ -570,10 +571,23 @@ impl<S: EngineSnapshot> MvccReader<S> {
         start_ts: TimeStamp,
         prev_write_loaded: bool,
         prev_write: Option<Write>,
+        prefer_load_data: bool,
     ) -> Result<OldValue> {
         if prev_write_loaded && prev_write.is_none() {
             return Ok(OldValue::None);
         }
+
+        let maybe_load_data = |w: Write, r: &mut MvccReader<S>| -> Result<OldValue> {
+            if prefer_load_data {
+                let value = r.load_data(key, w)?;
+                Ok(OldValue::Value { value })
+            } else {
+                Ok(OldValue::ValueTimeStamp {
+                    start_ts: w.start_ts,
+                })
+            }
+        };
+
         if let Some(prev_write) = prev_write {
             if !prev_write
                 .as_ref()
@@ -583,32 +597,26 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
 
             match prev_write.write_type {
+                // For Put, there must be an old value.
                 WriteType::Put => {
-                    // For Put, there must be an old value either in its
-                    // short value or in the default CF.
                     return Ok(match prev_write.short_value {
                         Some(value) => OldValue::Value { value },
-                        None => OldValue::ValueTimeStamp {
-                            start_ts: prev_write.start_ts,
-                        },
+                        None => maybe_load_data(prev_write, self)?,
                     });
                 }
-                WriteType::Delete => {
-                    // For Delete, no old value.
-                    return Ok(OldValue::None);
-                }
+                // For Delete, no old value.
+                WriteType::Delete => return Ok(OldValue::None),
                 // For Rollback and Lock, it's unknown whether there is a more
                 // previous valid write. Call `get_write` to get a valid
                 // previous write.
                 WriteType::Rollback | WriteType::Lock => (),
             }
         }
+
         Ok(match self.get_write(key, start_ts, Some(start_ts))? {
             Some(write) => match write.short_value {
                 Some(value) => OldValue::Value { value },
-                None => OldValue::ValueTimeStamp {
-                    start_ts: write.start_ts,
-                },
+                None => maybe_load_data(write, self)?,
             },
             None => OldValue::None,
         })
@@ -642,8 +650,8 @@ pub mod tests {
         kv::Modify,
         mvcc::{tests::write, MvccReader, MvccTxn},
         txn::{
-            acquire_pessimistic_lock, cleanup, commit, gc, prewrite, CommitKind, TransactionKind,
-            TransactionProperties,
+            acquire_pessimistic_lock, cleanup, commands::OldValueRequirement, commit, gc, prewrite,
+            CommitKind, TransactionKind, TransactionProperties,
         },
         Engine, TestEngineBuilder,
     };
@@ -721,7 +729,7 @@ pub mod tests {
                 txn_size: 0,
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
-                need_old_value: false,
+                need_old_value: Default::default(),
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
             }
@@ -794,7 +802,7 @@ pub mod tests {
                 false,
                 false,
                 TimeStamp::zero(),
-                true,
+                OldValueRequirement::require(),
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -1945,6 +1953,7 @@ pub mod tests {
                         TimeStamp::new(25),
                         prev_write_loaded,
                         prev_write,
+                        false,
                     )
                     .unwrap();
                 assert_eq!(result, case.expected, "case #{}", i);
@@ -1963,6 +1972,7 @@ pub mod tests {
                 TimeStamp::new(25),
                 prev_write_loaded,
                 prev_write,
+                false,
             )
             .unwrap();
         assert_eq!(result, OldValue::None);

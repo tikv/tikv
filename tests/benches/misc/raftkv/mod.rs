@@ -6,7 +6,7 @@ use crossbeam::channel::TrySendError;
 use engine_rocks::{raw::DB, RocksEngine, RocksSnapshot};
 use engine_traits::{ALL_CFS, CF_DEFAULT};
 use kvproto::{
-    kvrpcpb::{Context, ExtraOp as TxnExtraOp},
+    kvrpcpb::Context,
     metapb::Region,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response},
     raft_serverpb::RaftMessage,
@@ -16,7 +16,7 @@ use raftstore::{
     store::{
         cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter,
         RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg,
-        SignificantRouter, StoreMsg, StoreRouter, WriteResponse,
+        SignificantRouter, StoreMsg, StoreRouter, TxnExtraOp, WriteResponse,
     },
     Result,
 };

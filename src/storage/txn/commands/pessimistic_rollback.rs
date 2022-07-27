@@ -139,7 +139,7 @@ pub mod tests {
         let write_context = WriteContext {
             lock_mgr: &lock_mgr,
             concurrency_manager: cm,
-            extra_op: Default::default(),
+            need_old_value: Default::default(),
             statistics: &mut Default::default(),
             async_apply_prewrite: false,
         };

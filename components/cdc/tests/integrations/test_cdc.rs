@@ -2354,3 +2354,42 @@ fn test_prewrite_without_value() {
     let event = receive_event(false);
     assert_eq!(event.get_events()[0].get_entries().entries[0].commit_ts, 14);
 }
+
+#[test]
+fn test_txn_read_long_old_value() {
+    let cluster = new_server_cluster(0, 1);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let rid = suite.cluster.get_region(&[]).id;
+    let ctx = suite.get_context(rid);
+    let client = suite.get_tikv_client(rid).clone();
+
+    // Start a changefeed and wait incremental scan finished.
+    let req = suite.new_changedata_request(rid);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let _ = receive_event(false);
+
+    let key = b"key".to_vec();
+    let large_value = vec![b'x'; 2 * txn_types::SHORT_VALUE_MAX_LEN];
+
+    let mut muts = vec![Mutation::default()];
+    muts[0].set_op(Op::Put);
+    muts[0].key = key.clone();
+    muts[0].value = large_value.clone();
+
+    must_kv_prewrite(&client, ctx.clone(), muts.clone(), key.clone(), 10);
+    must_kv_commit(&client, ctx.clone(), vec![key.clone()], 10, 11, 11);
+    let _ = receive_event(false);
+    println!("case 1 finished");
+
+    must_kv_prewrite(&client, ctx.clone(), muts.clone(), key.clone(), 12);
+    must_kv_commit(&client, ctx.clone(), vec![key.clone()], 12, 13, 13);
+    println!("case 2 finished");
+
+    try_kv_prewrite_pessimistic(&client, ctx.clone(), muts, key.clone(), 14);
+    must_kv_commit(&client, ctx.clone(), vec![key.clone()], 14, 15, 15);
+    println!("case 3 finished");
+
+    std::thread::park();
+}

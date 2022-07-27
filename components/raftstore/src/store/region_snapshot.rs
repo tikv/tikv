@@ -15,7 +15,7 @@ use engine_traits::{
 };
 use fail::fail_point;
 use keys::DATA_PREFIX_KEY;
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_serverpb::RaftApplyState};
+use kvproto::{metapb::Region, raft_serverpb::RaftApplyState};
 use pd_client::BucketMeta;
 use tikv_util::{
     box_err, error, keybuilder::KeyBuilder, metrics::CRITICAL_ERROR,
@@ -23,7 +23,7 @@ use tikv_util::{
 };
 
 use crate::{
-    store::{util, PeerStorage, TxnExt},
+    store::{util, PeerStorage, TxnExt, TxnExtraOp},
     Error, Result,
 };
 

@@ -17,7 +17,10 @@ use crate::storage::{
         },
         Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
     },
-    txn::{actions::check_data_constraint::check_data_constraint, LockInfo},
+    txn::{
+        actions::check_data_constraint::check_data_constraint, commands::OldValueRequirement,
+        LockInfo,
+    },
     Snapshot,
 };
 
@@ -107,7 +110,7 @@ pub fn prewrite<S: Snapshot>(
         return Ok((min_commit_ts, OldValue::Unspecified));
     }
 
-    let old_value = if txn_props.need_old_value
+    let old_value = if txn_props.need_old_value.require
         && matches!(
             mutation.mutation_type,
             // Only Put, Delete and Insert may have old value.
@@ -136,7 +139,13 @@ pub fn prewrite<S: Snapshot>(
                 TransactionKind::Optimistic(_) => txn_props.start_ts,
                 TransactionKind::Pessimistic(for_update_ts) => for_update_ts,
             };
-            reader.get_old_value(&mutation.key, ts, prev_write_loaded, prev_write)?
+            reader.get_old_value(
+                &mutation.key,
+                ts,
+                prev_write_loaded,
+                prev_write,
+                txn_props.need_old_value.prefer_load_data,
+            )?
         }
     } else {
         OldValue::Unspecified
@@ -158,7 +167,7 @@ pub struct TransactionProperties<'a> {
     pub txn_size: u64,
     pub lock_ttl: u64,
     pub min_commit_ts: TimeStamp,
-    pub need_old_value: bool,
+    pub need_old_value: OldValueRequirement,
     pub is_retry_request: bool,
     pub assertion_level: AssertionLevel,
 }
@@ -702,6 +711,7 @@ pub mod tests {
     #[cfg(test)]
     use crate::storage::{
         kv::RocksSnapshot,
+        txn::commands::OldValueRequirement,
         txn::{commands::prewrite::fallback_1pc_locks, tests::*},
     };
     use crate::storage::{mvcc::tests::*, Engine};
@@ -715,7 +725,7 @@ pub mod tests {
             txn_size: 0,
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
-            need_old_value: false,
+            need_old_value: Default::default(),
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
         }
@@ -741,7 +751,7 @@ pub mod tests {
             txn_size,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
-            need_old_value: true,
+            need_old_value: OldValueRequirement::require(),
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
         }
@@ -763,7 +773,7 @@ pub mod tests {
         let mut reader = SnapshotReader::new(ts, snapshot, true);
 
         let mut props = optimistic_txn_props(pk, ts);
-        props.need_old_value = true;
+        props.need_old_value.require = true;
         let (_, old_value) = prewrite(
             &mut txn,
             &mut reader,
@@ -1051,7 +1061,7 @@ pub mod tests {
                 txn_size: 0,
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
-                need_old_value: true,
+                need_old_value: OldValueRequirement::require(),
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
             },
@@ -1083,7 +1093,7 @@ pub mod tests {
             txn_size: 2,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
-            need_old_value: true,
+            need_old_value: OldValueRequirement::require(),
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
         };
@@ -1133,7 +1143,7 @@ pub mod tests {
             txn_size: 2,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
-            need_old_value: true,
+            need_old_value: OldValueRequirement::require(),
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
         };
@@ -1242,7 +1252,7 @@ pub mod tests {
             txn_size: 6,
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
-            need_old_value: true,
+            need_old_value: OldValueRequirement::require(),
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
         };
@@ -1302,7 +1312,7 @@ pub mod tests {
             txn_size: 6,
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
-            need_old_value: true,
+            need_old_value: OldValueRequirement::require(),
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
         };
@@ -1514,7 +1524,7 @@ pub mod tests {
                 txn_size: 0,
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
-                need_old_value: true,
+                need_old_value: OldValueRequirement::require(),
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
             };
@@ -1568,7 +1578,7 @@ pub mod tests {
             txn_size: 0,
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
-            need_old_value: true,
+            need_old_value: OldValueRequirement::require(),
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
         };
@@ -1709,7 +1719,7 @@ pub mod tests {
                     txn_size: 0,
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
-                    need_old_value: true,
+                    need_old_value: OldValueRequirement::require(),
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
                 };
@@ -1745,7 +1755,7 @@ pub mod tests {
                     txn_size: 0,
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
-                    need_old_value: true,
+                    need_old_value: OldValueRequirement::require(),
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
                 };

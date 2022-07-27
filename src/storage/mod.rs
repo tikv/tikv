@@ -3137,7 +3137,6 @@ mod tests {
 
     #[test]
     fn test_prewrite_blocks_read() {
-        use kvproto::kvrpcpb::ExtraOp;
         let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
@@ -3156,7 +3155,7 @@ mod tests {
                 commands::WriteContext {
                     lock_mgr: &DummyLockManager {},
                     concurrency_manager: storage.concurrency_manager.clone(),
-                    extra_op: ExtraOp::Noop,
+                    need_old_value: Default::default(),
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                 },

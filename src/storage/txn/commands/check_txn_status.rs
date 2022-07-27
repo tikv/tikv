@@ -196,7 +196,7 @@ pub mod tests {
                 WriteContext {
                     lock_mgr: &DummyLockManager,
                     concurrency_manager: cm,
-                    extra_op: Default::default(),
+                    need_old_value: Default::default(),
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                 },
@@ -243,7 +243,7 @@ pub mod tests {
                     WriteContext {
                         lock_mgr: &DummyLockManager,
                         concurrency_manager: cm,
-                        extra_op: Default::default(),
+                        need_old_value: Default::default(),
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
                     },

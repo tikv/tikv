@@ -26,7 +26,7 @@ use fail::fail_point;
 use getset::Getters;
 use kvproto::{
     errorpb,
-    kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
+    kvrpcpb::{DiskFullOpt, LockInfo},
     metapb::{self, PeerRole},
     pdpb::{self, PeerStats},
     raft_cmdpb::{
@@ -79,7 +79,7 @@ use super::{
         self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
         Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
-    DestroyPeerJob,
+    DestroyPeerJob, TxnExtraOp,
 };
 use crate::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},

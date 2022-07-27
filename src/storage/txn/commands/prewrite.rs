@@ -9,7 +9,7 @@
 use std::mem;
 
 use engine_traits::CF_WRITE;
-use kvproto::kvrpcpb::{AssertionLevel, ExtraOp};
+use kvproto::kvrpcpb::AssertionLevel;
 use tikv_kv::SnapshotExt;
 use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 
@@ -24,8 +24,8 @@ use crate::storage::{
     txn::{
         actions::prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
         commands::{
-            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
-            WriteContext, WriteResult,
+            Command, CommandExt, OldValueRequirement, ReleasedLocks, ResponsePolicy, TypedCommand,
+            WriteCommand, WriteContext, WriteResult,
         },
         Error, ErrorInner, Result,
     },
@@ -447,7 +447,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         // Set extra op here for getting the write record when check write conflict in prewrite.
 
         let rows = self.mutations.len();
-        let res = self.prewrite(&mut txn, &mut reader, context.extra_op);
+        let res = self.prewrite(&mut txn, &mut reader, context.need_old_value);
         let (locks, final_min_commit_ts) = res?;
 
         Ok(self.write_result(
@@ -483,7 +483,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         &mut self,
         txn: &mut MvccTxn,
         reader: &mut SnapshotReader<impl Snapshot>,
-        extra_op: ExtraOp,
+        need_old_value: OldValueRequirement,
     ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
         let commit_kind = match (&self.secondary_keys, self.try_one_pc) {
             (_, true) => CommitKind::OnePc(self.max_commit_ts),
@@ -499,7 +499,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             txn_size: self.txn_size,
             lock_ttl: self.lock_ttl,
             min_commit_ts: self.min_commit_ts,
-            need_old_value: extra_op == ExtraOp::ReadOldValue,
+            need_old_value,
             is_retry_request: self.ctx.is_retry_request,
             assertion_level: self.assertion_level,
         };
@@ -867,7 +867,7 @@ mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::ReadPerfInstant;
     use engine_traits::CF_WRITE;
-    use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
+    use kvproto::kvrpcpb::{Assertion, Context};
     use txn_types::{Key, Mutation, TimeStamp};
 
     use super::*;
@@ -1425,7 +1425,6 @@ mod tests {
     fn test_out_of_sync_max_ts() {
         use engine_test::kv::KvTestEngineIterator;
         use engine_traits::{IterOptions, ReadOptions};
-        use kvproto::kvrpcpb::ExtraOp;
 
         use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
         #[derive(Clone)]
@@ -1465,7 +1464,7 @@ mod tests {
                 WriteContext {
                     lock_mgr: &DummyLockManager {},
                     concurrency_manager: ConcurrencyManager::new(10.into()),
-                    extra_op: ExtraOp::Noop,
+                    need_old_value: Default::default(),
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                 }
@@ -1631,7 +1630,7 @@ mod tests {
             let context = WriteContext {
                 lock_mgr: &DummyLockManager {},
                 concurrency_manager: cm.clone(),
-                extra_op: ExtraOp::Noop,
+                need_old_value: Default::default(),
                 statistics: &mut statistics,
                 async_apply_prewrite: case.async_apply_prewrite,
             };
@@ -1743,7 +1742,7 @@ mod tests {
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm.clone(),
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics: &mut statistics,
             async_apply_prewrite: false,
         };
@@ -1770,7 +1769,7 @@ mod tests {
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics: &mut statistics,
             async_apply_prewrite: false,
         };
@@ -1845,7 +1844,7 @@ mod tests {
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm.clone(),
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics: &mut statistics,
             async_apply_prewrite: false,
         };
@@ -1873,7 +1872,7 @@ mod tests {
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics: &mut statistics,
             async_apply_prewrite: false,
         };
@@ -2076,7 +2075,7 @@ mod tests {
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm.clone(),
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics: &mut statistics,
             async_apply_prewrite: false,
         };
@@ -2096,7 +2095,7 @@ mod tests {
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics: &mut statistics,
             async_apply_prewrite: false,
         };
@@ -2296,7 +2295,7 @@ mod tests {
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: ConcurrencyManager::new(20.into()),
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics: &mut statistics,
             async_apply_prewrite: false,
         };

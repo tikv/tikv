@@ -504,7 +504,7 @@ pub trait CommandExt: Display {
 pub struct WriteContext<'a, L: LockManager> {
     pub lock_mgr: &'a L,
     pub concurrency_manager: ConcurrencyManager,
-    pub extra_op: ExtraOp,
+    pub need_old_value: OldValueRequirement,
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
 }
@@ -705,6 +705,23 @@ pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
 }
 
+#[derive(Clone, Copy, Default, Debug)]
+pub struct OldValueRequirement {
+    /// whether old value is required or not.
+    pub require: bool,
+    /// whether to fetch old value from default CF or not.
+    pub prefer_load_data: bool,
+}
+
+impl OldValueRequirement {
+    pub fn require() -> Self {
+        OldValueRequirement {
+            require: true,
+            ..Default::default()
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod test_util {
     use txn_types::Mutation;
@@ -728,7 +745,7 @@ pub mod test_util {
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics,
             async_apply_prewrite: false,
         };
@@ -865,7 +882,7 @@ pub mod test_util {
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager,
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics,
             async_apply_prewrite: false,
         };
@@ -889,7 +906,7 @@ pub mod test_util {
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager,
-            extra_op: ExtraOp::Noop,
+            need_old_value: Default::default(),
             statistics,
             async_apply_prewrite: false,
         };

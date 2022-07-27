@@ -40,7 +40,7 @@ where
             txn_size: 0,
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
-            need_old_value: false,
+            need_old_value: Default::default(),
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
         };
@@ -87,7 +87,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &Be
                     txn_size: 0,
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
-                    need_old_value: false,
+                    need_old_value: Default::default(),
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
                 };

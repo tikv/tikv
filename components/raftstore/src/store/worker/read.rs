@@ -15,9 +15,7 @@ use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use fail::fail_point;
 use kvproto::{
-    errorpb,
-    kvrpcpb::ExtraOp as TxnExtraOp,
-    metapb,
+    errorpb, metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
 use pd_client::BucketMeta;
@@ -37,7 +35,7 @@ use crate::{
         fsm::store::StoreMeta,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
         Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadResponse,
-        RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
+        RegionSnapshot, RequestInspector, RequestPolicy, TxnExt, TxnExtraOp,
     },
     Error, Result,
 };
@@ -362,7 +360,7 @@ impl ReadDelegate {
             leader_lease: None,
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, 1),
-            txn_extra_op: Default::default(),
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             txn_ext: Default::default(),
             read_progress,
             pending_remove: false,

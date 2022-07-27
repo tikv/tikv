@@ -38,10 +38,11 @@ use futures::prelude::*;
 use into_other::IntoOther;
 use kvproto::{
     errorpb::Error as ErrorHeader,
-    kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange},
+    kvrpcpb::{Context, DiskFullOpt, KeyRange},
     raft_cmdpb,
 };
 use pd_client::BucketMeta;
+pub use raftstore::store::TxnExtraOp;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape, time::ThreadReadId};

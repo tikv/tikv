@@ -35,7 +35,6 @@ use engine_traits::{
 use fail::fail_point;
 use kvproto::{
     import_sstpb::SstMeta,
-    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{PeerRole, Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
@@ -89,7 +88,7 @@ use crate::{
             admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
             ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
         },
-        Config, RegionSnapshot, RegionTask,
+        Config, RegionSnapshot, RegionTask, TxnExtraOp,
     },
     Error, Result,
 };

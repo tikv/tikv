@@ -3,7 +3,6 @@
 use std::{num::NonZeroU64, sync::Arc};
 
 use engine_traits::{CfName, IterOptions, Peekable, ReadOptions, Snapshot};
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use pd_client::BucketMeta;
 use raftstore::{
     store::{RegionIterator, RegionSnapshot, TxnExt},
@@ -13,7 +12,7 @@ use txn_types::{Key, Value};
 
 use crate::{
     self as kv, Error, Error as KvError, ErrorInner, Iterator as EngineIterator,
-    Snapshot as EngineSnapshot, SnapshotExt,
+    Snapshot as EngineSnapshot, SnapshotExt, TxnExtraOp,
 };
 
 impl From<RaftServerError> for Error {

@@ -17,7 +17,6 @@ use kvproto::{
         ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
         EventRowOpType, Event_oneof_event,
     },
-    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
@@ -25,7 +24,7 @@ use kvproto::{
 };
 use raftstore::{
     coprocessor::{Cmd, CmdBatch, ObserveHandle},
-    store::util::compare_region_epoch,
+    store::{util::compare_region_epoch, TxnExtraOp},
     Error as RaftStoreError,
 };
 use resolved_ts::{ResolvedTs, Resolver};
@@ -564,7 +563,7 @@ impl Delegate {
         statistics: &mut Statistics,
         is_one_pc: bool,
     ) -> Result<()> {
-        debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+        debug_assert!(self.txn_extra_op.load().read_old_value());
         let mut read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
             let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
             let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
@@ -855,7 +854,10 @@ impl Delegate {
 
     fn add_downstream(&mut self, downstream: Downstream) {
         self.downstreams_mut().push(downstream);
-        self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
+        // TODO: fixme.
+        self.txn_extra_op.store(TxnExtraOp::ReadOldValue {
+            prefer_load_data: true,
+        });
     }
 
     fn remove_downstream(&mut self, id: DownstreamID) -> Option<Downstream> {
@@ -1179,14 +1181,14 @@ mod tests {
         // Create a new delegate.
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
         let mut delegate = Delegate::new(1, txn_extra_op.clone());
-        assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
+        assert!(txn_extra_op.load().read_old_value());
         assert!(delegate.handle.is_observing());
 
         // Subscribe once.
         let downstream1 = new_downstream(1, 1);
         let downstream1_id = downstream1.id;
         delegate.subscribe(downstream1).unwrap();
-        assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+        assert!(txn_extra_op.load().read_old_value());
         assert!(delegate.handle.is_observing());
 
         // Subscribe twice and then unsubscribe the second downstream.
@@ -1194,7 +1196,7 @@ mod tests {
         let downstream2_id = downstream2.id;
         delegate.subscribe(downstream2).unwrap();
         assert!(!delegate.unsubscribe(downstream2_id, None));
-        assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+        assert!(txn_extra_op.load().read_old_value());
         assert!(delegate.handle.is_observing());
 
         // `on_region_ready` when the delegate isn't resolved.
@@ -1209,7 +1211,7 @@ mod tests {
             delegate.unsubscribe(id, None);
             assert_eq!(delegate.downstreams().len(), 1);
         }
-        assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+        assert!(txn_extra_op.load().read_old_value());
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
@@ -1219,7 +1221,7 @@ mod tests {
         // Unsubscribe all downstreams.
         assert!(delegate.unsubscribe(downstream1_id, None));
         assert!(delegate.downstreams().is_empty());
-        assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
+        assert!(!txn_extra_op.load().read_old_value());
         assert!(!delegate.handle.is_observing());
     }
 

@@ -40,7 +40,7 @@ pub use self::{
     msg::{
         Callback, CasualMessage, ExtCallback, InspectedRaftMessage, MergeResultKind, PeerMsg,
         PeerTick, RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg,
-        StoreMsg, StoreTick, WriteCallback, WriteResponse,
+        StoreMsg, StoreTick, TxnExtraOp, WriteCallback, WriteResponse,
     },
     peer::{AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy},
     peer_storage::{

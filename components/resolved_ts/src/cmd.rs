@@ -397,7 +397,7 @@ mod tests {
                 txn_size: 2,
                 lock_ttl: 2000,
                 min_commit_ts: 10.into(),
-                need_old_value: false,
+                need_old_value: Default::default(),
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
             },

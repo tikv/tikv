@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use kvproto::kvrpcpb::{ExtraOp, LockInfo};
+use kvproto::kvrpcpb::LockInfo;
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
@@ -95,7 +95,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         } else {
             Ok(PessimisticLockRes::Empty)
         };
-        let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
@@ -108,7 +107,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.return_values,
                 self.check_existence,
                 self.min_commit_ts,
-                need_old_value,
+                context.need_old_value,
             ) {
                 Ok((val, old_value)) => {
                     if self.return_values || self.check_existence {

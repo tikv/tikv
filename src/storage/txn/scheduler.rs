@@ -38,14 +38,14 @@ use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use kvproto::{
-    kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp},
+    kvrpcpb::{CommandPri, Context, DiskFullOpt},
     pdpb::QueryKind,
 };
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
-use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
+use tikv_kv::{Modify, Snapshot, SnapshotExt, TxnExtraOp, WriteData};
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
 use txn_types::TimeStamp;
@@ -62,7 +62,10 @@ use crate::{
         lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout},
         metrics::*,
         txn::{
-            commands::{Command, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo},
+            commands::{
+                Command, OldValueRequirement, ResponsePolicy, WriteContext, WriteResult,
+                WriteResultLockInfo,
+            },
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
@@ -86,7 +89,7 @@ pub(super) struct Task {
     pub(super) cid: u64,
     pub(super) tracker: TrackerToken,
     pub(super) cmd: Command,
-    pub(super) extra_op: ExtraOp,
+    pub(super) extra_op: TxnExtraOp,
 }
 
 impl Task {
@@ -96,7 +99,17 @@ impl Task {
             cid,
             tracker,
             cmd,
-            extra_op: ExtraOp::Noop,
+            extra_op: TxnExtraOp::Noop,
+        }
+    }
+
+    fn need_old_value(&self) -> OldValueRequirement {
+        match self.extra_op {
+            TxnExtraOp::Noop => Default::default(),
+            TxnExtraOp::ReadOldValue { prefer_load_data } => OldValueRequirement {
+                require: true,
+                prefer_load_data,
+            },
         }
     }
 }
@@ -317,6 +330,7 @@ impl<L: LockManager> SchedulerInner<L> {
 #[derive(Clone)]
 pub struct Scheduler<E: Engine, L: LockManager> {
     inner: Arc<SchedulerInner<L>>,
+
     // The engine can be fetched from the thread local storage of scheduler threads.
     // So, we don't store the engine here.
     _engine: PhantomData<E>,
@@ -787,7 +801,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
                 concurrency_manager: self.inner.concurrency_manager.clone(),
-                extra_op: task.extra_op,
+                need_old_value: task.need_old_value(),
                 statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
             };

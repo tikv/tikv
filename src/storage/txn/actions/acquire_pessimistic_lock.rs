@@ -8,7 +8,7 @@ use crate::storage::{
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
         ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
     },
-    txn::actions::check_data_constraint::check_data_constraint,
+    txn::{actions::check_data_constraint::check_data_constraint, commands::OldValueRequirement},
     Snapshot,
 };
 
@@ -32,7 +32,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     need_value: bool,
     need_check_existence: bool,
     min_commit_ts: TimeStamp,
-    need_old_value: bool,
+    need_old_value: OldValueRequirement,
 ) -> MvccResult<(Option<Value>, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
@@ -46,10 +46,10 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // When `need_value` is set, the value need to be loaded of course. If `need_check_existence`
     // and `need_old_value` are both set, we also load the value even if `need_value` is false,
     // so that it avoids `load_old_value` doing repeated work.
-    let need_load_value = need_value || (need_check_existence && need_old_value);
+    let need_load_value = need_value || (need_check_existence && need_old_value.require);
 
     fn load_old_value<S: Snapshot>(
-        need_old_value: bool,
+        need_old_value: OldValueRequirement,
         value_loaded: bool,
         val: Option<&Value>,
         reader: &mut SnapshotReader<S>,
@@ -58,7 +58,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         prev_write_loaded: bool,
         prev_write: Option<Write>,
     ) -> MvccResult<OldValue> {
-        if !need_old_value {
+        if !need_old_value.require {
             return Ok(OldValue::Unspecified);
         }
         if value_loaded {
@@ -68,7 +68,13 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 None => OldValue::None,
             })
         } else {
-            reader.get_old_value(key, for_update_ts, prev_write_loaded, prev_write)
+            reader.get_old_value(
+                key,
+                for_update_ts,
+                prev_write_loaded,
+                prev_write,
+                need_old_value.prefer_load_data,
+            )
         }
     }
 
@@ -137,7 +143,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     let (prev_write_loaded, mut prev_write) = (true, None);
     if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
         // Find a previous write.
-        if need_old_value {
+        if need_old_value.require {
             prev_write = Some(write.clone());
         }
 
@@ -259,7 +265,7 @@ pub mod tests {
         txn::actions::prewrite::tests::{
             old_value_put_delete_lock_insert, old_value_random, OldValueRandomTest,
         },
-        txn::commands::pessimistic_rollback,
+        txn::commands::{pessimistic_rollback, OldValueRequirement},
         txn::tests::*,
         TestEngineBuilder,
     };
@@ -294,7 +300,7 @@ pub mod tests {
             need_value,
             need_check_existence,
             min_commit_ts,
-            false,
+            Default::default(),
         )
         .unwrap();
         let modifies = txn.into_modifies();
@@ -454,7 +460,7 @@ pub mod tests {
             need_value,
             need_check_existence,
             min_commit_ts,
-            false,
+            Default::default(),
         )
         .unwrap_err()
     }
@@ -903,7 +909,7 @@ pub mod tests {
                     let cm = ConcurrencyManager::new(start_ts);
                     let mut txn = MvccTxn::new(start_ts, cm);
                     let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-                    let need_old_value = true;
+                    let need_old_value = OldValueRequirement::require();
                     let lock_ttl = 0;
                     let for_update_ts = start_ts;
                     let min_commit_ts = 0.into();
@@ -951,7 +957,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(min_commit_ts);
         let start_ts = TimeStamp::new(9);
         let for_update_ts = TimeStamp::new(12);
-        let need_old_value = true;
+        let need_old_value = OldValueRequirement::require();
         // Force to read old via reader.
         let need_value = false;
         let need_check_existence = false;
@@ -1001,7 +1007,7 @@ pub mod tests {
             false,
             false,
             min_commit_ts,
-            true,
+            OldValueRequirement::require(),
         )
         .unwrap();
         assert_eq!(
@@ -1028,7 +1034,7 @@ pub mod tests {
                         let cm = ConcurrencyManager::new(start_ts);
                         let mut txn = MvccTxn::new(start_ts, cm);
                         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-                        let need_old_value = true;
+                        let need_old_value = OldValueRequirement::require();
                         let lock_ttl = 0;
                         let for_update_ts = start_ts;
                         let min_commit_ts = 0.into();
@@ -1078,7 +1084,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(min_commit_ts);
         let start_ts = TimeStamp::new(15);
         let for_update_ts = TimeStamp::new(15);
-        let need_old_value = true;
+        let need_old_value = OldValueRequirement::require();
         let need_value = false;
         let need_check_existence = false;
         let mut txn = MvccTxn::new(start_ts, cm.clone());
@@ -1109,7 +1115,7 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = TimeStamp::new(10);
         let for_update_ts = TimeStamp::new(10);
-        let need_old_value = true;
+        let need_old_value = OldValueRequirement::require();
         let need_value = false;
         let check_existence = false;
         let mut txn = MvccTxn::new(start_ts, cm);
