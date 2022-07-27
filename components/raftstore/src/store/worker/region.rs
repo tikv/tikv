@@ -72,7 +72,7 @@ const ENGINE: &str = "engine";
 pub enum Task<S> {
     Gen {
         region_id: u64,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: S,
         canceled: Arc<AtomicBool>,
@@ -262,7 +262,7 @@ where
     fn generate_snap(
         &self,
         region_id: u64,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
@@ -275,7 +275,7 @@ where
             &self.engine,
             kv_snap,
             region_id,
-            last_applied_index_term,
+            last_applied_term,
             last_applied_state,
             for_balance,
             allow_multi_files_snapshot,
@@ -301,7 +301,7 @@ where
     fn handle_gen(
         &self,
         region_id: u64,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         canceled: Arc<AtomicBool>,
@@ -325,7 +325,7 @@ where
 
         if let Err(e) = self.generate_snap(
             region_id,
-            last_applied_index_term,
+            last_applied_term,
             last_applied_state,
             kv_snap,
             notifier,
@@ -703,7 +703,7 @@ where
         match task {
             Task::Gen {
                 region_id,
-                last_applied_index_term,
+                last_applied_term,
                 last_applied_state,
                 kv_snap,
                 canceled,
@@ -742,7 +742,7 @@ where
                     tikv_alloc::add_thread_memory_accessor();
                     ctx.handle_gen(
                         region_id,
-                        last_applied_index_term,
+                        last_applied_term,
                         last_applied_state,
                         kv_snap,
                         canceled,
@@ -1055,7 +1055,7 @@ mod tests {
                 .schedule(Task::Gen {
                     region_id: id,
                     kv_snap: engine.kv.snapshot(),
-                    last_applied_index_term: entry.get_term(),
+                    last_applied_term: entry.get_term(),
                     last_applied_state: apply_state,
                     canceled: Arc::new(AtomicBool::new(false)),
                     notifier: tx,

@@ -11,7 +11,7 @@ use tempfile::Builder;
 
 use super::*;
 use crate::{
-    store::{Config, Transport},
+    store::{peer_storage::tests::new_entry, Config, Transport},
     Result,
 };
 
@@ -40,13 +40,6 @@ fn must_have_entries_and_state(
                 .is_none()
         );
     }
-}
-
-fn new_entry(index: u64, term: u64) -> Entry {
-    let mut e = Entry::default();
-    e.set_index(index);
-    e.set_term(term);
-    e
 }
 
 fn new_raft_state(term: u64, vote: u64, commit: u64, last_index: u64) -> RaftLocalState {
