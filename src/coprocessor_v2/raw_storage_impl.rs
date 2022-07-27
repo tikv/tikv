@@ -190,7 +190,8 @@ impl From<storage::errors::Error> for PluginErrorShim {
             storage::errors::ErrorInner::Kv(KvError(box KvErrorInner::Timeout(duration))) => {
                 PluginError::Timeout(duration)
             }
-            // Other errors are passed as-is inside their `Result` so we get a `&Result` when using `Any::downcast_ref`.
+            // Other errors are passed as-is inside their `Result` so we get a `&Result` when using
+            // `Any::downcast_ref`.
             _ => PluginError::Other(
                 format!("{}", &error),
                 Box::new(storage::Result::<()>::Err(error)),

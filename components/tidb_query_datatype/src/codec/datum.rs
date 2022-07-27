@@ -1010,7 +1010,7 @@ pub trait DatumEncoder:
                     self.write_u8(JSON_FLAG)?;
                     self.write_json(j.as_ref())?;
                 }
-                //TODO: implement datum write here.
+                // TODO: implement datum write here.
                 Datum::Enum(_) => unimplemented!(),
                 Datum::Set(_) => unimplemented!(),
             }

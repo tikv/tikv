@@ -89,9 +89,10 @@ impl SoftLimit {
 pub trait CpuStatistics {
     type Container: IntoIterator<Item = (String, u64)>;
     // ThreadInfoStatistics needs &mut self to record the thread information.
-    // RefCell(internal mutability) would make SoftLimitByCpu !Sync, hence futures contains it become !Send (WHY?)
-    // Mutex would make this function async or blocking.
-    // Anyway, &mut here is acceptable, since SoftLimitByCpu won't be shared. (Even the &mut here is a little weird...)
+    // RefCell(internal mutability) would make SoftLimitByCpu !Sync, hence futures contains it
+    // become !Send (WHY?) Mutex would make this function async or blocking.
+    // Anyway, &mut here is acceptable, since SoftLimitByCpu won't be shared. (Even the &mut here is
+    // a little weird...)
     fn get_cpu_usages(&mut self) -> Self::Container;
 }
 

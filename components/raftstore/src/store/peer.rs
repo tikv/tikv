@@ -296,8 +296,9 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
 }
 
 struct CmdEpochChecker<S: Snapshot> {
-    // Although it's a deque, because of the characteristics of the settings from `admin_cmd_epoch_lookup`,
-    // the max size of admin cmd is 2, i.e. split/merge and change peer.
+    // Although it's a deque, because of the characteristics of the settings from
+    // `admin_cmd_epoch_lookup`, the max size of admin cmd is 2, i.e. split/merge and change
+    // peer.
     proposed_admin_cmd: VecDeque<ProposedAdminCmd<S>>,
     term: u64,
 }
@@ -324,7 +325,8 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         }
     }
 
-    /// Check if the proposal can be proposed on the basis of its epoch and previous proposed admin cmds.
+    /// Check if the proposal can be proposed on the basis of its epoch and previous proposed admin
+    /// cmds.
     ///
     /// Returns None if passing the epoch check, otherwise returns a index which is the last
     /// admin cmd index conflicted with this proposal.
@@ -757,8 +759,8 @@ where
     /// The count of deleted keys since last reset.
     delete_keys_hint: u64,
     /// An inaccurate difference in region size after compaction.
-    /// It is used to trigger check split to update approximate size and keys after space reclamation
-    /// of deleted entries.
+    /// It is used to trigger check split to update approximate size and keys after space
+    /// reclamation of deleted entries.
     pub compaction_declined_bytes: u64,
     /// Approximate size of the region.
     pub approximate_size: Option<u64>,
@@ -1092,10 +1094,11 @@ where
     pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
         if entries.is_empty() {
-            // Though the entries is empty, it is possible that one source peer has caught up the logs
-            // but commit index is not updated. If other source peers are already destroyed, so the raft
-            // group will not make any progress, namely the source peer can not get the latest commit index anymore.
-            // Here update the commit index to let source apply rest uncommitted entries.
+            // Though the entries is empty, it is possible that one source peer has caught up the
+            // logs but commit index is not updated. If other source peers are already
+            // destroyed, so the raft group will not make any progress, namely the
+            // source peer can not get the latest commit index anymore. Here update the
+            // commit index to let source apply rest uncommitted entries.
             return if merge.get_commit() > self.raft_group.raft.raft_log.committed {
                 self.raft_group.raft.raft_log.commit_to(merge.get_commit());
                 Some(merge.get_commit())
@@ -1113,9 +1116,9 @@ where
             "commit_index" => self.raft_group.raft.raft_log.committed,
         );
         if log_idx < self.raft_group.raft.raft_log.committed {
-            // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
-            // so the commit index may exceed the last index of the entires from CommitMergeRequest.
-            // If that, no need to append
+            // There are maybe some logs not included in CommitMergeRequest's entries, like
+            // CompactLog, so the commit index may exceed the last index of the entires
+            // from CommitMergeRequest. If that, no need to append
             if self.raft_group.raft.raft_log.committed - log_idx >= entries.len() as u64 {
                 return None;
             }
@@ -1126,9 +1129,10 @@ where
 
         let last_log = entries.last().unwrap();
         if last_log.term > self.term() {
-            // Hack: In normal flow, when leader sends the entries, it will use a term that's not less
-            // than the last log term. And follower will update its states correctly. For merge, we append
-            // the log without raft, so we have to take care of term explicitly to get correct metadata.
+            // Hack: In normal flow, when leader sends the entries, it will use a term that's not
+            // less than the last log term. And follower will update its states
+            // correctly. For merge, we append the log without raft, so we have to take
+            // care of term explicitly to get correct metadata.
             info!(
                 "become follower for new logs";
                 "new_log_term" => last_log.term,
@@ -1875,11 +1879,13 @@ where
             // 1. Current leader hasn't communicated with this peer.
             // 2. This peer does not exist yet(maybe it is created but not initialized)
             //
-            // The correctness of region merge depends on the fact that all target peers must exist during merging.
-            // (PD rely on `pending_peers` to check whether all target peers exist)
+            // The correctness of region merge depends on the fact that all target peers must exist
+            // during merging. (PD rely on `pending_peers` to check whether all target
+            // peers exist)
             //
             // So if the `matched` is 0, it must be a pending peer.
-            // It can be ensured because `truncated_index` must be greater than `RAFT_INIT_LOG_INDEX`(5).
+            // It can be ensured because `truncated_index` must be greater than
+            // `RAFT_INIT_LOG_INDEX`(5).
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);
@@ -2107,11 +2113,11 @@ where
     /// It is due to the interaction between lease and split/merge.(details are decribed below)
     ///
     /// Note that in addition to the hearbeat/append msg, the read index response also can notify
-    /// other peers the new commit index. There are three place where TiKV handles read index resquest.
-    /// The first place is in raft-rs, so it's like hearbeat/append msg, call this function and
-    /// then send the response. The second place is in `Step`, we should use the commit index
-    /// of `PeerStorage` which is the greatest commit index that can be observed outside.
-    /// The third place is in `read_index`, handle it like the second one.
+    /// other peers the new commit index. There are three place where TiKV handles read index
+    /// resquest. The first place is in raft-rs, so it's like hearbeat/append msg, call this
+    /// function and then send the response. The second place is in `Step`, we should use the
+    /// commit index of `PeerStorage` which is the greatest commit index that can be observed
+    /// outside. The third place is in `read_index`, handle it like the second one.
     fn on_leader_commit_idx_changed(&mut self, pre_commit_index: u64, commit_index: u64) {
         if commit_index <= pre_commit_index || !self.is_leader() {
             return;
@@ -2334,7 +2340,7 @@ where
 
                     if self.unsafe_recovery_state.is_some() {
                         debug!("unsafe recovery finishes applying a snapshot");
-                        self.unsafe_recovery_maybe_finish_wait_apply(/*force=*/ false);
+                        self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
                     }
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
@@ -2596,8 +2602,9 @@ where
                         last.raft_msgs.push(persisted_msgs);
                     }
                 } else {
-                    // If this ready don't need to be persisted and there is no previous unpersisted ready,
-                    // we can safely consider it is persisted so the persisted msgs can be sent immediately.
+                    // If this ready don't need to be persisted and there is no previous unpersisted
+                    // ready, we can safely consider it is persisted so the
+                    // persisted msgs can be sent immediately.
                     self.persisted_number = ready_number;
 
                     if !persisted_msgs.is_empty() {
@@ -2606,8 +2613,8 @@ where
                         self.send_raft_messages(ctx, msgs);
                     }
 
-                    // The commit index and messages of light ready should be empty because no data needs
-                    // to be persisted.
+                    // The commit index and messages of light ready should be empty because no data
+                    // needs to be persisted.
                     let mut light_rd = self.raft_group.advance_append(ready);
 
                     self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
@@ -2703,9 +2710,10 @@ where
                     .find_propose_time(entry.get_term(), entry.get_index());
                 if let Some(propose_time) = propose_time {
                     // We must renew current_time because this value may be created a long time ago.
-                    // If we do not renew it, this time may be smaller than propose_time of a command,
-                    // which was proposed in another thread while this thread receives its AppendEntriesResponse
-                    // and is ready to calculate its commit-log-duration.
+                    // If we do not renew it, this time may be smaller than propose_time of a
+                    // command, which was proposed in another thread while this
+                    // thread receives its AppendEntriesResponse and is ready to
+                    // calculate its commit-log-duration.
                     ctx.current_time.replace(monotonic_raw_now());
                     ctx.raft_metrics.commit_log.observe(duration_to_sec(
                         (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
@@ -2880,7 +2888,8 @@ where
             self.mut_store().update_cache_persisted(persist_index);
 
             if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
-                // forward commit index, the committed entries will be applied in the next raft base tick round
+                // forward commit index, the committed entries will be applied in the next raft base
+                // tick round
                 self.maybe_force_forward_commit_index();
             }
         }
@@ -2922,7 +2931,8 @@ where
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
         if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
-            // forward commit index, the committed entries will be applied in the next raft base tick round
+            // forward commit index, the committed entries will be applied in the next raft base
+            // tick round
             self.maybe_force_forward_commit_index();
         }
         self.mut_store().update_cache_persisted(persist_index);
@@ -3346,8 +3356,8 @@ where
                 ) {
                     self.propose_normal(ctx, req)
                 } else {
-                    // If leader node is disk full, try to transfer leader to a node with disk usage normal to
-                    // keep write availablity not downback.
+                    // If leader node is disk full, try to transfer leader to a node with disk usage
+                    // normal to keep write availablity not downback.
                     // if majority node is disk full, to transfer leader or not is not necessary.
                     // Note: Need to exclude learner node.
                     if maybe_transfer_leader && !self.disk_full_peers.majority {
@@ -3402,8 +3412,9 @@ where
             Ok(Either::Left(idx)) => {
                 let has_applied_to_current_term = self.has_applied_to_current_term();
                 if has_applied_to_current_term {
-                    // After this peer has applied to current term and passed above checking including `cmd_epoch_checker`,
-                    // we can safely guarantee that this proposal will be committed if there is no abnormal leader transfer
+                    // After this peer has applied to current term and passed above checking
+                    // including `cmd_epoch_checker`, we can safely guarantee
+                    // that this proposal will be committed if there is no abnormal leader transfer
                     // in the near future. Thus proposed callback can be called.
                     cb.invoke_proposed();
                 }
@@ -3549,8 +3560,9 @@ where
             }
         }
 
-        // Multiple changes that only effect learner will not product `IncommingVoter` or `DemotingVoter`
-        // after apply, but raftstore layer and PD rely on these roles to detect joint state
+        // Multiple changes that only effect learner will not product `IncommingVoter` or
+        // `DemotingVoter` after apply, but raftstore layer and PD rely on these roles to
+        // detect joint state
         if kind != ConfChangeKind::Simple && only_learner_change {
             return Err(box_err!(
                 "{} invalid conf change request, multiple changes that only effect learner",
@@ -3779,10 +3791,11 @@ where
         let now = monotonic_raw_now();
         if self.is_leader() {
             match self.inspect_lease() {
-                // Here combine the new read request with the previous one even if the lease expired is
-                // ok because in this case, the previous read index must be sent out with a valid
-                // lease instead of a suspect lease. So there must no pending transfer-leader proposals
-                // before or after the previous read index, and the lease can be renewed when get
+                // Here combine the new read request with the previous one even if the lease expired
+                // is ok because in this case, the previous read index must be sent
+                // out with a valid lease instead of a suspect lease. So there must
+                // no pending transfer-leader proposals before or after the previous
+                // read index, and the lease can be renewed when get
                 // heartbeat responses.
                 LeaseState::Valid | LeaseState::Expired => {
                     // Must use the commit index of `PeerStorage` instead of the commit index
@@ -3796,14 +3809,16 @@ where
                             .get(0)
                             .map(|req| req.has_read_index())
                             .unwrap_or_default();
-                        // A read index request or a read with addition request always needs the response of
-                        // checking memory lock for async commit, so we cannot apply the optimization here
+                        // A read index request or a read with addition request always needs the
+                        // response of checking memory lock for async
+                        // commit, so we cannot apply the optimization here
                         if !is_read_index_request
                             && read.addition_request.is_none()
                             && read.propose_time + max_lease > now
                         {
-                            // A read request proposed in the current lease is found; combine the new
-                            // read request to that previous one, so that no proposing needed.
+                            // A read request proposed in the current lease is found; combine the
+                            // new read request to that previous one, so
+                            // that no proposing needed.
                             read.push_command(req, cb, commit_index);
                             return false;
                         }
@@ -4180,9 +4195,9 @@ where
 
     /// Propose normal request to raft
     ///
-    /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
-    /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
-    /// the last conflict admin cmd.
+    /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located
+    /// on `index` position. Ok(Either::Right(index)) means the proposal is rejected by
+    /// `CmdEpochChecker` and the `index` is the position of the last conflict admin cmd.
     fn propose_normal<T: Transport>(
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T>,
@@ -4412,9 +4427,9 @@ where
     // 2. Removing the leader is not allowed in the configuration;
     // 3. The conf change makes the raft group not healthy;
     // 4. The conf change is dropped by raft group internally.
-    /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
-    /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
-    /// the last conflict admin cmd.
+    /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located
+    /// on `index` position. Ok(Either::Right(index)) means the proposal is rejected by
+    /// `CmdEpochChecker` and the `index` is the position of the last conflict admin cmd.
     fn propose_conf_change<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -4618,7 +4633,8 @@ where
                 normal_peers.insert(peer_id);
             }
             if let Some(pr) = self.raft_group.raft.prs().get(peer_id) {
-                // status 3-normal, 2-almostfull, 1-alreadyfull, only for simplying the sort func belowing.
+                // status 3-normal, 2-almostfull, 1-alreadyfull, only for simplying the sort func
+                // belowing.
                 let mut status = 3;
                 if let Some(usg) = usage {
                     status = match usg {
@@ -4653,7 +4669,8 @@ where
             return;
         }
 
-        // Reverse sort peers based on `next_idx`, `usage` and `store healthy status`, then try to get a potential quorum.
+        // Reverse sort peers based on `next_idx`, `usage` and `store healthy status`, then try to
+        // get a potential quorum.
         next_idxs.sort_by(|x, y| {
             if x.3 == y.3 {
                 y.1.cmp(&x.1)
@@ -4763,7 +4780,8 @@ where
             }
         }
 
-        // if there are some peers with disk already full status in the majority set, should not allowed.
+        // if there are some peers with disk already full status in the majority set, should not
+        // allowed.
         if self.dangerous_majority_set {
             return false;
         }

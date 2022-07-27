@@ -181,7 +181,8 @@ impl Resolver {
         self.raw_lock_ts_heap.push(Reverse(ts));
     }
 
-    // untrack all timestamps smaller than input ts, depend on the raw ts in one region is non-decreasing
+    // untrack all timestamps smaller than input ts, depend on the raw ts in one region is
+    // non-decreasing
     pub fn raw_untrack_lock(&mut self, ts: TimeStamp) {
         debug!("raw untrack ts before {}, region {}", ts, self.region_id);
         while let Some(&Reverse(min_ts)) = self.raw_lock_ts_heap.peek() {

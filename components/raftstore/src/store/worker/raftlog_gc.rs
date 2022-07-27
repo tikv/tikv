@@ -234,7 +234,7 @@ mod tests {
             e.set_index(i);
             raft_wb.append(region_id, vec![e]).unwrap();
         }
-        raft_db.consume(&mut raft_wb, false /*sync*/).unwrap();
+        raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
 
         let tbls = vec![
             (Task::gc(region_id, 0, 10), 10, (0, 10), (10, 100)),

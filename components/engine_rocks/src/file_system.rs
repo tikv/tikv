@@ -84,22 +84,22 @@ mod tests {
         db.put(&data_key(b"a1"), &value).unwrap();
         db.put(&data_key(b"a2"), &value).unwrap();
         assert_eq!(stats.fetch(IOType::Flush, IOOp::Write), 0);
-        db.flush(true /*sync*/).unwrap();
+        db.flush(true /* sync */).unwrap();
         assert!(stats.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
         assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 2 + amplification_bytes);
         stats.reset();
         db.put(&data_key(b"a2"), &value).unwrap();
         db.put(&data_key(b"a3"), &value).unwrap();
-        db.flush(true /*sync*/).unwrap();
+        db.flush(true /* sync */).unwrap();
         assert!(stats.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
         assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 2 + amplification_bytes);
         stats.reset();
         db.c()
             .compact_range(
-                CF_DEFAULT, None,  /*start_key*/
-                None,  /*end_key*/
-                false, /*exclusive_manual*/
-                1,     /*max_subcompactions*/
+                CF_DEFAULT, None,  // start_key
+                None,  // end_key
+                false, // exclusive_manual
+                1,     // max_subcompactions
             )
             .unwrap();
         assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Read) > value_size * 4);

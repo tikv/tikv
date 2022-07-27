@@ -18,8 +18,8 @@ impl RocksEngine {
         self.as_inner().is_titan()
     }
 
-    // We store all data which would be deleted in memory at first because the data of region will never be larger than
-    // max-region-size.
+    // We store all data which would be deleted in memory at first because the data of region will
+    // never be larger than max-region-size.
     fn delete_all_in_range_cf_by_ingest(
         &self,
         cf: &str,

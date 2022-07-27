@@ -470,10 +470,10 @@ impl<E: KvEngine> Initializer<E> {
     pub(crate) fn deregister_downstream(&self, err: Error) {
         let deregister = if self.build_resolver || err.has_region_error() {
             // Deregister delegate on the conditions,
-            // * It fails to build a resolver. A delegate requires a resolver
-            //   to advance resolved ts.
-            // * A region error. It usually mean a peer is not leader or
-            //   a leader meets an error and can not serve.
+            // * It fails to build a resolver. A delegate requires a resolver to advance resolved
+            //   ts.
+            // * A region error. It usually mean a peer is not leader or a leader meets an error and
+            //   can not serve.
             Deregister::Delegate {
                 region_id: self.region_id,
                 observe_id: self.observe_id,

@@ -102,14 +102,14 @@ pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
 
 #[macro_export]
 macro_rules! update_concrete {
-    ( $state:expr, $ctx:expr, $value:expr ) => {
+    ($state:expr, $ctx:expr, $value:expr) => {
         unsafe { $state.update_concrete_unsafe($ctx, $value.unsafe_into()) }
     };
 }
 
 #[macro_export]
 macro_rules! update_vector {
-    ( $state:expr, $ctx:expr, $physical_values:expr, $logical_rows:expr ) => {
+    ($state:expr, $ctx:expr, $physical_values:expr, $logical_rows:expr) => {
         unsafe {
             $state.update_vector_unsafe(
                 $ctx,
@@ -123,21 +123,21 @@ macro_rules! update_vector {
 
 #[macro_export]
 macro_rules! update_repeat {
-    ( $state:expr, $ctx:expr, $value:expr, $repeat_times:expr ) => {
+    ($state:expr, $ctx:expr, $value:expr, $repeat_times:expr) => {
         unsafe { $state.update_repeat_unsafe($ctx, $value.unsafe_into(), $repeat_times) }
     };
 }
 
 #[macro_export]
 macro_rules! update {
-    ( $state:expr, $ctx:expr, $value:expr ) => {
+    ($state:expr, $ctx:expr, $value:expr) => {
         unsafe { $state.update_unsafe($ctx, $value.unsafe_into()) }
     };
 }
 
 #[macro_export]
 macro_rules! impl_state_update_partial {
-    ( $ty:tt ) => {
+    ($ty:tt) => {
         #[inline]
         unsafe fn update_unsafe(
             &mut self,
@@ -172,7 +172,7 @@ macro_rules! impl_state_update_partial {
 
 #[macro_export]
 macro_rules! impl_concrete_state {
-    ( $ty:ty ) => {
+    ($ty:ty) => {
         #[inline]
         unsafe fn update_concrete_unsafe(
             &mut self,
@@ -186,7 +186,7 @@ macro_rules! impl_concrete_state {
 
 #[macro_export]
 macro_rules! impl_unmatched_function_state {
-    ( $ty:ty ) => {
+    ($ty:ty) => {
         impl<T1, T> super::AggrFunctionStateUpdatePartial<T1> for $ty
         where
             T1: EvaluableRef<'static> + 'static,

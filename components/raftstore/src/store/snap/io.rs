@@ -193,8 +193,8 @@ where
     Ok(stats)
 }
 
-/// Apply the given snapshot file into a column family. `callback` will be invoked after each batch of
-/// key value pairs written to db.
+/// Apply the given snapshot file into a column family. `callback` will be invoked after each batch
+/// of key value pairs written to db.
 pub fn apply_plain_cf_file<E, F>(
     path: &str,
     key_mgr: Option<&Arc<DataKeyManager>>,

@@ -82,9 +82,11 @@ pub trait TabletAccessor<EK> {
 /// max error count to log
 const MAX_ERROR_COUNT: u32 = 5;
 
-/// TabletErrorCollector is the facility struct to handle errors when using TabletAccessor::for_each_opened_tablet
+/// TabletErrorCollector is the facility struct to handle errors when using
+/// TabletAccessor::for_each_opened_tablet
 ///
-/// It will choose the last failed result as the final result, meanwhile logging errors up to MAX_ERROR_COUNT.
+/// It will choose the last failed result as the final result, meanwhile logging errors up to
+/// MAX_ERROR_COUNT.
 pub struct TabletErrorCollector {
     errors: Vec<u8>,
     max_error_count: u32,
@@ -151,7 +153,6 @@ impl Drop for TabletErrorCollector {
 }
 
 /// A factory trait to create new engine.
-///
 // It should be named as `EngineFactory` for consistency, but we are about to rename
 // engine to tablet, so always use tablet for new traits/types.
 pub trait TabletFactory<EK>: TabletAccessor<EK> {

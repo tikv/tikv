@@ -1006,7 +1006,7 @@ pub trait ChunkColumnEncoder: NumberEncoder {
         }
         // offsets
         if !col.is_fixed() {
-            //let length = (col.length+1)*4;
+            // let length = (col.length+1)*4;
             for v in &col.var_offsets {
                 self.write_i64_le(*v as i64)?;
             }

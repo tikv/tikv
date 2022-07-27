@@ -25,7 +25,8 @@ pub enum Task {
     CheckAndCompact {
         cf_names: Vec<String>,         // Column families need to compact
         ranges: Vec<Key>,              // Ranges need to check
-        tombstones_num_threshold: u64, // The minimum RocksDB tombstones a range that need compacting has
+        tombstones_num_threshold: u64, /* The minimum RocksDB tombstones a range that need
+                                        * compacting has */
         tombstones_percent_threshold: u64,
     },
 }
@@ -200,7 +201,8 @@ fn collect_ranges_need_compact(
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
-        // Get total entries and total versions in this range and checks if it needs to be compacted.
+        // Get total entries and total versions in this range and checks if it needs to be
+        // compacted.
         if let Some((num_ent, num_ver)) =
             box_try!(engine.get_range_entries_and_versions(CF_WRITE, &range[0], &range[1]))
         {

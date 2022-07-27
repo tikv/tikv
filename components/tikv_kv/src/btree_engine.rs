@@ -25,8 +25,8 @@ use crate::{
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
 /// The BTreeEngine(based on `BTreeMap`) is in memory and only used in tests and benchmarks.
-/// Note: The `snapshot()` and `async_snapshot()` methods are fake, the returned snapshot is not isolated,
-/// they will be affected by the later modifies.
+/// Note: The `snapshot()` and `async_snapshot()` methods are fake, the returned snapshot is not
+/// isolated, they will be affected by the later modifies.
 #[derive(Clone)]
 pub struct BTreeEngine {
     cf_names: Vec<CfName>,
@@ -157,7 +157,8 @@ impl BTreeEngineIterator {
 
     /// In general, there are 2 endpoints in a range, the left one and the right one.
     /// This method will seek to the left one if left is `true`, else seek to the right one.
-    /// Returns true when the endpoint is valid, which means the endpoint exist and in `self.bounds`.
+    /// Returns true when the endpoint is valid, which means the endpoint exist and in
+    /// `self.bounds`.
     fn seek_to_range_endpoint(&mut self, range: (Bound<Key>, Bound<Key>), left: bool) -> bool {
         let tree = self.tree.read().unwrap();
         let mut range = tree.range(range);

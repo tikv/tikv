@@ -376,7 +376,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// watch event stream from the revision(exclusive).
-    /// the revision would usually come from a WithRevision struct(which indices the revision of the inner item).
+    /// the revision would usually come from a WithRevision struct(which indices the revision of the
+    /// inner item).
     pub async fn events_from(&self, revision: i64) -> Result<Subscription<MetadataEvent>> {
         let watcher = self
             .meta_store

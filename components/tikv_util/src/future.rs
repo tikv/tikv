@@ -165,7 +165,8 @@ impl PollAtWake {
                 Ok(_) => return,
                 Err(s) => {
                     if s == NOTIFIED {
-                        // Only this thread can change the state from NOTIFIED, so it has to succeed.
+                        // Only this thread can change the state from NOTIFIED, so it has to
+                        // succeed.
                         match arc_self.state.compare_exchange(
                             NOTIFIED,
                             POLLING,

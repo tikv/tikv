@@ -302,7 +302,8 @@ impl ImportDir {
         for meta in metas {
             match (api_version, meta.api_version) {
                 (cur_version, meta_version) if cur_version == meta_version => continue,
-                // sometimes client do not know whether ttl is enabled, so a general V1 is accepted as V1ttl
+                // sometimes client do not know whether ttl is enabled, so a general V1 is accepted
+                // as V1ttl
                 (ApiVersion::V1ttl, ApiVersion::V1) => continue,
                 // import V1ttl as V1 will immediatly be rejected because it is never correct.
                 (ApiVersion::V1, ApiVersion::V1ttl) => return Ok(false),

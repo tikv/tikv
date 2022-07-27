@@ -789,13 +789,15 @@ fn test_force_leader_trigger_snapshot() {
         find_peer(&region, 3).unwrap().clone(),
     );
     let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
-    // Though it has a force leader now, but the command can't committed because the log is not replicated to all the alive peers.
+    // Though it has a force leader now, but the command can't committed because the log is not
+    // replicated to all the alive peers.
     assert!(
         cluster
             .call_command_on_leader(req, Duration::from_millis(1000))
             .unwrap()
             .get_header()
-            .has_error() // error "there is a pending conf change" indicating no committed log after being the leader
+            .has_error() /* error "there is a pending conf change" indicating no committed log
+                          * after being the leader */
     );
 
     // Permit snapshot message, snapshot should be applied and advance commit index now.
@@ -1149,10 +1151,9 @@ fn test_force_leader_multiple_election_rounds() {
 // Tests whether unsafe recovery report sets has_commit_merge correctly.
 // This field is used by PD to issue force leader command in order, so that the recovery process
 // does not break the merge accidentally, when:
-//   *   The source region and the target region lost their quorum.
-//   *   The living peer(s) of the source region does not have prepare merge message replicated.
-//   *   The living peer(s) of the target region has commit merge messages replicated but
-//       uncommitted.
+//   * The source region and the target region lost their quorum.
+//   * The living peer(s) of the source region does not have prepare merge message replicated.
+//   * The living peer(s) of the target region has commit merge messages replicated but uncommitted.
 // If the living peer(s) of the source region in the above example enters force leader state before
 // the peer(s) of the target region, thus proposes a no-op entry (while becoming the leader) which
 // is conflict with part of the catch up logs, there will be data loss.

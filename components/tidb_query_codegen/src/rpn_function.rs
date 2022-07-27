@@ -67,12 +67,14 @@
 //! ### `metadata_type`
 //!
 //! The type of the metadata structure defined in tipb.
-//! If `metadata_mapper` is not specified, the protobuf metadata structure will be used as the metadata directly.
+//! If `metadata_mapper` is not specified, the protobuf metadata structure will be used as the
+//! metadata directly.
 //!
 //! ### `metadata_mapper`
 //!
-//! A function name to construct a new metadata or transform a protobuf metadata structure into a desired form.
-//! The function signatures varies according to the existence of `metadata_mapper` and `metadata_type` as follows.
+//! A function name to construct a new metadata or transform a protobuf metadata structure into a
+//! desired form. The function signatures varies according to the existence of `metadata_mapper` and
+//! `metadata_type` as follows.
 //!
 //! - `metadata_mapper ` exists, `metadata_type` missing: `fn(&mut tipb::Expr) -> T`
 //!
@@ -80,7 +82,8 @@
 //!
 //! - `metadata_mapper ` exists, `metadata_type` exists: `fn(MetaDataType, &mut tipb::Expr) -> T`
 //!
-//! Transforms a protobuf metadata type `MetaDataType` specified by `metadata_type` into a new type `T`.
+//! Transforms a protobuf metadata type `MetaDataType` specified by `metadata_type` into a new type
+//! `T`.
 //!
 //! ### `capture`
 //!
@@ -223,7 +226,8 @@ struct RpnFnAttr {
     /// Whether or not the function is a varg function. Varg function accepts `&[&Option<T>]`.
     is_varg: bool,
 
-    /// Whether or not the function is a raw varg function. Raw varg function accepts `&[ScalarValueRef]`.
+    /// Whether or not the function is a raw varg function. Raw varg function accepts
+    /// `&[ScalarValueRef]`.
     is_raw_varg: bool,
 
     /// Whether or not the function needs extra logic on `None` value.
@@ -411,7 +415,8 @@ impl parse::Parse for RpnFnAttr {
     }
 }
 
-/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`.
+/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`,
+/// `Option<SetRef>` or `Option<BytesRef>`.
 struct RpnFnRefEvaluableTypeWithOption(RpnFnRefEvaluableType);
 
 impl parse::Parse for RpnFnRefEvaluableTypeWithOption {

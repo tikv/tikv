@@ -173,7 +173,8 @@ impl Iterator for LogIterator {
                         if self.pre_log.time < self.begin_time {
                             continue;
                         }
-                        // treat the invalid log with the pre valid log time and level but its own whole line content
+                        // treat the invalid log with the pre valid log time and level but its own
+                        // whole line content
                         item.set_time(self.pre_log.time);
                         item.set_level(self.pre_log.get_level());
                         item.set_message(input.to_owned());

@@ -789,7 +789,7 @@ mod tests {
         range.set_start(small_key.clone());
         range.set_end(large_key.clone());
         assert!(check_table_ranges(&[range]).is_ok());
-        //test range.start > range.end
+        // test range.start > range.end
         let mut range = KeyRange::default();
         range.set_end(small_key.clone());
         range.set_start(large_key);

@@ -50,7 +50,8 @@ pub struct Tracker<E: Engine> {
     wait_time: Duration,          // Total wait time
     schedule_wait_time: Duration, // Wait time spent on waiting for scheduling
     snapshot_wait_time: Duration, // Wait time spent on waiting for a snapshot
-    handler_build_time: Duration, // Time spent on building the handler (not included in total wait time)
+    handler_build_time: Duration, /* Time spent on building the handler (not included in total
+                                   * wait time) */
     req_lifetime: Duration,
 
     // Suspend time between processing two items

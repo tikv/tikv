@@ -241,7 +241,8 @@ impl ApplyEvents {
                         <R as Borrow<T>>::borrow(&item).clone(),
                         ApplyEvents {
                             events: {
-                                // assuming the keys in the same region would probably be in one group.
+                                // assuming the keys in the same region would probably be in one
+                                // group.
                                 let mut v = Vec::with_capacity(event_len);
                                 v.push(event);
                                 v
@@ -336,7 +337,8 @@ pub struct RouterInner {
     /// The temporary directory for all tasks.
     prefix: PathBuf,
 
-    /// The handle to Endpoint, we should send `Flush` to endpoint if there are too many temporary files.
+    /// The handle to Endpoint, we should send `Flush` to endpoint if there are too many temporary
+    /// files.
     scheduler: Scheduler<Task>,
     /// The size limit of temporary file per task.
     temp_file_size_limit: u64,
@@ -384,9 +386,9 @@ impl RouterInner {
     }
 
     /// Register some ranges associated to some task.
-    /// Because the observer interface yields encoded data key, the key should be ENCODED DATA KEY too.    
-    /// (i.e. encoded by `Key::from_raw(key).into_encoded()`, [`utils::wrap_key`] could be a shortcut.).    
-    /// We keep ranges in memory to filter kv events not in these ranges.  
+    /// Because the observer interface yields encoded data key, the key should be ENCODED DATA KEY
+    /// too. (i.e. encoded by `Key::from_raw(key).into_encoded()`, [`utils::wrap_key`] could be
+    /// a shortcut.). We keep ranges in memory to filter kv events not in these ranges.  
     fn register_ranges(&self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
         // TODO reigister ranges to filter kv event
         // register ranges has two main purpose.
@@ -618,14 +620,16 @@ pub enum FormatType {
 }
 
 impl TempFileKey {
-    /// Create the key for an event. The key can be used to find which temporary file the event should be stored.
+    /// Create the key for an event. The key can be used to find which temporary file the event
+    /// should be stored.
     fn of(kv: &ApplyEvent, region_id: u64) -> Self {
         let table_id = if kv.is_meta() {
             // Force table id of meta key be zero.
             0
         } else {
-            // When we cannot extract the table key, use 0 for the table key(perhaps we insert meta key here.).
-            // Can we elide the copy here(or at least, take a slice of key instead of decoding the whole key)?
+            // When we cannot extract the table key, use 0 for the table key(perhaps we insert meta
+            // key here.). Can we elide the copy here(or at least, take a slice of key
+            // instead of decoding the whole key)?
             Key::from_encoded_slice(&kv.key)
                 .into_raw()
                 .ok()
@@ -700,11 +704,13 @@ impl TempFileKey {
     }
 
     /// path_to_log_file specifies the path of record log.
-    /// eg. "v1/${date}/${hour}/${store_id}/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
+    /// eg. "v1/${date}/${hour}/${store_id}/t00000071/
+    /// 434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
     fn path_to_log_file(&self, store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
             "v1/{}/{}/{}/t{:08}/{:012}-{}.log",
-            // We may delete a range of files, so using the max_ts for preventing remove some records wrong.
+            // We may delete a range of files, so using the max_ts for preventing remove some
+            // records wrong.
             Self::format_date_time(max_ts, FormatType::Date),
             Self::format_date_time(max_ts, FormatType::Hour),
             store_id,
@@ -715,7 +721,8 @@ impl TempFileKey {
     }
 
     /// path_to_schema_file specifies the path of schema log.
-    /// eg. "v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
+    /// eg. "v1/${date}/${hour}/${store_id}/schema-meta/
+    /// 434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
     fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
             "v1/{}/{}/{}/schema-meta/{:012}-{}.log",

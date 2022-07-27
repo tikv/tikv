@@ -334,6 +334,7 @@ fn test_read_lock_after_become_follower() {
     // Transfer leader will not make the command fail.
     fail::remove("txn_before_process_write");
     let resp = resp_rx.recv().unwrap();
-    // The term has changed, so we should get a stale command error instead a PessimisticLockNotFound.
+    // The term has changed, so we should get a stale command error instead a
+    // PessimisticLockNotFound.
     assert!(resp.get_region_error().has_stale_command());
 }

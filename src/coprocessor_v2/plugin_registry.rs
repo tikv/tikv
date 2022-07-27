@@ -150,7 +150,8 @@ impl PluginRegistry {
                             warn!("a loaded coprocessor plugin is removed. Be aware that original plugin is still running"; "plugin_path" => ?file);
                         }
                         Ok(DebouncedEvent::Rename(old_file, new_file)) => {
-                            // If the file is renamed with a different parent directory, we will receive a `Remove` instead.
+                            // If the file is renamed with a different parent directory, we will
+                            // receive a `Remove` instead.
                             debug_assert!(old_file.parent() == new_file.parent());
                             rename(&old_file, &new_file);
                         }
@@ -559,7 +560,8 @@ mod tests {
 
         // trigger loading
         std::fs::copy(&original_library_path, &library_path).unwrap();
-        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make sure the watcher is triggered.
+        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make
+        // sure the watcher is triggered.
         std::thread::sleep(Duration::from_secs(4));
 
         assert!(registry.get_plugin(plugin_name).is_some());
@@ -570,7 +572,8 @@ mod tests {
 
         // trigger rename
         std::fs::rename(&library_path, &library_path_2).unwrap();
-        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make sure the watcher is triggered.
+        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make
+        // sure the watcher is triggered.
         std::thread::sleep(Duration::from_secs(4));
 
         assert!(registry.get_plugin(plugin_name).is_some());
@@ -580,7 +583,8 @@ mod tests {
         );
 
         std::fs::remove_file(&library_path_2).unwrap();
-        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make sure the watcher is triggered.
+        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make
+        // sure the watcher is triggered.
         std::thread::sleep(Duration::from_secs(4));
 
         // plugin will not be unloadad

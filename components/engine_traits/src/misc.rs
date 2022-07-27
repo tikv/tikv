@@ -11,8 +11,8 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub enum DeleteStrategy {
-    /// Delete the SST files that are fullly fit in range. However, the SST files that are partially
-    /// overlapped with the range will not be touched.
+    /// Delete the SST files that are fullly fit in range. However, the SST files that are
+    /// partially overlapped with the range will not be touched.
     DeleteFiles,
     /// Delete the data stored in Titan.
     DeleteBlobs,
@@ -21,7 +21,8 @@ pub enum DeleteStrategy {
     /// Delete by range. Note that this is experimental and you should check whether it is enbaled
     /// in config before using it.
     DeleteByRange,
-    /// Delete by ingesting a SST file with deletions. Useful when the number of ranges is too many.
+    /// Delete by ingesting a SST file with deletions. Useful when the number of ranges is too
+    /// many.
     DeleteByWriter { sst_path: String },
 }
 
@@ -50,10 +51,9 @@ pub trait MiscExt: CFNamesExt + FlowControlFactorsExt {
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool>;
 
     /// Gets total used size of rocksdb engine, including:
-    /// *  total size (bytes) of all SST files.
-    /// *  total size (bytes) of active and unflushed immutable memtables.
-    /// *  total size (bytes) of all blob files.
-    ///
+    /// * total size (bytes) of all SST files.
+    /// * total size (bytes) of active and unflushed immutable memtables.
+    /// * total size (bytes) of all blob files.
     fn get_engine_used_size(&self) -> Result<u64>;
 
     /// Roughly deletes files in multiple ranges.

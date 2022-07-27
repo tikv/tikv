@@ -114,6 +114,6 @@ pub fn get_env(
     key_manager: Option<std::sync::Arc<::encryption::DataKeyManager>>,
     limiter: Option<std::sync::Arc<::file_system::IORateLimiter>>,
 ) -> std::result::Result<std::sync::Arc<raw::Env>, String> {
-    let env = encryption::get_env(None /*base_env*/, key_manager)?;
+    let env = encryption::get_env(None /* base_env */, key_manager)?;
     file_system::get_env(Some(env), limiter)
 }

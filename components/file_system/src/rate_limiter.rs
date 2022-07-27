@@ -197,13 +197,13 @@ impl PriorityBasedIORateLimiterProtected {
 }
 
 macro_rules! do_sleep {
-    ($duration:expr, sync) => {
+    ($duration:expr,sync) => {
         std::thread::sleep($duration);
     };
-    ($duration:expr, async) => {
+    ($duration:expr,async) => {
         tokio::time::sleep($duration).await;
     };
-    ($duration:expr, skewed_sync) => {
+    ($duration:expr,skewed_sync) => {
         use rand::Rng;
         let mut rng = rand::thread_rng();
         let subtraction: bool = rng.gen();
@@ -460,8 +460,8 @@ impl IORateLimiter {
     pub fn new_for_test() -> Self {
         IORateLimiter::new(
             IORateLimitMode::AllIo,
-            true, /*strict*/
-            true, /*enable_statistics*/
+            true, // strict
+            true, // enable_statistics
         )
     }
 
@@ -629,15 +629,15 @@ mod tests {
         let t0 = Instant::now();
         let _write_context = start_background_jobs(
             &limiter,
-            1, /*job_count*/
+            1, // job_count
             Request(IOType::ForegroundWrite, IOOp::Write, 10),
-            None, /*interval*/
+            None, // interval
         );
         let _compaction_context = start_background_jobs(
             &limiter,
-            1, /*job_count*/
+            1, // job_count
             Request(IOType::Compaction, IOOp::Write, 10),
-            None, /*interval*/
+            None, // interval
         );
         std::thread::sleep(Duration::from_secs(1));
         let t1 = Instant::now();
@@ -679,9 +679,9 @@ mod tests {
             {
                 let _context = start_background_jobs(
                     limiter,
-                    2, /*job_count*/
+                    2, // job_count
                     Request(IOType::ForegroundWrite, IOOp::Write, 10),
-                    None, /*interval*/
+                    None, // interval
                 );
                 std::thread::sleep(duration);
             }
@@ -699,8 +699,8 @@ mod tests {
         let bytes_per_sec = 2000;
         let limiter = Arc::new(IORateLimiter::new(
             IORateLimitMode::AllIo,
-            false, /*strict*/
-            true,  /*enable_statistics*/
+            false, // strict
+            true,  // enable_statistics
         ));
         limiter.set_io_priority(IOType::ForegroundWrite, IOPriority::Medium);
         verify_rate_limit(&limiter, bytes_per_sec, Duration::from_secs(2));
@@ -712,9 +712,9 @@ mod tests {
             {
                 let _context = start_background_jobs(
                     &limiter,
-                    2, /*job_count*/
+                    2, // job_count
                     Request(IOType::ForegroundWrite, IOOp::Write, 10),
-                    None, /*interval*/
+                    None, // interval
                 );
                 std::thread::sleep(Duration::from_secs(2));
             }
@@ -750,7 +750,7 @@ mod tests {
                 // each thread request at most 1000 bytes per second
                 let _context = start_background_jobs(
                     &limiter,
-                    actual_kbytes_per_sec, /*job_count*/
+                    actual_kbytes_per_sec, // job_count
                     Request(IOType::Compaction, IOOp::Write, 1),
                     Some(Duration::from_millis(1)),
                 );
@@ -781,7 +781,7 @@ mod tests {
         {
             let _write = start_background_jobs(
                 &limiter,
-                1, /*job_count*/
+                1, // job_count
                 Request(
                     IOType::ForegroundWrite,
                     IOOp::Write,
@@ -791,7 +791,7 @@ mod tests {
             );
             let _compaction = start_background_jobs(
                 &limiter,
-                1, /*job_count*/
+                1, // job_count
                 Request(
                     IOType::Compaction,
                     IOOp::Write,
@@ -801,7 +801,7 @@ mod tests {
             );
             let _import = start_background_jobs(
                 &limiter,
-                1, /*job_count*/
+                1, // job_count
                 Request(
                     IOType::Import,
                     IOOp::Write,
@@ -826,7 +826,7 @@ mod tests {
 
     #[bench]
     fn bench_critical_section(b: &mut test::Bencher) {
-        let inner_limiter = PriorityBasedIORateLimiter::new(true /*strict*/);
+        let inner_limiter = PriorityBasedIORateLimiter::new(true /* strict */);
         inner_limiter.set_bytes_per_sec(1024);
         let now = Instant::now_coarse();
         b.iter(|| {

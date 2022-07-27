@@ -343,8 +343,8 @@ impl<'a> PrewriteMutation<'a> {
         match reader.seek_write(&self.key, TimeStamp::max())? {
             Some((commit_ts, write)) => {
                 // Abort on writes after our start/for_update timestamp ...
-                // If exists a commit version whose commit timestamp is larger than current start/for_update
-                // timestamp, we should abort current prewrite.
+                // If exists a commit version whose commit timestamp is larger than current
+                // start/for_update timestamp, we should abort current prewrite.
                 match self.txn_props.kind {
                     TransactionKind::Optimistic(_) => {
                         if commit_ts > self.txn_props.start_ts {
@@ -533,7 +533,8 @@ impl<'a> PrewriteMutation<'a> {
             _ => Ok(()),
         };
 
-        // Assertion error can be caused by a rollback. So make up a constraint check if the check was skipped before.
+        // Assertion error can be caused by a rollback. So make up a constraint check if the check
+        // was skipped before.
         if assertion_err.is_err() {
             if self.skip_constraint_check() {
                 self.check_for_newer_version(reader)?;
@@ -652,12 +653,14 @@ fn amend_pessimistic_lock<S: Snapshot>(
         // The invariants of pessimistic locks are:
         //   1. lock's for_update_ts >= key's latest commit_ts
         //   2. lock's for_update_ts >= txn's start_ts
-        //   3. If the data is changed after acquiring the pessimistic lock, key's new commit_ts > lock's for_update_ts
+        //   3. If the data is changed after acquiring the pessimistic lock, key's new commit_ts >
+        // lock's for_update_ts
         //
-        // So, if the key's latest commit_ts is still less than or equal to lock's for_update_ts, the data is not changed.
-        // However, we can't get lock's for_update_ts in current implementation (txn's for_update_ts is updated for each DML),
-        // we can only use txn's start_ts to check -- If the key's commit_ts is less than txn's start_ts, it's less than
-        // lock's for_update_ts too.
+        // So, if the key's latest commit_ts is still less than or equal to lock's for_update_ts,
+        // the data is not changed. However, we can't get lock's for_update_ts in current
+        // implementation (txn's for_update_ts is updated for each DML), we can only use
+        // txn's start_ts to check -- If the key's commit_ts is less than txn's start_ts, it's less
+        // than lock's for_update_ts too.
         if *commit_ts >= reader.start_ts {
             warn!(
                 "prewrite failed (pessimistic lock not found)";
@@ -859,7 +862,8 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // should_not_write mutations don't write locks or change data so that they needn't ask
-        // the concurrency manager for max_ts. Its min_commit_ts may be less than or equal to max_ts.
+        // the concurrency manager for max_ts. Its min_commit_ts may be less than or equal to
+        // max_ts.
         let mut props = optimistic_async_props(b"k0", 10.into(), 50.into(), 2, false);
         props.min_commit_ts = 11.into();
         let mut txn = MvccTxn::new(10.into(), cm.clone());
@@ -1373,9 +1377,9 @@ pub mod tests {
         must_commit(&engine, b"k1", 10, 20);
         must_commit(&engine, b"k2", 10, 20);
 
-        // This is a re-sent prewrite. It should report a PessimisticLockNotFound. In production, the caller
-        // will need to check if the current transaction is already committed before, in order to
-        // provide the idempotency.
+        // This is a re-sent prewrite. It should report a PessimisticLockNotFound. In production,
+        // the caller will need to check if the current transaction is already committed
+        // before, in order to provide the idempotency.
         let err = must_retry_pessimistic_prewrite_put_err(
             &engine,
             b"k2",

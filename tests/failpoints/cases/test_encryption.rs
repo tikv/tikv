@@ -10,7 +10,7 @@ fn test_file_dict_file_record_corrupted() {
         tempdir.path(),
         "test_file_dict_file_record_corrupted_1",
         true,
-        10, /*file_rewrite_threshold*/
+        10, // file_rewrite_threshold
     )
     .unwrap();
     let info1 = create_file_info(1, EncryptionMethod::Aes256Ctr);
@@ -28,7 +28,7 @@ fn test_file_dict_file_record_corrupted() {
         tempdir.path(),
         "test_file_dict_file_record_corrupted_2",
         true,
-        10, /*file_rewrite_threshold*/
+        10, // file_rewrite_threshold
     )
     .unwrap();
     let info1 = create_file_info(1, EncryptionMethod::Aes256Ctr);

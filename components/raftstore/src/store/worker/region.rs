@@ -202,7 +202,8 @@ impl PendingDeleteRanges {
 
     /// Inserts a new range waiting to be deleted.
     ///
-    /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping range.
+    /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping
+    /// range.
     fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], stale_sequence: u64) {
         if !self.find_overlap_ranges(start_key, end_key).is_empty() {
             panic!(
@@ -297,7 +298,8 @@ where
         Ok(())
     }
 
-    /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the actual work.
+    /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the
+    /// actual work.
     fn handle_gen(
         &self,
         region_id: u64,
@@ -425,7 +427,8 @@ where
         Ok(())
     }
 
-    /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
+    /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual
+    /// work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         let _ = status.compare_exchange(
             JOB_STATUS_PENDING,
@@ -493,7 +496,8 @@ where
         let mut df_ranges = Vec::with_capacity(overlap_ranges.len());
         for (region_id, start_key, end_key, stale_sequence) in overlap_ranges.iter() {
             // `DeleteFiles` may break current rocksdb snapshots consistency,
-            // so do not use it unless we can make sure there is no reader of the destroyed peer anymore.
+            // so do not use it unless we can make sure there is no reader of the destroyed peer
+            // anymore.
             if *stale_sequence < oldest_sequence {
                 df_ranges.push(Range::new(start_key, end_key));
             } else {
@@ -680,7 +684,8 @@ where
         fail_point!("apply_pending_snapshot", |_| {});
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be ingested.
-            // check level 0 every time because we can not make sure how does the number of level 0 files change.
+            // check level 0 every time because we can not make sure how does the number of level 0
+            // files change.
             if self.ctx.ingest_maybe_stall() {
                 break;
             }

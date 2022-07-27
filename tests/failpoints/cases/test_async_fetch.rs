@@ -103,7 +103,7 @@ fn test_node_async_fetch() {
                 &cluster.engines,
                 &before_states,
                 1,
-                false, /*must_compacted*/
+                false, // must_compacted
             )
         {
             return;
@@ -113,7 +113,7 @@ fn test_node_async_fetch() {
         &cluster.engines,
         &before_states,
         1,
-        true, /*must_compacted*/
+        true, // must_compacted
     );
 }
 

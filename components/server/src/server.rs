@@ -366,8 +366,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     /// - If `dynamic config` feature is enabled and failed to register config to PD
     /// - If some critical configs (like data dir) are differrent from last run
     /// - If the config can't pass `validate()`
-    /// - If the max open file descriptor limit is not high enough to support
-    ///   the main database and the raft database.
+    /// - If the max open file descriptor limit is not high enough to support the main database and
+    ///   the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
         validate_and_persist_config(&mut config, true);
 
@@ -1242,7 +1242,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.config
                 .storage
                 .io_rate_limit
-                .build(!stats_collector_enabled /*enable_statistics*/),
+                .build(!stats_collector_enabled /* enable_statistics */),
         );
         let fetcher = if stats_collector_enabled {
             BytesFetcher::FromIOStatsCollector()
@@ -1286,7 +1286,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             });
     }
 
-    // Only background cpu quota tuning is implemented at present. iops and frontend quota tuning is on the way
+    // Only background cpu quota tuning is implemented at present. iops and frontend quota tuning is
+    // on the way
     fn init_quota_tuning_task(&self, quota_limiter: Arc<QuotaLimiter>) {
         // No need to do auto tune when capacity is really low
         if SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO
@@ -1335,9 +1336,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                     };
                     // Try tuning quota when cpu_usage is correctly collected.
                     // rule based tuning:
-                    //      1) if instance is busy, shrink cpu quota for analyze by one quota pace until lower bound is hit;
-                    //      2) if instance cpu usage is healthy, no op;
-                    //      3) if instance is idle, increase cpu quota by one quota pace  until upper bound is hit.
+                    //      1) if instance is busy, shrink cpu quota for analyze by one quota pace
+                    // until lower bound is hit;      2) if instance cpu usage
+                    // is healthy, no op;      3) if instance is idle, increase
+                    // cpu quota by one quota pace  until upper bound is hit.
                     if cpu_usage > 0.0f64 {
                         let mut target_quota = old_quota;
 
@@ -1561,7 +1563,7 @@ impl ConfiguredRaftEngine for RocksEngine {
             let raft_engine =
                 RaftLogEngine::new(config.raft_engine.config(), key_manager.clone(), None)
                     .expect("failed to open raft engine for migration");
-            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
+            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /* threads */);
             raft_engine.stop();
             drop(raft_engine);
             raft_data_state_machine.after_dump_data();
@@ -1616,7 +1618,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             )
             .expect("failed to open raftdb for migration");
             let raftdb = RocksEngine::from_db(Arc::new(raftdb));
-            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
+            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /* threads */);
             raftdb.stop();
             drop(raftdb);
             raft_data_state_machine.after_dump_data();
@@ -1676,7 +1678,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             .register_config(cfg_controller, self.config.storage.block_cache.shared);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
-            &engines, 180, /*max_samples_to_preserve*/
+            &engines, 180, // max_samples_to_preserve
         ));
 
         (engines, engines_info)

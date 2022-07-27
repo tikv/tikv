@@ -221,13 +221,15 @@ fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = 1;
     let pd_client = Arc::clone(&cluster.pd_client);
 
-    // Given some nodes A, B, C, D, E, we partition the cluster such that D, E are isolated from the rest.
+    // Given some nodes A, B, C, D, E, we partition the cluster such that D, E are isolated from the
+    // rest.
     cluster.run();
     // Choose a predictable leader so we don't accidentally partition the leader.
     cluster.must_transfer_leader(region, new_peer(1, 1));
     cluster.partition(vec![1, 2, 3], vec![4, 5]);
 
-    // Then, add a policy to PD that it should ask the Raft leader to remove the peer from the group.
+    // Then, add a policy to PD that it should ask the Raft leader to remove the peer from the
+    // group.
     pd_client.must_remove_peer(region, new_peer(4, 4));
     pd_client.must_remove_peer(region, new_peer(5, 5));
 

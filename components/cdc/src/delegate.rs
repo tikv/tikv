@@ -667,8 +667,8 @@ impl Delegate {
             ..Default::default()
         };
         let send = move |downstream: &Downstream| {
-            // No ready downstream or a downstream that does not match the kv_api type, will be ignored.
-            // There will be one region that contains both Txn & Raw entries.
+            // No ready downstream or a downstream that does not match the kv_api type, will be
+            // ignored. There will be one region that contains both Txn & Raw entries.
             // The judgement here is for sending entries to downstreams with correct kv_api.
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
@@ -877,9 +877,9 @@ impl Delegate {
         if let Err(e) = compare_region_epoch(
             &downstream.region_epoch,
             region,
-            false, /* check_conf_ver */
-            true,  /* check_ver */
-            true,  /* include_region */
+            false, // check_conf_ver
+            true,  // check_ver
+            true,  // include_region
         ) {
             info!(
                 "cdc fail to subscribe downstream";

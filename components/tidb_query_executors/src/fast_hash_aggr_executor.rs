@@ -198,8 +198,8 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
 /// All groups.
 enum Groups {
     // The value of each hash table is the start index in `FastHashAggregationImpl::states`
-    // field. When there are new groups (i.e. new entry in the hash table), the states of the groups
-    // will be appended to `states`.
+    // field. When there are new groups (i.e. new entry in the hash table), the states of the
+    // groups will be appended to `states`.
     Int(HashMap<Option<Int>, usize>),
     Real(HashMap<Option<Real>, usize>),
     Bytes(HashMap<Option<Bytes>, usize>),

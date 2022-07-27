@@ -98,8 +98,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
-    /// Set locks that the scanner can read through. Locks with start_ts in the specified set will be
-    /// accessed during scanning.
+    /// Set locks that the scanner can read through. Locks with start_ts in the specified set will
+    /// be accessed during scanning.
     ///
     /// Default is empty.
     #[inline]
@@ -254,8 +254,8 @@ pub struct ScannerConfig<S: Snapshot> {
     isolation_level: IsolationLevel,
 
     /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
-    /// is used in initial seek(or `lower_bound` in initial backward seek) as well. They will be consumed after `default_cursor` is being
-    /// created.
+    /// is used in initial seek(or `lower_bound` in initial backward seek) as well. They will be
+    /// consumed after `default_cursor` is being created.
     lower_bound: Option<Key>,
     upper_bound: Option<Key>,
     // hint for we will only scan data with commit ts >= hint_min_ts
@@ -842,15 +842,15 @@ mod tests {
         let access_locks = TsSet::from_u64s(vec![30, 40, 50, 60, 90]);
 
         let mut expected_result = vec![
-            (vec![0], Some(vec![b'v', 0, 0])), /* access put if not delete_bound */
-            (vec![1], Some(vec![b'v', 1, 1])), /* access put */
-            /* vec![2] access delete */
-            (vec![3], Some(vec![b'v', 3])), /* ignore LockType::Lock */
-            (vec![4], None),                /* locked */
-            (vec![5], Some(vec![b'v', 5])), /* bypass */
-            (vec![6], Some(vec![b'v', 6])), /* ignore lock with larger ts */
-            (vec![7], Some(vec![b'v', 7])), /* no lock */
-            (vec![8], Some(vec![b'v', 8, 8])), /* access put if not delete_bound*/
+            (vec![0], Some(vec![b'v', 0, 0])), // access put if not delete_bound
+            (vec![1], Some(vec![b'v', 1, 1])), // access put
+            // vec![2] access delete
+            (vec![3], Some(vec![b'v', 3])),    // ignore LockType::Lock
+            (vec![4], None),                   // locked
+            (vec![5], Some(vec![b'v', 5])),    // bypass
+            (vec![6], Some(vec![b'v', 6])),    // ignore lock with larger ts
+            (vec![7], Some(vec![b'v', 7])),    // no lock
+            (vec![8], Some(vec![b'v', 8, 8])), // access put if not delete_bound
         ];
         if desc {
             expected_result.reverse();

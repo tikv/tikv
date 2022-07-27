@@ -45,9 +45,9 @@ impl Latch {
     }
 
     /// Remove the first command ID in the queue whose hash value is equal to hash_key.
-    /// If the element which would be removed does not appear at the front of the queue, it will leave
-    /// a hole in the queue. So we must remove consecutive hole when remove the head of the
-    /// queue to make the queue not too long.
+    /// If the element which would be removed does not appear at the front of the queue, it will
+    /// leave a hole in the queue. So we must remove consecutive hole when remove the head of
+    /// the queue to make the queue not too long.
     pub fn pop_front(&mut self, key_hash: u64) -> Option<(u64, u64)> {
         if let Some(item) = self.waiting.pop_front() {
             if let Some((k, _)) = item.as_ref() {

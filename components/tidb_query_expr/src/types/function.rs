@@ -183,8 +183,8 @@ impl ArgDef for Null {}
 /// with the input to get the result vector.
 ///
 /// There are two kinds of evaluators in general:
-/// - `ArgConstructor`: It's a provided `Evaluator`. It is used in the `rpn_fn` attribute macro
-///   to generate the `ArgDef`. The `def` parameter of its eval method is the already constructed
+/// - `ArgConstructor`: It's a provided `Evaluator`. It is used in the `rpn_fn` attribute macro to
+///   generate the `ArgDef`. The `def` parameter of its eval method is the already constructed
 ///   `ArgDef`. If it is the outmost evaluator, `def` should be `Null`.
 /// - Custom evaluators which do the actual execution of the RPN function. The `def` parameter of
 ///   its eval method is the constructed `ArgDef`. Implementors can then extract values from the

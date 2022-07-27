@@ -881,7 +881,8 @@ fn test_split_with_concurrent_pessimistic_locking() {
     assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
 
     // 2. Locking happens when split has finished
-    // It needs to be rejected due to incorrect epoch, otherwise the lock may be written to the wrong region.
+    // It needs to be rejected due to incorrect epoch, otherwise the lock may be written to the
+    // wrong region.
     fail::cfg("txn_before_process_write", "pause").unwrap();
     req.set_context(cluster.get_ctx(b"key"));
     let res = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());

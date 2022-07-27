@@ -88,7 +88,8 @@ pub const BLOCK_CACHE_RATE: f64 = 0.45;
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
 pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
 
-/// Min block cache shard's size. If a shard is too small, the index/filter data may not fit one shard
+/// Min block cache shard's size. If a shard is too small, the index/filter data may not fit one
+/// shard
 pub const MIN_BLOCK_CACHE_SHARD_SIZE: usize = 128 * MIB as usize;
 
 /// Maximum of 15% of system memory can be used by Raft Engine. Normally its
@@ -543,12 +544,12 @@ macro_rules! build_cf_opt {
         // To set for bottommost level sst compression. The first 3 parameters refer to the
         // default value in `CompressionOptions` in `rocksdb/include/rocksdb/advanced_options.h`.
         cf_opts.set_bottommost_level_compression_options(
-            -14,   /* window_bits */
-            32767, /* level */
-            0,     /* strategy */
+            -14,   // window_bits
+            32767, // level
+            0,     // strategy
             $opt.bottommost_zstd_compression_dict_size,
             $opt.bottommost_zstd_compression_sample_size,
-            1, /* parallel_threads */
+            1, // parallel_threads
         );
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
@@ -1063,8 +1064,8 @@ pub struct DbConfig {
     #[online_config(skip)]
     pub enable_pipelined_write: bool,
     // deprecated. TiKV will use a new write mode when set `enable_pipelined_write` false and fall
-    // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of multi-batch-write
-    // in RocksDB has been removed.
+    // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of
+    // multi-batch-write in RocksDB has been removed.
     #[online_config(skip)]
     #[serde(skip_serializing)]
     pub enable_multi_batch_write: bool,
@@ -1592,7 +1593,8 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
                  block-cache.capacity in storage module instead"
                 .into());
         }
-        // for multi-rocks, shared block cache has to be enabled and thus should shortcut in the above if statement.
+        // for multi-rocks, shared block cache has to be enabled and thus should shortcut in the
+        // above if statement.
         assert!(self.tablet_accessor.is_single_engine());
         let mut error_collector = TabletErrorCollector::new();
         self.tablet_accessor
@@ -3988,7 +3990,8 @@ impl ConfigController {
                     // dispatched to corresponding config manager, to avoid dispatch change twice
                     if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
-                            // we already verified the correctness at the beginning of this function.
+                            // we already verified the correctness at the beginning of this
+                            // function.
                             inner.current.update(to_update).unwrap();
                             return Err(e);
                         }
@@ -5130,7 +5133,7 @@ mod tests {
                 ..Default::default()
             };
             let provider = Some(MockRegionInfoProvider::new(vec![]));
-            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /* cache */, provider);
             assert_eq!(
                 config.target_file_size_base.0,
                 cf_opts.get_target_file_size_base()
@@ -5144,7 +5147,7 @@ mod tests {
                 ..Default::default()
             };
             let provider: Option<MockRegionInfoProvider> = None;
-            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /* cache */, provider);
             assert_eq!(
                 config.target_file_size_base.0,
                 cf_opts.get_target_file_size_base()
@@ -5160,7 +5163,7 @@ mod tests {
                 ..Default::default()
             };
             let provider = Some(MockRegionInfoProvider::new(vec![]));
-            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /* cache */, provider);
             assert_eq!(
                 config.compaction_guard_max_output_file_size.0,
                 cf_opts.get_target_file_size_base()
@@ -5264,7 +5267,10 @@ mod tests {
     fn test_background_job_limits() {
         // cpu num = 1
         assert_eq!(
-            get_background_job_limits_impl(1 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            get_background_job_limits_impl(
+                1, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
             BackgroundJobLimits {
                 max_background_jobs: 2,
                 max_background_flushes: 1,
@@ -5274,7 +5280,7 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
-                1, /*cpu_num*/
+                1, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             BackgroundJobLimits {
@@ -5286,7 +5292,10 @@ mod tests {
         );
         // cpu num = 2
         assert_eq!(
-            get_background_job_limits_impl(2 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            get_background_job_limits_impl(
+                2, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
             BackgroundJobLimits {
                 max_background_jobs: 2,
                 max_background_flushes: 1,
@@ -5296,7 +5305,7 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
-                2, /*cpu_num*/
+                2, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             BackgroundJobLimits {
@@ -5308,7 +5317,10 @@ mod tests {
         );
         // cpu num = 4
         assert_eq!(
-            get_background_job_limits_impl(4 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            get_background_job_limits_impl(
+                4, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
             BackgroundJobLimits {
                 max_background_jobs: 3,
                 max_background_flushes: 1,
@@ -5318,7 +5330,7 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
-                4, /*cpu_num*/
+                4, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             BackgroundJobLimits {
@@ -5330,7 +5342,10 @@ mod tests {
         );
         // cpu num = 8
         assert_eq!(
-            get_background_job_limits_impl(8 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            get_background_job_limits_impl(
+                8, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
             BackgroundJobLimits {
                 max_background_jobs: 7,
                 max_background_flushes: 2,
@@ -5340,7 +5355,7 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
-                8, /*cpu_num*/
+                8, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS,
@@ -5348,14 +5363,14 @@ mod tests {
         // cpu num = 16
         assert_eq!(
             get_background_job_limits_impl(
-                16, /*cpu_num*/
+                16, // cpu_num
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             KVDB_DEFAULT_BACKGROUND_JOB_LIMITS,
         );
         assert_eq!(
             get_background_job_limits_impl(
-                16, /*cpu_num*/
+                16, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS,

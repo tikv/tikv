@@ -28,7 +28,8 @@ pub type PluginGetPluginInfoSignature = extern "C" fn() -> PluginInfo;
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildInfo {
-    /// Version of the [`coprocessor_plugin_api`](crate) crate that was used to compile this plugin.
+    /// Version of the [`coprocessor_plugin_api`](crate) crate that was used to compile this
+    /// plugin.
     pub api_version: &'static str,
     /// Target triple for which platform this plugin was compiled.
     pub target: &'static str,
@@ -60,8 +61,10 @@ pub struct PluginInfo {
 ///
 /// The macro has three different versions:
 /// * `declare_plugin!(plugin_name, plugin_version, plugin_ctor)` which gives you full control.
-/// * `declare_plugin!(plugin_name, plugin_ctor)` automatically fetches the version from `Cargo.toml`.
-/// * `declare_plugin!(plugin_ctor)` automatically fetches plugin name and version from `Cargo.toml`.
+/// * `declare_plugin!(plugin_name, plugin_ctor)` automatically fetches the version from
+///   `Cargo.toml`.
+/// * `declare_plugin!(plugin_ctor)` automatically fetches plugin name and version from
+///   `Cargo.toml`.
 ///
 /// The types of `plugin_name` and `plugin_version` have to be `&'static str` literals.
 ///

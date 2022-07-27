@@ -317,7 +317,8 @@ impl Client {
     /// Re-establishes connection with PD leader in asynchronized fashion.
     ///
     /// If `force` is false, it will reconnect only when members change.
-    /// Note: Retrying too quickly will return an error due to cancellation. Please always try to reconnect after sending the request first.
+    /// Note: Retrying too quickly will return an error due to cancellation. Please always try to
+    /// reconnect after sending the request first.
     pub async fn reconnect(&self, force: bool) -> Result<()> {
         PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
         let start = Instant::now();
@@ -610,7 +611,8 @@ impl PdConnector {
                     Ok((_, r)) => {
                         let new_cluster_id = r.get_header().get_cluster_id();
                         if new_cluster_id == cluster_id {
-                            // check whether the response have leader info, otherwise continue to loop the rest members
+                            // check whether the response have leader info, otherwise continue to
+                            // loop the rest members
                             if r.has_leader() {
                                 return Ok(r);
                             }
@@ -635,8 +637,9 @@ impl PdConnector {
     }
 
     // There are 3 kinds of situations we will return the new client:
-    // 1. the force is true which represents the client is newly created or the original connection has some problem
-    // 2. the previous forwarded host is not empty and it can connect the leader now which represents the network partition problem to leader may be recovered
+    // 1. the force is true which represents the client is newly created or the original connection
+    // has some problem 2. the previous forwarded host is not empty and it can connect the
+    // leader now which represents the network partition problem to leader may be recovered
     // 3. the member information of PD has been changed
     async fn reconnect_pd(
         &self,

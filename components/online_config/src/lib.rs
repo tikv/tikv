@@ -51,7 +51,7 @@ impl Debug for ConfigValue {
 }
 
 macro_rules! impl_from {
-    ($from: ty, $to: tt) => {
+    ($from:ty, $to:tt) => {
         impl From<$from> for ConfigValue {
             fn from(r: $from) -> ConfigValue {
                 ConfigValue::$to(r)
@@ -69,7 +69,7 @@ impl_from!(String, String);
 impl_from!(ConfigChange, Module);
 
 macro_rules! impl_into {
-    ($into: ty, $from: tt) => {
+    ($into:ty, $from:tt) => {
         impl From<ConfigValue> for $into {
             fn from(c: ConfigValue) -> $into {
                 if let ConfigValue::$from(v) = c {

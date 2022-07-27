@@ -675,7 +675,7 @@ fn run_ldb_command(args: Vec<String>, cfg: &TiKvConfig) {
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
-    let env = get_env(key_manager, None /*io_rate_limiter*/).unwrap();
+    let env = get_env(key_manager, None /* io_rate_limiter */).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);
 
@@ -735,7 +735,8 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
     for line in corruptions.lines() {
         println!("--------------------------------------------------------");
         // The corruption format may like this:
-        // /path/to/db/057155.sst is corrupted: Corruption: block checksum mismatch: expected 3754995957, got 708533950  in /path/to/db/057155.sst offset 3126049 size 22724
+        // /path/to/db/057155.sst is corrupted: Corruption: block checksum mismatch: expected
+        // 3754995957, got 708533950  in /path/to/db/057155.sst offset 3126049 size 22724
         println!("corruption info:\n{}", line);
 
         let r = Regex::new(r"/\w*\.sst").unwrap();
@@ -796,7 +797,9 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
         println!("\nsst meta:");
         // The output may like this:
         // --------------- Column family "write"  (ID 2) --------------
-        // 63:132906243[3555338 .. 3555338]['7A311B40EFCC2CB4C5911ECF3937D728DED26AE53FA5E61BE04F23F2BE54EACC73' seq:3555338, type:1 .. '7A313030302E25CD5F57252E' seq:3555338, type:1] at level 0
+        // 63:132906243[3555338 ..
+        // 3555338]['7A311B40EFCC2CB4C5911ECF3937D728DED26AE53FA5E61BE04F23F2BE54EACC73'
+        // seq:3555338, type:1 .. '7A313030302E25CD5F57252E' seq:3555338, type:1] at level 0
         let column_r = Regex::new(r"--------------- (.*) --------------\n(.*)").unwrap();
         if let Some(m) = column_r.captures(&output) {
             println!(
@@ -848,7 +851,8 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
                 println!("unexpected key {}", log_wrappers::Value(&start));
             }
         } else {
-            // it is expected when the sst is output of a compaction and the sst isn't added to manifest yet.
+            // it is expected when the sst is output of a compaction and the sst isn't added to
+            // manifest yet.
             println!(
                 "sst {} is not found in manifest: {}",
                 sst_file_number, output

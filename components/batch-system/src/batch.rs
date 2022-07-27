@@ -39,7 +39,7 @@ pub enum FsmTypes<N, C> {
 
 // A macro to introduce common definition of scheduler.
 macro_rules! impl_sched {
-    ($name:ident, $ty:path, Fsm = $fsm:tt) => {
+    ($name:ident, $ty:path,Fsm = $fsm:tt) => {
         pub struct $name<N, C> {
             sender: channel::Sender<FsmTypes<N, C>>,
             low_sender: channel::Sender<FsmTypes<N, C>>,

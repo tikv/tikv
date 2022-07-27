@@ -55,8 +55,8 @@ pub fn create_storage(
     }
 }
 
-// when the flag cloud-storage-dylib or cloud-storage-grpc is set create_storage is automatically wrapped with a client
-// This function is used by the library/server to avoid any wrapping
+// when the flag cloud-storage-dylib or cloud-storage-grpc is set create_storage is automatically
+// wrapped with a client This function is used by the library/server to avoid any wrapping
 pub fn create_storage_no_client(
     storage_backend: &StorageBackend,
     config: BackendConfig,

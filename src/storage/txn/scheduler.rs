@@ -287,10 +287,11 @@ impl<L: LockManager> SchedulerInner<L> {
         // Check deadline early during acquiring latches to avoid expired requests blocking
         // other requests.
         if let Err(e) = tctx.task.as_ref().unwrap().cmd.deadline().check() {
-            // `acquire_lock_on_wakeup` is called when another command releases its locks and wakes up
-            // command `cid`. This command inserted its lock before and now the lock is at the
-            // front of the queue. The actual acquired count is one more than the `owned_count`
-            // recorded in the lock, so we increase one to make `release` work.
+            // `acquire_lock_on_wakeup` is called when another command releases its locks and wakes
+            // up command `cid`. This command inserted its lock before and now the lock
+            // is at the front of the queue. The actual acquired count is one more than
+            // the `owned_count` recorded in the lock, so we increase one to make
+            // `release` work.
             tctx.lock.owned_count += 1;
             return Err(e.into());
         }
@@ -742,8 +743,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         .await;
     }
 
-    /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
-    /// `Scheduler`.
+    /// Processes a read command within a worker thread, then posts `ReadFinished` message back to
+    /// the `Scheduler`.
     fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
@@ -806,7 +807,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
 
         if write_result.is_ok() {
-            // TODO: write bytes can be a bit inaccurate due to error requests or in-memory pessimistic locks.
+            // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
+            // pessimistic locks.
             sample.add_write_bytes(write_bytes);
         }
         let read_bytes = statistics.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
@@ -833,16 +835,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .map_err(StorageError::from)
             .and(write_result)
         {
-            // Write prepare failure typically means conflicting transactions are detected. Delivers the
-            // error to the callback, and releases the latches.
+            // Write prepare failure typically means conflicting transactions are detected. Delivers
+            // the error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
                 debug!("write command failed"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
                 return;
             }
-            // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
-            // message when it finishes.
+            // Initiates an async write operation on the storage engine, there'll be a
+            // `WriteFinished` message when it finishes.
             Ok(res) => res,
         };
         let region_id = ctx.get_region_id();
@@ -1021,13 +1023,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }
             _ => vec![],
         };
-        // Keep the read lock guard of the pessimistic lock table until the request is sent to the raftstore.
+        // Keep the read lock guard of the pessimistic lock table until the request is sent to the
+        // raftstore.
         //
-        // If some in-memory pessimistic locks need to be proposed, we will propose another TransferLeader
-        // command. Then, we can guarentee even if the proposed locks don't include the locks deleted here,
-        // the response message of the transfer leader command must be later than this write command because
-        // this write command has been sent to the raftstore. Then, we don't need to worry this request will
-        // fail due to the voluntary leader transfer.
+        // If some in-memory pessimistic locks need to be proposed, we will propose another
+        // TransferLeader command. Then, we can guarentee even if the proposed locks don't
+        // include the locks deleted here, the response message of the transfer leader
+        // command must be later than this write command because this write command has been
+        // sent to the raftstore. Then, we don't need to worry this request will fail due to
+        // the voluntary leader transfer.
         let _downgraded_guard = pessimistic_locks_guard.and_then(|guard| {
             (!removed_pessimistic_locks.is_empty()).then(|| RwLockWriteGuard::downgrade(guard))
         });
@@ -1036,14 +1040,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let engine_cb = Box::new(move |result: EngineResult<()>| {
             let ok = result.is_ok();
             if ok && !removed_pessimistic_locks.is_empty() {
-                // Removing pessimistic locks when it succeeds to apply. This should be done in the apply
-                // thread, to make sure it happens before other admin commands are executed.
+                // Removing pessimistic locks when it succeeds to apply. This should be done in the
+                // apply thread, to make sure it happens before other admin commands
+                // are executed.
                 if let Some(mut pessimistic_locks) = txn_ext
                     .as_ref()
                     .map(|txn_ext| txn_ext.pessimistic_locks.write())
                 {
-                    // If epoch version or term does not match, region or leader change has happened,
-                    // so we needn't remove the key.
+                    // If epoch version or term does not match, region or leader change has
+                    // happened, so we needn't remove the key.
                     if pessimistic_locks.term == term && pessimistic_locks.version == version {
                         for key in removed_pessimistic_locks {
                             pessimistic_locks.remove(&key);
@@ -1070,8 +1075,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         .observe(rows as f64);
 
                     if !ok {
-                        // Only consume the quota when write succeeds, otherwise failed write requests may exhaust
-                        // the quota and other write requests would be in long delay.
+                        // Only consume the quota when write succeeds, otherwise failed write
+                        // requests may exhaust the quota and other write
+                        // requests would be in long delay.
                         if sched.inner.flow_controller.enabled() {
                             sched.inner.flow_controller.unconsume(region_id, write_size);
                         }

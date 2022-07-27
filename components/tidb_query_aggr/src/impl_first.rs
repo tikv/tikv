@@ -162,7 +162,8 @@ where
     T: EvaluableRef<'static> + 'static,
     VectorValue: VectorValueExt<T::EvaluableType>,
 {
-    // ChunkedType has been implemented in AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
+    // ChunkedType has been implemented in AggrFunctionStateUpdatePartial<T1> for
+    // AggrFnStateFirst<T2>
     impl_state_update_partial! { T }
 }
 

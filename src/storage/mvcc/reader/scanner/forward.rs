@@ -339,7 +339,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
 
-                // Report error if there's a more recent version if the isolation level is RcCheckTs.
+                // Report error if there's a more recent version if the isolation level is
+                // RcCheckTs.
                 if self.cfg.isolation_level == IsolationLevel::RcCheckTs {
                     // TODO: the more write recent version with `LOCK` or `ROLLBACK` write type
                     //       could be skipped.

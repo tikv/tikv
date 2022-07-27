@@ -629,7 +629,6 @@ where
     }
 
     /// Ingest multiple files by sending a raft command to raftstore.
-    ///
     fn multi_ingest(
         &mut self,
         ctx: RpcContext<'_>,
@@ -858,7 +857,8 @@ fn pb_error_inc(type_: &str, e: &errorpb::Error) {
 
 enum RequestCollector {
     /// Retain the last ts of each key in each request.
-    /// This is used for write CF because resolved ts observer hates duplicated key in the same request.
+    /// This is used for write CF because resolved ts observer hates duplicated key in the same
+    /// request.
     RetainLastTs(HashMap<Vec<u8>, (Request, u64)>),
     /// Collector favor that simple collect all items.
     /// This is used for default CF.
@@ -943,7 +943,8 @@ fn make_request(reqs: &mut RequestCollector, context: Context) -> RaftCmdRequest
     // Set the UUID of header to prevent raftstore batching our requests.
     // The current `resolved_ts` observer assumes that each batch of request doesn't has
     // two writes to the same key. (Even with 2 different TS). That was true for normal cases
-    // because the latches reject concurrency write to keys. However we have bypassed the latch layer :(
+    // because the latches reject concurrency write to keys. However we have bypassed the latch
+    // layer :(
     header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
     cmd.set_header(header);
     cmd.set_requests(reqs.drain().into());

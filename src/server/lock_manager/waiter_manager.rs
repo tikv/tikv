@@ -325,7 +325,8 @@ impl WaitTable {
             WAIT_TABLE_STATUS_GAUGE.txns.inc();
             None
         }
-        // Here we don't increase waiter_count because it's already updated in LockManager::wait_for()
+        // Here we don't increase waiter_count because it's already updated in
+        // LockManager::wait_for()
     }
 
     /// Removes all waiters waiting for the lock.
@@ -823,7 +824,8 @@ pub mod tests {
         waiter_ts: TimeStamp,
         mut lock_info: LockInfo,
         deadlock_hash: u64,
-        expect_wait_chain: &[(u64, u64, &[u8], &[u8])], // (waiter_ts, wait_for_ts, key, resource_group_tag)
+        expect_wait_chain: &[(u64, u64, &[u8], &[u8])], /* (waiter_ts, wait_for_ts, key,
+                                                         * resource_group_tag) */
     ) {
         match res {
             Err(StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(

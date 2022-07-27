@@ -394,14 +394,16 @@ where
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
-    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the
+    /// same peer.
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 
-    /// We must delete the ingested file before calling `callback` so that any ingest-request reaching this
-    /// peer could see this update if leader had changed. We must also delete them after the applied-index
-    /// has been persisted to kvdb because this entry may replay because of panic or power-off, which
-    /// happened before `WriteBatch::write` and after `SstImporter::delete`. We shall make sure that
-    /// this entry will never apply again at first, then we can delete the ssts files.
+    /// We must delete the ingested file before calling `callback` so that any ingest-request
+    /// reaching this peer could see this update if leader had changed. We must also delete
+    /// them after the applied-index has been persisted to kvdb because this entry may replay
+    /// because of panic or power-off, which happened before `WriteBatch::write` and after
+    /// `SstImporter::delete`. We shall make sure that this entry will never apply again at
+    /// first, then we can delete the ssts files.
     delete_ssts: Vec<SstMetaInfo>,
 
     /// The priority of this Handler.
@@ -546,7 +548,8 @@ where
                 // Control the memory usage for the WriteBatch.
                 self.kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
             } else {
-                // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+                // Clear data, reuse the WriteBatch, this can reduce memory allocations and
+                // deallocations.
                 self.kv_wb_mut().clear();
             }
             self.kv_wb_last_bytes = 0;
@@ -566,7 +569,8 @@ where
             batch_max_level,
             mut cb_batch,
         } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
-        // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
+        // Call it before invoking callback for preventing Commit is executed before Prewrite is
+        // observed.
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
@@ -749,9 +753,9 @@ fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
         if cmd.get_admin_request().get_cmd_type() == AdminCmdType::CompactLog {
-            // We do not need to sync WAL before compact log, because this request will send a msg to
-            // raft_gc_log thread to delete the entries before this index instead of deleting them in
-            // apply thread directly.
+            // We do not need to sync WAL before compact log, because this request will send a msg
+            // to raft_gc_log thread to delete the entries before this index instead of
+            // deleting them in apply thread directly.
             return false;
         }
         return true;
@@ -985,9 +989,10 @@ where
                 );
             }
 
-            // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by `unimplemented!()`,
-            // which can break compatibility (i.e. old version tikv running on data written by new version tikv),
-            // but PD will reject old version tikv join the cluster, so this should not happen.
+            // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by
+            // `unimplemented!()`, which can break compatibility (i.e. old version tikv
+            // running on data written by new version tikv), but PD will reject old
+            // version tikv join the cluster, so this should not happen.
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
                 EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
@@ -1358,7 +1363,8 @@ where
         if let Some(epoch) = origin_epoch {
             let cmd_type = req.get_admin_request().get_cmd_type();
             let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-            // The change-epoch behavior **MUST BE** equal to the settings in `admin_cmd_epoch_lookup`
+            // The change-epoch behavior **MUST BE** equal to the settings in
+            // `admin_cmd_epoch_lookup`
             if (epoch_state.change_ver
                 && epoch.get_version() == self.region.get_region_epoch().get_version())
                 || (epoch_state.change_conf_ver
@@ -2521,13 +2527,14 @@ where
     // So, the merge process order would be:
     // 1.   `exec_commit_merge` in target apply fsm and send `CatchUpLogs` to source peer fsm
     // 2.   `on_catch_up_logs_for_merge` in source peer fsm
-    // 3.   if the source peer has already executed the corresponding `on_ready_prepare_merge`, set pending_remove and jump to step 6
-    // 4.   ... (raft append and apply logs)
-    // 5.   `on_ready_prepare_merge` in source peer fsm and set pending_remove (means source region has finished applying all logs)
-    // 6.   `logs_up_to_date_for_merge` in source apply fsm (destroy its apply fsm and send Noop to trigger the target apply fsm)
-    // 7.   resume `exec_commit_merge` in target apply fsm
-    // 8.   `on_ready_commit_merge` in target peer fsm and send `MergeResult` to source peer fsm
-    // 9.   `on_merge_result` in source peer fsm (destroy itself)
+    // 3.   if the source peer has already executed the corresponding `on_ready_prepare_merge`, set
+    // pending_remove and jump to step 6 4.   ... (raft append and apply logs)
+    // 5.   `on_ready_prepare_merge` in source peer fsm and set pending_remove (means source region
+    // has finished applying all logs) 6.   `logs_up_to_date_for_merge` in source apply fsm
+    // (destroy its apply fsm and send Noop to trigger the target apply fsm) 7.   resume
+    // `exec_commit_merge` in target apply fsm 8.   `on_ready_commit_merge` in target peer fsm
+    // and send `MergeResult` to source peer fsm 9.   `on_merge_result` in source peer fsm
+    // (destroy itself)
     fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext<EK>,
@@ -3473,7 +3480,8 @@ where
         self.delegate.destroy(ctx);
     }
 
-    /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
+    /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be
+    /// removed too.
     fn handle_destroy(&mut self, ctx: &mut ApplyContext<EK>, d: Destroy) {
         assert_eq!(d.region_id, self.delegate.region_id());
         if d.merge_from_snapshot {
@@ -3544,8 +3552,8 @@ where
             "region_id" => region_id,
             "peer_id" => self.delegate.id(),
         );
-        // The source peer fsm will be destroyed when the target peer executes `on_ready_commit_merge`
-        // and sends `merge result` to the source peer fsm.
+        // The source peer fsm will be destroyed when the target peer executes
+        // `on_ready_commit_merge` and sends `merge result` to the source peer fsm.
         self.destroy(ctx);
         catch_up_logs
             .logs_up_to_date
@@ -3649,12 +3657,13 @@ where
         let resp = match compare_region_epoch(
             &region_epoch,
             &self.delegate.region,
-            false, /* check_conf_ver */
-            true,  /* check_ver */
-            true,  /* include_region */
+            false, // check_conf_ver
+            true,  // check_ver
+            true,  // include_region
         ) {
             Ok(()) => {
-                // Commit the writebatch for ensuring the following snapshot can get all previous writes.
+                // Commit the writebatch for ensuring the following snapshot can get all previous
+                // writes.
                 if apply_ctx.kv_wb().count() > 0 {
                     apply_ctx.commit(&mut self.delegate);
                 }
@@ -5391,9 +5400,9 @@ mod tests {
         router.schedule_task(1, Msg::Registration(reg));
 
         // Test whether put commands and ingest commands are applied to engine in a correct order.
-        // We will generate 5 entries which are put, ingest, put, ingest, put respectively. For a same key,
-        // it can exist in multiple entries or in a single entries. We will test all all the possible
-        // keys exsiting combinations.
+        // We will generate 5 entries which are put, ingest, put, ingest, put respectively. For a
+        // same key, it can exist in multiple entries or in a single entries. We will test
+        // all all the possible keys exsiting combinations.
         let mut keys = Vec::new();
         let keys_count = 1 << 5;
         for i in 0..keys_count {

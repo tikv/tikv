@@ -131,8 +131,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                         let write_user_key = Key::truncate_ts_for(wk)?;
                         match write_user_key.cmp(lk) {
                             Ordering::Less => {
-                                // We are scanning from largest user key to smallest user key, so this
-                                // indicate that we meet a lock first, thus its corresponding write
+                                // We are scanning from largest user key to smallest user key, so
+                                // this indicate that we meet a lock
+                                // first, thus its corresponding write
                                 // does not exist.
                                 (lk, false, true)
                             }
@@ -188,7 +189,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                                 &mut self.statistics,
                             );
                             if has_write {
-                                // Skip current_user_key because this key is either blocked or handled.
+                                // Skip current_user_key because this key is either blocked or
+                                // handled.
                                 has_write = false;
                                 self.move_write_cursor_to_prev_user_key(&current_user_key)?;
                             }
@@ -218,9 +220,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         }
     }
 
-    /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts` in reverse order.
-    /// This function requires that the write cursor is currently pointing to the earliest version
-    /// of `user_key`.
+    /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts` in reverse
+    /// order. This function requires that the write cursor is currently pointing to the
+    /// earliest version of `user_key`.
     #[inline]
     fn reverse_get(
         &mut self,

@@ -247,8 +247,6 @@ impl RetryError for RequestError {
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// A helper for uploading a large file to Azure storage.
-///
-///
 struct AzureUploader {
     client_builder: Arc<dyn ContainerBuilder>,
     name: String,

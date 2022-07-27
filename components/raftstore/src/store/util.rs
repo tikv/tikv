@@ -119,10 +119,10 @@ fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
     }
 }
 
-/// `is_first_append_entry` checks `msg` is the first append message or not. This meassge is the first
-/// message that the learner peers of the new split region will receive from the leader. It's used for
-/// when the message is received but there is no such region in `Store::region_peers`. In this case we
-/// should put `msg` into `pending_msg` instead of create the peer.
+/// `is_first_append_entry` checks `msg` is the first append message or not. This meassge is the
+/// first message that the learner peers of the new split region will receive from the leader. It's
+/// used for when the message is received but there is no such region in `Store::region_peers`. In
+/// this case we should put `msg` into `pending_msg` instead of create the peer.
 #[inline]
 fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
     match msg.get_msg_type() {
@@ -422,15 +422,13 @@ pub fn is_region_initialized(r: &metapb::Region) -> bool {
 ///   - Valid timestamp would increase when raft log entries are applied in current term.
 ///   - Suspect timestamp would be set after the message `MsgTimeoutNow` is sent by current peer.
 ///     The message `MsgTimeoutNow` starts a leader transfer procedure. During this procedure,
-///     current peer as an old leader may still hold its lease or lose it.
-///     It's possible there is a new leader elected and current peer as an old leader
-///     doesn't step down due to network partition from the new leader. In that case,
-///     current peer lose its leader lease.
-///     Within this suspect leader lease expire time, read requests could not be performed
-///     locally.
-///   - The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
-///     And the expired timestamp for that leader lease is `commit_ts + lease`,
-///     which is `send_ts + max_lease` in short.
+///     current peer as an old leader may still hold its lease or lose it. It's possible there is a
+///     new leader elected and current peer as an old leader doesn't step down due to network
+///     partition from the new leader. In that case, current peer lose its leader lease. Within this
+///     suspect leader lease expire time, read requests could not be performed locally.
+///   - The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)` And the expired
+///     timestamp for that leader lease is `commit_ts + lease`, which is `send_ts + max_lease` in
+///     short.
 pub struct Lease {
     // A suspect timestamp is in the Either::Left(_),
     // a valid timestamp is in the Either::Right(_).
@@ -967,9 +965,9 @@ impl Default for RegionReadProgressRegistry {
     }
 }
 
-/// `RegionReadProgress` is used to keep track of the replica's `safe_ts`, the replica can handle a read
-/// request directly without requiring leader lease or read index iff `safe_ts` >= `read_ts` (the `read_ts`
-/// is usually stale i.e seconds ago).
+/// `RegionReadProgress` is used to keep track of the replica's `safe_ts`, the replica can handle a
+/// read request directly without requiring leader lease or read index iff `safe_ts` >= `read_ts`
+/// (the `read_ts` is usually stale i.e seconds ago).
 ///
 /// `safe_ts` is updated by the `(apply index, safe ts)` item:
 /// ```ignore
@@ -978,13 +976,15 @@ impl Default for RegionReadProgressRegistry {
 /// }
 /// ```
 ///
-/// For the leader, the `(apply index, safe ts)` item is publish by the `resolved-ts` worker periodically.
-/// For the followers, the item is sync periodically from the leader through the `CheckLeader` rpc.
+/// For the leader, the `(apply index, safe ts)` item is publish by the `resolved-ts` worker
+/// periodically. For the followers, the item is sync periodically from the leader through the
+/// `CheckLeader` rpc.
 ///
-/// The intend is to make the item's `safe ts` larger (more up to date) and `apply index` smaller (require less data)
+/// The intend is to make the item's `safe ts` larger (more up to date) and `apply index` smaller
+/// (require less data)
 //
-/// TODO: the name `RegionReadProgress` is conflict with the leader lease's `ReadProgress`, shoule change it to another
-/// more proper name
+/// TODO: the name `RegionReadProgress` is conflict with the leader lease's `ReadProgress`, shoule
+/// change it to another more proper name
 #[derive(Debug)]
 pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
@@ -1123,16 +1123,18 @@ struct RegionReadProgressCore {
     tag: String,
     region_id: u64,
     applied_index: u64,
-    // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current `safe_ts`
-    // and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
+    // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
+    // `safe_ts` and the `read_state.idx` is the smallest `apply_index` required for that
+    // `safe_ts`
     read_state: ReadState,
     // The local peer's acknowledge about the leader
     leader_info: LocalLeaderInfo,
     // `pending_items` is a *sorted* list of `(apply_index, safe_ts)` item
     pending_items: VecDeque<ReadState>,
-    // After the region commit merged, the region's key range is extended and the region's `safe_ts`
-    // should reset to `min(source_safe_ts, target_safe_ts)`, and start reject stale `read_state` item
-    // with index smaller than `last_merge_index` to avoid `safe_ts` undo the decrease
+    // After the region commit merged, the region's key range is extended and the region's
+    // `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`, and start reject stale
+    // `read_state` item with index smaller than `last_merge_index` to avoid `safe_ts` undo the
+    // decrease
     last_merge_index: u64,
     // Stop update `safe_ts`
     pause: bool,
@@ -1432,7 +1434,8 @@ mod tests {
         let cases = vec![
             (Timespec::new(0, 0), 0x0000_0000_0000_0000u64),
             (Timespec::new(0, 1), 0x0000_0000_0000_0000u64), // 1ns is round down to 0ms.
-            (Timespec::new(0, 999_999), 0x0000_0000_0000_0000u64), // 999_999ns is round down to 0ms.
+            (Timespec::new(0, 999_999), 0x0000_0000_0000_0000u64), /* 999_999ns is round down to
+                                                                    * 0ms. */
             (
                 // 1_048_575ns is round down to 0ms.
                 Timespec::new(0, 1_048_575 /* 0x0FFFFF */),
@@ -1520,7 +1523,7 @@ mod tests {
     ) -> metapb::Region {
         let mut region = metapb::Region::default();
         macro_rules! push_peer {
-            ($ids: ident, $role: expr) => {
+            ($ids:ident, $role:expr) => {
                 for id in $ids {
                     let mut peer = metapb::Peer::default();
                     peer.set_id(*id);

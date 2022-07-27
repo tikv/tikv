@@ -516,9 +516,9 @@ where
 
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the lifetime of
     // the returned `&ReadDelegate` will bind to `self`, and make it impossible to use `&mut self`
-    // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will be
-    // violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
-    // make the logic clear
+    // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will
+    // be violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra
+    // cost but make the logic clear
     fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
         let rd = match self.delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
@@ -669,7 +669,8 @@ where
                         // Getting the snapshot
                         let response = self.execute(&req, &delegate.region, None, read_id);
 
-                        // Double check in case `safe_ts` change after the first check and before getting snapshot
+                        // Double check in case `safe_ts` change after the first check and before
+                        // getting snapshot
                         if let Err(resp) =
                             delegate.check_stale_read_safe(read_ts, &mut self.metrics)
                         {

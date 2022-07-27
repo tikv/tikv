@@ -432,7 +432,7 @@ impl WriteCompactionFilter {
         }
         self.filtered += 1;
         self.handle_filtered_write(write)?;
-        self.flush_pending_writes_if_need(false /*force*/)?;
+        self.flush_pending_writes_if_need(false /* force */)?;
         let decision = if self.remove_older {
             // Use `Decision::RemoveAndSkipUntil` instead of `Decision::Remove` to avoid
             // leaving tombstones, which can only be freed at the bottommost level.
@@ -649,7 +649,7 @@ fn check_need_gc(
     ratio_threshold: f64,
     context: &CompactionFilterContext,
 ) -> bool {
-    let check_props = |props: &MvccProperties| -> (bool, bool /*skip_more_checks*/) {
+    let check_props = |props: &MvccProperties| -> (bool, bool /* skip_more_checks */) {
         if props.min_ts > safe_point {
             return (false, false);
         }

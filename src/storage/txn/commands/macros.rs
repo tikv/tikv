@@ -148,12 +148,12 @@ macro_rules! request_type {
 }
 
 macro_rules! write_bytes {
-    ($field: ident) => {
+    ($field:ident) => {
         fn write_bytes(&self) -> usize {
             self.$field.as_encoded().len()
         }
     };
-    ($field: ident: multiple) => {
+    ($field:ident : multiple) => {
         fn write_bytes(&self) -> usize {
             self.$field.iter().map(|x| x.as_encoded().len()).sum()
         }
@@ -166,17 +166,17 @@ macro_rules! gen_lock {
             crate::storage::txn::latch::Lock::new::<(), _>(vec![])
         }
     };
-    ($field: ident) => {
+    ($field:ident) => {
         fn gen_lock(&self) -> crate::storage::txn::latch::Lock {
             crate::storage::txn::latch::Lock::new(std::iter::once(&self.$field))
         }
     };
-    ($field: ident: multiple) => {
+    ($field:ident : multiple) => {
         fn gen_lock(&self) -> crate::storage::txn::latch::Lock {
             crate::storage::txn::latch::Lock::new(&self.$field)
         }
     };
-    ($field: ident: multiple$transform: tt) => {
+    ($field:ident : multiple $transform:tt) => {
         fn gen_lock(&self) -> crate::storage::txn::latch::Lock {
             #![allow(unused_parens)]
             let keys = self.$field.iter().map($transform);

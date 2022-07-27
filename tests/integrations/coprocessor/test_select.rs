@@ -39,7 +39,7 @@ fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
 
 /// sort_by sorts the `$v`(a vector of `Vec<Datum>`) by the $index elements in `Vec<Datum>`
 macro_rules! sort_by {
-    ($v:ident,  $index:expr, $t:ident) => {
+    ($v:ident, $index:expr, $t:ident) => {
         $v.sort_by(|a, b| match (&a[$index], &b[$index]) {
             (Datum::Null, Datum::Null) => std::cmp::Ordering::Equal,
             (Datum::$t(a), Datum::$t(b)) => a.cmp(&b),
@@ -1775,12 +1775,12 @@ fn test_cache() {
 #[test]
 fn test_copr_bypass_or_access_locks() {
     let data = vec![
-        (1, Some("name:1"), 1), /* no lock */
-        (2, Some("name:2"), 2), /* bypass lock */
-        (3, Some("name:3"), 3), /* access lock(range) */
-        (4, Some("name:4"), 4), /* access lock(range) */
-        (6, Some("name:6"), 6), /* access lock(point) */
-        (8, Some("name:8"), 8), /* not conflict lock */
+        (1, Some("name:1"), 1), // no lock
+        (2, Some("name:2"), 2), // bypass lock
+        (3, Some("name:3"), 3), // access lock(range)
+        (4, Some("name:4"), 4), // access lock(range)
+        (6, Some("name:6"), 6), // access lock(point)
+        (8, Some("name:8"), 8), // not conflict lock
     ];
 
     let product = ProductTable::new();
@@ -1894,10 +1894,10 @@ fn test_copr_bypass_or_access_locks() {
 #[test]
 fn test_rc_read() {
     let data = vec![
-        (1, Some("name:1"), 1), /* no lock */
-        (2, Some("name:2"), 2), /* no lock */
-        (3, Some("name:3"), 3), /* update lock */
-        (4, Some("name:4"), 4), /* delete lock */
+        (1, Some("name:1"), 1), // no lock
+        (2, Some("name:2"), 2), // no lock
+        (3, Some("name:3"), 3), // update lock
+        (4, Some("name:4"), 4), // delete lock
     ];
 
     let product = ProductTable::new();

@@ -710,8 +710,8 @@ fn cast_float_real_as_string(
     }
 }
 
-// FIXME: We cannot use specialization in current Rust version, so impl ConvertTo<Bytes> for Bytes cannot
-//  pass compile because of we have impl Convert<Bytes> for T where T: ToString + Evaluable
+// FIXME: We cannot use specialization in current Rust version, so impl ConvertTo<Bytes> for Bytes
+// cannot  pass compile because of we have impl Convert<Bytes> for T where T: ToString + Evaluable
 //  Refactor this part after https://github.com/rust-lang/rust/issues/31844 closed
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
@@ -841,7 +841,8 @@ fn cast_string_as_unsigned_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
-            // FIXME: in TiDB, if the param IsBinaryLiteral, then return the result of `evalDecimal` directly
+            // FIXME: in TiDB, if the param IsBinaryLiteral, then return the result of `evalDecimal`
+            // directly
             let d: Decimal = val.convert(ctx)?;
             let d = if metadata.get_in_union() && d.is_negative() {
                 Decimal::zero()
@@ -1302,7 +1303,8 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<BytesRef>) -> Res
                 let val: Json = s.parse()?;
                 Ok(Some(val))
             } else {
-                // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8 string
+                // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8
+                // string
                 let val = unsafe { String::from_utf8_unchecked(val.to_owned()) };
                 Ok(Some(Json::from_string(val)?))
             }
@@ -2308,9 +2310,10 @@ mod tests {
             //  and `show warnings` will show
             //  `| Warning | 1292 | Truncated incorrect INTEGER value: '18446744073709551616'`
             //  fix this cast_string_as_int after fix TiDB's
-            // ("18446744073709551616", 18446744073709551615 as i64, Some(ERR_TRUNCATE_WRONG_VALUE) , Cond::Unsigned)
-            // FIXME: our cast_string_as_int's err handle is not exactly same as TiDB's
-            // ("18446744073709551616", 18446744073709551615u64 as i64, Some(ERR_TRUNCATE_WRONG_VALUE), Cond::InSelectStmt),
+            // ("18446744073709551616", 18446744073709551615 as i64, Some(ERR_TRUNCATE_WRONG_VALUE)
+            // , Cond::Unsigned) FIXME: our cast_string_as_int's err handle is not
+            // exactly same as TiDB's ("18446744073709551616", 18446744073709551615u64
+            // as i64, Some(ERR_TRUNCATE_WRONG_VALUE), Cond::InSelectStmt),
 
             // has prefix `-` and in_union and unsigned
             ("-10", 0, vec![], Cond::InUnionAndUnsigned),
@@ -2570,9 +2573,9 @@ mod tests {
                 20000101121315,
             ),
             // FiXME
-            //  Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap().round_frac(DEFAULT_FSP)
-            //  will get 2000-01-01T12:13:14, this is a bug
-            // (
+            //  Time::parse_utc_datetime("2000-01-01T12:13:14.6666",
+            // 4).unwrap().round_frac(DEFAULT_FSP)  will get 2000-01-01T12:13:14, this
+            // is a bug (
             //     Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap(),
             //     20000101121315,
             // ),
@@ -2775,7 +2778,7 @@ mod tests {
         for (input, expected, fsp) in cases {
             let mut ctx = EvalContext::default();
             let time =
-                Time::parse_timestamp(&mut ctx, input, MAX_FSP, /* Enable round*/ true).unwrap();
+                Time::parse_timestamp(&mut ctx, input, MAX_FSP, /* Enable round */ true).unwrap();
 
             let actual: Time = RpnFnScalarEvaluator::new()
                 .push_param(time)
@@ -3528,9 +3531,11 @@ mod tests {
                 vec![ERR_TRUNCATE_WRONG_VALUE, ERR_DATA_OUT_OF_RANGE],
             ),
             // the case below has 3 warning
-            // 1. from getValidFloatPrefix, because of `-1234abc`'s `abc`, (ERR_TRUNCATE_WRONG_VALUE)
-            // 2. from ProduceFloatWithSpecifiedTp, because of TruncateFloat (ERR_DATA_OUT_OF_RANGE)
-            // 3. from ProduceFloatWithSpecifiedTp, because of unsigned but negative (ERR_DATA_OUT_OF_RANGE)
+            // 1. from getValidFloatPrefix, because of `-1234abc`'s `abc`,
+            // (ERR_TRUNCATE_WRONG_VALUE) 2. from ProduceFloatWithSpecifiedTp, because
+            // of TruncateFloat (ERR_DATA_OUT_OF_RANGE)
+            // 3. from ProduceFloatWithSpecifiedTp, because of unsigned but negative
+            // (ERR_DATA_OUT_OF_RANGE)
             (
                 String::from("-1234abc"),
                 0.0,
@@ -4627,8 +4632,8 @@ mod tests {
             // (
             // origin, origin_flen, origin_decimal, res_flen, res_decimal, is_unsigned,
             // expect, warning_err_code,
-            // (InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning, truncate_as_warning
-            // )
+            // (InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning,
+            // truncate_as_warning )
             //
             // The origin_flen, origin_decimal here is
             // to let the programmer clearly know what the flen and decimal of the decimal is.
@@ -6756,7 +6761,8 @@ mod tests {
 
         // TODO: add more case for other TimeType
         let cs = vec![
-            // Add time_type filed here is to make maintainer know clearly that what is the type of the time.
+            // Add time_type filed here is to make maintainer know clearly that what is the type of
+            // the time.
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
                 TimeType::DateTime,

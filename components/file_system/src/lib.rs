@@ -296,8 +296,8 @@ pub fn file_exists<P: AsRef<Path>>(file: P) -> bool {
     path.exists() && path.is_file()
 }
 
-/// Deletes given path from file system. Returns `true` on success, `false` if the file doesn't exist.
-/// Otherwise the raw error will be returned.
+/// Deletes given path from file system. Returns `true` on success, `false` if the file doesn't
+/// exist. Otherwise the raw error will be returned.
 pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     match remove_file(&file) {
         Ok(_) => Ok(true),

@@ -448,19 +448,19 @@ mod tests {
         db.put(b"za1", b"").unwrap();
         db.put(b"zb1", &value).unwrap();
         db.put(b"zc1", &value).unwrap();
-        db.flush(true /*sync*/).unwrap();
+        db.flush(true /* sync */).unwrap();
         db.put(b"zb2", &value).unwrap();
         db.put(b"zc2", &value).unwrap();
         db.put(b"zc3", &value).unwrap();
         db.put(b"zc4", &value).unwrap();
         db.put(b"zc5", &value).unwrap();
         db.put(b"zc6", &value).unwrap();
-        db.flush(true /*sync*/).unwrap();
+        db.flush(true /* sync */).unwrap();
         db.compact_range(
-            CF_DEFAULT, None,  /*start_key*/
-            None,  /*end_key*/
-            false, /*exclusive_manual*/
-            1,     /*max_subcompactions*/
+            CF_DEFAULT, None,  // start_key
+            None,  // end_key
+            false, // exclusive_manual
+            1,     // max_subcompactions
         )
         .unwrap();
 

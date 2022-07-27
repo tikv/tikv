@@ -55,7 +55,8 @@ pub trait Scanner: Send {
     fn next(&mut self) -> Result<Option<(Key, Value)>>;
 
     /// Get the next [`KvPair`](KvPair)s up to `limit` if they exist.
-    /// If `sample_step` is greater than 0, skips `sample_step - 1` number of keys after each returned key.
+    /// If `sample_step` is greater than 0, skips `sample_step - 1` number of keys after each
+    /// returned key.
     fn scan(&mut self, limit: usize, sample_step: usize) -> Result<Vec<Result<KvPair>>> {
         let mut row_count = 0;
         let mut results = Vec::with_capacity(limit);

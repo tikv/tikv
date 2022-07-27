@@ -2052,10 +2052,14 @@ mod tests {
         lock.extend(vec![
             // key, start_ts, for_update_ts, lock_type, short_value, check
             (b"k1", 100, 0, LockType::Put, false, Expect::Remove), // k1: remove orphan lock.
-            (b"k2", 100, 0, LockType::Delete, false, Expect::Keep), // k2: Delete doesn't need default.
-            (b"k3", 100, 0, LockType::Put, true, Expect::Keep), // k3: short value doesn't need default.
-            (b"k4", 100, 0, LockType::Put, false, Expect::Keep), // k4: corresponding default exists.
-            (b"k5", 100, 0, LockType::Put, false, Expect::Remove), // k5: duplicated lock and write.
+            (b"k2", 100, 0, LockType::Delete, false, Expect::Keep), /* k2: Delete doesn't need
+                                                                    * default. */
+            (b"k3", 100, 0, LockType::Put, true, Expect::Keep), /* k3: short value doesn't need
+                                                                 * default. */
+            (b"k4", 100, 0, LockType::Put, false, Expect::Keep), /* k4: corresponding default
+                                                                  * exists. */
+            (b"k5", 100, 0, LockType::Put, false, Expect::Remove), /* k5: duplicated lock and
+                                                                    * write. */
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value, check
@@ -2072,11 +2076,14 @@ mod tests {
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value
-            (b"k6", 100, 101, WriteType::Put, true, Expect::Keep), // short value doesn't need default.
-            (b"k6", 99, 99, WriteType::Rollback, false, Expect::Keep), // rollback doesn't need default.
-            (b"k6", 97, 98, WriteType::Delete, false, Expect::Keep), // delete doesn't need default.
-            (b"k6", 94, 94, WriteType::Put, false, Expect::Keep),    // ok.
-            (b"k6", 92, 93, WriteType::Put, false, Expect::Remove),  // extra write.
+            (b"k6", 100, 101, WriteType::Put, true, Expect::Keep), /* short value doesn't need
+                                                                    * default. */
+            (b"k6", 99, 99, WriteType::Rollback, false, Expect::Keep), /* rollback doesn't need
+                                                                        * default. */
+            (b"k6", 97, 98, WriteType::Delete, false, Expect::Keep), /* delete doesn't need
+                                                                      * default. */
+            (b"k6", 94, 94, WriteType::Put, false, Expect::Keep), // ok.
+            (b"k6", 92, 93, WriteType::Put, false, Expect::Remove), // extra write.
             (b"k6", 90, 91, WriteType::Delete, false, Expect::Keep),
             (b"k6", 88, 89, WriteType::Put, true, Expect::Keep),
         ]);
@@ -2106,7 +2113,9 @@ mod tests {
         lock.extend(vec![
             // key, start_ts, for_update_ts, lock_type, short_value, check
             (b"k8", 90, 105, LockType::Pessimistic, false, Expect::Remove), // newer writes exist
-            (b"k9", 90, 115, LockType::Put, true, Expect::Keep), // prewritten lock from a pessimistic txn
+            (b"k9", 90, 115, LockType::Put, true, Expect::Keep),            /* prewritten lock
+                                                                             * from a pessimistic
+                                                                             * txn */
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value

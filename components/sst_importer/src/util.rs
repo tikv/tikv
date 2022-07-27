@@ -180,8 +180,8 @@ mod tests {
     #[test]
     fn test_prepare_sst_for_ingestion() {
         check_prepare_sst_for_ingestion(
-            None, None, None,  /*key_manager*/
-            false, /* was encrypted*/
+            None, None, None,  // key_manager
+            false, // was encrypted
         );
     }
 
@@ -197,8 +197,8 @@ mod tests {
         check_prepare_sst_for_ingestion(
             Some(db_opts),
             Some(vec![RocksCFOptions::new("default", cf_opts)]),
-            None,  /*key_manager*/
-            false, /*was_encrypted*/
+            None,  // key_manager
+            false, // was_encrypted
         );
     }
 
@@ -207,7 +207,7 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         let manager = Arc::new(key_manager.unwrap().unwrap());
-        check_prepare_sst_for_ingestion(None, None, Some(&manager), false /*was_encrypted*/);
+        check_prepare_sst_for_ingestion(None, None, Some(&manager), false /* was_encrypted */);
     }
 
     #[test]
@@ -215,6 +215,6 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         let manager = Arc::new(key_manager.unwrap().unwrap());
-        check_prepare_sst_for_ingestion(None, None, Some(&manager), true /*was_encrypted*/);
+        check_prepare_sst_for_ingestion(None, None, Some(&manager), true /* was_encrypted */);
     }
 }

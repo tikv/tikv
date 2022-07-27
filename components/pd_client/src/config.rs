@@ -33,7 +33,8 @@ pub struct Config {
     ///
     /// Default is 10m.
     pub update_interval: ReadableDuration,
-    /// The switch to support forwarding requests to follower when the network partition problem happens.
+    /// The switch to support forwarding requests to follower when the network partition problem
+    /// happens.
     ///
     /// Default is false.
     pub enable_forwarding: bool,

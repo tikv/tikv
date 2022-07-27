@@ -80,8 +80,9 @@ impl GbkCollator for CollatorGbkChineseCi {
     const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_CHINESE_CI_TABLE;
 }
 
-// GBK_BIN_TABLE are the encoding tables from Unicode to GBK code, it is totally the same with golang's GBK encoding.
-// If there is no mapping code in GBK, use 0x3F(?) instead. It should not happened.
+// GBK_BIN_TABLE are the encoding tables from Unicode to GBK code, it is totally the same with
+// golang's GBK encoding. If there is no mapping code in GBK, use 0x3F(?) instead. It should not
+// happened.
 const GBK_BIN_TABLE: &[u8; (0xffff + 1) * 2] = include_bytes!("gbk_bin.data");
 
 // GBK_CHINESE_CI_TABLE are the sort key tables for GBK codepoint.

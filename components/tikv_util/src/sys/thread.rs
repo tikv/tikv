@@ -82,7 +82,8 @@ mod imp {
     }
 
     /// Gets thread ids of the given process id.
-    /// WARN: Don't call this function frequently. Otherwise there will be a lot of memory fragments.
+    /// WARN: Don't call this function frequently. Otherwise there will be a lot of memory
+    /// fragments.
     pub fn thread_ids<C: FromIterator<Pid>>(pid: Pid) -> io::Result<C> {
         let dir = fs::read_dir(format!("/proc/{}/task", pid))?;
         Ok(dir

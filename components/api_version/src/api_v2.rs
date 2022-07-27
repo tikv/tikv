@@ -143,8 +143,8 @@ impl KvFormat for ApiV2 {
     }
 
     // Note: `user_key` may not be `KeyMode::Raw`.
-    // E.g., `raw_xxx_range` interfaces accept an exclusive end key just beyond the scope of raw keys.
-    // The validity is ensured by client & Storage interfaces.
+    // E.g., `raw_xxx_range` interfaces accept an exclusive end key just beyond the scope of raw
+    // keys. The validity is ensured by client & Storage interfaces.
     fn encode_raw_key(user_key: &[u8], ts: Option<TimeStamp>) -> Key {
         let encoded_key = Key::from_raw(user_key);
         if let Some(ts) = ts {
@@ -156,13 +156,14 @@ impl KvFormat for ApiV2 {
     }
 
     // Note: `user_key` may not be `KeyMode::Raw`.
-    // E.g., `raw_xxx_range` interfaces accept an exclusive end key just beyond the scope of raw keys.
-    // The validity is ensured by client & Storage interfaces.
+    // E.g., `raw_xxx_range` interfaces accept an exclusive end key just beyond the scope of raw
+    // keys. The validity is ensured by client & Storage interfaces.
     fn encode_raw_key_owned(mut user_key: Vec<u8>, ts: Option<TimeStamp>) -> Key {
         let src_len = user_key.len();
         let encoded_len = MemComparableByteCodec::encoded_len(src_len);
 
-        // always reserve more U64_SIZE for ts, as it's likely to "append_ts" later, especially in raw write procedures.
+        // always reserve more U64_SIZE for ts, as it's likely to "append_ts" later, especially in
+        // raw write procedures.
         user_key.reserve(encoded_len - src_len + number::U64_SIZE);
         user_key.resize(encoded_len, 0u8);
         MemComparableByteCodec::encode_all_in_place(&mut user_key, src_len);

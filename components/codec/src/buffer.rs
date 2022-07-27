@@ -632,7 +632,7 @@ mod tests {
             // Re-allocate the vector space and ensure that the address is changed.
             vec.reserve(::std::cmp::max(payload_len * 3, 32));
 
-            //assert_ne!(vec_ptr, vec.as_ptr());
+            // assert_ne!(vec_ptr, vec.as_ptr());
             if vec_ptr == vec.as_ptr() {
                 in_place_reallocs += 1;
             }

@@ -261,12 +261,10 @@ pub trait PdClient: Send + Sync {
     /// We don't need to support Region and Peer put/delete,
     /// because PD knows all Region and Peers itself:
     /// - For bootstrapping, PD knows first Region with `bootstrap_cluster`.
-    /// - For changing Peer, PD determines where to add a new Peer in some store
-    ///   for this Region.
-    /// - For Region splitting, PD determines the new Region id and Peer id for the
-    ///   split Region.
-    /// - For Region merging, PD knows which two Regions will be merged and which Region
-    ///   and Peers will be removed.
+    /// - For changing Peer, PD determines where to add a new Peer in some store for this Region.
+    /// - For Region splitting, PD determines the new Region id and Peer id for the split Region.
+    /// - For Region merging, PD knows which two Regions will be merged and which Region and Peers
+    ///   will be removed.
     /// - For auto-balance, PD determines how to move the Region from one store to another.
 
     /// Gets store information if it is not a tombstone store.

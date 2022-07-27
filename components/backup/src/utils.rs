@@ -12,8 +12,9 @@ use txn_types::{Key, TimeStamp};
 
 use crate::{metrics::*, Result};
 
-// BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version V1/V1Ttl data and save to V2 format.
-// Use 1 other than 0 because 0 is not a acceptable value for causal timestamp. See api_version::ApiV2::is_valid_ts.
+// BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version V1/V1Ttl data and save
+// to V2 format. Use 1 other than 0 because 0 is not a acceptable value for causal timestamp. See
+// api_version::ApiV2::is_valid_ts.
 pub const BACKUP_V1_TO_V2_TS: u64 = 1;
 /// DaemonRuntime is a "background" runtime, which contains "daemon" tasks:
 /// any task spawn into it would run until finish even the runtime isn't referenced.

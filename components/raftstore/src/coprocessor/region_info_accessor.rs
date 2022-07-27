@@ -151,8 +151,8 @@ impl Display for RegionInfoQuery {
     }
 }
 
-/// `RegionEventListener` implements observer traits. It simply send the events that we are interested in
-/// through the `scheduler`.
+/// `RegionEventListener` implements observer traits. It simply send the events that we are
+/// interested in through the `scheduler`.
 #[derive(Clone)]
 struct RegionEventListener {
     scheduler: Scheduler<RegionInfoQuery>,
@@ -207,8 +207,9 @@ fn register_region_event_listener(
 }
 
 /// `RegionCollector` is the place where we hold all region information we collected, and the
-/// underlying runner of `RegionInfoAccessor`. It listens on events sent by the `RegionEventListener` and
-/// keeps information of all regions. Role of each region are also tracked.
+/// underlying runner of `RegionInfoAccessor`. It listens on events sent by the
+/// `RegionEventListener` and keeps information of all regions. Role of each region are also
+/// tracked.
 pub struct RegionCollector {
     // HashMap: region_id -> (Region, State)
     regions: RegionsMap,
@@ -1216,9 +1217,9 @@ mod tests {
         must_update_region(&mut c, &new_region(2, b"k1", b"k9", 1), StateRole::Follower);
         must_change_role(&mut c, &new_region(2, b"k1", b"k9", 1), StateRole::Leader);
         must_update_region(&mut c, &new_region(2, b"k1", b"k5", 2), StateRole::Leader);
-        // TODO: In fact, region 2's role should be follower. However because it's previous state was
-        // removed while creating updating region 4, it can't be successfully updated. Fortunately
-        // this case may hardly happen so it can be fixed later.
+        // TODO: In fact, region 2's role should be follower. However because it's previous state
+        // was removed while creating updating region 4, it can't be successfully updated.
+        // Fortunately this case may hardly happen so it can be fixed later.
         check_collection(
             &c,
             &[

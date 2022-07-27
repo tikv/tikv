@@ -51,8 +51,8 @@ pub trait Rotator: Send {
 /// This `FileLogger` will iterate over a series of `Rotators`,
 /// once the context trigger the `Rotator`, it will execute a rotation.
 ///
-/// After rotating, the original log file would be renamed to "{original name}.{"%Y-%m-%dT%H-%M-%S%.3f"}".
-/// Note: log file will *not* be compressed or otherwise modified.
+/// After rotating, the original log file would be renamed to "{original
+/// name}.{"%Y-%m-%dT%H-%M-%S%.3f"}". Note: log file will *not* be compressed or otherwise modified.
 pub struct RotatingFileLogger {
     path: PathBuf,
     file: File,

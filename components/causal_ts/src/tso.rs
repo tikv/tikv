@@ -31,8 +31,9 @@ use crate::{
 // Renew on every 100ms, to adjust batch size rapidly enough.
 pub(crate) const TSO_BATCH_RENEW_INTERVAL_DEFAULT: u64 = 100;
 // Batch size on every renew interval.
-// One TSO is required for every batch of Raft put messages, so by default 1K tso/s should be enough.
-// Benchmark showed that with a 8.6w raw_put per second, the TSO requirement is 600 per second.
+// One TSO is required for every batch of Raft put messages, so by default 1K tso/s should be
+// enough. Benchmark showed that with a 8.6w raw_put per second, the TSO requirement is 600 per
+// second.
 pub(crate) const TSO_BATCH_MIN_SIZE_DEFAULT: u32 = 100;
 // Max batch size of TSO requests. Space of logical timestamp is 262144,
 // exceed this space will cause PD to sleep, waiting for physical clock advance.
@@ -363,8 +364,8 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
                 break;
             }
             if let Err(err) = block_on(self.renew_tso_batch(false, TSO_BATCH_RENEW_FOR_USED_UP)) {
-                // `renew_tso_batch` failure is likely to be caused by TSO timeout, which would mean that PD is quite busy.
-                // So do not retry any more.
+                // `renew_tso_batch` failure is likely to be caused by TSO timeout, which would mean
+                // that PD is quite busy. So do not retry any more.
                 error!("BatchTsoProvider::get_ts, renew_tso_batch fail on batch used-up"; "err" => ?err);
                 break;
             }
@@ -477,8 +478,8 @@ pub mod tests {
         let pd_cli = Arc::new(TestPdClient::new(1, false));
         pd_cli.set_tso(1000.into());
 
-        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to renew manually.
-        // allocated: [1001, 1100]
+        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to renew
+        // manually. allocated: [1001, 1100]
         let provider = block_on(BatchTsoProvider::new_opt(
             pd_cli.clone(),
             Duration::ZERO,
@@ -539,8 +540,8 @@ pub mod tests {
             );
         }
 
-        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to renew manually.
-        // allocated: [1001, 1100]
+        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to renew
+        // manually. allocated: [1001, 1100]
         let provider = block_on(BatchTsoProvider::new_opt(
             pd_cli.clone(),
             Duration::ZERO,

@@ -371,7 +371,8 @@ impl CfFile {
         assert!(self.size.len() >= idx);
         let file_name = self.gen_file_name(idx);
         if self.size.len() > idx {
-            // Any logic similar to test_snap_corruption_on_size_or_checksum will trigger this branch
+            // Any logic similar to test_snap_corruption_on_size_or_checksum will trigger this
+            // branch
             self.size[idx] = size;
             self.checksum[idx] = checksum;
             self.file_names[idx] = file_name.clone();
@@ -895,8 +896,8 @@ impl Snapshot {
             };
             cf_file.kv_count = cf_stat.key_count as u64;
             if cf_file.kv_count > 0 {
-                // Use `kv_count` instead of file size to check empty files because encrypted sst files
-                // contain some metadata so their sizes will never be 0.
+                // Use `kv_count` instead of file size to check empty files because encrypted sst
+                // files contain some metadata so their sizes will never be 0.
                 self.mgr.rename_tmp_cf_file_for_send(cf_file)?;
             } else {
                 for tmp_file_path in cf_file.tmp_file_paths() {
@@ -936,7 +937,7 @@ impl Snapshot {
 
     fn delete(&self) {
         macro_rules! try_delete_snapshot_files {
-            ($cf_file: ident, $file_name_func: ident) => {
+            ($cf_file:ident, $file_name_func:ident) => {
                 let mut file_id = 0;
                 loop {
                     let file_path = $cf_file.path.join($cf_file.$file_name_func(file_id));
@@ -948,7 +949,7 @@ impl Snapshot {
                     }
                 }
             };
-            ($cf_file: ident) => {
+            ($cf_file:ident) => {
                 let mut file_id = 0;
                 loop {
                     let file_path = $cf_file.path.join($cf_file.gen_file_name(file_id));

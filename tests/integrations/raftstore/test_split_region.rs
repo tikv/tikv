@@ -1065,7 +1065,8 @@ fn test_refresh_region_bucket_keys() {
     );
     assert_eq!(bucket_version3, bucket_version2);
 
-    // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""] buckets into more buckets
+    // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""] buckets into more
+    // buckets
     let region = pd_client.get_region(b"k11").unwrap();
     let bucket_ranges = vec![
         BucketRange(vec![], b"k12".to_vec()),
@@ -1243,7 +1244,8 @@ fn test_gen_split_check_bucket_ranges() {
         Option::None,
         Some(expected_buckets.clone()),
     );
-    // because the diff between last_bucket_regions and bucket_regions is zero, bucket range for split check should be empty.
+    // because the diff between last_bucket_regions and bucket_regions is zero, bucket range for
+    // split check should be empty.
     let expected_bucket_ranges = vec![];
     cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
 

@@ -124,20 +124,20 @@ pub struct StoreMeta {
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
-    /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
-    /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
-    /// will be handled later.
+    /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions
+    /// shouldn't be dropped if there is no such Region in this store now. So the messages are
+    /// recorded temporarily and will be handled later.
     pub pending_msgs: RingQueue<RaftMessage>,
     /// The regions with pending snapshots.
     pub pending_snapshot_regions: Vec<Region>,
-    /// A marker used to indicate the peer of a Region has received a merge target message and waits to be destroyed.
-    /// target_region_id -> (source_region_id -> merge_target_region)
+    /// A marker used to indicate the peer of a Region has received a merge target message and
+    /// waits to be destroyed. target_region_id -> (source_region_id -> merge_target_region)
     pub pending_merge_targets: HashMap<u64, HashMap<u64, metapb::Region>>,
-    /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
-    /// source_region_id -> target_region_id
+    /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to
+    /// clean up related entry. source_region_id -> target_region_id
     pub targets_map: HashMap<u64, u64>,
-    /// `atomic_snap_regions` and `destroyed_region_for_snap` are used for making destroy overlapped regions
-    /// and apply snapshot atomically.
+    /// `atomic_snap_regions` and `destroyed_region_for_snap` are used for making destroy
+    /// overlapped regions and apply snapshot atomically.
     /// region_id -> wait_destroy_regions_map(source_region_id -> is_ready)
     /// A target peer must wait for all source peer to ready before applying snapshot.
     pub atomic_snap_regions: HashMap<u64, HashMap<u64, bool>>,
@@ -471,7 +471,8 @@ where
     pub feature_gate: FeatureGate,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
-    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the
+    /// same peer.
     ///
     /// WARNING:
     /// To avoid deadlock, if you want to use `store_meta` and `pending_create_peers` together,
@@ -1805,8 +1806,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             } else {
                 let mut need_gc_msg = util::is_vote_msg(msg.get_message());
                 if msg.has_extra_msg() {
-                    // A learner can't vote so it sends the check-stale-peer msg to others to find out whether
-                    // it is removed due to conf change or merge.
+                    // A learner can't vote so it sends the check-stale-peer msg to others to find
+                    // out whether it is removed due to conf change or merge.
                     need_gc_msg |=
                         msg.get_extra_msg().get_type() == ExtraMessageType::MsgCheckStalePeer;
                     // For backward compatibility
@@ -1835,7 +1836,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
         // A tombstone peer may not apply the conf change log which removes itself.
         // In this case, the local epoch is stale and the local peer can be found from region.
-        // We can compare the local peer id with to_peer_id to verify whether it is correct to create a new peer.
+        // We can compare the local peer id with to_peer_id to verify whether it is correct to
+        // create a new peer.
         if let Some(local_peer_id) =
             util::find_peer(region, self.ctx.store_id()).map(|r| r.get_id())
         {
@@ -2021,12 +2023,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             match pending_create_peers.get(&region_id) {
                 Some(status) if *status == (msg.get_to_peer().get_id(), false) => (),
-                // If changed, it means this peer has been/will be replaced from the new one from splitting.
+                // If changed, it means this peer has been/will be replaced from the new one from
+                // splitting.
                 _ => return Ok(false),
             }
-            // Note that `StoreMeta` lock is held and status is (peer_id, false) in `pending_create_peers` now.
-            // If this peer is created from splitting latter and then status in `pending_create_peers` is changed,
-            // that peer creation in `on_ready_split_region` must be executed **after** current peer creation
+            // Note that `StoreMeta` lock is held and status is (peer_id, false) in
+            // `pending_create_peers` now. If this peer is created from splitting latter
+            // and then status in `pending_create_peers` is changed, that peer creation
+            // in `on_ready_split_region` must be executed **after** current peer creation
             // because of the `StoreMeta` lock.
         }
 

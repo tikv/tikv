@@ -99,13 +99,14 @@ pub struct Write {
     /// 1. `Key_100_put`, `Key_120_del` applied
     /// 2. GC with safepoint = 130 started and `Key_100_put`, `Key_120_del` are deleted
     /// 3. Finished applying `Key_100_put_R`, which means to rewrite `Key_100_put`
-    /// 4. Read at `140` should get nothing (since it's MVCC-deleted at 120) but finds `Key_100_put`
+    /// 4. Read at `140` should get nothing (since it's MVCC-deleted at 120) but finds
+    /// `Key_100_put`
     ///
     /// To solve the problem, when marking `has_overlapped_rollback` on an already-existed commit
     /// record, add a special field `gc_fence` on it. If there is a newer version after the record
     /// being rewritten, the next version's `commit_ts` will be recorded. When MVCC reading finds
-    /// a commit record with a GC fence timestamp but the corresponding version that matches that ts
-    /// doesn't exist, the current version will be believed to be already GC-ed and ignored.
+    /// a commit record with a GC fence timestamp but the corresponding version that matches that
+    /// ts doesn't exist, the current version will be believed to be already GC-ed and ignored.
     ///
     /// Therefore, for the example above, in the 3rd step it will record the version `120` to the
     /// `gc_fence` field:
@@ -136,8 +137,8 @@ pub struct Write {
     /// * `None`: A record that haven't been rewritten
     /// * `Some(0)`: A commit record that has been rewritten due to overlapping rollback, but it
     ///   doesn't have an newer version.
-    /// * `Some(ts)`: A commit record that has been rewritten due to overlapping rollback,
-    ///   and it's next version's `commit_ts` is `ts`
+    /// * `Some(ts)`: A commit record that has been rewritten due to overlapping rollback, and it's
+    ///   next version's `commit_ts` is `ts`
     pub gc_fence: Option<TimeStamp>,
 }
 
@@ -333,18 +334,19 @@ impl WriteRef<'_> {
     }
 
     /// Prev Conditions:
-    ///   * The `Write` record `self` is referring to is the latest version found by reading at `read_ts`
+    ///   * The `Write` record `self` is referring to is the latest version found by reading at
+    ///     `read_ts`
     ///   * The `read_ts` is safe, which means, it's not earlier than the current GC safepoint.
     /// Return:
-    ///   Whether the `Write` record is valid, ie. there's no GC fence or GC fence doesn't points to any other
-    ///   version.
+    ///   Whether the `Write` record is valid, ie. there's no GC fence or GC fence doesn't points to
+    /// any other   version.
     pub fn check_gc_fence_as_latest_version(&self, read_ts: TimeStamp) -> bool {
         // It's a valid write record if there's no GC fence or GC fence doesn't points to any other
         // version.
         // If there is a GC fence that's points to another version, there are two cases:
-        // * If `gc_fence_ts > read_ts`, then since `read_ts` didn't expire the GC
-        //   safepoint, so the current version must be a not-expired version or the latest version
-        //   before safepoint, so it must be a valid version
+        // * If `gc_fence_ts > read_ts`, then since `read_ts` didn't expire the GC safepoint, so the
+        //   current version must be a not-expired version or the latest version before safepoint,
+        //   so it must be a valid version
         // * If `gc_fence_ts <= read_ts`, since the current version is the latest version found by
         //   reading at `read_ts`, the version at `gc_fence_ts` must be missing, so the current
         //   version must be invalid.

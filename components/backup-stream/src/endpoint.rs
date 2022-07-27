@@ -255,7 +255,8 @@ where
     async fn starts_flush_ticks(router: Router) {
         loop {
             // check every 5s.
-            // TODO: maybe use global timer handle in the `tikv_utils::timer` (instead of enabling timing in the current runtime)?
+            // TODO: maybe use global timer handle in the `tikv_utils::timer` (instead of enabling
+            // timing in the current runtime)?
             tokio::time::sleep(Duration::from_secs(5)).await;
             debug!("backup stream trigger flush tick");
             router.tick().await;
@@ -429,11 +430,13 @@ where
         // Let L be the instant some key locked, U be the instant it unlocked,
         // +---------*-------L-----------U--*-------------+
         //           ^   ^----(1)----^      ^ We get the snapshot for initial scanning at here.
-        //           +- If we issue refresh resolver at here, and the cmd batch (1) is the last cmd batch of the first observing.
-        //              ...the background initial scanning may keep running, and the lock would be sent to the scanning.
-        //              ...note that (1) is the last cmd batch of first observing, so the unlock event would never be sent to us.
-        //              ...then the lock would get an eternal life in the resolver :|
-        //                 (Before we refreshing the resolver for this region again)
+        //           +- If we issue refresh resolver at here, and the cmd batch (1) is the last cmd
+        // batch of the first observing.              ...the background initial scanning may
+        // keep running, and the lock would be sent to the scanning.              ...note
+        // that (1) is the last cmd batch of first observing, so the unlock event would never be
+        // sent to us.              ...then the lock would get an eternal life in the
+        // resolver :|                 (Before we refreshing the resolver for this region
+        // again)
         if batch.pitr_id != resolver.value().handle.id {
             debug!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
             return None;
@@ -529,8 +532,9 @@ where
                 "end_key" => utils::redact(&end_key),
             );
         }
-        // Assuming the `region info provider` would read region info form `StoreMeta` directly and this would be fast.
-        // If this gets slow, maybe make it async again. (Will that bring race conditions? say `Start` handled after `ResfreshResolver` of some region.)
+        // Assuming the `region info provider` would read region info form `StoreMeta` directly and
+        // this would be fast. If this gets slow, maybe make it async again. (Will that
+        // bring race conditions? say `Start` handled after `ResfreshResolver` of some region.)
         let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
         match range_init_result {
             Ok(()) => {
@@ -680,7 +684,8 @@ where
         );
     }
 
-    /// unload a task from memory: this would stop observe the changes required by the task temporarily.
+    /// unload a task from memory: this would stop observe the changes required by the task
+    /// temporarily.
     fn unload_task(&self, task: &str) -> Option<StreamBackupTaskInfo> {
         let router = self.range_router.clone();
 

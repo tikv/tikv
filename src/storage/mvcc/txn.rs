@@ -52,8 +52,8 @@ pub struct MvccTxn {
     pub(crate) start_ts: TimeStamp,
     pub(crate) write_size: usize,
     pub(crate) modifies: Vec<Modify>,
-    // When 1PC is enabled, locks will be collected here instead of marshalled and put into `writes`,
-    // so it can be further processed. The elements are tuples representing
+    // When 1PC is enabled, locks will be collected here instead of marshalled and put into
+    // `writes`, so it can be further processed. The elements are tuples representing
     // (key, lock, remove_pessimistic_lock)
     pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
@@ -563,8 +563,8 @@ pub(crate) mod tests {
         assert_eq!(w1r.set_overlapped_rollback(false, None), w1);
 
         let w2r = must_written(&engine, k2, 11, 20, WriteType::Put);
-        // Rollback is invoked on secondaries, so the rollback is not protected and overlapped_rollback
-        // won't be set.
+        // Rollback is invoked on secondaries, so the rollback is not protected and
+        // overlapped_rollback won't be set.
         assert_eq!(w2r, w2);
     }
 
@@ -1188,7 +1188,8 @@ pub(crate) mod tests {
 
     #[test]
     fn test_async_prewrite_primary() {
-        // copy must_prewrite_put_impl, check that the key is written with the correct secondaries and the right timestamp
+        // copy must_prewrite_put_impl, check that the key is written with the correct secondaries
+        // and the right timestamp
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();

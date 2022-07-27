@@ -439,7 +439,8 @@ fn test_split_isolation() {
     }
     let peer = peer.unwrap();
     cluster.run_node(2).unwrap();
-    // Originally leader of region ['', 'k2'] will go to sleep, so the learner peer cannot be created.
+    // Originally leader of region ['', 'k2'] will go to sleep, so the learner peer cannot be
+    // created.
     for _ in 0..10 {
         let resp = async_read_on_peer(&mut cluster, peer.clone(), r2.clone(), b"k1", true, true);
         let resp = resp.recv_timeout(Duration::from_secs(1)).unwrap();

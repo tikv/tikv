@@ -22,7 +22,8 @@
 //! * the [`Engine`](kv::Engine) trait and related traits, which abstracts over underlying storage,
 //! * the [`MvccTxn`](mvcc::txn::MvccTxn) struct, which is the primary object in the MVCC
 //!   implementation,
-//! * the commands in the [`commands`](txn::commands) module, which are how each command is implemented,
+//! * the commands in the [`commands`](txn::commands) module, which are how each command is
+//!   implemented,
 //! * the [`Storage`](Storage) struct, which is the primary entry point for this module.
 //!
 //! Related code:
@@ -124,20 +125,21 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// When a TiKV server is running, a [`RaftKv`](crate::server::raftkv::RaftKv) will be the
 /// underlying [`Engine`] of [`Storage`]. The other two types of engines are for test purpose.
 ///
-///[`Storage`] is reference counted and cloning [`Storage`] will just increase the reference counter.
-/// Storage resources (i.e. threads, engine) will be released when all references are dropped.
+/// [`Storage`] is reference counted and cloning [`Storage`] will just increase the reference
+/// counter. Storage resources (i.e. threads, engine) will be released when all references are
+/// dropped.
 ///
 /// Notice that read and write methods may not be performed over full data in most cases, i.e. when
 /// underlying engine is [`RaftKv`](crate::server::raftkv::RaftKv),
 /// which limits data access in the range of a single region
 /// according to specified `ctx` parameter. However,
-/// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::UnsafeDestroyRange) is the only exception.
-/// It's always performed on the whole TiKV.
+/// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::UnsafeDestroyRange) is the only
+/// exception. It's always performed on the whole TiKV.
 ///
-/// Operations of [`Storage`](Storage) can be divided into two types: MVCC operations and raw operations.
-/// MVCC operations uses MVCC keys, which usually consist of several physical keys in different
-/// CFs. In default CF and write CF, the key will be memcomparable-encoded and append the timestamp
-/// to it, so that multiple versions can be saved at the same time.
+/// Operations of [`Storage`](Storage) can be divided into two types: MVCC operations and raw
+/// operations. MVCC operations uses MVCC keys, which usually consist of several physical keys in
+/// different CFs. In default CF and write CF, the key will be memcomparable-encoded and append the
+/// timestamp to it, so that multiple versions can be saved at the same time.
 /// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
 /// encoding and appending timestamp.
 pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
@@ -214,7 +216,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
 }
 
 macro_rules! check_key_size {
-    ($key_iter: expr, $max_key_size: expr, $callback: ident) => {
+    ($key_iter:expr, $max_key_size:expr, $callback:ident) => {
         for k in $key_iter {
             let key_size = k.len();
             if key_size > $max_key_size {
@@ -361,7 +363,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// Check if key range is valid
     ///
     /// - If `reverse` is true, `end_key` is less than `start_key`. `end_key` is the lower bound.
-    /// - If `reverse` is false, `end_key` is greater than `start_key`. `end_key` is the upper bound.
+    /// - If `reverse` is false, `end_key` is greater than `start_key`. `end_key` is the upper
+    ///   bound.
     fn check_key_ranges(ranges: &[KeyRange], reverse: bool) -> bool {
         let ranges_len = ranges.len();
         for i in 0..ranges_len {
@@ -415,7 +418,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ///   * Request of V2 with legal prefix.
     /// See the following for detail:
     ///   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-    ///   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+    ///   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum
+    ///     APIVersion.
     // TODO: refactor to use `Api` parameter.
     fn check_api_version(
         storage_api_version: ApiVersion,
@@ -696,7 +700,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    /// Get values of a set of keys with separate context from a snapshot, return a list of `Result`s.
+    /// Get values of a set of keys with separate context from a snapshot, return a list of
+    /// `Result`s.
     ///
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn batch_get_command<P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)>>(
@@ -1046,7 +1051,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the snapshot.
     /// If `reverse_scan` is true, it scans [`end_key`, `start_key`) in descending order.
-    /// If `end_key` is `None`, it means the upper bound or the lower bound if reverse scan is unbounded.
+    /// If `end_key` is `None`, it means the upper bound or the lower bound if reverse scan is
+    /// unbounded.
     ///
     /// Only writes committed before `start_ts` are visible.
     pub fn scan(
@@ -1270,7 +1276,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .inc();
 
                 // Do not check_api_version in scan_lock, to be compatible with TiDB gc-worker,
-                // which resolves locks on regions, and boundary of regions will be out of range of TiDB keys.
+                // which resolves locks on regions, and boundary of regions will be out of range of
+                // TiDB keys.
 
                 let command_duration = tikv_util::time::Instant::now();
 
@@ -1364,7 +1371,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    // The entry point of the storage scheduler. Not only transaction commands need to access keys serially.
+    // The entry point of the storage scheduler. Not only transaction commands need to access keys
+    // serially.
     pub fn sched_txn_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
@@ -1502,7 +1510,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let begin_instant = Instant::now();
                     let mut stats = Statistics::default();
                     let key = F::encode_raw_key_owned(key, None);
-                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for
+                    // region split.
                     tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -1590,9 +1599,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 for (mut req, id) in gets.into_iter().zip(ids) {
                     let ctx = req.take_context();
                     let key = F::encode_raw_key_owned(req.take_key(), None);
-                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
-                    // Don't place in loop of `snaps`, otherwise `snap.wait` may run in another thread,
-                    // and cause the `thread-local` statistics unstable for test.
+                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for
+                    // region split. Don't place in loop of `snaps`, otherwise
+                    // `snap.wait` may run in another thread, and cause the
+                    // `thread-local` statistics unstable for test.
                     tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -1921,8 +1931,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     /// Delete all raw keys in [`start_key`, `end_key`).
-    /// Note that in API V2, data is still "physical" deleted, as "logical" delete for a range will be quite expensive.
-    /// Notification of range delete operations will be through a special channel (unimplemented yet).
+    /// Note that in API V2, data is still "physical" deleted, as "logical" delete for a range will
+    /// be quite expensive. Notification of range delete operations will be through a special
+    /// channel (unimplemented yet).
     pub fn raw_delete_range(
         &self,
         ctx: Context,
@@ -1996,8 +2007,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// Scan raw keys in a range.
     ///
     /// If `reverse_scan` is false, the range is [`start_key`, `end_key`); otherwise, the range is
-    /// [`end_key`, `start_key`) and it scans from `start_key` and goes backwards. If `end_key` is `None`, it
-    /// means unbounded.
+    /// [`end_key`, `start_key`) and it scans from `start_key` and goes backwards. If `end_key` is
+    /// `None`, it means unbounded.
     ///
     /// This function scans at most `limit` keys.
     ///
@@ -2048,7 +2059,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                     let start_key = F::encode_raw_key_owned(start_key, None);
                     let end_key = end_key.map(|k| F::encode_raw_key_owned(k, None));
-                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for
+                    // region split.
                     tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -2324,7 +2336,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let begin_instant = Instant::now();
                     let mut stats = Statistics::default();
                     let key = F::encode_raw_key_owned(key, None);
-                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for
+                    // region split.
                     tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -3661,8 +3674,8 @@ mod tests {
                 &cfs,
                 Some(cfs_opts),
                 cache.is_some(),
-                None, /*io_rate_limiter*/
-                None, /* CFOptions */
+                None, // io_rate_limiter
+                None, // CFOptions
             )
         }
         .unwrap();
@@ -7964,8 +7977,8 @@ mod tests {
 
     // This is one of the series of tests to test overlapped timestamps.
     // Overlapped ts means there is a rollback record and a commit record with the same ts.
-    // In this test we check that if rollback happens before commit, then they should not have overlapped ts,
-    // which is an expected property.
+    // In this test we check that if rollback happens before commit, then they should not have
+    // overlapped ts, which is an expected property.
     #[test]
     fn test_overlapped_ts_rollback_before_prewrite() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -8356,7 +8369,8 @@ mod tests {
         rx.recv().unwrap();
 
         // Pessimistically rollback the k2 lock.
-        // Non lite lock resolve on k1 and k2, there should no errors as lock on k2 is pessimistic type.
+        // Non lite lock resolve on k1 and k2, there should no errors as lock on k2 is pessimistic
+        // type.
         must_rollback(&storage.engine, b"k2", 10, false);
         let mut temp_map = HashMap::default();
         temp_map.insert(10.into(), 20.into());
@@ -8493,7 +8507,8 @@ mod tests {
     // Test check_api_version.
     // See the following for detail:
     //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-    //   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+    //   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum
+    //     APIVersion.
     #[test]
     fn test_check_api_version() {
         use error_code::storage::*;
@@ -8875,7 +8890,8 @@ mod tests {
         }
 
         let (tx, rx) = channel();
-        // The written in-memory pessimistic lock should be visible, so the new lock request should fail.
+        // The written in-memory pessimistic lock should be visible, so the new lock request should
+        // fail.
         storage
             .sched_txn_command(
                 new_acquire_pessimistic_lock_command(

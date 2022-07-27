@@ -59,7 +59,8 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     ) -> Result<(Vec<u8>, Option<TimeStamp>)> {
         Ok((encoded_key.into_encoded(), None))
     }
-    /// Encode the user key & optional timestamp into txn_types::Key. Default implementation for API V1|V1TTL.
+    /// Encode the user key & optional timestamp into txn_types::Key. Default implementation for API
+    /// V1|V1TTL.
     fn encode_raw_key(user_key: &[u8], _ts: Option<TimeStamp>) -> Key {
         Key::from_encoded_slice(user_key)
     }
@@ -138,7 +139,8 @@ macro_rules! match_template_api_version {
      }}
 }
 
-/// Dispatch an expression with type `kvproto::kvrpcpb::ApiVersion` to corresponding concrete type of `KvFormat`
+/// Dispatch an expression with type `kvproto::kvrpcpb::ApiVersion` to corresponding concrete type
+/// of `KvFormat`
 ///
 /// For example, the following code
 ///

@@ -69,7 +69,8 @@ impl<T: Storage> RangesScanner<T> {
     }
 
     /// Fetches next row.
-    /// Note: `update_scanned_range` can control whether update the scanned range when `is_scanned_range_aware` is true.
+    /// Note: `update_scanned_range` can control whether update the scanned range when
+    /// `is_scanned_range_aware` is true.
     pub fn next_opt(
         &mut self,
         update_scanned_range: bool,

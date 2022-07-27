@@ -915,7 +915,8 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
         GcTask::PhysicalScanLock { callback, .. } => {
             callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
         }
-        // Attention: If you are adding a new GcTask, do not forget to call the callback if it has a callback.
+        // Attention: If you are adding a new GcTask, do not forget to call the callback if it has a
+        // callback.
         GcTask::GcKeys { .. } | GcTask::RawGcKeys { .. } | GcTask::OrphanVersions { .. } => {}
         #[cfg(any(test, feature = "testexport"))]
         GcTask::Validate(_) => {}
@@ -1988,13 +1989,15 @@ mod tests {
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 0);
 
-        // Test rebuilding snapshot when GC write batch limit reached (gc_info.is_completed == false).
-        // Build a key with versions that will just reach the limit `MAX_TXN_WRITE_SIZE`.
+        // Test rebuilding snapshot when GC write batch limit reached (gc_info.is_completed ==
+        // false). Build a key with versions that will just reach the limit
+        // `MAX_TXN_WRITE_SIZE`.
         let key_size = Modify::Delete(CF_WRITE, Key::from_raw(b"k2").append_ts(1.into())).size();
         // versions = ceil(MAX_TXN_WRITE_SIZE/write_size) + 3
         // Write CF: Put@N, Put@N-2,    Put@N-4, ... Put@5,   Put@3
         //                 ^            ^^^^^^^^^^^^^^^^^^^
-        //           safepoint=N-1      Deleted in the first batch, `ceil(MAX_TXN_WRITE_SIZE/write_size)` versions.
+        //           safepoint=N-1      Deleted in the first batch,
+        // `ceil(MAX_TXN_WRITE_SIZE/write_size)` versions.
         let versions = (MAX_TXN_WRITE_SIZE - 1) / key_size + 4;
         for start_ts in (1..versions).map(|x| x as u64 * 2) {
             let commit_ts = start_ts + 1;

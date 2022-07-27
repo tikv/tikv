@@ -1452,7 +1452,7 @@ macro_rules! test_func {
 
 macro_rules! test_func_init {
     ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{ test_func!($client, $ctx, $call_opt, $func, $req::default()) }};
-    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, batch) => {{
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident,batch) => {{
         test_func!($client, $ctx, $call_opt, $func, {
             let mut req = $req::default();
             req.set_keys(vec![b"key".to_vec()].into());
@@ -1839,7 +1839,7 @@ fn test_txn_api_version() {
                 let expect_prefix = format!("Error({}", errcode);
                 assert!(!errs.is_empty(), "case {}", i);
                 assert!(
-                    errs[0].get_abort().starts_with(&expect_prefix), // e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 })
+                    errs[0].get_abort().starts_with(&expect_prefix), /* e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 }) */
                     "case {}: errs[0]: {:?}, expected: {}",
                     i,
                     errs[0],
@@ -1964,7 +1964,8 @@ fn test_txn_api_version() {
 #[test]
 fn test_storage_with_quota_limiter_enable() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
-        // write_bandwidth is limited to 1, which means that every write request will trigger the limit.
+        // write_bandwidth is limited to 1, which means that every write request will trigger the
+        // limit.
         let quota_config = QuotaConfig {
             foreground_cpu_time: 2000,
             foreground_write_bandwidth: ReadableSize(10),

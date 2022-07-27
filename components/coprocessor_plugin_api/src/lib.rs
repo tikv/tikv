@@ -17,8 +17,9 @@
 //! # Example
 //!
 //! ```no_run
-//! use coprocessor_plugin_api::*;
 //! use std::ops::Range;
+//!
+//! use coprocessor_plugin_api::*;
 //!
 //! #[derive(Default)]
 //! struct MyPlugin;

@@ -137,13 +137,14 @@ impl<T: BufRead> CompactBytesFromFileDecoder for T {}
 
 /// Gets the first encoded bytes' length in memcomparable-encoded data.
 ///
-/// Memcomparable-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
-/// This function gets the total bytes length of memcomparable-encoded data, including the length prefix.
+/// Memcomparable-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes
+/// payload. This function gets the total bytes length of memcomparable-encoded data, including the
+/// length prefix.
 ///
 /// Note:
 ///     - This function won't check whether the bytes are encoded correctly.
-///     - There can be multiple memcomparable-encoded data, placed one by one. This function only returns
-///       the length of the first one.
+///     - There can be multiple memcomparable-encoded data, placed one by one. This function only
+///       returns the length of the first one.
 pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
     let mut idx = ENC_GROUP_SIZE;
     loop {

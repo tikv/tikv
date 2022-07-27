@@ -121,7 +121,8 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
         .build()
         .unwrap();
 
-    // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite should complete.
+    // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite
+    // should complete.
     fail::cfg("after-snapshot", "sleep(500)").unwrap();
     let read_ts = 20.into();
     let get_fut = storage.get(Context::default(), Key::from_raw(b"j"), read_ts);
@@ -200,7 +201,14 @@ fn test_update_max_ts_before_scan_memory_locks() {
 /// Generates a test that checks the correct behavior of holding and dropping locks,
 /// during the process of a single prewrite command.
 macro_rules! lock_release_test {
-    ($test_name:ident, $lock_exists:ident, $before_actions:expr, $middle_actions:expr, $after_actions:expr, $should_succeed:expr) => {
+    (
+        $test_name:ident,
+        $lock_exists:ident,
+        $before_actions:expr,
+        $middle_actions:expr,
+        $after_actions:expr,
+        $should_succeed:expr
+    ) => {
         #[test]
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();

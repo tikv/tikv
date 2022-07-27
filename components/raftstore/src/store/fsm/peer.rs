@@ -144,7 +144,8 @@ where
     has_ready: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
     pub receiver: Receiver<PeerMsg<EK>>,
-    /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
+    /// when snapshot is generating or sending, skip split check at most
+    /// REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
     /// Sometimes applied raft logs won't be compacted in time, because less compact means less
     /// sync-log in apply threads. Stale logs will be deleted if the skip time reaches this
@@ -891,7 +892,7 @@ where
         });
         self.fsm
             .peer
-            .unsafe_recovery_maybe_finish_wait_apply(/*force=*/ self.fsm.stopped);
+            .unsafe_recovery_maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
     }
 
     fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
@@ -989,8 +990,9 @@ where
 
                 if is_learner(&self.fsm.peer.peer) {
                     // FIXME: should use `bcast_check_stale_peer_message` instead.
-                    // Sending a new enum type msg to a old tikv may cause panic during rolling update
-                    // we should change the protobuf behavior and check if properly handled in all place
+                    // Sending a new enum type msg to a old tikv may cause panic during rolling
+                    // update we should change the protobuf behavior and check
+                    // if properly handled in all place
                     self.fsm.peer.bcast_wake_up_message(self.ctx);
                 }
             }
@@ -1359,7 +1361,8 @@ where
                 return;
             }
             // wait two rounds of election timeout to trigger check quorum to step down the leader
-            // note: check quorum is triggered every `election_timeout` instead of `randomized_election_timeout`
+            // note: check quorum is triggered every `election_timeout` instead of
+            // `randomized_election_timeout`
             Some(
                 self.fsm.peer.raft_group.raft.election_timeout() * 2
                     - self.fsm.peer.raft_group.raft.election_elapsed,
@@ -1558,7 +1561,8 @@ where
         self.fsm.peer.raft_group.raft.set_check_quorum(true);
         self.fsm.peer.raft_group.raft.pre_vote = true;
         if self.fsm.peer.raft_group.raft.promotable() {
-            // Do not campaign directly here, otherwise on_role_changed() won't called for follower state
+            // Do not campaign directly here, otherwise on_role_changed() won't called for follower
+            // state
             let _ = self.ctx.router.send(
                 self.region_id(),
                 PeerMsg::CasualMessage(CasualMessage::Campaign),
@@ -1947,9 +1951,10 @@ where
                 // Then the follower's `election_elapsed` will be 1 + `missing_tick` + 1
                 // (default 1 + 6 + 1 = 8) which is less than the min election timeout.
                 // The reason is that we don't want let all followers become (pre)candidate if one
-                // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
-                // to others. As long as the leader can wake up and broadcast heartbeats in one `raft_heartbeat_ticks`
-                // time(default 2s), no more followers will wake up and sends vote msg again.
+                // follower may receive a request, then becomes (pre)candidate and sends (pre)vote
+                // msg to others. As long as the leader can wake up and broadcast
+                // heartbeats in one `raft_heartbeat_ticks` time(default 2s), no
+                // more followers will wake up and sends vote msg again.
                 if self.fsm.missing_ticks + 1 /* for the next tick after the peer isn't Idle */
                     + self.fsm.peer.raft_group.raft.election_elapsed
                     + self.ctx.cfg.raft_heartbeat_ticks
@@ -1985,7 +1990,8 @@ where
 
         self.fsm.peer.mut_store().flush_entry_cache_metrics();
 
-        // Keep ticking if there are still pending read requests or this node is within hibernate timeout.
+        // Keep ticking if there are still pending read requests or this node is within hibernate
+        // timeout.
         if res.is_none() /* hibernate_region is false */ ||
             !self.fsm.peer.check_after_tick(self.fsm.hibernate_state.group_state(), res.unwrap()) ||
             (self.fsm.peer.is_leader() && !self.all_agree_to_hibernate())
@@ -2021,7 +2027,7 @@ where
             Some(UnsafeRecoveryState::WaitApply { .. }) => self
                 .fsm
                 .peer
-                .unsafe_recovery_maybe_finish_wait_apply(/*force=*/ false),
+                .unsafe_recovery_maybe_finish_wait_apply(/* force= */ false),
             Some(UnsafeRecoveryState::DemoteFailedVoters {
                 syncer,
                 failed_voters,
@@ -2379,9 +2385,10 @@ where
             } else {
                 // This snapshot may be accepted by raft-rs.
                 // If it's rejected by raft-rs, the snapshot region in `pending_snapshot_regions`
-                // will be removed together with the latest snapshot region after applying that snapshot.
-                // But if `regions_to_destroy` is not empty, the pending snapshot must be this msg's snapshot
-                // because this kind of snapshot is exclusive.
+                // will be removed together with the latest snapshot region after applying that
+                // snapshot. But if `regions_to_destroy` is not empty, the pending
+                // snapshot must be this msg's snapshot because this kind of
+                // snapshot is exclusive.
                 self.destroy_regions_for_snapshot(regions_to_destroy);
             }
         }
@@ -2719,7 +2726,8 @@ where
         );
 
         // Destroy peer in next round in order to apply more committed entries if any.
-        // It depends on the implementation that msgs which are handled in this round have already fetched.
+        // It depends on the implementation that msgs which are handled in this round have already
+        // fetched.
         let _ = self
             .ctx
             .router
@@ -2727,8 +2735,8 @@ where
     }
 
     // Returns `Vec<(u64, bool)>` indicated (source_region_id, merge_to_this_peer) if the `msg`
-    // doesn't contain a snapshot or this snapshot doesn't conflict with any other snapshots or regions.
-    // Otherwise a `SnapKey` is returned.
+    // doesn't contain a snapshot or this snapshot doesn't conflict with any other snapshots or
+    // regions. Otherwise a `SnapKey` is returned.
     fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Either<SnapKey, Vec<(u64, bool)>>> {
         if !msg.get_message().has_snapshot() {
             return Ok(Either::Right(vec![]));
@@ -2895,14 +2903,15 @@ where
         // Now all checking passed.
 
         if self.fsm.peer.local_first_replicate && !self.fsm.peer.is_initialized() {
-            // If the peer is not initialized and passes the snapshot range check, `is_splitting` flag must
-            // be false.
-            // 1. If `is_splitting` is set to true, then the uninitialized peer is created before split is applied
-            //    and the peer id is the same as split one. So there should be no initialized peer before.
-            // 2. If the peer is also created by splitting, then the snapshot range is not overlapped with
-            //    parent peer. It means leader has applied merge and split at least one time. However,
-            //    the prerequisite of merge includes the initialization of all target peers and source peers,
-            //    which is conflict with 1.
+            // If the peer is not initialized and passes the snapshot range check, `is_splitting`
+            // flag must be false.
+            // 1. If `is_splitting` is set to true, then the uninitialized peer is created before
+            // split is applied    and the peer id is the same as split one. So there
+            // should be no initialized peer before. 2. If the peer is also created by
+            // splitting, then the snapshot range is not overlapped with    parent peer.
+            // It means leader has applied merge and split at least one time. However,
+            //    the prerequisite of merge includes the initialization of all target peers and
+            // source peers,    which is conflict with 1.
             let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             let status = pending_create_peers.get(&region_id).cloned();
             if status != Some((self.fsm.peer_id(), false)) {
@@ -3262,7 +3271,7 @@ where
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.fsm
                 .peer
-                .unsafe_recovery_maybe_finish_wait_apply(/*force=*/ true);
+                .unsafe_recovery_maybe_finish_wait_apply(/* force= */ true);
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -3361,8 +3370,10 @@ where
                     .get_mut(&target)
                     .unwrap()
                     .remove(&region_id);
-                // When the target doesn't exist(add peer but the store is isolated), source peer decide to destroy by itself.
-                // Without target, the `pending_merge_targets` for target won't be removed, so here source peer help target to clear.
+                // When the target doesn't exist(add peer but the store is isolated), source peer
+                // decide to destroy by itself. Without target, the
+                // `pending_merge_targets` for target won't be removed, so here source peer help
+                // target to clear.
                 if meta.regions.get(&target).is_none()
                     && meta.pending_merge_targets.get(&target).unwrap().is_empty()
                 {
@@ -3528,7 +3539,8 @@ where
                 // The only exception is `Raft::restore` at the time of writing, which is ok
                 // because the raft msgs(including snapshot) don't be handled when `pending_remove`
                 // is true(it will be set in `destroy_peer`).
-                // TODO: totally avoid calling these raft-rs functions when `pending_remove` is true.
+                // TODO: totally avoid calling these raft-rs functions when `pending_remove` is
+                // true.
                 self.fsm
                     .peer
                     .raft_group
@@ -3785,8 +3797,8 @@ where
 
     /// Check if merge target region is staler than the local one in kv engine.
     /// It should be called when target region is not in region map in memory.
-    /// If everything is ok, the answer should always be true because PD should ensure all target peers exist.
-    /// So if not, error log will be printed and return false.
+    /// If everything is ok, the answer should always be true because PD should ensure all target
+    /// peers exist. So if not, error log will be printed and return false.
     fn is_merge_target_region_stale(&self, target_region: &metapb::Region) -> Result<bool> {
         let target_region_id = target_region.get_id();
         let target_peer_id = util::find_peer(target_region, self.ctx.store_id())
@@ -3805,8 +3817,9 @@ where
                 return Ok(true);
             }
             // The local target region epoch is staler than target region's.
-            // In the case where the peer is destroyed by receiving gc msg rather than applying conf change,
-            // the epoch may staler but it's legal, so check peer id to assure that.
+            // In the case where the peer is destroyed by receiving gc msg rather than applying conf
+            // change, the epoch may staler but it's legal, so check peer id to assure
+            // that.
             if let Some(local_target_peer_id) =
                 util::find_peer(target_state.get_region(), self.ctx.store_id()).map(|r| r.get_id())
             {
@@ -3830,8 +3843,9 @@ where
                             // There is a new peer and it's destroyed without being initialised.
                             return Ok(true);
                         }
-                        // The local target peer id is greater than the one in target region, but its epoch
-                        // is staler than target_region's. That is contradictory.
+                        // The local target peer id is greater than the one in target region, but
+                        // its epoch is staler than target_region's. That is
+                        // contradictory.
                         panic!("{} local target peer id {} is greater than the one in target region {}, but its epoch is staler, local target region {:?},
                                     target region {:?}", self.fsm.peer.tag, local_target_peer_id, target_peer_id, target_state.get_region(), target_region);
                     }
@@ -3847,7 +3861,8 @@ where
                     }
                 }
             } else {
-                // Can't get local target peer id probably because this target peer is removed by applying conf change
+                // Can't get local target peer id probably because this target peer is removed by
+                // applying conf change
                 error!(
                     "the local target peer does not exist in target region state";
                     "target_region" => ?target_region,
@@ -4204,8 +4219,8 @@ where
             d.mark_pending_remove();
         }
 
-        // After the region commit merged, the region's key range is extended and the region's `safe_ts`
-        // should reset to `min(source_safe_ts, target_safe_ts)`
+        // After the region commit merged, the region's key range is extended and the region's
+        // `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`
         let source_read_progress = meta.region_read_progress.remove(&source.get_id()).unwrap();
         self.fsm
             .peer
@@ -4486,7 +4501,8 @@ where
             }
         } else if self.fsm.peer.local_first_replicate {
             // This peer is uninitialized previously.
-            // More accurately, the `RegionLocalState` has been persisted so the data can be removed from `pending_create_peers`.
+            // More accurately, the `RegionLocalState` has been persisted so the data can be removed
+            // from `pending_create_peers`.
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             assert_eq!(
                 pending_create_peers.remove(&self.fsm.region_id()),
@@ -4576,8 +4592,8 @@ where
             }
         }
 
-        // Update metrics only when all exec_results are finished in case the metrics is counted multiple times
-        // when waiting for commit merge
+        // Update metrics only when all exec_results are finished in case the metrics is counted
+        // multiple times when waiting for commit merge
         self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
         self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
         self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
@@ -4744,8 +4760,8 @@ where
             Err(Error::EpochNotMatch(m, mut new_regions)) => {
                 // Attach the region which might be split from the current region. But it doesn't
                 // matter if the region is not split from the current region. If the region meta
-                // received by the TiKV driver is newer than the meta cached in the driver, the meta is
-                // updated.
+                // received by the TiKV driver is newer than the meta cached in the driver, the meta
+                // is updated.
                 let requested_version = msg.get_header().get_region_epoch().version;
                 self.collect_sibling_region(requested_version, &mut new_regions);
                 self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
@@ -4875,7 +4891,8 @@ where
                 collect_cnt -= 1;
                 // For example, A is split into B, A, and then B is split into C, B.
                 if r.get_region_epoch().version >= max_version {
-                    // It doesn't matter if it's a false positive, as it's limited by MAX_REGIONS_IN_ERROR.
+                    // It doesn't matter if it's a false positive, as it's limited by
+                    // MAX_REGIONS_IN_ERROR.
                     collect_cnt += r.get_region_epoch().version - max_version;
                     max_version = r.get_region_epoch().version;
                 }
@@ -5098,8 +5115,8 @@ where
         }
 
         // When Lightning or BR is importing data to TiKV, their ingest-request may fail because of
-        // region-epoch not matched. So we hope TiKV do not check region size and split region during
-        // importing.
+        // region-epoch not matched. So we hope TiKV do not check region size and split region
+        // during importing.
         if self.ctx.importer.get_mode() == SwitchMode::Import {
             return;
         }
@@ -5939,15 +5956,16 @@ where
     }
 }
 
-/// Checks merge target, returns whether the source peer should be destroyed and whether the source peer is
-/// merged to this target peer.
+/// Checks merge target, returns whether the source peer should be destroyed and whether the source
+/// peer is merged to this target peer.
 ///
 /// It returns (`can_destroy`, `merge_to_this_peer`).
 ///
-/// `can_destroy` is true when there is a network isolation which leads to a follower of a merge target
-/// Region's log falls behind and then receive a snapshot with epoch version after merge.
+/// `can_destroy` is true when there is a network isolation which leads to a follower of a merge
+/// target Region's log falls behind and then receive a snapshot with epoch version after merge.
 ///
-/// `merge_to_this_peer` is true when `can_destroy` is true and the source peer is merged to this target peer.
+/// `merge_to_this_peer` is true when `can_destroy` is true and the source peer is merged to this
+/// target peer.
 pub fn maybe_destroy_source(
     meta: &StoreMeta,
     target_region_id: u64,
@@ -5975,7 +5993,8 @@ pub fn maybe_destroy_source(
                             .get_id(),
                 );
             }
-            // Wait till the target peer has caught up logs and source peer will be destroyed at that time.
+            // Wait till the target peer has caught up logs and source peer will be destroyed at
+            // that time.
             return (false, false);
         }
     }

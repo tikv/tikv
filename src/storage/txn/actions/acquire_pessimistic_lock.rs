@@ -681,8 +681,8 @@ pub mod tests {
         must_rollback(&engine, k, 51, false);
         must_err(&engine, k, k, 49, 60);
 
-        // Overlapped rollback record will be written when the current start_ts equals to another write
-        // records' commit ts. Now there is a commit record with commit_ts = 50.
+        // Overlapped rollback record will be written when the current start_ts equals to another
+        // write records' commit ts. Now there is a commit record with commit_ts = 50.
         must_succeed(&engine, k, k, 50, 61);
         must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
         must_locked(&engine, k, 50);
@@ -1105,7 +1105,8 @@ pub mod tests {
         must_pessimistic_prewrite_delete(&engine, key, key, 8, 8, true);
         must_commit(&engine, key, 8, cm.max_ts().into_inner() + 1);
 
-        // T1: start_ts = 10, repeatedly acquire pessimistic lock on k, with should_not_exist flag set
+        // T1: start_ts = 10, repeatedly acquire pessimistic lock on k, with should_not_exist flag
+        // set
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = TimeStamp::new(10);
         let for_update_ts = TimeStamp::new(10);

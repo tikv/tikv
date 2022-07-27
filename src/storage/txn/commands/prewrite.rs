@@ -476,9 +476,10 @@ impl<K: PrewriteKind> Prewriter<K> {
         }
     }
 
-    /// The core part of the prewrite action. In the abstract, this method iterates over the mutations
-    /// in the prewrite and prewrites each one. It keeps track of any locks encountered and (if it's
-    /// an async commit transaction) the min_commit_ts, these are returned by the method.
+    /// The core part of the prewrite action. In the abstract, this method iterates over the
+    /// mutations in the prewrite and prewrites each one. It keeps track of any locks
+    /// encountered and (if it's an async commit transaction) the min_commit_ts, these are
+    /// returned by the method.
     fn prewrite(
         &mut self,
         txn: &mut MvccTxn,
@@ -1476,7 +1477,7 @@ mod tests {
         }
 
         macro_rules! assert_max_ts_err {
-            ($e: expr) => {
+            ($e:expr) => {
                 match $e {
                     Err(Error(box ErrorInner::MaxTimestampNotSynced { .. })) => {}
                     _ => panic!("Should have returned an error"),

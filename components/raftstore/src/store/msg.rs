@@ -80,10 +80,10 @@ pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type TestCallback = Box<dyn FnOnce(PeerInternalStat) + Send>;
 
 /// Variants of callbacks for `Msg`.
-///  - `Read`: a callback for read only requests including `StatusRequest`,
-///         `GetRequest` and `SnapRequest`
-///  - `Write`: a callback for write only requests including `AdminRequest`
-///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
+///  - `Read`: a callback for read only requests including `StatusRequest`, `GetRequest` and
+///    `SnapRequest`
+///  - `Write`: a callback for write only requests including `AdminRequest` `PutRequest`,
+///    `DeleteRequest` and `DeleteRangeRequest`.
 pub enum Callback<S: Snapshot> {
     /// No callback.
     None,
@@ -96,8 +96,8 @@ pub enum Callback<S: Snapshot> {
         /// It's used to notify the caller to move on early because it's very likely the request
         /// will be applied to the raftstore.
         proposed_cb: Option<ExtCallback>,
-        /// `committed_cb` is called after a request is committed and before it's being applied, and
-        /// it's guaranteed that the request will be successfully applied soon.
+        /// `committed_cb` is called after a request is committed and before it's being applied,
+        /// and it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
         trackers: SmallVec<[TimeTracker; 4]>,
     },
@@ -656,8 +656,8 @@ where
         invalid_ssts: Vec<SstMeta>,
     },
 
-    // Clear region size and keys for all regions in the range, so we can force them to re-calculate
-    // their size later.
+    // Clear region size and keys for all regions in the range, so we can force them to
+    // re-calculate their size later.
     ClearRegionSizeInRange {
         start_key: Vec<u8>,
         end_key: Vec<u8>,

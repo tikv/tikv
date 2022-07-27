@@ -59,10 +59,10 @@ where
 }
 
 /// Variants of channels for `Msg`.
-///  - `Read`: a channel for read only requests including `StatusRequest`,
-///         `GetRequest` and `SnapRequest`
-///  - `Write`: a channel for write only requests including `AdminRequest`
-///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
+///  - `Read`: a channel for read only requests including `StatusRequest`, `GetRequest` and
+///    `SnapRequest`
+///  - `Write`: a channel for write only requests including `AdminRequest` `PutRequest`,
+///    `DeleteRequest` and `DeleteRangeRequest`.
 /// Prefer channel rather than callback because:
 /// 1. channel can be reused, hence reduce allocations.
 /// 2. channel may not need dynamic dispatch.

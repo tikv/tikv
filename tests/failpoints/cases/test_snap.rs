@@ -252,8 +252,8 @@ fn test_destroy_peer_on_pending_snapshot() {
 }
 
 // The peer 3 in store 3 is isolated for a while and then recovered.
-// During its applying snapshot, however the peer is destroyed and thus applying snapshot is canceled.
-// And when it's destroyed (destroy is not finished either), the machine restarted.
+// During its applying snapshot, however the peer is destroyed and thus applying snapshot is
+// canceled. And when it's destroyed (destroy is not finished either), the machine restarted.
 // After the restart, the snapshot should be applied successfully.println!
 // And new data should be written to store 3 successfully.
 #[test]

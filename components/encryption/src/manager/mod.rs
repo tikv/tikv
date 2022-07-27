@@ -466,7 +466,8 @@ impl DataKeyManager {
         Ok(Some(Self::from_dicts(dicts, args.method, master_key)?))
     }
 
-    /// Will block file operation for a considerable amount of time. Only used for debugging purpose.
+    /// Will block file operation for a considerable amount of time. Only used for debugging
+    /// purpose.
     pub fn retain_encrypted_files(&self, f: impl Fn(&str) -> bool) {
         let mut dict = self.dicts.file_dict.lock().unwrap();
         let mut file_dict_file = self.dicts.file_dict_file.lock().unwrap();
@@ -592,7 +593,7 @@ impl DataKeyManager {
 
     pub fn create_file_for_write<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
         let file_writer = File::create(&path)?;
-        self.open_file_with_writer(path, file_writer, true /*create*/)
+        self.open_file_with_writer(path, file_writer, true /* create */)
     }
 
     pub fn open_file_with_writer<P: AsRef<Path>, W: std::io::Write>(
@@ -683,9 +684,9 @@ impl DataKeyManager {
         let (_, file_dict) = FileDictionaryFile::open(
             dict_path,
             FILE_DICT_NAME,
-            true, /*enable_file_dictionary_log*/
+            true, // enable_file_dictionary_log
             1,
-            true, /*skip_rewrite*/
+            true, // skip_rewrite
         )?;
         if let Some(file_path) = file_path {
             if let Some(info) = file_dict.files.get(file_path) {
@@ -1317,7 +1318,7 @@ mod tests {
         {
             let raw = File::create(&path).unwrap();
             let mut f = manager
-                .open_file_with_writer(&path, raw, false /*create*/)
+                .open_file_with_writer(&path, raw, false /* create */)
                 .unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();

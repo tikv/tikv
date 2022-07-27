@@ -638,7 +638,8 @@ fn test_merge_approximate_size_and_keys() {
         keys
     );
 
-    // after merge and then transfer leader, if not update new leader's approximate size, it maybe be stale.
+    // after merge and then transfer leader, if not update new leader's approximate size, it maybe
+    // be stale.
     cluster.must_transfer_leader(region.get_id(), region.get_peers()[0].clone());
     // make sure split check is invoked
     thread::sleep(Duration::from_millis(100));
@@ -764,13 +765,15 @@ fn test_node_merge_catch_up_logs_empty_entries() {
             .msg_type(MessageType::MsgAppend)
             .allow(1),
     ));
-    // make the source peer have no way to know the uncommitted entries can be applied from heartbeat.
+    // make the source peer have no way to know the uncommitted entries can be applied from
+    // heartbeat.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(left.get_id(), 3)
             .msg_type(MessageType::MsgHeartbeat)
             .direction(Direction::Recv),
     ));
-    // make the source peer have no way to know the uncommitted entries can be applied from target region.
+    // make the source peer have no way to know the uncommitted entries can be applied from target
+    // region.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(right.get_id(), 3)
             .msg_type(MessageType::MsgAppend)
@@ -1067,8 +1070,8 @@ fn test_merge_isolated_not_in_merge_learner_2() {
     pd_client.must_merge(left.get_id(), right.get_id());
 
     cluster.run_node(2).unwrap();
-    // When the abnormal leader missing duration has passed, the check-stale-peer msg will be sent to peer 1001.
-    // After that, a new peer list will be returned (2, 2) (3, 3).
+    // When the abnormal leader missing duration has passed, the check-stale-peer msg will be sent
+    // to peer 1001. After that, a new peer list will be returned (2, 2) (3, 3).
     // Then peer 2 sends the check-stale-peer msg to peer 3 and it will get a tombstone response.
     // Finally peer 2 will be destroyed.
     must_get_none(&cluster.get_engine(2), b"k1");
@@ -1531,13 +1534,15 @@ fn test_stale_message_after_merge() {
     pd_client.must_merge(left.get_id(), right.get_id());
 
     // Such stale message can be sent due to network error, consider the following example:
-    // 1. Store 1 and Store 3 can't reach each other, so peer 1003 start election and send `RequestVote`
-    //    message to peer 1001, and fail due to network error, but this message is keep backoff-retry to send out
-    // 2. Peer 1002 become the new leader and remove peer 1003 and add peer 1004 on store 3, then the region is
-    //    merged into other region, the merge can success because peer 1002 can reach both peer 1001 and peer 1004
-    // 3. Network recover, so peer 1003's `RequestVote` message is sent to peer 1001 after it is merged
+    // 1. Store 1 and Store 3 can't reach each other, so peer 1003 start election and send
+    // `RequestVote`    message to peer 1001, and fail due to network error, but this message is
+    // keep backoff-retry to send out 2. Peer 1002 become the new leader and remove peer 1003
+    // and add peer 1004 on store 3, then the region is    merged into other region, the merge
+    // can success because peer 1002 can reach both peer 1001 and peer 1004 3. Network recover,
+    // so peer 1003's `RequestVote` message is sent to peer 1001 after it is merged
     //
-    // the backoff-retry of a stale message is hard to simulated in test, so here just send this stale message directly
+    // the backoff-retry of a stale message is hard to simulated in test, so here just send this
+    // stale message directly
     let mut raft_msg = RaftMessage::default();
     raft_msg.set_region_id(left.get_id());
     raft_msg.set_from_peer(find_peer(&left, 3).unwrap().to_owned());

@@ -345,7 +345,7 @@ impl BackupRange {
             snapshot,
             backup_ts,
             IsolationLevel::Si,
-            false, /* fill_cache */
+            false, // fill_cache
             Default::default(),
             Default::default(),
             false,
@@ -971,8 +971,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         }
         // Flush causal timestamp to make sure that future writes will have larger timestamps.
         // And help TiKV-BR acquire a backup-ts with intact data smaller than it.
-        // (Note that intactness is not fully ensured now, until the safe-ts of RawKV is implemented.
-        // TiKV-BR need a workaround by rewinding backup-ts to a small "safe interval").
+        // (Note that intactness is not fully ensured now, until the safe-ts of RawKV is
+        // implemented. TiKV-BR need a workaround by rewinding backup-ts to a small "safe
+        // interval").
         if request.is_raw_kv {
             if let Err(e) = self
                 .causal_ts_provider
@@ -1088,10 +1089,11 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
     }
 }
 
-/// Construct an backup file name based on the given store id, region, range start key and local unix timestamp.
-/// A name consists with five parts: store id, region_id, a epoch version, the hash of range start key and timestamp.
-/// range start key is used to keep the unique file name for file, to handle different tables exists on the same region.
-/// local unix timestamp is used to keep the unique file name for file, to handle receive the same request after connection reset.
+/// Construct an backup file name based on the given store id, region, range start key and local
+/// unix timestamp. A name consists with five parts: store id, region_id, a epoch version, the hash
+/// of range start key and timestamp. range start key is used to keep the unique file name for file,
+/// to handle different tables exists on the same region. local unix timestamp is used to keep the
+/// unique file name for file, to handle receive the same request after connection reset.
 pub fn backup_file_name(
     store_id: u64,
     region: &Region,
@@ -1536,11 +1538,11 @@ pub mod tests {
         // flush to disk so that read requests can be traced by TiKV limiter.
         engine
             .get_rocksdb()
-            .flush_cf(engine_traits::CF_DEFAULT, true /*sync*/)
+            .flush_cf(engine_traits::CF_DEFAULT, true /* sync */)
             .unwrap();
         engine
             .get_rocksdb()
-            .flush_cf(engine_traits::CF_WRITE, true /*sync*/)
+            .flush_cf(engine_traits::CF_WRITE, true /* sync */)
             .unwrap();
 
         // TODO: check key number for each snapshot.
@@ -1575,7 +1577,7 @@ pub mod tests {
             info!("{:?}", files);
             assert_eq!(
                 files.len(),
-                file_len, /* default and write */
+                file_len, // default and write
                 "{:?}",
                 resp
             );
@@ -1651,8 +1653,8 @@ pub mod tests {
         let start_key_idx: u64 = 100;
         let end_key_idx: u64 = 110;
         endpoint.region_info.set_regions(vec![(
-            vec![], //generate_test_raw_key(start_key_idx).into_bytes(),
-            vec![], //generate_test_raw_key(end_key_idx).into_bytes(),
+            vec![], // generate_test_raw_key(start_key_idx).into_bytes(),
+            vec![], // generate_test_raw_key(end_key_idx).into_bytes(),
             1,
         )]);
         let ctx = Context::default();
@@ -1679,7 +1681,7 @@ pub mod tests {
         // flush to disk so that read requests can be traced by TiKV limiter.
         engine
             .get_rocksdb()
-            .flush_cf(engine_traits::CF_DEFAULT, true /*sync*/)
+            .flush_cf(engine_traits::CF_DEFAULT, true /* sync */)
             .unwrap();
 
         // TODO: check key number for each snapshot.
@@ -1730,7 +1732,7 @@ pub mod tests {
         let file_len = 1;
         let files = resp.get_files();
         info!("{:?}", files);
-        assert_eq!(files.len(), file_len /* default cf*/, "{:?}", resp);
+        assert_eq!(files.len(), file_len /* default cf */, "{:?}", resp);
         assert_eq!(files[0].total_kvs, end_key_idx - start_key_idx);
         assert_eq!(files[0].crc64xor, checksum);
         assert_eq!(files[0].get_start_key(), file_start);

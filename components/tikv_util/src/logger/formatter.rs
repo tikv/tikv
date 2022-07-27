@@ -41,7 +41,6 @@ where
 /// - U+005D (RIGHT SQUARE BRACKET)
 ///
 /// [RFC: Unified Log Format]: (https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md)
-///
 #[inline]
 fn need_json_encode(bytes: &[u8]) -> bool {
     for &byte in bytes {
@@ -58,7 +57,6 @@ fn need_json_encode(bytes: &[u8]) -> bool {
 ///
 /// [RFC: Unified Log Format]: (https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md)
 /// [`need json encode`]: #method.need_json_encode
-///
 pub fn write_escaped_str<W>(writer: &mut W, value: &str) -> io::Result<()>
 where
     W: io::Write + ?Sized,

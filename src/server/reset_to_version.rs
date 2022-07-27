@@ -169,7 +169,8 @@ impl ResetToVersionWorker {
 }
 
 /// `ResetToVersionManager` is the manager that manages the reset-to-version process.
-/// User should interact with `ResetToVersionManager` instead of using `ResetToVersionWorker` directly.  
+/// User should interact with `ResetToVersionManager` instead of using `ResetToVersionWorker`
+/// directly.
 pub struct ResetToVersionManager {
     /// Current state of the reset-to-version process.
     state: Arc<Mutex<ResetToVersionState>>,

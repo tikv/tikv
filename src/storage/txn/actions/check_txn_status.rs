@@ -72,8 +72,9 @@ pub fn check_txn_status_lock_exists(
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
     }
 
-    // As long as the primary lock's min_commit_ts > caller_start_ts, locks belong to the same transaction
-    // can't block reading. Return MinCommitTsPushed result to the client to let it bypass locks.
+    // As long as the primary lock's min_commit_ts > caller_start_ts, locks belong to the same
+    // transaction can't block reading. Return MinCommitTsPushed result to the client to let it
+    // bypass locks.
     let min_commit_ts_pushed = (!caller_start_ts.is_zero() && lock.min_commit_ts > caller_start_ts)
         // If the caller_start_ts is max, it's a point get in the autocommit transaction.
         // We don't push forward lock's min_commit_ts and the point get can ignore the lock

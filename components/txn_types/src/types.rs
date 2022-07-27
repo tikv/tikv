@@ -189,7 +189,6 @@ impl Key {
     /// There is an optimization in this function, which is to compare the last 8 encoded bytes
     /// first before comparing the rest. It is because in TiDB many records are ended with an 8
     /// byte row id and in many situations only this part is different when calling this function.
-    //
     // TODO: If the last 8 byte is memory aligned, it would be better.
     #[inline]
     pub fn is_user_key_eq(ts_encoded_key: &[u8], user_key: &[u8]) -> bool {

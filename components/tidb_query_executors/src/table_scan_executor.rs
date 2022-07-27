@@ -361,14 +361,16 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 }
             }
         } else if !self.primary_column_ids.is_empty() {
-            // Otherwise, if `primary_column_ids` is not empty, we try to extract the values of the columns from the common handle.
+            // Otherwise, if `primary_column_ids` is not empty, we try to extract the values of the
+            // columns from the common handle.
             let mut handle = table::decode_common_handle(key)?;
             for primary_id in self.primary_column_ids.iter() {
                 let index = self.column_id_index.get(primary_id);
                 let (datum, remain) = datum::split_datum(handle, false)?;
                 handle = remain;
 
-                // If the column info of the corresponding primary column id is missing, we ignore this slice of the datum.
+                // If the column info of the corresponding primary column id is missing, we ignore
+                // this slice of the datum.
                 if let Some(&index) = index {
                     if !self.is_column_filled[index] {
                         columns[index].mut_raw().push(datum);
@@ -743,9 +745,9 @@ mod tests {
             vec![0, 1],
             vec![0, 2],
             vec![1, 2],
-            //PK is the last column in schema
+            // PK is the last column in schema
             vec![2, 1, 0],
-            //PK is the first column in schema
+            // PK is the first column in schema
             vec![0, 1, 2],
             // PK is in the middle of the schema
             vec![1, 0, 2],

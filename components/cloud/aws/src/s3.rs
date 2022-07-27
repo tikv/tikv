@@ -259,8 +259,9 @@ impl<T: 'static + StdError> From<RusotoError<T>> for UploadError {
 }
 
 /// try_read_exact tries to read exact length data as the buffer size.  
-/// like [`std::io::Read::read_exact`], but won't return `UnexpectedEof` when cannot read anything more from the `Read`.  
-/// once returning a size less than the buffer length, implies a EOF was meet, or nothing readed.
+/// like [`std::io::Read::read_exact`], but won't return `UnexpectedEof` when cannot read anything
+/// more from the `Read`. once returning a size less than the buffer length, implies a EOF was meet,
+/// or nothing readed.
 async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
     r: &mut R,
     buf: &mut [u8],
@@ -541,8 +542,8 @@ impl BlobStorage for S3Storage {
                 io::ErrorKind::Other
             };
             // Even we can check whether there is an `io::Error` internal and extract it directly,
-            // We still need to keep the message 'failed to put object' here for adapting the string-matching based
-            // retry logic in BR :(
+            // We still need to keep the message 'failed to put object' here for adapting the
+            // string-matching based retry logic in BR :(
             io::Error::new(error_code, format!("failed to put object {}", e))
         })
     }
@@ -628,7 +629,8 @@ mod tests {
         // set multi_part_size to use upload_part function
         config.multi_part_size = multi_part_size;
 
-        // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3 part + 1 complete)
+        // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3 part + 1
+        // complete)
         let dispatcher = MultipleMockRequestDispatcher::new(vec![
             MockRequestDispatcher::with_status(200).with_body(
                 r#"<?xml version="1.0" encoding="UTF-8"?>

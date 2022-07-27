@@ -97,7 +97,8 @@ impl<'a> BinaryModifier<'a> {
                         for i in 0..elem_count {
                             elems.push(parent_node.array_get_elem(i)?);
                         }
-                        // We can ignore the idx in the PathLeg here since we have checked the path-value existence
+                        // We can ignore the idx in the PathLeg here since we have checked the
+                        // path-value existence
                         elems.push(new.as_ref());
                         self.new_value = Some(Json::from_ref_array(elems)?);
                     }

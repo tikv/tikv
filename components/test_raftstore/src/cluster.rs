@@ -180,7 +180,8 @@ impl<T: Simulator> Cluster<T> {
         pd_client: Arc<TestPdClient>,
         api_version: ApiVersion,
     ) -> Cluster<T> {
-        // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
+        // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true
+        // and false
         Cluster {
             cfg: Config {
                 tikv: new_tikv_config_with_api_ver(id, api_version),
@@ -248,7 +249,7 @@ impl<T: Simulator> Cluster<T> {
             self.cfg
                 .storage
                 .io_rate_limit
-                .build(true /*enable_statistics*/),
+                .build(true /* enable_statistics */),
         ));
         for _ in 0..self.count {
             self.create_engine(None);
@@ -304,7 +305,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn flush_data(&self) {
         for engine in self.engines.values() {
             let db = &engine.kv;
-            db.flush_cf(CF_DEFAULT, true /*sync*/).unwrap();
+            db.flush_cf(CF_DEFAULT, true /* sync */).unwrap();
         }
     }
 

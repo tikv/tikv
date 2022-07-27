@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
-//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
-//! [`RocksEngine`](RocksEngine) are used for testing only.
+//! There are multiple [`Engine`](kv::Engine) implementations,
+//! [`RaftKv`](crate::server::raftkv::RaftKv) is used by the [`Server`](crate::server::Server). The
+//! [`BTreeEngine`](kv::BTreeEngine) and [`RocksEngine`](RocksEngine) are used for testing only.
 
 #![feature(min_specialization)]
 #![feature(generic_associated_types)]

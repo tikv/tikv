@@ -472,8 +472,9 @@ fn test_read_after_peer_destroyed() {
     );
 }
 
-/// In previous implementation, we suspect the leader lease at the position of `leader_commit_prepare_merge`
-/// failpoint when `PrepareMerge` log is committed, which is too late to prevent stale read.
+/// In previous implementation, we suspect the leader lease at the position of
+/// `leader_commit_prepare_merge` failpoint when `PrepareMerge` log is committed, which is too late
+/// to prevent stale read.
 #[test]
 fn test_stale_read_during_merging_2() {
     let mut cluster = new_node_cluster(0, 3);

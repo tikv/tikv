@@ -387,7 +387,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             storage,
             ranges,
             config.clone(),
-            is_streaming || paging_size.is_some(), // For streaming and paging request, executors will continue scan from range end where last scan is finished
+            is_streaming || paging_size.is_some(), /* For streaming and paging request,
+                                                    * executors will continue scan from range
+                                                    * end where last scan is finished */
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
@@ -435,7 +437,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     /// only paging request will return Some(IntervalRange),
     /// this should be used when calculating ranges of the next batch.
     /// IntervalRange records whole range scanned though there are gaps in multi ranges.
-    /// e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4) with IntervalRange like (k1, k4).
+    /// e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4) with IntervalRange like (k1,
+    /// k4).
     pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
         let mut chunks = vec![];
         let mut batch_size = Self::batch_initial_size();

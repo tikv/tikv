@@ -356,12 +356,13 @@ fn test_read_after_cleanup_range_for_snap() {
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
-/// Tests the learner of new split region will know its leader without waiting for the leader heartbeat timeout.
+/// Tests the learner of new split region will know its leader without waiting for the leader
+/// heartbeat timeout.
 ///
 /// Before https://github.com/tikv/tikv/pull/8820,
-/// the learner of a new split region may not know its leader if it applies log slowly and drops the no-op
-/// entry from the new leader, and it had to wait for a heartbeat timeout to know its leader before that it
-/// can't handle any read request.
+/// the learner of a new split region may not know its leader if it applies log slowly and drops the
+/// no-op entry from the new leader, and it had to wait for a heartbeat timeout to know its leader
+/// before that it can't handle any read request.
 #[test]
 fn test_new_split_learner_can_not_find_leader() {
     let mut cluster = new_node_cluster(0, 4);
@@ -385,9 +386,10 @@ fn test_new_split_learner_can_not_find_leader() {
     let region = cluster.get_region(b"k3");
     cluster.must_split(&region, b"k3");
 
-    // This `put` will not inform learner leadership because the The learner is paused at apply split command,
-    // so the learner peer of the new split region is not create yet. Also, the leader will not send another
-    // append request before the previous one response as all peer is initiated with the `Probe` mod
+    // This `put` will not inform learner leadership because the The learner is paused at apply
+    // split command, so the learner peer of the new split region is not create yet. Also, the
+    // leader will not send another append request before the previous one response as all peer
+    // is initiated with the `Probe` mod
     cluster.must_put(b"k2", b"v2");
     assert_eq!(cluster.get(b"k2"), Some(b"v2".to_vec()));
 
@@ -479,8 +481,8 @@ fn test_replica_read_after_transfer_leader() {
     assert_eq!(exp_value, b"v2");
 }
 
-// This test is for reproducing the bug that some replica reads was sent to a leader and shared a same
-// read index because of the optimization on leader.
+// This test is for reproducing the bug that some replica reads was sent to a leader and shared a
+// same read index because of the optimization on leader.
 #[test]
 fn test_read_index_after_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
@@ -513,7 +515,8 @@ fn test_read_index_after_transfer_leader() {
             async_read_index_on_peer(&mut cluster, new_peer(2, 2), region.clone(), b"k1", true);
         responses.push(resp);
     }
-    // Try to split the region to change the peer into `splitting` state then can not handle read requests.
+    // Try to split the region to change the peer into `splitting` state then can not handle read
+    // requests.
     cluster.split_region(&region, b"k2", raftstore::store::Callback::None);
     // Wait the split command be sent.
     sleep_ms(100);
@@ -546,8 +549,8 @@ fn test_read_index_after_transfer_leader() {
     fail::remove(on_peer_collect_message_2);
     // Wait for read index has been advanced.
     sleep_ms(100);
-    // Filter and send vote message, peer 2 would step down to follower and try to handle read requests
-    // as a follower.
+    // Filter and send vote message, peer 2 would step down to follower and try to handle read
+    // requests as a follower.
     let msgs = std::mem::take(&mut *dropped_msgs.lock().unwrap());
     let vote_msgs = msgs.iter().filter(|msg| {
         let msg_type = msg.get_message().get_msg_type();

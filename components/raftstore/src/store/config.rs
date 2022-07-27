@@ -37,7 +37,8 @@ with_prefix!(prefix_store "store-");
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
+    // minimizes disruption when a partitioned node rejoins the cluster by using a two phase
+    // election.
     #[online_config(skip)]
     pub prevote: bool,
     #[online_config(skip)]
@@ -256,7 +257,8 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub region_split_size: ReadableSize,
-    // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number.
+    // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot
+    // sequence number.
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]

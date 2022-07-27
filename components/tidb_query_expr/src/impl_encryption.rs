@@ -458,7 +458,7 @@ mod tests {
             );
         }
 
-        //test NULL case
+        // test NULL case
         assert!(
             RpnFnScalarEvaluator::new()
                 .push_param(ScalarValue::Int(None))

@@ -477,7 +477,8 @@ pub mod tests {
             must_unlocked(&engine, b"k2");
             must_get_rollback_protected(&engine, b"k2", 15, true);
 
-            // case 3: pessimistic transaction with two keys (large txn), secondary is prewritten first
+            // case 3: pessimistic transaction with two keys (large txn), secondary is prewritten
+            // first
             must_acquire_pessimistic_lock_for_large_txn(&engine, b"k3", b"k3", 20, 20, 100);
             must_acquire_pessimistic_lock_for_large_txn(&engine, b"k4", b"k3", 20, 25, 100);
             must_pessimistic_prewrite_put_async_commit(
@@ -491,7 +492,8 @@ pub mod tests {
                 true,
                 28,
             );
-            // the client must call check_txn_status with caller_start_ts == current_ts == 0, should not push
+            // the client must call check_txn_status with caller_start_ts == current_ts == 0, should
+            // not push
             must_success(
                 &engine,
                 b"k3",
@@ -504,7 +506,8 @@ pub mod tests {
                 uncommitted(100, 21, false),
             );
 
-            // case 4: pessimistic transaction with two keys (not large txn), secondary is prewritten first
+            // case 4: pessimistic transaction with two keys (not large txn), secondary is
+            // prewritten first
             must_acquire_pessimistic_lock_with_ttl(&engine, b"k5", b"k5", 30, 30, 100);
             must_acquire_pessimistic_lock_with_ttl(&engine, b"k6", b"k5", 30, 35, 100);
             must_pessimistic_prewrite_put_async_commit(
@@ -518,7 +521,8 @@ pub mod tests {
                 true,
                 36,
             );
-            // the client must call check_txn_status with caller_start_ts == current_ts == 0, should not push
+            // the client must call check_txn_status with caller_start_ts == current_ts == 0, should
+            // not push
             must_success(
                 &engine,
                 b"k5",
@@ -936,8 +940,8 @@ pub mod tests {
             100,
             TimeStamp::zero(),
             1,
-            /* min_commit_ts */ TimeStamp::zero(),
-            /* max_commit_ts */ TimeStamp::zero(),
+            TimeStamp::zero(), // min_commit_ts
+            TimeStamp::zero(), // max_commit_ts
             false,
             kvproto::kvrpcpb::Assertion::None,
             kvproto::kvrpcpb::AssertionLevel::Off,
@@ -958,7 +962,8 @@ pub mod tests {
 
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(310, 0), 100, 0);
         must_large_txn_locked(&engine, k, ts(310, 0), 100, ts(310, 1), false);
-        // Don't push forward the min_commit_ts if caller_start_ts is max, but pushed should be true.
+        // Don't push forward the min_commit_ts if caller_start_ts is max, but pushed should be
+        // true.
         must_success(
             &engine,
             k,
@@ -1031,8 +1036,8 @@ pub mod tests {
             uncommitted(10, TimeStamp::zero(), false),
         );
 
-        // Path: the pessimistic primary key lock does exist, and it's expired, the primary lock will
-        // be pessimistically rolled back but there will not be a rollback record.
+        // Path: the pessimistic primary key lock does exist, and it's expired, the primary lock
+        // will be pessimistically rolled back but there will not be a rollback record.
         must_success(
             &engine,
             k,
@@ -1060,8 +1065,10 @@ pub mod tests {
             10,
             TimeStamp::zero(),
             1,
-            /* min_commit_ts */ TimeStamp::zero(),
-            /* max_commit_ts */ TimeStamp::zero(),
+            // min_commit_ts
+            TimeStamp::zero(),
+            // max_commit_ts
+            TimeStamp::zero(),
             false,
             kvproto::kvrpcpb::Assertion::None,
             kvproto::kvrpcpb::AssertionLevel::Off,
@@ -1106,7 +1113,8 @@ pub mod tests {
             ts(61, 0),
             true,
             false,
-            /* resolving_pessimistic_lock */ false,
+            // resolving_pessimistic_lock
+            false,
             |s| s == TtlExpire,
         );
         must_unlocked(&engine, k);

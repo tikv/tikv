@@ -311,8 +311,8 @@ impl LockCollectorRunner {
                 info!("start collecting locks"; "max_ts" => max_ts);
                 self.collected_locks.clear();
                 // TODO: `is_clean` may be unexpectedly set to false here, if any error happens on a
-                // previous observing. It need to be solved, although it's very unlikely to happen and
-                // doesn't affect correctness of data.
+                // previous observing. It need to be solved, although it's very unlikely to happen
+                // and doesn't affect correctness of data.
                 self.observer_state.mark_clean();
                 self.observer_state.store_max_ts(max_ts);
                 Ok(())

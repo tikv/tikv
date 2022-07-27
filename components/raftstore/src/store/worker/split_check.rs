@@ -339,7 +339,8 @@ where
         );
     }
 
-    /// Checks a Region with split and bucket checkers to produce split keys and buckets keys and generates split admin command.
+    /// Checks a Region with split and bucket checkers to produce split keys and buckets keys and
+    /// generates split admin command.
     fn check_split_and_bucket(
         &mut self,
         region: &Region,
@@ -553,7 +554,8 @@ where
                         if bucket_range_idx == bucket_range_list.len() {
                             skip_check_bucket = true;
                         } else if origin_key >= bucket_range_list[bucket_range_idx].0.as_slice() {
-                            // e.key() is between bucket_range_list[bucket_range_idx].0, bucket_range_list[bucket_range_idx].1
+                            // e.key() is between bucket_range_list[bucket_range_idx].0,
+                            // bucket_range_list[bucket_range_idx].1
                             bucket_size += e.entry_size() as u64;
                             if bucket_size >= host.region_bucket_size() {
                                 bucket.keys.push(origin_key.to_vec());
@@ -580,7 +582,8 @@ where
                 }
             }
 
-            // if we scan the whole range, we can update approximate size and keys with accurate value.
+            // if we scan the whole range, we can update approximate size and keys with accurate
+            // value.
             if is_key_range {
                 return;
             }

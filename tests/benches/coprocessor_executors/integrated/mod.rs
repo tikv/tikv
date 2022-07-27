@@ -418,7 +418,8 @@ fn bench_select_count_1_group_by_2_col_group_few_stream<M>(
     bench_select_count_1_group_by_2_col_stream_impl(table, store, b, input);
 }
 
-/// SELECT COUNT(1) FROM Table GROUP BY int_col, int_col + 1 (n groups, n = row_count, stream aggregation)
+/// SELECT COUNT(1) FROM Table GROUP BY int_col, int_col + 1 (n groups, n = row_count, stream
+/// aggregation)
 fn bench_select_count_1_group_by_2_col_group_many_stream<M>(
     b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,

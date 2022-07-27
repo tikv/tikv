@@ -458,7 +458,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             .build()
             .unwrap();
 
-        // Initialized for the first time, subsequent adjustments will be made based on configuration updates.
+        // Initialized for the first time, subsequent adjustments will be made based on
+        // configuration updates.
         let scan_concurrency_semaphore =
             Arc::new(Semaphore::new(config.incremental_scan_concurrency));
         let old_value_cache = OldValueCache::new(config.old_value_cache_memory_quota);
@@ -949,7 +950,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     }
                     resolved_regions.push(region_id, resolved_ts.min());
                     // The judge of raw region is not accuracy here, and we may miss at most one
-                    // "normal" raw region. But this will not break the correctness of outlier detection.
+                    // "normal" raw region. But this will not break the correctness of outlier
+                    // detection.
                     if resolved_ts.is_min_ts_from_raw() {
                         raw_resolved_regions.push(region_id, resolved_ts.raw_ts)
                     }

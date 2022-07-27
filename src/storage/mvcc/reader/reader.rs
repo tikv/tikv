@@ -127,7 +127,8 @@ pub struct MvccReader<S: EngineSnapshot> {
     /// different versions of the same key. It can use prefix seek to speed up reads
     /// from the write-cf.
     scan_mode: Option<ScanMode>,
-    // Records the current key for prefix seek. Will Reset the write cursor when switching to another key.
+    // Records the current key for prefix seek. Will Reset the write cursor when switching to
+    // another key.
     current_key: Option<Key>,
 
     fill_cache: bool,
@@ -268,7 +269,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
     /// Return:
     ///   (commit_ts, write_record) of the write record for `key` committed before or equal to`ts`
     /// Post Condition:
-    ///   leave the write_cursor at the first record which key is less or equal to the `ts` encoded version of `key`
+    ///   leave the write_cursor at the first record which key is less or equal to the `ts` encoded
+    /// version of `key`
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         // Get the cursor for write record
         //
@@ -1074,7 +1076,8 @@ pub mod tests {
 
         // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
         // is 50.
-        // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
+        // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT,
+        // 5_5 Rollback].
         let key = Key::from_raw(k);
         let overlapped_write = reader
             .get_txn_commit_record(&key, 55.into())

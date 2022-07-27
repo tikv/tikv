@@ -70,8 +70,8 @@ use crate::storage::{
 /// Learn more about our transaction system at
 /// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/docs/deep-dive/distributed-transaction/introduction/)
 ///
-/// These are typically scheduled and used through the [`Storage`](crate::storage::Storage) with functions like
-/// [`prewrite`](prewrite::Prewrite) trait and are executed asynchronously.
+/// These are typically scheduled and used through the [`Storage`](crate::storage::Storage) with
+/// functions like [`prewrite`](prewrite::Prewrite) trait and are executed asynchronously.
 pub enum Command {
     Prewrite(Prewrite),
     PrewritePessimistic(PrewritePessimistic),

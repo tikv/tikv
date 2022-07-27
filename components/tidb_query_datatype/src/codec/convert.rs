@@ -2089,7 +2089,8 @@ mod tests {
             assert_eq!(o.unwrap(), i);
         }
 
-        // Secondly, make sure warnings are attached when the float string cannot be casted to a valid int string
+        // Secondly, make sure warnings are attached when the float string cannot be casted to a
+        // valid int string
         let warnings = ctx.take_warnings().warnings;
         assert_eq!(warnings.len(), 2);
         for warning in warnings {
@@ -2359,8 +2360,8 @@ mod tests {
             // origin,
             // (origin_flen, origin_decimal), (res_flen, res_decimal), is_unsigned,
             // expect, warning_err_code,
-            // ((InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning, truncate_as_warning)
-            // )
+            // ((InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning,
+            // truncate_as_warning) )
             //
             // The origin_flen, origin_decimal field is to
             // let the programmer clearly know what the flen and decimal of the decimal is.
@@ -2646,8 +2647,8 @@ mod tests {
             // zero
             // FIXME:
             //  according to Decimal::prec_and_frac,
-            //  the decimals' prec(the number of all digits) and frac(the number of digit after number point) are
-            //  Decimal::zero()'s is (1, 0)
+            //  the decimals' prec(the number of all digits) and frac(the number of digit after
+            // number point) are  Decimal::zero()'s is (1, 0)
             //  Decimal::from_bytes(b"00.00")'s is (2, 2)
             //  Decimal::from_bytes(b"000.00")'s is (2, 2)
             //  Decimal::from_bytes(b"000.00")'s is (2, 2)

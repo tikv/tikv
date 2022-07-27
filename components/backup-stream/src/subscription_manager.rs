@@ -64,8 +64,8 @@ pub struct ResolvedRegions {
 impl ResolvedRegions {
     /// compose the calculated global checkpoint and region checkpoints.
     /// note: maybe we can compute the global checkpoint internal and getting the interface clear.
-    ///       however we must take the `min_ts` or we cannot provide valid global checkpoint if there
-    ///       isn't any region checkpoint.
+    ///       however we must take the `min_ts` or we cannot provide valid global checkpoint if
+    /// there       isn't any region checkpoint.
     pub fn new(checkpoint: TimeStamp, checkpoints: Vec<(Region, TimeStamp)>) -> Self {
         Self {
             items: checkpoints,
@@ -128,7 +128,8 @@ where
         handle: ObserveHandle,
     ) -> Result<Statistics> {
         let region_id = region.get_id();
-        // Note: we have external retry at `ScanCmd::exec_by_with_retry`, should we keep retrying here?
+        // Note: we have external retry at `ScanCmd::exec_by_with_retry`, should we keep retrying
+        // here?
         let snap = self.observe_over_with_retry(region, move || {
             ChangeObserver::from_pitr(region_id, handle.clone())
         })?;
@@ -222,9 +223,10 @@ fn scan_executor_loop(
 }
 
 /// spawn the executors in the scan pool.
-/// we make workers thread instead of spawn scan task directly into the pool because the [`InitialDataLoader`] isn't `Sync` hence
-/// we must use it very carefully or rustc (along with tokio) would complain that we made a `!Send` future.
-/// so we have moved the data loader to the synchronous context so its reference won't be shared between threads any more.
+/// we make workers thread instead of spawn scan task directly into the pool because the
+/// [`InitialDataLoader`] isn't `Sync` hence we must use it very carefully or rustc (along with
+/// tokio) would complain that we made a `!Send` future. so we have moved the data loader to the
+/// synchronous context so its reference won't be shared between threads any more.
 fn spawn_executors(init: impl InitialScan + Send + 'static, number: usize) -> ScanPoolHandle {
     let (tx, rx) = crossbeam::channel::bounded(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
@@ -280,8 +282,8 @@ const MESSAGE_BUFFER_SIZE: usize = 4096;
 
 /// The operator for region subscription.
 /// It make a queue for operations over the `SubscriptionTracer`, generally,
-/// we should only modify the `SubscriptionTracer` itself (i.e. insert records, remove records) at here.
-/// So the order subscription / desubscription won't be broken.
+/// we should only modify the `SubscriptionTracer` itself (i.e. insert records, remove records) at
+/// here. So the order subscription / desubscription won't be broken.
 pub struct RegionSubscriptionManager<S, R, PDC> {
     // Note: these fields appear everywhere, maybe make them a `context` type?
     regions: R,
@@ -453,7 +455,8 @@ where
                     }
                     let cps = self.subs.resolve_with(min_ts);
                     let min_region = cps.iter().min_by_key(|(_, rts)| rts);
-                    // If there isn't any region observed, the `min_ts` can be used as resolved ts safely.
+                    // If there isn't any region observed, the `min_ts` can be used as resolved ts
+                    // safely.
                     let rts = min_region.map(|(_, rts)| *rts).unwrap_or(min_ts);
                     info!("getting checkpoint"; "defined_by_region" => ?min_region.map(|r| r.0.get_id()), "checkpoint" => %rts);
                     self.subs.warn_if_gap_too_huge(rts);

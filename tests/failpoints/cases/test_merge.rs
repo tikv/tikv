@@ -345,8 +345,8 @@ fn test_node_merge_catch_up_logs_no_need() {
     // let source region not merged
     fail::cfg("before_handle_catch_up_logs_for_merge", "pause").unwrap();
     fail::cfg("after_handle_catch_up_logs_for_merge", "pause").unwrap();
-    // due to `before_handle_catch_up_logs_for_merge` failpoint, we already pass `apply_index < catch_up_logs.merge.get_commit()`
-    // so now can let apply index make progress.
+    // due to `before_handle_catch_up_logs_for_merge` failpoint, we already pass `apply_index <
+    // catch_up_logs.merge.get_commit()` so now can let apply index make progress.
     fail::remove("apply_after_prepare_merge");
 
     // make sure all the logs are committed, including the compact command
@@ -476,7 +476,8 @@ fn test_node_merge_multiple_snapshots(together: bool) {
             .msg_type(MessageType::MsgAppend),
     ));
 
-    // Add a collect snapshot filter, it will delay snapshots until have collected multiple snapshots from different peers
+    // Add a collect snapshot filter, it will delay snapshots until have collected multiple
+    // snapshots from different peers
     cluster.sim.wl().add_recv_filter(
         3,
         Box::new(LeadingDuplicatedSnapshotFilter::new(
@@ -610,7 +611,8 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     must_get_equal(&cluster.get_engine(3), b"k123", b"v2");
 }
 
-/// Tests whether stale merge is rollback properly if it merges to the same target region again later.
+/// Tests whether stale merge is rollback properly if it merges to the same target region again
+/// later.
 #[test]
 fn test_node_failed_merge_before_succeed_merge() {
     let mut cluster = new_node_cluster(0, 3);
@@ -693,10 +695,12 @@ fn test_node_failed_merge_before_succeed_merge() {
     }
 }
 
-/// Tests whether the source peer is destroyed correctly when transferring leader during committing merge.
+/// Tests whether the source peer is destroyed correctly when transferring leader during committing
+/// merge.
 ///
-/// In the previous merge flow, target peer deletes meta of source peer without marking it as pending remove.
-/// If source peer becomes leader at the same time, it will panic due to corrupted meta.
+/// In the previous merge flow, target peer deletes meta of source peer without marking it as
+/// pending remove. If source peer becomes leader at the same time, it will panic due to corrupted
+/// meta.
 #[test]
 fn test_node_merge_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
@@ -976,13 +980,13 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     fail::remove(on_handle_apply_2_fp);
 }
 
-/// In previous implementation, destroying its source peer(s) and applying snapshot is not **atomic**.
-/// It may break the rule of our merging process.
+/// In previous implementation, destroying its source peer(s) and applying snapshot is not
+/// **atomic**. It may break the rule of our merging process.
 ///
 /// A tikv crash after its source peers have destroyed but this target peer does not become to
 /// `Applying` state which means it will not apply snapshot after this tikv restarts.
-/// After this tikv restarts, a new leader may send logs to this target peer, then the panic may happen
-/// because it can not find its source peers when applying `CommitMerge` log.
+/// After this tikv restarts, a new leader may send logs to this target peer, then the panic may
+/// happen because it can not find its source peers when applying `CommitMerge` log.
 ///
 /// This test is to reproduce above situation.
 #[test]
@@ -1527,7 +1531,8 @@ fn test_retry_pending_prepare_merge_fail() {
     thread::sleep(Duration::from_millis(200));
     assert!(txn_ext.pessimistic_locks.read().is_writable());
 
-    // Set disk full error to let PrepareMerge fail. (Set both peer to full to avoid transferring leader)
+    // Set disk full error to let PrepareMerge fail. (Set both peer to full to avoid transferring
+    // leader)
     fail::cfg("disk_already_full_peer_1", "return").unwrap();
     fail::cfg("disk_already_full_peer_2", "return").unwrap();
     fail::remove("on_handle_apply");
@@ -1611,8 +1616,8 @@ fn test_merge_pessimistic_locks_propose_fail() {
     );
 }
 
-// Testing that when the source peer is destroyed while merging, it should not persist the `merge_state`
-// thus won't generate gc message to destroy other peers
+// Testing that when the source peer is destroyed while merging, it should not persist the
+// `merge_state` thus won't generate gc message to destroy other peers
 #[test]
 fn test_destroy_source_peer_while_merging() {
     let mut cluster = new_node_cluster(0, 5);

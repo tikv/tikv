@@ -26,8 +26,7 @@
 //!
 //! This crate accepts five cargo features:
 //!
-//! - mem-profiling - compiles jemalloc and this crate with profiling
-//!   capability
+//! - mem-profiling - compiles jemalloc and this crate with profiling capability
 //!
 //! - jemalloc - compiles tikv-jemallocator (default)
 //!

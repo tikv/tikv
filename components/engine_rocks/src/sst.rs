@@ -226,10 +226,10 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
             io_options.set_compression_options(
                 -14,
                 self.compression_level,
-                0, /*strategy*/
-                0, /*max_dict_bytes*/
-                0, /*zstd_max_train_bytes*/
-                1, /*parallel_threads*/
+                0, // strategy
+                0, // max_dict_bytes
+                0, // zstd_max_train_bytes
+                1, // parallel_threads
             );
         }
         io_options.compression(compress_type);

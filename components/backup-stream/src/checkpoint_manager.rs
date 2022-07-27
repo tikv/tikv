@@ -168,9 +168,10 @@ pub trait FlushObserver: Send + 'static {
     /// The callback when the flush is done. (Files are fully written to external storage.)
     async fn after(&mut self, task: &str, rts: u64) -> Result<()>;
     /// The optional callback to rewrite the resolved ts of this flush.
-    /// Because the default method (collect all leader resolved ts in the store, and use the minimal TS.)
-    /// may lead to resolved ts rolling back, if we desire a stronger consistency, we can rewrite a safer resolved ts here.
-    /// Note the new resolved ts cannot be greater than the old resolved ts.
+    /// Because the default method (collect all leader resolved ts in the store, and use the minimal
+    /// TS.) may lead to resolved ts rolling back, if we desire a stronger consistency, we can
+    /// rewrite a safer resolved ts here. Note the new resolved ts cannot be greater than the
+    /// old resolved ts.
     async fn rewrite_resolved_ts(
         &mut self,
         #[allow(unused_variables)] task: &str,
@@ -282,7 +283,8 @@ where
             }
         }
         // Optionally upload the region checkpoint.
-        // Unless in some extreme condition, skipping upload the region checkpoint won't lead to data loss.
+        // Unless in some extreme condition, skipping upload the region checkpoint won't lead to
+        // data loss.
         if let Err(err) = self
             .meta_cli
             .upload_region_checkpoint(task, &self.checkpoints)

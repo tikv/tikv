@@ -169,7 +169,8 @@ impl<S: Snapshot> PointGetter<S> {
         fail_point!("point_getter_get");
 
         if need_check_locks(self.isolation_level) {
-            // Check locks that signal concurrent writes for `Si` or more recent writes for `RcCheckTs`.
+            // Check locks that signal concurrent writes for `Si` or more recent writes for
+            // `RcCheckTs`.
             if let Some(lock) = self.load_and_check_lock(user_key)? {
                 return self.load_data_from_lock(user_key, lock);
             }
@@ -373,8 +374,8 @@ impl<S: Snapshot> PointGetter<S> {
             }
             LockType::Delete => Ok(None),
             LockType::Lock | LockType::Pessimistic => {
-                // Only when fails to call `Lock::check_ts_conflict()`, the function is called, so it's
-                // unreachable here.
+                // Only when fails to call `Lock::check_ts_conflict()`, the function is called, so
+                // it's unreachable here.
                 unreachable!()
             }
         }
@@ -1016,7 +1017,7 @@ mod tests {
             100,
             80.into(),
             1,
-            100.into(), /* min_commit_ts */
+            100.into(), // min_commit_ts
             TimeStamp::default(),
             false,
             Assertion::None,

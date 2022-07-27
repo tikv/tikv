@@ -46,8 +46,8 @@ pub fn wrap_key(v: Vec<u8>) -> Vec<u8> {
 }
 
 /// Transform a str to a [`engine_traits::CfName`]\(`&'static str`).
-/// If the argument isn't one of `""`, `"DEFAULT"`, `"default"`, `"WRITE"`, `"write"`, `"LOCK"`, `"lock"`...
-/// returns "ERR_CF". (Which would be ignored then.)
+/// If the argument isn't one of `""`, `"DEFAULT"`, `"default"`, `"WRITE"`, `"write"`, `"LOCK"`,
+/// `"lock"`... returns "ERR_CF". (Which would be ignored then.)
 pub fn cf_name(s: &str) -> CfName {
     match s {
         "" | "DEFAULT" | "default" => CF_DEFAULT,
@@ -319,11 +319,11 @@ pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, CfName),
 }
 
 /// `try_send!(s: Scheduler<T>, task: T)` tries to send a task to the scheduler,
-/// once meet an error, would report it, with the current file and line (so it is made as a macro).    
+/// once meet an error, would report it, with the current file and line (so it is made as a macro).
 /// returns whether it success.
 #[macro_export(crate)]
 macro_rules! try_send {
-    ($s: expr, $task: expr) => {
+    ($s:expr, $task:expr) => {
         match $s.schedule($task) {
             Err(err) => {
                 $crate::errors::Error::from(err).report(concat!(
@@ -391,7 +391,8 @@ pub fn record_cf_stat(cf_name: &str, stat: &CfStatistics) {
     );
 }
 
-/// a shortcut for handing the result return from `Router::on_events`, when any faliure, send a fatal error to the `doom_messenger`.
+/// a shortcut for handing the result return from `Router::on_events`, when any faliure, send a
+/// fatal error to the `doom_messenger`.
 pub fn handle_on_event_result(doom_messenger: &Scheduler<Task>, result: Vec<(String, Result<()>)>) {
     for (task, res) in result.into_iter() {
         if let Err(err) = res {
@@ -524,7 +525,8 @@ impl ReadThroughputRecorder {
         //        the `bytes_read` is always zero :(
         //        For now, we eject here and let rocksDB prove that we did read something
         //        When the proc think we don't touch the block device (even in fact we didn't).
-        //  NOTE: In the real-world, we would accept the zero `bytes_read` value since the cache did exists.
+        //  NOTE: In the real-world, we would accept the zero `bytes_read` value since the cache did
+        // exists.
         #[cfg(test)]
         if bytes_read == 0 {
             // use println here so we can get this message even log doesn't enabled.

@@ -161,15 +161,13 @@ pub struct BatchExecuteResult {
     ///
     /// This structure is a `Result`. When it is:
     /// - `Ok(false)`: The normal case, means that there could be more data. The caller should
-    ///                continue calling `next_batch()` although for each call the returned data may
-    ///                be empty.
+    ///   continue calling `next_batch()` although for each call the returned data may be empty.
     /// - `Ok(true)`:  Means that the executor is drained and no more data will be returned in
-    ///                future. However there could be some (last) data in the `data` field this
-    ///                time. The caller should NOT call `next_batch()` any more.
-    /// - `Err(_)`:    Means that there is an error when trying to retrieve more data. In this case,
-    ///                the error is returned and the executor is also drained. Similar to
-    ///                `Ok(true)`, there could be some remaining data in the `data` field which is
-    ///                valid data and should be processed. The caller should NOT call `next_batch()`
-    ///                any more.
+    ///   future. However there could be some (last) data in the `data` field this time. The caller
+    ///   should NOT call `next_batch()` any more.
+    /// - `Err(_)`:    Means that there is an error when trying to retrieve more data. In this
+    ///   case, the error is returned and the executor is also drained. Similar to `Ok(true)`,
+    ///   there could be some remaining data in the `data` field which is valid data and should be
+    ///   processed. The caller should NOT call `next_batch()` any more.
     pub is_drained: Result<bool>,
 }

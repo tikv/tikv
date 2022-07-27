@@ -474,7 +474,7 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
         // There is a gap between existing raft logs and snapshot. Clean them up.
         engines
             .raft
-            .clean(region_id, 0 /*first_index*/, &raft_state, raft_wb)?;
+            .clean(region_id, 0 /* first_index */, &raft_state, raft_wb)?;
         raft_wb.put_raft_state(region_id, &snapshot_raft_state)?;
     }
     Ok(())
@@ -930,7 +930,8 @@ where
                     return Ok(count);
                 }
 
-                // the count of left entries isn't too large, fetch the remaining entries synchronously one by one
+                // the count of left entries isn't too large, fetch the remaining entries
+                // synchronously one by one
                 for idx in last + 1..high {
                     let ent = self.engines.raft.get_entry(region_id, idx)?;
                     match ent {
@@ -963,7 +964,8 @@ where
                 "max_size" => max_size,
                 "res_max_size" => res.max_size,
             );
-            // low index or max size is changed, the result is not fit for the current range, so refetch again.
+            // low index or max size is changed, the result is not fit for the current range, so
+            // refetch again.
             self.raftlog_fetch_stats.fetch_invalid.update(|m| m + 1);
             res.tried_cnt + 1
         } else {
@@ -972,7 +974,8 @@ where
 
         // the first/second try: get [low, high) asynchronously
         // the third try:
-        //  - if term and low are matched: use result of [low, persisted) and get [persisted, high) synchronously
+        //  - if term and low are matched: use result of [low, persisted) and get [persisted, high)
+        //    synchronously
         //  - else: get [low, high) synchronously
         if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
             // even the larger range is invalid again, fallback to fetch in sync way
@@ -2306,7 +2309,7 @@ mod tests {
             store
                 .engines
                 .raft
-                .consume(&mut raft_wb, false /*sync*/)
+                .consume(&mut raft_wb, false /* sync */)
                 .unwrap();
 
             assert_eq!(left, get_meta_key_count(&store));

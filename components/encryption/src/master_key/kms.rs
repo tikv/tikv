@@ -132,9 +132,10 @@ impl KmsBackend {
             Some(val) if val.as_slice() == vendor_name.as_bytes() => (),
             None => {
                 return Err(
-                    // If vender is missing in metadata, it could be the encrypted content is invalid
-                    // or corrupted, but it is also possible that the content is encrypted using the
-                    // FileBackend. Return WrongMasterKey anyway.
+                    // If vender is missing in metadata, it could be the encrypted content is
+                    // invalid or corrupted, but it is also possible that the
+                    // content is encrypted using the FileBackend. Return
+                    // WrongMasterKey anyway.
                     Error::WrongMasterKey(box_err!("missing KMS vendor")),
                 );
             }

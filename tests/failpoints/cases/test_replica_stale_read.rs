@@ -111,7 +111,8 @@ fn test_stale_read_basic_flow_lock() {
         b"key1".to_vec(),
     );
 
-    // Assert `(key1, value2)` can't be readed with `commit_ts2` due to it's larger than the `start_ts` of `key2`.
+    // Assert `(key1, value2)` can't be readed with `commit_ts2` due to it's larger than the
+    // `start_ts` of `key2`.
     let resp = follower_client2.kv_read(b"key1".to_vec(), commit_ts2);
     assert!(resp.get_region_error().has_data_is_not_ready());
     // Still can read `(key1, value1)` since `commit_ts1` is less than the `key2` lock's `start_ts`
@@ -536,7 +537,8 @@ fn test_stale_read_after_rollback_merge() {
         find_peer(&source, 3).unwrap().clone(),
     );
     source_client3.ctx.set_stale_read(true);
-    // the `safe_ts` should resume updating after merge rollback so we can read `key1` with the newest ts
+    // the `safe_ts` should resume updating after merge rollback so we can read `key1` with the
+    // newest ts
     source_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
 
@@ -587,7 +589,8 @@ fn test_stale_read_on_learner() {
     learner_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
 
-// Testing that stale read request with a future ts should not update the `concurency_manager`'s `max_ts`
+// Testing that stale read request with a future ts should not update the `concurency_manager`'s
+// `max_ts`
 #[test]
 fn test_stale_read_future_ts_not_update_max_ts() {
     let (_cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
@@ -624,8 +627,8 @@ fn test_stale_read_future_ts_not_update_max_ts() {
     let resp = leader_client.kv_read(b"key1".to_vec(), read_ts);
     assert!(resp.get_region_error().has_data_is_not_ready());
 
-    // The `max_ts` should not updated by the stale read request, so 1pc transaction with a ts that smaller
-    // than the `read_ts` should not be fallbacked to 2pc
+    // The `max_ts` should not updated by the stale read request, so 1pc transaction with a ts that
+    // smaller than the `read_ts` should not be fallbacked to 2pc
     let prewrite_ts = get_tso(&pd_client);
     assert!(prewrite_ts < read_ts);
     leader_client.must_kv_prewrite_one_pc(

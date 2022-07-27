@@ -967,7 +967,8 @@ fn test_txn_store_txnkv_api_version() {
 
                 store.scan_err(key, None, 100, 10);
 
-                // To compatible with TiDB gc-worker, we remove check_api_version_ranges in scan_lock
+                // To compatible with TiDB gc-worker, we remove check_api_version_ranges in
+                // scan_lock
                 store.scan_locks_ok(20, key, &end_key, 10, vec![]);
 
                 store.delete_range_err(key, key);

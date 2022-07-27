@@ -566,15 +566,18 @@ mod tests {
             ("g", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
             ("h", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8, 1),
             ("i", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4, 1),
-            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
+            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 +
+            // 9),keys(4,5)
             ("j", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
             ("k", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
             // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)
             ("l", 0, DEFAULT_PROP_KEYS_INDEX_DISTANCE / 2),
             ("m", 0, DEFAULT_PROP_KEYS_INDEX_DISTANCE / 2),
-            //handle "m": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE,offset = 11+DEFAULT_PROP_KEYS_INDEX_DISTANCE
+            // handle "m": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE,offset =
+            // 11+DEFAULT_PROP_KEYS_INDEX_DISTANCE
             ("n", 1, DEFAULT_PROP_KEYS_INDEX_DISTANCE),
-            //handle "n": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE, offset = 11+2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
+            // handle "n": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE, offset =
+            // 11+2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
             ("o", 1, 1),
             // handle　"o": keys = 1, offset = 12 + 2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
         ];
@@ -665,7 +668,8 @@ mod tests {
             ("g", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
             ("h", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
             ("i", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
-            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
+            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 +
+            // 9),keys(4,5)
             ("j", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
             ("k", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
             // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)

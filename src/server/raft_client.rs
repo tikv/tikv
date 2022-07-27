@@ -277,8 +277,8 @@ impl Buffer for BatchMessageBuffer {
         }
 
         // try refresh config after flush. `max_grpc_send_msg_len` and `raft_msg_max_batch_size`
-        // can impact the buffer push logic, but since they are soft restriction, we check config change
-        // at here to avoid affact performance since `push` is a hot path.
+        // can impact the buffer push logic, but since they are soft restriction, we check config
+        // change at here to avoid affact performance since `push` is a hot path.
         self.maybe_refresh_config();
 
         res
@@ -836,7 +836,8 @@ async fn start<S, R, E>(
             Err(_) => {
                 error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
                 if retry_times > 1 {
-                    // Clears pending messages to avoid consuming high memory when one node is shutdown.
+                    // Clears pending messages to avoid consuming high memory when one node is
+                    // shutdown.
                     back_end.clear_pending_message("unreachable");
                 } else {
                     // At least report failure in metrics.

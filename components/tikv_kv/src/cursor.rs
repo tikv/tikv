@@ -148,7 +148,8 @@ impl<I: Iterator> Cursor<I> {
                 }
             } else if self.prefix_seek {
                 // When prefixed seek and prefix_same_as_start enabled
-                // seek_to_first may return false due to no key's prefix is same as iter lower bound's
+                // seek_to_first may return false due to no key's prefix is same as iter lower
+                // bound's
                 return self.seek(key, statistics);
             } else {
                 assert!(self.seek_to_first(statistics));

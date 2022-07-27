@@ -404,8 +404,8 @@ mod tests {
     //   have existed in db before importing. So we do not think (105,10) is repeated with (105,14).
     //  [108, 109, 110, 111, 112, 113, 114, 115, 116, 117] with commit timestamp 18
     //  [112, 113, 114, 115, 116, 117, 118, 119, 120, 121] with commit timestamp 22, these 20 keys
-    // are imported by lightning. So (108,18) is repeated with (108,14), but (108,18) is not repeated
-    // with (108,10).
+    // are imported by lightning. So (108,18) is repeated with (108,14), but (108,18) is not
+    // repeated with (108,10).
     #[test]
     fn test_duplicate_detect_incremental() {
         let storage = TestStorageBuilderApiV1::new(DummyLockManager)

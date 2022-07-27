@@ -24,8 +24,9 @@ use crate::{
 /// there may be many pending messages, those messages won't block the advancing of checkpoint ts.
 /// So the checkpoint ts may be too late and losing some data.
 ///
-/// This is a temporary solution for this problem: If this greater than (1), then it implies that there are some
-/// inflight wait-for-initialized regions, we should block the resolved ts from advancing in that condition.
+/// This is a temporary solution for this problem: If this greater than (1), then it implies that
+/// there are some inflight wait-for-initialized regions, we should block the resolved ts from
+/// advancing in that condition.
 ///
 /// FIXME: Move handler of `ModifyObserve` to another thread, and remove this :(
 pub static IN_FLIGHT_START_OBSERVE_MESSAGE: AtomicUsize = AtomicUsize::new(0);
@@ -99,8 +100,8 @@ impl BackupStreamObserver {
 impl Coprocessor for BackupStreamObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
-    // `BackupStreamObserver::on_flush_applied_cmd_batch` should only invoke if `cmd_batches` is not empty
-    // and only leader will trigger this.
+    // `BackupStreamObserver::on_flush_applied_cmd_batch` should only invoke if `cmd_batches` is not
+    // empty and only leader will trigger this.
     fn on_flush_applied_cmd_batch(
         &self,
         max_level: ObserveLevel,

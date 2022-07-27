@@ -153,8 +153,8 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
 }
 
 // Confirms leadership of region peer before trying to advance resolved ts.
-// This function broadcasts a special message to all stores, gets the leader id of them to confirm whether
-// current peer has a quorum which accepts its leadership.
+// This function broadcasts a special message to all stores, gets the leader id of them to confirm
+// whether current peer has a quorum which accepts its leadership.
 pub async fn region_resolved_ts_store(
     regions: Vec<u64>,
     store_meta: Arc<StdMutex<StoreMeta>>,

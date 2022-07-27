@@ -24,7 +24,6 @@
 //!
 //! Some aggregate function output multiple results, for example, `AVG(Int)` output two results:
 //! count and sum. In this case we say that the result of `AVG(Int)` has a *cardinality* of 2.
-//!
 
 use std::{convert::TryFrom, sync::Arc};
 

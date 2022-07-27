@@ -157,7 +157,8 @@ fn test_notify_observer_after_apply() {
             10,
         );
     });
-    // We can use physical_scan_lock to get the lock because we notify the lock observer after writing data to the rocskdb.
+    // We can use physical_scan_lock to get the lock because we notify the lock observer after
+    // writing data to the rocskdb.
     let mut locks = vec![];
     retry_until(|| {
         assert!(must_check_lock_observer(&client, max_ts, true).is_empty());
@@ -189,7 +190,8 @@ fn test_notify_observer_after_apply() {
     cluster
         .pd_client
         .must_add_peer(ctx.get_region_id(), new_peer(store_id, store_id));
-    // We can use physical_scan_lock to get the lock because we notify the lock observer after writing data to the rocksdb.
+    // We can use physical_scan_lock to get the lock because we notify the lock observer after
+    // writing data to the rocksdb.
     let mut locks = vec![];
     retry_until(|| {
         assert!(must_check_lock_observer(&replica_client, max_ts, true).is_empty());
@@ -213,13 +215,15 @@ fn test_notify_observer_after_apply() {
     );
 }
 
-// It may cause locks missing during green GC if the raftstore notifies the lock observer before writing data to the rocksdb:
-//   1. Store-1 transfers a region to store-2 and store-2 is applying logs.
-//   2. GC worker registers lock observer on store-2 after calling lock observer's callback and before finishing applying which means the lock won't be observed.
-//   3. GC worker scans locks on each store independently. It's possible GC worker has scanned all locks on store-2 and hasn't scanned locks on store-1.
-//   4. Store-2 applies all logs and removes the peer on store-1.
+// It may cause locks missing during green GC if the raftstore notifies the lock observer before
+// writing data to the rocksdb:   1. Store-1 transfers a region to store-2 and store-2 is applying
+// logs.   2. GC worker registers lock observer on store-2 after calling lock observer's callback
+// and before finishing applying which means the lock won't be observed.   3. GC worker scans locks
+// on each store independently. It's possible GC worker has scanned all locks on store-2 and hasn't
+// scanned locks on store-1.   4. Store-2 applies all logs and removes the peer on store-1.
 //   5. GC worker can't scan the lock on store-1 because the peer has been destroyed.
-//   6. GC worker can't get the lock from store-2 because it can't observe the lock and has scanned it.
+//   6. GC worker can't get the lock from store-2 because it can't observe the lock and has scanned
+// it.
 #[test]
 fn test_collect_applying_locks() {
     let mut cluster = new_server_cluster(0, 2);

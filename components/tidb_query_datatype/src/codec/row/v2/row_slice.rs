@@ -61,7 +61,8 @@ impl RowSlice<'_> {
 
     /// Search `id` in non-null ids
     ///
-    /// Returns the `start` position and `offset` in `values` field if found, otherwise returns `None`
+    /// Returns the `start` position and `offset` in `values` field if found, otherwise returns
+    /// `None`
     ///
     /// # Errors
     ///
@@ -280,7 +281,7 @@ mod tests {
         let cols = vec![
             Column::new(1, 1000),
             Column::new(356, 2),
-            Column::new(33, ScalarValue::Int(None)), //0x21
+            Column::new(33, ScalarValue::Int(None)), // 0x21
             Column::new(3, 3),
             Column::new(64123, 5),
         ];

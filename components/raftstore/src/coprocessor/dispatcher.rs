@@ -38,7 +38,7 @@ pub trait ClonableObserver: 'static + Send {
 }
 
 macro_rules! impl_box_observer {
-    ($name:ident, $ob: ident, $wrapper: ident) => {
+    ($name:ident, $ob:ident, $wrapper:ident) => {
         pub struct $name(Box<dyn ClonableObserver<Ob = dyn $ob> + Send>);
         impl $name {
             pub fn new<T: 'static + $ob + Clone>(observer: T) -> $name {
@@ -82,7 +82,7 @@ macro_rules! impl_box_observer {
 
 // This is the same as impl_box_observer_g except $ob has a typaram
 macro_rules! impl_box_observer_g {
-    ($name:ident, $ob: ident, $wrapper: ident) => {
+    ($name:ident, $ob:ident, $wrapper:ident) => {
         pub struct $name<E: KvEngine>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
         impl<E: KvEngine + 'static + Send> $name<E> {
             pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {

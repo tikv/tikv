@@ -210,7 +210,8 @@ pub struct SlowHashAggregationImpl {
     extra_group_by_col_index: Vec<usize>,
 
     /// The sequence of group by column index which are in original form and are in the
-    /// same order as group_by_exps by substituting bytes columns index for extra group by column index.
+    /// same order as group_by_exps by substituting bytes columns index for extra group by column
+    /// index.
     original_group_by_col_index: Vec<usize>,
 
     /// Encoded group keys are stored in this buffer sequentially. Offsets of each encoded
@@ -330,8 +331,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             // End of the sortkey columns
             let group_key_ref_end = self.group_key_buffer.len();
 
-            // Encode bytes column in original form to extra group by columns, which is to be returned
-            // as group by results
+            // Encode bytes column in original form to extra group by columns, which is to be
+            // returned as group by results
             for (i, col_index) in self.extra_group_by_col_index.iter().enumerate() {
                 let group_by_result = &self.group_by_results_unsafe[*col_index];
                 match group_by_result {

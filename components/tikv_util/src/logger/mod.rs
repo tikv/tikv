@@ -880,7 +880,8 @@ mod tests {
         check_log(expected);
     }
 
-    /// Removes the wrapping signs, peels `"[hello]"` to `"hello"`, or peels `"(hello)"` to `"hello"`,
+    /// Removes the wrapping signs, peels `"[hello]"` to `"hello"`, or peels `"(hello)"` to
+    /// `"hello"`,
     fn peel(output: &str) -> &str {
         assert!(output.len() >= 2);
         &(output[1..output.len() - 1])

@@ -157,7 +157,8 @@ fn run_dump_raftdb_worker(
                                     let mut state = RaftLocalState::default();
                                     state.merge_from_bytes(value)?;
                                     batch.put_raft_state(region_id, &state).unwrap();
-                                    // Assume that we always scan entry first and raft state at the end.
+                                    // Assume that we always scan entry first and raft state at the
+                                    // end.
                                     batch
                                         .append(region_id, std::mem::take(&mut entries))
                                         .unwrap();
@@ -237,8 +238,8 @@ mod tests {
         // Dump logs from RocksEngine to RaftLogEngine.
         let raft_engine = RaftLogEngine::new(
             cfg.raft_engine.config(),
-            None, /*key_manager*/
-            None, /*io_rate_limiter*/
+            None, // key_manager
+            None, // io_rate_limiter
         )
         .expect("open raft engine");
 

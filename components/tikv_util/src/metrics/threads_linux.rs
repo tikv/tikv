@@ -214,7 +214,8 @@ impl Collector for ThreadsCollector {
     }
 }
 
-/// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with `_`, and drops the others.
+/// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with `_`, and drops the
+/// others.
 ///
 /// Examples:
 ///

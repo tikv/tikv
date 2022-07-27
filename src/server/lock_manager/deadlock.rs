@@ -112,9 +112,10 @@ impl Locks {
 
 /// Used to detect the deadlock of wait-for-lock in the cluster.
 pub struct DetectTable {
-    /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts` has a survival time -- `ttl`.
-    /// When checking the deadlock, if the ttl has elpased, the corresponding edge will be removed.
-    /// `last_detect_time` is the start time of the edge. `Detect` requests will refresh it.
+    /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts` has a survival time
+    /// -- `ttl`. When checking the deadlock, if the ttl has elpased, the corresponding edge
+    /// will be removed. `last_detect_time` is the start time of the edge. `Detect` requests
+    /// will refresh it.
     // txn_ts => (lock_ts => Locks)
     wait_for_map: HashMap<TimeStamp, HashMap<TimeStamp, Locks>>,
 
