@@ -1009,6 +1009,13 @@ impl<'a> PeerMsgHandler<'a> {
                 } else {
                     self.peer.mut_store().on_persist_apply_result = Some(apply_result);
                 }
+                let on_apply_snapshot_msgs =
+                    std::mem::take(&mut self.peer.mut_store().on_apply_snapshot_msgs);
+                for msg in on_apply_snapshot_msgs {
+                    if let Err(err) = self.ctx.global.trans.send(msg) {
+                        error!("failed to send on apply snapshot msg {:?}", err);
+                    }
+                }
             }
         }
         if change.has_snapshot() || change.has_initial_flush() {

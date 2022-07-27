@@ -4,7 +4,10 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use engine_traits::RaftEngineReadOnly;
 use kvengine::ShardMeta;
-use kvproto::{raft_serverpb::PeerState, *};
+use kvproto::{
+    raft_serverpb::{PeerState, RaftMessage},
+    *,
+};
 use protobuf::Message;
 use raft::{GetEntriesContext, StorageError};
 use raft_proto::{
@@ -82,6 +85,7 @@ pub(crate) struct PeerStorage {
     pub(crate) initial_flushed: bool,
     pub(crate) shard_meta: Option<kvengine::ShardMeta>,
     pub(crate) on_persist_apply_result: Option<MsgApplyResult>,
+    pub(crate) on_apply_snapshot_msgs: Vec<RaftMessage>,
 }
 
 impl raft::Storage for PeerStorage {
@@ -225,6 +229,7 @@ impl PeerStorage {
             initial_flushed,
             shard_meta,
             on_persist_apply_result: None,
+            on_apply_snapshot_msgs: vec![],
         })
     }
 

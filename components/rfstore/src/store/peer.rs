@@ -1222,7 +1222,10 @@ impl Peer {
                 self.heartbeat_pd(ctx)
             }
         }
-        let persist_messages = self.build_raft_messages(ctx, ready.take_persisted_messages());
+        let mut persist_messages = self.build_raft_messages(ctx, ready.take_persisted_messages());
+        if !ready.snapshot().is_empty() {
+            self.mut_store().on_apply_snapshot_msgs = std::mem::take(&mut persist_messages);
+        }
         ctx.persist_readies.push(PersistReady {
             region_id: self.region_id,
             ready_number: ready.number(),
