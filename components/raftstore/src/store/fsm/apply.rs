@@ -4035,6 +4035,12 @@ where
     fn get_priority(&self) -> Priority {
         self.apply_ctx.priority
     }
+
+    fn exit(&mut self) {
+        if let Err(e) = self.apply_ctx.engine.flush(true) {
+            warn!("failed to flush kvdb on exit"; "err" => ?e);
+        }
+    }
 }
 
 pub struct Builder<EK: KvEngine> {

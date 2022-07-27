@@ -332,6 +332,8 @@ pub trait PollHandler<N, C>: Send + 'static {
     fn get_priority(&self) -> Priority {
         Priority::Normal
     }
+
+    fn exit(&mut self) {}
 }
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
@@ -506,6 +508,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
         }
         batch.clear();
+        self.handler.exit();
     }
 }
 
