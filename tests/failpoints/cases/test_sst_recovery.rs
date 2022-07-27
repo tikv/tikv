@@ -51,15 +51,15 @@ fn test_sst_recovery_basic() {
 
     std::thread::sleep(CHECK_DURATION);
 
-    must_get_equal(&engine1, b"z1", b"val");
-    must_get_equal(&engine1, b"z7", b"val");
+    must_get_equal(&engine1, b"1", b"val");
+    must_get_equal(&engine1, b"7", b"val");
     assert_corruption(engine1.get_value(b"z4"));
 
     fail::remove("sst_recovery_before_delete_files");
     std::thread::sleep(CHECK_DURATION);
 
-    must_get_equal(&engine1, b"z1", b"val");
-    must_get_equal(&engine1, b"z7", b"val");
+    must_get_equal(&engine1, b"1", b"val");
+    must_get_equal(&engine1, b"7", b"val");
     assert!(engine1.get_value(b"z4").unwrap().is_none());
 
     // Damaged file has been deleted.
@@ -98,9 +98,9 @@ fn test_sst_recovery_overlap_range_sst_exist() {
     cluster.must_put_cf(CF_DEFAULT, b"4", b"val_2");
 
     std::thread::sleep(CHECK_DURATION);
-    must_get_equal(&engine1, b"z1", b"val_1");
-    must_get_equal(&engine1, b"z4", b"val_1");
-    must_get_equal(&engine1, b"z7", b"val_1");
+    must_get_equal(&engine1, b"1", b"val_1");
+    must_get_equal(&engine1, b"4", b"val_1");
+    must_get_equal(&engine1, b"7", b"val_1");
 
     // Validate the damaged sst has been deleted.
     compact_files_to_target_level(&engine1, true, 3).unwrap();
@@ -127,8 +127,8 @@ fn test_sst_recovery_atomic_when_adding_peer() {
     pd_client.must_remove_peer(region.id, peer.clone());
 
     std::thread::sleep(CHECK_DURATION);
-    must_get_equal(&engine1, b"z1", b"val");
-    must_get_equal(&engine1, b"z7", b"val");
+    must_get_equal(&engine1, b"1", b"val");
+    must_get_equal(&engine1, b"7", b"val");
     // delete file action is paused before.
     assert_corruption(engine1.get_value(b"z4"));
 
