@@ -223,12 +223,11 @@ mod tests {
     use rocksdb::DBOptions as RawDBOptions;
     use tempfile::Builder;
 
-    use crate::RocksCfOptions;
-
     use super::{
         super::{util::new_engine_opt, RocksDBOptions},
         *,
     };
+    use crate::RocksCfOptions;
 
     #[test]
     fn test_should_write_to_engine_with_pipeline_write_mode() {

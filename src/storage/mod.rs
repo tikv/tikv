@@ -3231,7 +3231,10 @@ mod tests {
     #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
-        let engine = TestEngineBuilder::new().cfs([CF_DEFAULT, "foo"]).build().unwrap();
+        let engine = TestEngineBuilder::new()
+            .cfs([CF_DEFAULT, "foo"])
+            .build()
+            .unwrap();
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
             .build()
             .unwrap();
